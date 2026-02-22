@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import {
   Server,
@@ -340,11 +340,21 @@ const demos = [
 ];
 
 function DemoGallery() {
+  const chatRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    chatRef.current?.scrollIntoView({ inline: "center", block: "nearest" });
+  }, []);
+
   return (
     <div className="flex snap-x snap-mandatory gap-6 overflow-x-auto pb-4">
       <div className="w-[15%] shrink-0" aria-hidden="true" />
       {demos.map((demo) => (
-        <div key={demo.id} className="w-[70%] shrink-0 snap-center">
+        <div
+          key={demo.id}
+          ref={demo.id === "chat" ? chatRef : undefined}
+          className="w-[70%] shrink-0 snap-center"
+        >
           <h3 className="mb-1 text-lg font-semibold">{demo.title}</h3>
           <p className="mb-3 text-sm text-fd-muted-foreground">{demo.description}</p>
           <div className="overflow-hidden rounded-xl border border-fd-border shadow-lg">
