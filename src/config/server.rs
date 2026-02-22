@@ -460,15 +460,18 @@ fn default_frame_options() -> Option<String> {
 /// Default Content-Security-Policy for the web UI.
 ///
 /// Directives:
-/// - `script-src blob:` — WASM workers (Pyodide, QuickJS, DuckDB) loaded as blob URLs
+/// - `script-src blob: 'unsafe-eval' https://cdn.jsdelivr.net` — WASM workers loaded as blob
+///   URLs; `unsafe-eval` required by Pyodide for Python bytecode execution; CDN for Pyodide modules
 /// - `style-src 'unsafe-inline'` — Tailwind CSS dynamic styling
 /// - `worker-src blob:` — Web Worker sandboxed execution
 /// - `frame-src blob:` — HTML artifact preview iframes
 /// - `img-src data: blob:` — Generated charts/images and inline assets
+/// - `media-src blob:` — Audio playback from generated TTS blob URLs
+/// - `connect-src https://cdn.jsdelivr.net` — Pyodide fetches WASM/packages from CDN
 /// - `object-src 'none'` — Blocks plugins (Flash, Java applets)
 /// - `base-uri 'self'` — Prevents `<base>` tag injection
 fn default_csp() -> Option<String> {
-    Some("default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'".to_string())
+    Some("default-src 'self'; script-src 'self' blob: 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'".to_string())
 }
 
 fn default_xss_protection() -> Option<String> {

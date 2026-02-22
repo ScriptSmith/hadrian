@@ -143,20 +143,22 @@ permissions_policy = "geolocation=(), microphone=()"
 Hadrian ships a default CSP tailored for the web UI's frontend tools (Python, JavaScript, SQL, and chart execution via WASM):
 
 ```
-default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline';
-img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self';
-worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'
+default-src 'self'; script-src 'self' blob: 'unsafe-eval' https://cdn.jsdelivr.net;
+style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:;
+connect-src 'self' https://cdn.jsdelivr.net; worker-src 'self' blob:;
+frame-src 'self' blob:; object-src 'none'; base-uri 'self'
 ```
 
-| Directive    | Value                    | Reason                                                           |
-| ------------ | ------------------------ | ---------------------------------------------------------------- |
-| `script-src` | `'self' blob:`           | WASM workers (Pyodide, QuickJS, DuckDB) are loaded as blob URLs. |
-| `style-src`  | `'self' 'unsafe-inline'` | Tailwind CSS injects styles dynamically.                         |
-| `worker-src` | `'self' blob:`           | Web Workers run sandboxed code execution.                        |
-| `frame-src`  | `'self' blob:`           | HTML artifact previews render in sandboxed iframes.              |
-| `img-src`    | `'self' data: blob:`     | Generated charts and inline images use data/blob URIs.           |
-| `object-src` | `'none'`                 | Blocks plugin-based content (Flash, Java applets).               |
-| `base-uri`   | `'self'`                 | Prevents `<base>` tag injection attacks.                         |
+| Directive     | Value                                                 | Reason                                                                                                   |
+| ------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `script-src`  | `'self' blob: 'unsafe-eval' https://cdn.jsdelivr.net` | WASM workers as blob URLs; `unsafe-eval` for Pyodide Python bytecode execution; CDN for Pyodide modules. |
+| `style-src`   | `'self' 'unsafe-inline'`                              | Tailwind CSS injects styles dynamically.                                                                 |
+| `worker-src`  | `'self' blob:`                                        | Web Workers run sandboxed code execution.                                                                |
+| `frame-src`   | `'self' blob:`                                        | HTML artifact previews render in sandboxed iframes.                                                      |
+| `img-src`     | `'self' data: blob:`                                  | Generated charts and inline images use data/blob URIs.                                                   |
+| `connect-src` | `'self' https://cdn.jsdelivr.net`                     | Pyodide fetches WASM binaries and packages from CDN.                                                     |
+| `object-src`  | `'none'`                                              | Blocks plugin-based content (Flash, Java applets).                                                       |
+| `base-uri`    | `'self'`                                              | Prevents `<base>` tag injection attacks.                                                                 |
 
 Override this by setting `content_security_policy` explicitly. Set to an empty string to disable the CSP header entirely.
 
