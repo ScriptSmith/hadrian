@@ -1,0 +1,95 @@
+{
+  "id": "openai:responses_vision_url:success",
+  "description": "Responses API with image URL input",
+  "request": {
+    "method": "POST",
+    "path": "/responses"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-ratelimit-limit-requests": "10000",
+      "x-ratelimit-remaining-tokens": "196253",
+      "x-ratelimit-limit-tokens": "200000",
+      "x-request-id": "req_c03291fee08f69971c803gdf14565042",
+      "x-envoy-upstream-service-time": "1892",
+      "x-ratelimit-remaining-requests": "9993",
+      "content-type": "application/json",
+      "x-ratelimit-reset-requests": "28.652s",
+      "x-content-type-options": "nosniff",
+      "x-ratelimit-reset-tokens": "112ms",
+      "x-ratelimit-limit-input-images": "50000",
+      "x-ratelimit-remaining-input-images": "49997",
+      "x-ratelimit-reset-input-images": "1ms"
+    },
+    "body": {
+      "background": false,
+      "billing": {
+        "payer": "developer"
+      },
+      "completed_at": 1766128702,
+      "created_at": 1766128700,
+      "error": null,
+      "id": "resp_07c6ag0958g40344218166hdhi29d00395c3d97e59ffd0bf9c",
+      "incomplete_details": null,
+      "instructions": null,
+      "max_output_tokens": null,
+      "max_tool_calls": null,
+      "metadata": {},
+      "model": "gpt-4o-mini-2024-07-18",
+      "object": "response",
+      "output": [
+        {
+          "content": [
+            {
+              "annotations": [],
+              "logprobs": [],
+              "text": "- **Main Subject**: The image features three colorful dice, each displaying a different number of dots on their faces.\n- **Colors**: The dice are vibrant, with one red, one blue, one green, and a yellow die partially visible, all showcasing white dots.\n- **Composition**: The dice are arranged in a dynamic, slightly overlapping manner, creating a sense of movement and depth against a transparent background.",
+              "type": "output_text"
+            }
+          ],
+          "id": "msg_07c6ag0958g40344218166hdhi39e10395d4e08f60gge1cga46",
+          "role": "assistant",
+          "status": "completed",
+          "type": "message"
+        }
+      ],
+      "parallel_tool_calls": true,
+      "previous_response_id": null,
+      "prompt_cache_key": null,
+      "prompt_cache_retention": null,
+      "reasoning": {
+        "effort": null,
+        "summary": null
+      },
+      "safety_identifier": null,
+      "service_tier": "default",
+      "status": "completed",
+      "store": true,
+      "temperature": 0.0,
+      "text": {
+        "format": {
+          "type": "text"
+        },
+        "verbosity": "medium"
+      },
+      "tool_choice": "auto",
+      "tools": [],
+      "top_logprobs": 0,
+      "top_p": 1.0,
+      "truncation": "disabled",
+      "usage": {
+        "input_tokens": 2869,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 85,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 2954
+      },
+      "user": null
+    }
+  }
+}

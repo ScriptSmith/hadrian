@@ -1,0 +1,75 @@
+{
+  "id": "openrouter:responses:success",
+  "description": "Successful non-streaming Responses API via OpenRouter with cost",
+  "request": {
+    "method": "POST",
+    "path": "/responses"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-content-type-options": "nosniff"
+    },
+    "body": {
+      "background": false,
+      "created_at": 1766147975,
+      "error": null,
+      "id": "gen-1766147975-6wzdd70QY41G4rapzwgM",
+      "incomplete_details": null,
+      "instructions": null,
+      "max_output_tokens": null,
+      "metadata": {},
+      "model": "openai/gpt-4o-mini",
+      "object": "response",
+      "output": [
+        {
+          "content": [
+            {
+              "annotations": [],
+              "logprobs": [],
+              "text": "2  \n3  \n5  \n7  \n11  \n13  \n17  \n19  \n23  \n29  ",
+              "type": "output_text"
+            }
+          ],
+          "id": "msg_tmp_f01twv8gfsk",
+          "role": "assistant",
+          "status": "completed",
+          "type": "message"
+        }
+      ],
+      "output_text": "",
+      "parallel_tool_calls": true,
+      "previous_response_id": null,
+      "prompt_cache_key": null,
+      "reasoning": null,
+      "safety_identifier": null,
+      "service_tier": "auto",
+      "store": false,
+      "temperature": 0,
+      "tool_choice": "auto",
+      "tools": [],
+      "top_p": null,
+      "truncation": null,
+      "usage": {
+        "cost": 0.0000156,
+        "cost_details": {
+          "upstream_inference_cost": null,
+          "upstream_inference_input_cost": 3.6e-6,
+          "upstream_inference_output_cost": 0.000012
+        },
+        "input_tokens": 24,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "is_byok": false,
+        "output_tokens": 20,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 44
+      },
+      "user": null
+    }
+  }
+}

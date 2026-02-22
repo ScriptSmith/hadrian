@@ -1,0 +1,20 @@
+{
+  "id": "bedrock:bad:request",
+  "description": "Bad request error response (400) - invalid model",
+  "request": {
+    "method": "POST",
+    "path": "/model/invalid-model/converse",
+    "path_pattern": "/model/.+/converse"
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "x-amzn-requestid": "077c3a10-1646-4a17-aa92-c38e65171c9b",
+      "x-amzn-errortype": "ValidationException:http://internal.amazon.com/coral/com.amazon.bedrock/",
+      "content-type": "application/json"
+    },
+    "body": {
+      "message": "The provided model identifier is invalid."
+    }
+  }
+}

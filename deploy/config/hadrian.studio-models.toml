@@ -1,0 +1,289 @@
+# Hadrian Gateway Configuration - Studio Models Reference
+#
+# Comprehensive model configuration for image generation, text-to-speech,
+# transcription, and translation models. These models are not in the
+# models.dev catalog, so they need explicit modalities and tasks to appear
+# correctly in the Studio UI.
+#
+# Copy the relevant [providers.*.models.*] sections into your own hadrian.toml.
+# Pricing values are in microcents (1/1,000,000 of a dollar).
+
+[database]
+type = "sqlite"
+path = "/app/data/hadrian.db"
+
+[cache]
+type = "memory"
+
+[providers]
+default_provider = "openai"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# OpenAI
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[providers.openai]
+type = "open_ai"
+api_key = "${OPENAI_API_KEY}"
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Image Generation
+# ───────────────────────────────────────────────────────────────────────────────
+
+[providers.openai.models."dall-e-3"]
+per_image = 40000                                          # $0.04/image (standard 1024x1024)
+modalities = { input = ["text"], output = ["image"] }
+tasks = ["image_generation"]
+family = "dall-e"
+image_sizes = ["1024x1024", "1792x1024", "1024x1792"]
+image_qualities = ["standard", "hd"]
+max_images = 1
+
+[providers.openai.models."dall-e-2"]
+per_image = 20000                                          # $0.02/image
+modalities = { input = ["text"], output = ["image"] }
+tasks = ["image_generation"]
+family = "dall-e"
+image_sizes = ["256x256", "512x512", "1024x1024"]
+max_images = 4
+
+[providers.openai.models."gpt-image-1"]
+per_image = 11000                                          # $0.011/image (low quality)
+modalities = { input = ["text", "image"], output = ["image"] }
+tasks = ["image_generation"]
+family = "gpt-image"
+image_sizes = ["auto", "1024x1024", "1024x1536", "1536x1024"]
+image_qualities = ["auto", "low", "medium", "high"]
+max_images = 4
+
+[providers.openai.models."gpt-image-1-mini"]
+per_image = 5000                                           # $0.005/image (low quality)
+modalities = { input = ["text", "image"], output = ["image"] }
+tasks = ["image_generation"]
+family = "gpt-image"
+image_sizes = ["auto", "1024x1024", "1024x1536", "1536x1024"]
+image_qualities = ["auto", "low", "medium", "high"]
+max_images = 4
+
+[providers.openai.models."gpt-image-1.5"]
+per_image = 9000                                           # $0.009/image (low quality)
+modalities = { input = ["text", "image"], output = ["image"] }
+tasks = ["image_generation"]
+family = "gpt-image"
+image_sizes = ["auto", "1024x1024", "1024x1536", "1536x1024"]
+image_qualities = ["auto", "low", "medium", "high"]
+max_images = 4
+
+[providers.openai.models."chatgpt-image-latest"]
+per_image = 9000
+modalities = { input = ["text", "image"], output = ["image"] }
+tasks = ["image_generation"]
+family = "gpt-image"
+image_sizes = ["auto", "1024x1024", "1024x1536", "1536x1024"]
+image_qualities = ["auto", "low", "medium", "high"]
+max_images = 4
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Text-to-Speech (TTS)
+# ───────────────────────────────────────────────────────────────────────────────
+
+[providers.openai.models."tts-1"]
+per_1m_characters = 15000000                               # $15/1M chars
+modalities = { input = ["text"], output = ["audio"] }
+tasks = ["tts"]
+family = "tts"
+voices = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
+
+[providers.openai.models."tts-1-hd"]
+per_1m_characters = 30000000                               # $30/1M chars
+modalities = { input = ["text"], output = ["audio"] }
+tasks = ["tts"]
+family = "tts"
+voices = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
+
+[providers.openai.models."tts-1-1106"]
+per_1m_characters = 15000000
+modalities = { input = ["text"], output = ["audio"] }
+tasks = ["tts"]
+family = "tts"
+voices = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
+
+[providers.openai.models."tts-1-hd-1106"]
+per_1m_characters = 30000000
+modalities = { input = ["text"], output = ["audio"] }
+tasks = ["tts"]
+family = "tts"
+voices = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
+
+[providers.openai.models."gpt-4o-mini-tts"]
+input_per_1m_tokens = 600000                               # $0.60/1M input tokens
+output_per_1m_tokens = 12000000                            # $12/1M audio tokens
+modalities = { input = ["text"], output = ["audio"] }
+tasks = ["tts"]
+family = "gpt-4o-mini-tts"
+voices = ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse", "marin", "cedar"]
+
+[providers.openai.models."gpt-4o-mini-tts-2025-03-20"]
+input_per_1m_tokens = 600000
+output_per_1m_tokens = 12000000
+modalities = { input = ["text"], output = ["audio"] }
+tasks = ["tts"]
+family = "gpt-4o-mini-tts"
+voices = ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse", "marin", "cedar"]
+
+[providers.openai.models."gpt-4o-mini-tts-2025-12-15"]
+input_per_1m_tokens = 600000
+output_per_1m_tokens = 12000000
+modalities = { input = ["text"], output = ["audio"] }
+tasks = ["tts"]
+family = "gpt-4o-mini-tts"
+voices = ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse", "marin", "cedar"]
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Transcription & Translation
+# ───────────────────────────────────────────────────────────────────────────────
+
+[providers.openai.models."whisper-1"]
+per_second = 100                                           # $0.006/min
+modalities = { input = ["audio"], output = ["text"] }
+tasks = ["transcription", "translation"]
+family = "whisper"
+
+[providers.openai.models."gpt-4o-transcribe"]
+per_second = 100                                           # $0.006/min
+modalities = { input = ["audio"], output = ["text"] }
+tasks = ["transcription"]
+family = "gpt-4o-transcribe"
+
+[providers.openai.models."gpt-4o-mini-transcribe"]
+per_second = 50                                            # $0.003/min
+modalities = { input = ["audio"], output = ["text"] }
+tasks = ["transcription"]
+family = "gpt-4o-mini-transcribe"
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Audio Chat Models (text+audio in, text+audio out)
+# ───────────────────────────────────────────────────────────────────────────────
+
+[providers.openai.models."gpt-4o-audio-preview"]
+input_per_1m_tokens = 2500000                              # $2.50/1M text input
+output_per_1m_tokens = 10000000                            # $10/1M text output
+modalities = { input = ["text", "audio"], output = ["text", "audio"] }
+tasks = ["chat"]
+family = "gpt-4o-audio"
+
+[providers.openai.models."gpt-4o-audio-preview-2024-12-17"]
+input_per_1m_tokens = 2500000
+output_per_1m_tokens = 10000000
+modalities = { input = ["text", "audio"], output = ["text", "audio"] }
+tasks = ["chat"]
+family = "gpt-4o-audio"
+
+[providers.openai.models."gpt-4o-audio-preview-2025-06-03"]
+input_per_1m_tokens = 2500000
+output_per_1m_tokens = 10000000
+modalities = { input = ["text", "audio"], output = ["text", "audio"] }
+tasks = ["chat"]
+family = "gpt-4o-audio"
+
+[providers.openai.models."gpt-audio"]
+input_per_1m_tokens = 2500000
+output_per_1m_tokens = 10000000
+modalities = { input = ["text", "audio"], output = ["text", "audio"] }
+tasks = ["chat"]
+family = "gpt-audio"
+
+[providers.openai.models."gpt-audio-mini"]
+input_per_1m_tokens = 600000                               # $0.60/1M text input
+output_per_1m_tokens = 2400000                             # $2.40/1M text output
+modalities = { input = ["text", "audio"], output = ["text", "audio"] }
+tasks = ["chat"]
+family = "gpt-audio"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Azure OpenAI
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# [providers.azure]
+# type = "azure_open_ai"
+# resource_name = "my-openai-resource"
+#
+# [providers.azure.auth]
+# type = "api_key"
+# api_key = "${AZURE_OPENAI_API_KEY}"
+#
+# [providers.azure.models."dall-e-3"]
+# per_image = 40000
+# modalities = { input = ["text"], output = ["image"] }
+# tasks = ["image_generation"]
+# family = "dall-e"
+#
+# [providers.azure.models."dall-e-3-3.0"]
+# per_image = 40000
+# modalities = { input = ["text"], output = ["image"] }
+# tasks = ["image_generation"]
+# family = "dall-e"
+#
+# [providers.azure.models."dall-e-2"]
+# per_image = 20000
+# modalities = { input = ["text"], output = ["image"] }
+# tasks = ["image_generation"]
+# family = "dall-e"
+#
+# [providers.azure.models."dall-e-2-2.0"]
+# per_image = 20000
+# modalities = { input = ["text"], output = ["image"] }
+# tasks = ["image_generation"]
+# family = "dall-e"
+#
+# [providers.azure.models."Stable-Image-Core"]
+# modalities = { input = ["text"], output = ["image"] }
+# tasks = ["image_generation"]
+# family = "stable-image"
+#
+# [providers.azure.models."Stable-Image-Ultra"]
+# modalities = { input = ["text"], output = ["image"] }
+# tasks = ["image_generation"]
+# family = "stable-image"
+#
+# [providers.azure.models."gpt-4o-mini-tts"]
+# input_per_1m_tokens = 600000
+# output_per_1m_tokens = 12000000
+# modalities = { input = ["text"], output = ["audio"] }
+# tasks = ["tts"]
+# family = "gpt-4o-mini-tts"
+#
+# [providers.azure.models."whisper"]
+# per_second = 100
+# modalities = { input = ["audio"], output = ["text"] }
+# tasks = ["transcription", "translation"]
+# family = "whisper"
+#
+# [providers.azure.models."whisper-001"]
+# per_second = 100
+# modalities = { input = ["audio"], output = ["text"] }
+# tasks = ["transcription", "translation"]
+# family = "whisper"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AWS Bedrock
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# [providers.bedrock]
+# type = "bedrock"
+# region = "us-east-1"
+#
+# [providers.bedrock.models."amazon.titan-image-generator-v2:0"]
+# modalities = { input = ["text"], output = ["image"] }
+# tasks = ["image_generation"]
+# family = "titan-image"
+#
+# [providers.bedrock.models."amazon.titan-image-generator-v1"]
+# modalities = { input = ["text"], output = ["image"] }
+# tasks = ["image_generation"]
+# family = "titan-image"
+#
+# [providers.bedrock.models."stability.stable-diffusion-xl-v1"]
+# modalities = { input = ["text"], output = ["image"] }
+# tasks = ["image_generation"]
+# family = "stable-diffusion"

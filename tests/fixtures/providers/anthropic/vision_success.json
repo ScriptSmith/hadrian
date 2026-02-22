@@ -1,0 +1,41 @@
+{
+  "id": "anthropic:vision:success",
+  "description": "Anthropic Messages API with base64 image input",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-robots-tag": "none",
+      "x-envoy-upstream-service-time": "4209"
+    },
+    "body": {
+      "content": [
+        {
+          "text": "• **Main subject**: A small bird with distinctive black and white striped markings on its head and wings, perched on what appears to be a wooden surface\n\n• **Colors**: Predominantly black and white coloration with the bird's striped pattern contrasting against a soft, muted background in neutral tones\n\n• **Composition**: The bird is positioned slightly off-center in the frame, creating visual interest, with a shallow depth of field that keeps the subject in sharp focus while softly blurring the background",
+          "type": "text"
+        }
+      ],
+      "id": "msg_0125jxdRsr41pBKuAEDcPcXD",
+      "model": "claude-sonnet-4-20250514",
+      "role": "assistant",
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "type": "message",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "input_tokens": 42,
+        "output_tokens": 111,
+        "service_tier": "standard"
+      }
+    }
+  }
+}

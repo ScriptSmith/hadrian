@@ -1,0 +1,272 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hadrian.fullname" . }}
+  labels:
+    {{- include "hadrian.labels" . | nindent 4 }}
+  {{- with .Values.networkPolicy.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "hadrian.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- if .Values.networkPolicy.ingress.enabled }}
+    # Allow traffic from specified sources
+    - ports:
+        - port: {{ .Values.gateway.server.port }}
+          protocol: TCP
+      from:
+        {{- /* Allow from same namespace by default */}}
+        {{- if .Values.networkPolicy.ingress.allowSameNamespace }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+        {{- end }}
+        {{- /* Allow from specific namespaces */}}
+        {{- range .Values.networkPolicy.ingress.allowedNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              {{- if .labels }}
+              {{- toYaml .labels | nindent 14 }}
+              {{- else }}
+              kubernetes.io/metadata.name: {{ .name }}
+              {{- end }}
+          {{- if .podSelector }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .podSelector | nindent 14 }}
+          {{- end }}
+        {{- end }}
+        {{- /* Allow from specific pod selectors in any namespace */}}
+        {{- range .Values.networkPolicy.ingress.allowedPodSelectors }}
+        - podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
+        {{- /* Allow from specific CIDR blocks */}}
+        {{- range .Values.networkPolicy.ingress.allowedCIDRs }}
+        - ipBlock:
+            cidr: {{ .cidr }}
+            {{- if .except }}
+            except:
+              {{- toYaml .except | nindent 14 }}
+            {{- end }}
+        {{- end }}
+        {{- /* Allow from ingress controller namespace */}}
+        {{- if .Values.networkPolicy.ingress.ingressController.enabled }}
+        - namespaceSelector:
+            matchLabels:
+              {{- if .Values.networkPolicy.ingress.ingressController.namespaceLabels }}
+              {{- toYaml .Values.networkPolicy.ingress.ingressController.namespaceLabels | nindent 14 }}
+              {{- else }}
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingress.ingressController.namespace }}
+              {{- end }}
+          {{- if .Values.networkPolicy.ingress.ingressController.podSelector }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingress.ingressController.podSelector | nindent 14 }}
+          {{- end }}
+        {{- end }}
+    {{- /* Separate rule for Prometheus scraping if configured */}}
+    {{- if .Values.networkPolicy.ingress.prometheus.enabled }}
+    - ports:
+        - port: {{ .Values.gateway.server.port }}
+          protocol: TCP
+      from:
+        - namespaceSelector:
+            matchLabels:
+              {{- if .Values.networkPolicy.ingress.prometheus.namespaceLabels }}
+              {{- toYaml .Values.networkPolicy.ingress.prometheus.namespaceLabels | nindent 14 }}
+              {{- else }}
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingress.prometheus.namespace }}
+              {{- end }}
+          {{- if .Values.networkPolicy.ingress.prometheus.podSelector }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingress.prometheus.podSelector | nindent 14 }}
+          {{- end }}
+    {{- end }}
+    {{- /* Custom ingress rules */}}
+    {{- with .Values.networkPolicy.ingress.customRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- end }}
+  egress:
+    {{- if .Values.networkPolicy.egress.enabled }}
+    # DNS resolution (required for any hostname-based connections)
+    {{- if .Values.networkPolicy.egress.dns.enabled }}
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+      to:
+        {{- if .Values.networkPolicy.egress.dns.namespaceSelector }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.egress.dns.namespaceSelector | nindent 14 }}
+          {{- if .Values.networkPolicy.egress.dns.podSelector }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.egress.dns.podSelector | nindent 14 }}
+          {{- end }}
+        {{- else }}
+        # Allow DNS to kube-system namespace (default kube-dns location)
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        {{- end }}
+    {{- end }}
+    # PostgreSQL connections
+    {{- if or .Values.postgresql.enabled (and (eq .Values.gateway.database.type "postgres") .Values.networkPolicy.egress.database.enabled) }}
+    - ports:
+        - port: {{ include "hadrian.postgresql.port" . }}
+          protocol: TCP
+      to:
+        {{- if .Values.postgresql.enabled }}
+        # PostgreSQL subchart in same namespace
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgresql
+              app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- else if .Values.networkPolicy.egress.database.podSelector }}
+        # External PostgreSQL via pod selector
+        - namespaceSelector:
+            matchLabels:
+              {{- if .Values.networkPolicy.egress.database.namespaceLabels }}
+              {{- toYaml .Values.networkPolicy.egress.database.namespaceLabels | nindent 14 }}
+              {{- else }}
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.egress.database.namespace | default .Release.Namespace }}
+              {{- end }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.egress.database.podSelector | nindent 14 }}
+        {{- else if .Values.networkPolicy.egress.database.cidr }}
+        # External PostgreSQL via CIDR (for managed databases like RDS, Cloud SQL)
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.egress.database.cidr }}
+            {{- if .Values.networkPolicy.egress.database.except }}
+            except:
+              {{- toYaml .Values.networkPolicy.egress.database.except | nindent 14 }}
+            {{- end }}
+        {{- else }}
+        # Allow to any destination (external managed database)
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        {{- end }}
+    {{- end }}
+    # Redis connections
+    {{- if or .Values.redis.enabled (and (eq .Values.gateway.cache.type "redis") .Values.networkPolicy.egress.cache.enabled) }}
+    - ports:
+        - port: {{ include "hadrian.redis.port" . }}
+          protocol: TCP
+        {{- if .Values.networkPolicy.egress.cache.additionalPorts }}
+        {{- range .Values.networkPolicy.egress.cache.additionalPorts }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+        {{- end }}
+      to:
+        {{- if .Values.redis.enabled }}
+        # Redis subchart in same namespace
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+              app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- else if .Values.networkPolicy.egress.cache.podSelector }}
+        # External Redis via pod selector
+        - namespaceSelector:
+            matchLabels:
+              {{- if .Values.networkPolicy.egress.cache.namespaceLabels }}
+              {{- toYaml .Values.networkPolicy.egress.cache.namespaceLabels | nindent 14 }}
+              {{- else }}
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.egress.cache.namespace | default .Release.Namespace }}
+              {{- end }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.egress.cache.podSelector | nindent 14 }}
+        {{- else if .Values.networkPolicy.egress.cache.cidr }}
+        # External Redis via CIDR (for managed Redis like ElastiCache, MemoryStore)
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.egress.cache.cidr }}
+            {{- if .Values.networkPolicy.egress.cache.except }}
+            except:
+              {{- toYaml .Values.networkPolicy.egress.cache.except | nindent 14 }}
+            {{- end }}
+        {{- else }}
+        # Allow to any destination (external managed cache)
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        {{- end }}
+    {{- end }}
+    # HTTPS egress for LLM providers (OpenRouter, OpenAI, Anthropic, etc.)
+    {{- if .Values.networkPolicy.egress.https.enabled }}
+    - ports:
+        - port: 443
+          protocol: TCP
+      to:
+        {{- if .Values.networkPolicy.egress.https.cidrs }}
+        {{- range .Values.networkPolicy.egress.https.cidrs }}
+        - ipBlock:
+            cidr: {{ .cidr }}
+            {{- if .except }}
+            except:
+              {{- toYaml .except | nindent 14 }}
+            {{- end }}
+        {{- end }}
+        {{- else }}
+        # Allow HTTPS to any external destination (LLM provider APIs)
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # Exclude private IP ranges by default for security
+              {{- if .Values.networkPolicy.egress.https.excludePrivateRanges }}
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              {{- end }}
+        {{- end }}
+    {{- end }}
+    # OpenTelemetry/tracing egress
+    {{- if and .Values.gateway.observability.tracing.enabled .Values.networkPolicy.egress.tracing.enabled }}
+    - ports:
+        - port: {{ .Values.networkPolicy.egress.tracing.port | default 4317 }}
+          protocol: TCP
+        {{- if .Values.networkPolicy.egress.tracing.httpPort }}
+        - port: {{ .Values.networkPolicy.egress.tracing.httpPort }}
+          protocol: TCP
+        {{- end }}
+      to:
+        {{- if .Values.networkPolicy.egress.tracing.podSelector }}
+        - namespaceSelector:
+            matchLabels:
+              {{- if .Values.networkPolicy.egress.tracing.namespaceLabels }}
+              {{- toYaml .Values.networkPolicy.egress.tracing.namespaceLabels | nindent 14 }}
+              {{- else }}
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.egress.tracing.namespace | default .Release.Namespace }}
+              {{- end }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.egress.tracing.podSelector | nindent 14 }}
+        {{- else if .Values.networkPolicy.egress.tracing.cidr }}
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.egress.tracing.cidr }}
+        {{- else }}
+        # Allow to any destination
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        {{- end }}
+    {{- end }}
+    # Custom egress rules
+    {{- with .Values.networkPolicy.egress.customRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- end }}
+{{- end }}

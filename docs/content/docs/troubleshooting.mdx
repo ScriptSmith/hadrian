@@ -1,0 +1,487 @@
+---
+title: Troubleshooting
+description: Common issues and solutions for Hadrian Gateway
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Solutions to common issues with Hadrian Gateway.
+
+## Connection Issues
+
+### Gateway Won't Start
+
+**Check if the port is in use:**
+
+```bash
+lsof -i :8080
+```
+
+**Validate your configuration file:**
+
+```bash
+hadrian --config hadrian.toml --validate
+```
+
+**Enable debug logging to see detailed errors:**
+
+```bash
+RUST_LOG=debug hadrian
+```
+
+Common causes:
+
+- Invalid TOML syntax in configuration file
+- Missing required environment variables
+- Port already in use by another process
+- Insufficient permissions for database file
+
+### Database Connection Failed
+
+**For PostgreSQL:**
+
+```bash
+# Test the connection
+psql "${DATABASE_URL}" -c "SELECT 1"
+
+# Common error: "connection refused"
+# → Ensure PostgreSQL is running and accessible
+# → Check firewall rules and network configuration
+# → Verify the DATABASE_URL format: postgres://user:pass@host:5432/dbname
+```
+
+**For SQLite:**
+
+```bash
+# Check file permissions
+ls -la /path/to/hadrian.db
+
+# Ensure the directory exists and is writable
+mkdir -p ~/.local/share/hadrian
+```
+
+<Callout type="info">
+  SQLite databases are created automatically on first run. If you see permission errors, check that
+  the parent directory exists and is writable.
+</Callout>
+
+### Redis Connection Issues
+
+```bash
+# Test Redis connection
+redis-cli -u "${REDIS_URL}" ping
+
+# For Redis Cluster
+redis-cli -c -h redis-1 -p 6379 cluster info
+
+# Common error: "Connection refused"
+# → Ensure Redis is running
+# → Check if TLS is required (use rediss:// instead of redis://)
+# → Verify firewall allows connections on port 6379
+```
+
+<Callout type="warn">
+  Multi-node deployments require Redis for distributed rate limiting and cache invalidation. Without
+  Redis, each node maintains its own cache, which can lead to inconsistent budget and rate limit
+  enforcement.
+</Callout>
+
+## Authentication Errors
+
+### "Invalid API key"
+
+This error occurs when the provided API key cannot be validated.
+
+**Check the following:**
+
+1. **Key prefix matches configuration** - By default, keys must start with `gw_`
+2. **Key hasn't been revoked** - Check in the admin UI under API Keys
+3. **Correct header is used** - Either `X-API-Key` or `Authorization: Bearer`
+
+```bash
+# Using X-API-Key header (default)
+curl http://localhost:8080/v1/chat/completions \
+  -H "X-API-Key: gw_live_abc123..."
+
+# Using Authorization header (OpenAI-compatible)
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer gw_live_abc123..."
+```
+
+**Configuration reference:**
+
+```toml
+[auth.gateway]
+type = "api_key"
+
+[auth.gateway.api_key]
+header_name = "X-API-Key"  # or "Authorization"
+key_prefix = "gw_"         # Required prefix for all keys
+```
+
+### "JWT validation failed"
+
+JWT authentication errors can have several causes:
+
+| Error               | Cause                  | Solution                                                |
+| ------------------- | ---------------------- | ------------------------------------------------------- |
+| `invalid_token`     | Malformed JWT          | Check token format and encoding                         |
+| `expired`           | Token past expiration  | Obtain a fresh token from your IdP                      |
+| `invalid_issuer`    | Issuer doesn't match   | Verify `issuer` in config matches token's `iss` claim   |
+| `invalid_audience`  | Audience doesn't match | Verify `audience` in config matches token's `aud` claim |
+| `jwks_fetch_failed` | Can't reach JWKS URL   | Check network connectivity to IdP                       |
+
+**Debugging steps:**
+
+```bash
+# Verify JWKS URL is accessible from the gateway
+curl https://auth.example.com/.well-known/jwks.json
+
+# Decode and inspect the JWT (without verification)
+echo "eyJhbGciOi..." | cut -d'.' -f2 | base64 -d | jq .
+```
+
+**Configuration reference:**
+
+```toml
+[auth.gateway]
+type = "jwt"
+issuer = "https://auth.example.com"
+audience = "hadrian"
+jwks_url = "https://auth.example.com/.well-known/jwks.json"
+```
+
+### Revoked Key Still Working
+
+API keys are cached to reduce database load. When a key is revoked:
+
+1. The cache entry is immediately invalidated (if Redis is available)
+2. Other nodes receive the invalidation via Redis pub/sub
+3. If Redis is unavailable, the key remains valid until cache TTL expires
+
+**Solutions:**
+
+- **Immediate**: Restart the gateway to clear in-memory cache
+- **Recommended**: Use Redis to share cache invalidation across nodes
+- **Adjust TTL**: Lower `cache_ttl_secs` for faster revocation (at cost of more DB queries)
+
+```toml
+[auth.gateway.api_key]
+cache_ttl_secs = 60  # Default: 60 seconds
+```
+
+<Callout type="info">
+  In production multi-node deployments, always use Redis to ensure consistent cache invalidation
+  across all gateway instances.
+</Callout>
+
+## Provider Issues
+
+### "Provider not found"
+
+```bash
+# List all configured providers and their models
+curl http://localhost:8080/v1/models -H "X-API-Key: ..."
+```
+
+**Common causes:**
+
+- Provider name is case-sensitive in model strings
+- Provider not configured in `hadrian.toml`
+- Dynamic provider not created for the organization/project
+
+```bash
+# Correct format
+{"model": "anthropic/claude-sonnet-4-20250514"}
+
+# Wrong - provider names are lowercase
+{"model": "Anthropic/claude-sonnet-4-20250514"}
+```
+
+### AWS Bedrock Errors
+
+**"AccessDeniedException":**
+
+```bash
+# Verify AWS credentials are configured
+aws sts get-caller-identity
+
+# Check if model access is enabled in AWS console
+# Bedrock → Model access → Request access for the models you need
+```
+
+**"ValidationException":**
+
+- Model ID format may differ from OpenAI naming
+- Check the exact model ID in AWS Bedrock console
+
+**Credential configuration:**
+
+```toml
+[providers.bedrock]
+type = "bedrock"
+region = "us-east-1"
+
+# Option 1: Use AWS credential chain (recommended)
+# Checks: env vars → ~/.aws/credentials → IAM role
+
+# Option 2: Explicit credentials
+[providers.bedrock.credentials]
+type = "static"
+access_key_id = "${AWS_ACCESS_KEY_ID}"
+secret_access_key = "${AWS_SECRET_ACCESS_KEY}"
+
+# Option 3: Assume role
+[providers.bedrock.credentials]
+type = "assume_role"
+role_arn = "arn:aws:iam::123456789:role/bedrock-access"
+```
+
+### Azure OpenAI Errors
+
+**"DeploymentNotFound":**
+
+- Verify deployment name in Azure portal matches configuration
+- Deployments are region-specific
+
+**"InvalidApiKey":**
+
+- Check the API key in Azure portal → Keys and Endpoint
+- Ensure you're using the correct resource name
+
+**Configuration:**
+
+```toml
+[providers.azure]
+type = "azure_open_ai"
+resource_name = "my-openai-resource"  # From Azure portal URL
+api_version = "2024-02-01"
+
+[providers.azure.auth]
+type = "api_key"
+api_key = "${AZURE_OPENAI_API_KEY}"
+
+# Map deployment names to model names
+[providers.azure.deployments.gpt4-deployment]
+model = "gpt-4"
+
+[providers.azure.deployments.gpt35-deployment]
+model = "gpt-3.5-turbo"
+```
+
+### Google Vertex AI Errors
+
+**"Permission denied":**
+
+```bash
+# Check Application Default Credentials
+gcloud auth application-default print-access-token
+
+# Verify project and region
+gcloud config get-value project
+```
+
+**Configuration:**
+
+```toml
+[providers.vertex]
+type = "vertex"
+project = "my-gcp-project"
+region = "us-central1"
+
+# Option 1: Use Application Default Credentials (recommended)
+
+# Option 2: Service account key file
+[providers.vertex.credentials]
+type = "service_account"
+key_path = "/path/to/service-account.json"
+```
+
+### Timeout Errors
+
+If requests are timing out, especially for long-running completions:
+
+```toml
+# Increase timeout per provider
+[providers.anthropic]
+type = "anthropic"
+api_key = "${ANTHROPIC_API_KEY}"
+timeout_secs = 120  # Default is 60 seconds
+
+# For streaming requests with thinking/reasoning
+[providers.anthropic]
+streaming_timeout_secs = 300  # 5 minutes for extended thinking
+```
+
+<Callout type="info">
+  Models with extended thinking (Claude with `thinking` parameter, O1/O3 with `reasoning`) may
+  require longer timeouts as they can take several minutes to respond.
+</Callout>
+
+### Circuit Breaker Open
+
+When a provider experiences repeated failures, the circuit breaker opens to prevent cascading failures:
+
+```
+Error: Circuit breaker open for provider 'anthropic'
+```
+
+**What's happening:**
+
+1. Provider returned 5+ consecutive 5xx errors (configurable)
+2. Circuit breaker opened, rejecting requests immediately
+3. After cooldown period, circuit enters half-open state
+4. One test request is allowed through
+5. If successful, circuit closes; if failed, remains open
+
+**Configuration:**
+
+```toml
+[providers.anthropic.circuit_breaker]
+enabled = true
+failure_threshold = 5      # Open after 5 failures
+success_threshold = 2      # Close after 2 successes in half-open
+cooldown_secs = 30         # Wait 30s before trying again
+```
+
+**Immediate workarounds:**
+
+- Wait for cooldown period to expire
+- Restart gateway to reset circuit breaker state
+- Configure fallback providers to handle outages
+
+## Performance Issues
+
+### Slow Responses
+
+**Enable tracing to identify bottlenecks:**
+
+```toml
+[observability.tracing]
+enabled = true
+exporter = "otlp"
+endpoint = "http://localhost:4317"
+```
+
+**Check database query times:**
+
+```bash
+RUST_LOG=hadrian=debug,sqlx=debug hadrian
+```
+
+**Common causes:**
+
+| Symptom            | Likely Cause                   | Solution                           |
+| ------------------ | ------------------------------ | ---------------------------------- |
+| Slow first request | Cold start, DB connection pool | Use connection pool warming        |
+| All requests slow  | Provider latency               | Check provider health, add caching |
+| Periodic slowdowns | Database queries               | Add read replica, optimize queries |
+| Increasing latency | Memory pressure                | Check for response buffer buildup  |
+
+### High Memory Usage
+
+**Monitor memory with metrics:**
+
+```bash
+curl http://localhost:8080/metrics | grep process_resident_memory
+```
+
+**Common causes:**
+
+- Large streaming response buffers accumulating
+- Cache size too large for available memory
+- Memory leak (report on GitHub if suspected)
+
+**Configuration adjustments:**
+
+```toml
+[cache]
+max_capacity = 10000  # Limit cache entries
+
+[providers.openai]
+streaming_buffer_size = 8192  # Limit per-request buffer
+```
+
+### Rate Limiting Too Aggressive
+
+If legitimate requests are being rate limited:
+
+**Check current limits:**
+
+```bash
+# Response headers show rate limit status
+curl -I http://localhost:8080/v1/chat/completions \
+  -H "X-API-Key: ..." \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gpt-4o", "messages": []}'
+
+# Look for:
+# X-RateLimit-Limit: 100
+# X-RateLimit-Remaining: 95
+# X-RateLimit-Reset: 1234567890
+```
+
+**Adjust limits:**
+
+```toml
+# Global limits
+[limits.rate]
+requests_per_minute = 1000
+tokens_per_minute = 100000
+
+# Per-API-key limits can be set in the admin UI
+# or via the Admin API
+```
+
+<Callout type="warn">
+  Without Redis, rate limits are enforced per-node. In multi-node deployments, the effective limit
+  is multiplied by the number of nodes unless Redis is configured.
+</Callout>
+
+### Budget Enforcement Issues
+
+**Budget exceeded unexpectedly:**
+
+- Check if estimated costs are accurate for your usage patterns
+- Review usage in admin UI → Usage Analytics
+- Budget enforcement uses atomic reservations to prevent overspend
+
+**Budget not enforced:**
+
+- Ensure `[limits.budget]` is configured
+- Check that the API key has a budget assigned
+- Verify Redis is connected (required for distributed budget tracking)
+
+```toml
+[limits.budget]
+enabled = true
+default_daily_limit_cents = 1000  # $10/day default
+```
+
+## Getting Help
+
+**Diagnostic commands:**
+
+```bash
+# Health check (includes database and provider status)
+curl http://localhost:8080/health
+
+# Prometheus metrics
+curl http://localhost:8080/metrics
+
+# Verbose logging
+RUST_LOG=debug hadrian
+
+# Very verbose (includes HTTP bodies)
+RUST_LOG=trace hadrian
+```
+
+**API documentation:**
+
+- Swagger UI: `http://localhost:8080/api/docs`
+- OpenAPI spec: `http://localhost:8080/api/openapi.json`
+
+**Report issues:**
+
+- [GitHub Issues](https://github.com/ScriptSmith/hadrian/issues)
+- Include: gateway version, config (redact secrets), error messages, and steps to reproduce

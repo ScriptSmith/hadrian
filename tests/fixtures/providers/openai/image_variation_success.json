@@ -1,0 +1,23 @@
+{
+  "id": "openai:image_variation:success",
+  "description": "Successful image variation response (DALL-E 2)",
+  "request": {
+    "method": "POST",
+    "path": "/images/variations"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "req_img_var_abcdef123"
+    },
+    "body": {
+      "created": 1713833800,
+      "data": [
+        {
+          "url": "https://oaidalleapiprodscus.blob.core.windows.net/private/variation-image.png"
+        }
+      ]
+    }
+  }
+}

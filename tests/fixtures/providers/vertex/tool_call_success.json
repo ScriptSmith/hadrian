@@ -1,0 +1,60 @@
+{
+  "id": "vertex:tool_call:success",
+  "description": "Vertex generateContent with single function call response",
+  "request": {
+    "method": "POST",
+    "path": "/gemini-2.0-flash:generateContent",
+    "path_pattern": "/.+:generateContent"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "content-type": "application/json; charset=UTF-8",
+      "x-xss-protection": "0"
+    },
+    "body": {
+      "candidates": [
+        {
+          "avgLogprobs": -0.005733759142458439,
+          "content": {
+            "parts": [
+              {
+                "functionCall": {
+                  "args": {
+                    "location": "San Francisco, USA"
+                  },
+                  "name": "get_weather"
+                }
+              }
+            ],
+            "role": "model"
+          },
+          "finishReason": "STOP"
+        }
+      ],
+      "createTime": "2025-12-21T08:54:09.021949Z",
+      "modelVersion": "gemini-2.0-flash",
+      "responseId": "sbVHab2rAfuyxMwPkoi0oAg",
+      "usageMetadata": {
+        "candidatesTokenCount": 8,
+        "candidatesTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 8
+          }
+        ],
+        "promptTokenCount": 45,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 45
+          }
+        ],
+        "totalTokenCount": 53,
+        "trafficType": "ON_DEMAND"
+      }
+    }
+  }
+}

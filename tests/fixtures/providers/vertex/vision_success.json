@@ -1,0 +1,59 @@
+{
+  "id": "vertex:vision:success",
+  "description": "Vertex generateContent with base64 image input",
+  "request": {
+    "method": "POST",
+    "path": "/gemini-2.0-flash:generateContent",
+    "path_pattern": "/.+:generateContent"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-xss-protection": "0",
+      "content-type": "application/json; charset=UTF-8",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff"
+    },
+    "body": {
+      "candidates": [
+        {
+          "avgLogprobs": -0.2285164577860228,
+          "content": {
+            "parts": [
+              {
+                "text": "Here are 3 bullet points describing the image:\n\n*   **Main Subject:** The image is a solid, uniform field of color.\n*   **Colors:** The color is a bright, vibrant green, similar to lime or neon green.\n*   **Composition:** The image is a simple, single-color rectangle filling the entire frame."
+              }
+            ],
+            "role": "model"
+          },
+          "finishReason": "STOP"
+        }
+      ],
+      "createTime": "2025-12-21T08:54:11.720348Z",
+      "modelVersion": "gemini-2.0-flash",
+      "responseId": "s7VHadz7K5KwxMwPldi3sAQ",
+      "usageMetadata": {
+        "candidatesTokenCount": 71,
+        "candidatesTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 71
+          }
+        ],
+        "promptTokenCount": 287,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 29
+          },
+          {
+            "modality": "IMAGE",
+            "tokenCount": 258
+          }
+        ],
+        "totalTokenCount": 358,
+        "trafficType": "ON_DEMAND"
+      }
+    }
+  }
+}

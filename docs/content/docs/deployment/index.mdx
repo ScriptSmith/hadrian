@@ -1,0 +1,198 @@
+---
+title: Deployment
+description: Production deployment guides for Hadrian Gateway
+---
+
+Deploy Hadrian Gateway to your infrastructure using Docker, Kubernetes, or systemd.
+
+## Quick Start
+
+The fastest way to get started is with Docker:
+
+```bash
+# Clone the repository
+git clone https://github.com/ScriptSmith/hadrian.git
+cd hadrian
+
+# Copy and configure environment variables
+cp .env.example .env
+# Edit .env and add your API keys
+
+# Start with SQLite (simplest)
+docker-compose -f docker-compose.sqlite.yml up -d
+```
+
+See the [Docker guide](/docs/deployment/docker) for detailed instructions.
+
+## Deployment Options
+
+<Cards>
+  <Card
+    title="Docker"
+    href="/docs/deployment/docker"
+    description="Recommended for most deployments. Includes Docker Compose configurations for development and production."
+  />
+  <Card
+    title="Kubernetes"
+    href="/docs/deployment/kubernetes"
+    description="Deploy to Kubernetes with Helm, including HA, observability, and cloud integrations."
+  />
+</Cards>
+
+## Choosing a Configuration
+
+| Configuration          | Database   | Cache | Best For                                  |
+| ---------------------- | ---------- | ----- | ----------------------------------------- |
+| **SQLite**             | SQLite     | None  | Development, testing, single-user         |
+| **SQLite + Redis**     | SQLite     | Redis | Enhanced development, small teams         |
+| **PostgreSQL + Redis** | PostgreSQL | Redis | Production, multi-node, high availability |
+
+## Environment Requirements
+
+| Resource    | Minimum | Recommended                  | Notes                                                |
+| ----------- | ------- | ---------------------------- | ---------------------------------------------------- |
+| **CPU**     | 1 core  | 2+ cores                     | More cores improve concurrent request handling       |
+| **Memory**  | 512 MB  | 2 GB                         | Increase for large vector stores or high concurrency |
+| **Disk**    | 1 GB    | 10+ GB                       | Depends on file uploads and database size            |
+| **Network** | -       | Low latency to LLM providers | Gateway adds minimal overhead                        |
+
+## Database Options
+
+### SQLite
+
+Best for single-node deployments and getting started quickly.
+
+- **Pros**: Zero configuration, embedded, fast for single-user
+- **Cons**: Single-writer lock, no horizontal scaling
+- **Data location**: `/app/data/hadrian.db` in container
+
+### PostgreSQL
+
+Recommended for production and multi-node deployments.
+
+- **Pros**: Concurrent writes, horizontal scaling, robust backups, pgvector support
+- **Cons**: Requires separate database service
+- **Version**: PostgreSQL 15+ recommended (14+ required for pgvector)
+
+## Caching with Redis
+
+Redis is optional but recommended for:
+
+- **API key caching**: Faster authentication lookups
+- **Session storage**: Required for multi-node OIDC deployments
+- **Rate limiting**: Distributed rate limits across nodes
+- **Usage tracking**: Async usage record writes
+
+For single-node deployments, the built-in memory cache is sufficient.
+
+## Build Profiles
+
+Hadrian uses Cargo feature flags for modular compilation. Choose a profile based on your deployment needs.
+
+### Profiles
+
+| Profile          | Features                                                                                                                                                                                                          | Use Case                             |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| `tiny`           | OpenAI + Test providers only — no database, no embedded assets                                                                                                                                                    | Stateless API proxy, smallest binary |
+| `minimal`        | tiny + all providers (Anthropic, Azure, Bedrock, Vertex), SQLite, embedded UI, wizard                                                                                                                             | Development, Windows, embedded       |
+| `standard`       | minimal + PostgreSQL, Redis, OTLP, Prometheus, CEL, SSO, basic doc extraction, embedded docs, OpenAPI docs, S3, secrets managers (AWS/Azure/GCP/Vault), forecasting, JSON schema, response validation, CSV export | Typical deployment                   |
+| `full` (default) | standard + SAML, Kreuzberg (full doc extraction), ClamAV (virus scan)                                                                                                                                             | Production multi-tenant              |
+
+Build with a specific profile:
+
+```bash
+# Smallest possible binary — stateless API proxy only
+cargo build --no-default-features --features tiny
+
+# Fast compile, small binary — great for development
+cargo build --no-default-features --features minimal
+
+# Typical production deployment
+cargo build --release --no-default-features --features standard
+
+# Everything enabled (default)
+cargo build --release
+```
+
+### Individual Feature Flags
+
+Select individual features for a custom build by combining flags with `--no-default-features --features "flag1,flag2,..."`.
+
+| Category                | Feature                     | Description                                             | Included in |
+| ----------------------- | --------------------------- | ------------------------------------------------------- | ----------- |
+| **Providers**           | `provider-openai`           | OpenAI-compatible APIs                                  | tiny        |
+|                         | `provider-anthropic`        | Anthropic Claude                                        | minimal     |
+|                         | `provider-test`             | Mock provider for testing                               | tiny        |
+|                         | `provider-bedrock`          | AWS Bedrock (pulls in `aws-sdk`)                        | minimal     |
+|                         | `provider-vertex`           | Google Vertex AI (pulls in `gcp-sdk`)                   | minimal     |
+|                         | `provider-azure`            | Azure OpenAI (pulls in `azure-sdk`)                     | minimal     |
+| **Assets**              | `embed-ui`                  | Embedded web UI                                         | minimal     |
+|                         | `embed-docs`                | Embedded documentation site                             | standard    |
+| **Databases**           | `database-sqlite`           | SQLite database support                                 | minimal     |
+|                         | `database-postgres`         | PostgreSQL database support                             | standard    |
+| **Secrets**             | `vault`                     | HashiCorp Vault                                         | standard    |
+|                         | `secrets-aws`               | AWS Secrets Manager                                     | standard    |
+|                         | `secrets-azure`             | Azure Key Vault                                         | standard    |
+|                         | `secrets-gcp`               | GCP Secret Manager                                      | standard    |
+| **Auth**                | `sso`                       | OIDC/SAML session management, domain verification, SCIM | standard    |
+|                         | `saml`                      | SAML SSO (requires OpenSSL; implies `sso`)              | full        |
+| **Authorization**       | `cel`                       | CEL-based RBAC policy evaluation                        | standard    |
+| **Cache / Storage**     | `redis`                     | Distributed cache, rate limits, queues                  | standard    |
+|                         | `s3-storage`                | S3-compatible file storage                              | standard    |
+| **Document Processing** | `document-extraction-basic` | Built-in text extraction                                | standard    |
+|                         | `document-extraction-full`  | Kreuzberg: PDF, DOCX, OCR                               | full        |
+| **Observability**       | `otlp`                      | OpenTelemetry OTLP export (gRPC)                        | standard    |
+| **Metrics**             | `prometheus`                | Prometheus metrics export                               | standard    |
+| **Validation & Export** | `json-schema`               | JSON schema generation (schemars)                       | standard    |
+|                         | `response-validation`       | Response validation (jsonschema)                        | standard    |
+|                         | `csv-export`                | CSV export for access reviews                           | standard    |
+| **Tools**               | `forecasting`               | Usage forecasting (augurs)                              | standard    |
+|                         | `wizard`                    | Interactive setup wizard (dialoguer)                    | minimal     |
+| **Documentation**       | `utoipa`                    | OpenAPI spec generation + Scalar docs UI                | standard    |
+| **Integrations**        | `virus-scan`                | ClamAV file scanning                                    | full        |
+
+### Runtime Introspection
+
+Check which features are enabled in a running binary:
+
+```bash
+gateway features
+```
+
+This lists all features and their enabled/disabled status. The gateway also logs warnings at startup when disabled features are referenced in the configuration file.
+
+<Callout type="warn" title="Windows builds">
+  SAML support (`saml` feature) requires OpenSSL and does not compile on Windows. Use `minimal` or
+  `standard` for Windows builds.
+</Callout>
+
+<Callout type="info" title="Docker images">
+  Pre-built Docker images use the `full` profile. Feature selection only applies when building from
+  source.
+</Callout>
+
+## High Availability
+
+For high availability deployments:
+
+1. **Use PostgreSQL** as the database (required for multi-node)
+2. **Deploy multiple gateway instances** behind a load balancer
+3. **Configure Redis** for shared sessions, rate limits, and cache
+4. **Set up health checks** for automatic failover
+
+```yaml
+# Example: 3 gateway replicas
+services:
+  gateway:
+    deploy:
+      replicas: 3
+```
+
+See the [Docker guide](/docs/deployment/docker#horizontal-scaling) for detailed scaling instructions.
+
+## Next Steps
+
+- [Docker Deployment](/docs/deployment/docker) - Complete Docker and Docker Compose guide
+- [Kubernetes Deployment](/docs/deployment/kubernetes) - Helm chart with HA and cloud integrations
+- [Configuration Reference](/docs/configuration) - All configuration options
+- [Security](/docs/security) - Authentication, authorization, and security best practices

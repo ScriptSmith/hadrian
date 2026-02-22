@@ -1,0 +1,70 @@
+{{- if and (eq .Values.gateway.database.type "sqlite") .Values.persistence.enabled (not .Values.persistence.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "hadrian.fullname" . }}-data
+  labels:
+    {{- include "hadrian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+  {{- with .Values.persistence.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.accessMode }}
+  {{- if .Values.persistence.storageClass }}
+  {{- if eq .Values.persistence.storageClass "-" }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+  {{- with .Values.persistence.selector }}
+  selector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.persistence.dataSource }}
+  dataSource:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- if and .Values.fileStorage.enabled .Values.fileStorage.persistence.enabled (not .Values.fileStorage.persistence.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "hadrian.fullname" . }}-files
+  labels:
+    {{- include "hadrian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: file-storage
+  {{- with .Values.fileStorage.persistence.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    - {{ .Values.fileStorage.persistence.accessMode }}
+  {{- if .Values.fileStorage.persistence.storageClass }}
+  {{- if eq .Values.fileStorage.persistence.storageClass "-" }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.fileStorage.persistence.storageClass | quote }}
+  {{- end }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.fileStorage.persistence.size }}
+  {{- with .Values.fileStorage.persistence.selector }}
+  selector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.fileStorage.persistence.dataSource }}
+  dataSource:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

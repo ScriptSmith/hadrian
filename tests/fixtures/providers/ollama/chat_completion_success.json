@@ -1,0 +1,37 @@
+{
+  "id": "ollama:chat_completion:success",
+  "description": "Successful non-streaming chat completion via Ollama",
+  "request": {
+    "method": "POST",
+    "path": "/chat/completions"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "choices": [
+        {
+          "finish_reason": "length",
+          "index": 0,
+          "message": {
+            "content": "2\n3\n5\n7\n11\n13\n17\n19",
+            "reasoning": "We are to list the first 10 prime numbers, one per line, with no additional text.\n The first 10 prime numbers are: 2, 3, 5, 7, 11, 13, 17, 19, 23, 29.\n We write each on a new line without any extra text.\n",
+            "role": "assistant"
+          }
+        }
+      ],
+      "created": 1766312945,
+      "id": "chatcmpl-711",
+      "model": "qwen3:4b",
+      "object": "chat.completion",
+      "system_fingerprint": "fp_ollama",
+      "usage": {
+        "completion_tokens": 100,
+        "prompt_tokens": 28,
+        "total_tokens": 128
+      }
+    }
+  }
+}

@@ -1,0 +1,57 @@
+# Promtail Configuration - Collects logs from Docker containers
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Docker container logs
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      # Only keep hadrian containers
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(hadrian-.*)'
+        action: keep
+      # Set container name as label
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: container
+      # Set service name from container label
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: service
+      # Set compose project
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: project
+    pipeline_stages:
+      # Parse JSON logs from gateway
+      - json:
+          expressions:
+            level: level
+            msg: msg
+            target: target
+            timestamp: timestamp
+            trace_id: trace_id
+            span_id: span_id
+      # Extract level for filtering
+      - labels:
+          level:
+          trace_id:
+      # Parse non-JSON logs (fallback)
+      - regex:
+          expression: '^(?P<timestamp>\S+)\s+(?P<level>\w+)\s+(?P<msg>.*)$'
+      # Add timestamp
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+      # Output formatting
+      - output:
+          source: msg

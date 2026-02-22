@@ -1,0 +1,60 @@
+{
+  "id": "openai:chat_completion:success",
+  "description": "Successful non-streaming chat completion response",
+  "request": {
+    "method": "POST",
+    "path": "/chat/completions"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-ratelimit-remaining-requests": "9999",
+      "x-openai-proxy-wasm": "v0.1",
+      "x-content-type-options": "nosniff",
+      "x-ratelimit-reset-tokens": "6ms",
+      "x-ratelimit-reset-requests": "8.64s",
+      "x-envoy-upstream-service-time": "729",
+      "x-ratelimit-remaining-tokens": "199980",
+      "x-ratelimit-limit-requests": "10000",
+      "content-type": "application/json",
+      "x-ratelimit-limit-tokens": "200000",
+      "x-request-id": "req_40db9fe384c14b7b8847e6702b3c40f2"
+    },
+    "body": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "logprobs": null,
+          "message": {
+            "annotations": [],
+            "content": "2  \n3  \n5  \n7  \n11  \n13  \n17  \n19  \n23  \n29  ",
+            "refusal": null,
+            "role": "assistant"
+          }
+        }
+      ],
+      "created": 1766147475,
+      "id": "chatcmpl-CoTvXPuFR2zhW50TEOCvpUWvGjxPH",
+      "model": "gpt-4o-mini-2024-07-18",
+      "object": "chat.completion",
+      "service_tier": "default",
+      "system_fingerprint": "fp_ee69c2ef48",
+      "usage": {
+        "completion_tokens": 20,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": 0,
+          "audio_tokens": 0,
+          "reasoning_tokens": 0,
+          "rejected_prediction_tokens": 0
+        },
+        "prompt_tokens": 24,
+        "prompt_tokens_details": {
+          "audio_tokens": 0,
+          "cached_tokens": 0
+        },
+        "total_tokens": 44
+      }
+    }
+  }
+}

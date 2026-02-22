@@ -1,0 +1,46 @@
+{
+  "id": "anthropic:thinking:success",
+  "description": "Anthropic Messages API with extended thinking (Claude 4+)",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-envoy-upstream-service-time": "14230",
+      "x-robots-tag": "none",
+      "content-type": "application/json"
+    },
+    "body": {
+      "content": [
+        {
+          "signature": "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",
+          "thinking": "I need to find the 15th prime number. Let me start by listing prime numbers in order.\n\nA prime number is a natural number greater than 1 that has no positive divisors other than 1 and itself.\n\nLet me go through the numbers systematically:\n\n1: Not prime (by definition, primes must be greater than 1)\n2: Prime (only divisible by 1 and 2)\n3: Prime (only divisible by 1 and 3)\n4: Not prime (divisible by 1, 2, and 4)\n5: Prime (only divisible by 1 and 5)\n6: Not prime (divisible by 1, 2, 3, and 6)\n7: Prime (only divisible by 1 and 7)\n8: Not prime (divisible by 1, 2, 4, and 8)\n9: Not prime (divisible by 1, 3, and 9)\n10: Not prime (divisible by 1, 2, 5, and 10)\n11: Prime (only divisible by 1 and 11)\n12: Not prime (divisible by 1, 2, 3, 4, 6, and 12)\n13: Prime (only divisible by 1 and 13)\n14: Not prime (divisible by 1, 2, 7, and 14)\n15: Not prime (divisible by 1, 3, 5, and 15)\n16: Not prime (divisible by 1, 2, 4, 8, and 16)\n17: Prime (only divisible by 1 and 17)\n18: Not prime (divisible by 1, 2, 3, 6, 9, and 18)\n19: Prime (only divisible by 1 and 19)\n20: Not prime (divisible by 1, 2, 4, 5, 10, and 20)\n\n\n21: Not prime (divisible by 1, 3, 7, and 21)\n22: Not prime (divisible by 1, 2, 11, and 22)\n23: Prime (only divisible by 1 and 23)\n24: Not prime (divisible by many factors)\n25: Not prime (divisible by 1, 5, and 25)\n26: Not prime (divisible by 1, 2, 13, and 26)\n27: Not prime (divisible by 1, 3, 9, and 27)\n28: Not prime (divisible by many factors)\n29: Prime (only divisible by 1 and 29)\n\nI continue identifying prime numbers systematically. So far, I've found 2, 3, 5, 7, 11, 13, 17, 19, 23, and now 29. I'm tracking these carefully to determine the 15th prime number in the sequence.\n\nThe list of primes grows methodically as I check each number's divisibility. I see 30 is not prime, while 31 is another prime number. I continue this pattern, marking primes that are only divisible by 1 and themselves.\n\nBy the end of this sequence, I've confirmed 15 prime numbers, with 47 being the last one in this current set. I'm ready to identify the 15th prime number in the sequence.",
+          "type": "thinking"
+        },
+        {
+          "text": "I'll find the 15th prime number by systematically checking each number for primality.\n\nLet me list the prime numbers in order:\n\n1st prime: 2 (the only even prime)\n2nd prime: 3\n3rd prime: 5\n4th prime: 7\n5th prime: 11\n6th prime: 13\n7th prime: 17\n8th prime: 19\n9th prime: 23\n10th prime: 29\n11th prime: 31\n12th prime: 37\n13th prime: 41\n14th prime: 43\n15th prime: 47\n\nTo verify that 47 is prime, I need to check if it's divisible by any prime number up to √47 ≈ 6.9. So I check divisibility by 2, 3, 5:\n- 47 ÷ 2 = 23.5 (not divisible)\n- 47 ÷ 3 = 15.67... (not divisible)  \n- 47 ÷ 5 = 9.4 (not divisible)\n\nSince 47 isn't divisible by any prime less than its square root, 47 is prime.\n\nTherefore, the 15th prime number is **47**.",
+          "type": "text"
+        }
+      ],
+      "id": "msg_015ysdzszhZ5QaQC1RaxaHL4",
+      "model": "claude-sonnet-4-20250514",
+      "role": "assistant",
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "type": "message",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "input_tokens": 52,
+        "output_tokens": 1378,
+        "service_tier": "standard"
+      }
+    }
+  }
+}

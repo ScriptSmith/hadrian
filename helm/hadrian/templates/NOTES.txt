@@ -1,0 +1,530 @@
+
+===============================================================================
+  Hadrian AI Gateway has been deployed!
+===============================================================================
+
+Release: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+
+{{- if .Values.ingress.enabled }}
+
+Access the gateway via ingress:
+{{- range $host := .Values.ingress.hosts }}
+  {{- range .paths }}
+  http{{ if or $.Values.ingress.tls $.Values.certManager.enabled }}s{{ end }}://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+
+{{- if .Values.certManager.enabled }}
+
+TLS Certificate (cert-manager):
+  Certificate: {{ include "hadrian.fullname" . }}
+  Secret:      {{ .Values.certManager.secretName | default (printf "%s-tls" (include "hadrian.fullname" .)) }}
+  Issuer:      {{ .Values.certManager.issuer.name }} ({{ .Values.certManager.issuer.kind }})
+
+  Check certificate status:
+    kubectl get certificate {{ include "hadrian.fullname" . }} -n {{ .Release.Namespace }}
+    kubectl describe certificate {{ include "hadrian.fullname" . }} -n {{ .Release.Namespace }}
+
+  View certificate details:
+    kubectl get secret {{ .Values.certManager.secretName | default (printf "%s-tls" (include "hadrian.fullname" .)) }} -n {{ .Release.Namespace }} -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -text -noout
+{{- end }}
+
+{{- else if .Values.gatewayAPI.enabled }}
+
+Access the gateway via Gateway API HTTPRoute:
+{{- range .Values.gatewayAPI.hostnames }}
+  https://{{ . }}/
+{{- end }}
+
+HTTPRoute "{{ include "hadrian.fullname" . }}" is attached to Gateway:
+{{- range .Values.gatewayAPI.parentRefs }}
+  - {{ .name }}{{ if .namespace }} (namespace: {{ .namespace }}){{ end }}{{ if .sectionName }} [{{ .sectionName }}]{{ end }}
+{{- end }}
+
+Check HTTPRoute status:
+  kubectl get httproute {{ include "hadrian.fullname" . }} -n {{ .Release.Namespace }} -o yaml
+
+{{- else if contains "NodePort" .Values.service.type }}
+
+Get the gateway URL by running:
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "hadrian.fullname" . }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo "Gateway URL: http://$NODE_IP:$NODE_PORT"
+
+{{- else if contains "LoadBalancer" .Values.service.type }}
+
+Get the gateway URL by running (may take a few minutes for the LoadBalancer IP):
+  export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "hadrian.fullname" . }} --template "{{"{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}"}}")
+  echo "Gateway URL: http://$SERVICE_IP:{{ .Values.service.port }}"
+
+{{- else if contains "ClusterIP" .Values.service.type }}
+
+Access the gateway via port-forward:
+  kubectl port-forward --namespace {{ .Release.Namespace }} svc/{{ include "hadrian.fullname" . }} 8080:{{ .Values.service.port }}
+  echo "Gateway URL: http://localhost:8080"
+
+{{- end }}
+
+-------------------------------------------------------------------------------
+  Endpoints
+-------------------------------------------------------------------------------
+
+  Web UI:        /
+  API Docs:      /docs
+  OpenAPI Spec:  /openapi.json
+  Health Check:  /health
+  Metrics:       /metrics
+
+-------------------------------------------------------------------------------
+  Configuration
+-------------------------------------------------------------------------------
+
+Database Type: {{ .Values.gateway.database.type }}
+Cache Type:    {{ .Values.gateway.cache.type }}
+{{- if .Values.gateway.providers.openrouter.enabled }}
+Provider:      OpenRouter (default)
+{{- end }}
+{{- if .Values.gateway.providers.openai.enabled }}
+Provider:      OpenAI
+{{- end }}
+{{- if .Values.gateway.providers.anthropic.enabled }}
+Provider:      Anthropic
+{{- end }}
+
+{{- if eq .Values.gateway.database.type "sqlite" }}
+
+NOTE: SQLite is configured. This is suitable for development and single-replica
+deployments only. For production with multiple replicas, use PostgreSQL:
+
+  helm upgrade {{ .Release.Name }} hadrian/hadrian \
+    --set gateway.database.type=postgres \
+    --set gateway.database.postgres.host=your-postgres-host \
+    --set gateway.database.postgres.existingSecret=your-postgres-secret
+
+{{- end }}
+
+{{- if and (gt (int .Values.replicaCount) 1) (eq .Values.gateway.database.type "sqlite") }}
+
+WARNING: You have {{ .Values.replicaCount }} replicas configured with SQLite.
+SQLite does not support multiple writers. Please either:
+  1. Set replicaCount to 1, or
+  2. Switch to PostgreSQL for the database
+
+{{- end }}
+
+{{- if and (gt (int .Values.replicaCount) 1) (eq .Values.gateway.cache.type "memory") }}
+
+WARNING: You have {{ .Values.replicaCount }} replicas with in-memory cache.
+Each replica will have its own cache, which may cause inconsistencies.
+Consider using Redis for shared caching:
+
+  helm upgrade {{ .Release.Name }} hadrian/hadrian \
+    --set gateway.cache.type=redis \
+    --set gateway.cache.redis.host=your-redis-host
+
+{{- end }}
+
+{{- if or (and (eq .Values.gateway.database.type "sqlite") .Values.persistence.enabled) .Values.fileStorage.enabled }}
+
+-------------------------------------------------------------------------------
+  Persistent Storage
+-------------------------------------------------------------------------------
+{{- if and (eq .Values.gateway.database.type "sqlite") .Values.persistence.enabled }}
+
+SQLite Database:
+  PVC Name:     {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "hadrian.fullname" .)) }}
+  Storage Size: {{ .Values.persistence.size }}
+  Access Mode:  {{ .Values.persistence.accessMode }}
+  Mount Path:   {{ .Values.gateway.database.sqlite.path | dir }}
+
+  Check PVC status:
+    kubectl get pvc {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "hadrian.fullname" .)) }} -n {{ .Release.Namespace }}
+
+{{- end }}
+{{- if .Values.fileStorage.enabled }}
+
+File Storage ({{ if .Values.fileStorage.persistence.enabled }}persistent{{ else }}ephemeral{{ end }}):
+  {{- if .Values.fileStorage.persistence.enabled }}
+  PVC Name:     {{ .Values.fileStorage.persistence.existingClaim | default (printf "%s-files" (include "hadrian.fullname" .)) }}
+  Storage Size: {{ .Values.fileStorage.persistence.size }}
+  Access Mode:  {{ .Values.fileStorage.persistence.accessMode }}
+  {{- else }}
+  Volume Type:  emptyDir (data lost on pod restart!)
+  {{- end }}
+  Mount Path:   {{ .Values.fileStorage.mountPath }}
+
+  {{- if .Values.fileStorage.persistence.enabled }}
+  Check PVC status:
+    kubectl get pvc {{ .Values.fileStorage.persistence.existingClaim | default (printf "%s-files" (include "hadrian.fullname" .)) }} -n {{ .Release.Namespace }}
+  {{- end }}
+
+{{- end }}
+{{- end }}
+
+{{- if and (eq .Values.gateway.database.type "sqlite") (not .Values.persistence.enabled) }}
+
+WARNING: SQLite is configured without persistence. Data will be lost when the pod
+restarts. Enable persistence for production use:
+
+  helm upgrade {{ .Release.Name }} hadrian/hadrian \
+    --set persistence.enabled=true \
+    --set persistence.size=5Gi
+
+{{- end }}
+
+{{- if and .Values.fileStorage.enabled (not .Values.fileStorage.persistence.enabled) }}
+
+WARNING: File storage is enabled without persistence. Uploaded files will be lost
+when the pod restarts. Enable persistence for production use:
+
+  helm upgrade {{ .Release.Name }} hadrian/hadrian \
+    --set fileStorage.persistence.enabled=true \
+    --set fileStorage.persistence.size=50Gi
+
+{{- end }}
+
+{{- if and .Values.fileStorage.enabled (gt (int .Values.replicaCount) 1) (ne .Values.fileStorage.persistence.accessMode "ReadWriteMany") }}
+
+WARNING: File storage is enabled with {{ .Values.replicaCount }} replicas but access mode
+is {{ .Values.fileStorage.persistence.accessMode }}. For multi-replica deployments, use ReadWriteMany:
+
+  helm upgrade {{ .Release.Name }} hadrian/hadrian \
+    --set fileStorage.persistence.accessMode=ReadWriteMany \
+    --set fileStorage.persistence.storageClass=<your-rwx-storage-class>
+
+{{- end }}
+
+{{- if .Values.serviceMonitor.enabled }}
+
+-------------------------------------------------------------------------------
+  Prometheus Monitoring
+-------------------------------------------------------------------------------
+
+ServiceMonitor "{{ include "hadrian.fullname" . }}" has been created for Prometheus Operator.
+
+  Scrape interval: {{ .Values.serviceMonitor.interval }}
+  Metrics path:    {{ .Values.gateway.observability.metrics.path | default "/metrics" }}
+  {{- if .Values.serviceMonitor.namespace }}
+  Namespace:       {{ .Values.serviceMonitor.namespace }}
+  {{- end }}
+
+Check ServiceMonitor status:
+  kubectl get servicemonitor {{ include "hadrian.fullname" . }} -n {{ .Values.serviceMonitor.namespace | default .Release.Namespace }}
+
+Verify Prometheus is scraping:
+  kubectl port-forward -n <prometheus-namespace> svc/prometheus-operated 9090:9090
+  # Then visit http://localhost:9090/targets and search for "{{ include "hadrian.fullname" . }}"
+
+{{- if not .Values.serviceMonitor.labels }}
+
+NOTE: No labels are set on the ServiceMonitor. If Prometheus uses label selectors
+to discover ServiceMonitors (e.g., "release: prometheus"), you may need to add:
+
+  helm upgrade {{ .Release.Name }} hadrian/hadrian \
+    --set serviceMonitor.labels.release=prometheus
+
+{{- end }}
+{{- end }}
+
+{{- if .Values.podMonitor.enabled }}
+
+-------------------------------------------------------------------------------
+  Prometheus Monitoring (PodMonitor)
+-------------------------------------------------------------------------------
+
+PodMonitor "{{ include "hadrian.fullname" . }}" has been created for Prometheus Operator.
+This scrapes pods directly instead of via the Service.
+
+  Scrape interval: {{ .Values.podMonitor.interval }}
+  Metrics path:    {{ .Values.gateway.observability.metrics.path | default "/metrics" }}
+  {{- if .Values.podMonitor.namespace }}
+  Namespace:       {{ .Values.podMonitor.namespace }}
+  {{- end }}
+
+Check PodMonitor status:
+  kubectl get podmonitor {{ include "hadrian.fullname" . }} -n {{ .Values.podMonitor.namespace | default .Release.Namespace }}
+
+Verify Prometheus is scraping:
+  kubectl port-forward -n <prometheus-namespace> svc/prometheus-operated 9090:9090
+  # Then visit http://localhost:9090/targets and search for "{{ include "hadrian.fullname" . }}"
+
+{{- if not .Values.podMonitor.labels }}
+
+NOTE: No labels are set on the PodMonitor. If Prometheus uses label selectors
+to discover PodMonitors (e.g., "release: prometheus"), you may need to add:
+
+  helm upgrade {{ .Release.Name }} hadrian/hadrian \
+    --set podMonitor.labels.release=prometheus
+
+{{- end }}
+{{- end }}
+
+{{- if .Values.prometheusRule.enabled }}
+
+-------------------------------------------------------------------------------
+  Prometheus Alerting Rules
+-------------------------------------------------------------------------------
+
+PrometheusRule "{{ include "hadrian.fullname" . }}" has been created with alerting rules.
+
+  {{- if .Values.prometheusRule.namespace }}
+  Namespace: {{ .Values.prometheusRule.namespace }}
+  {{- end }}
+
+{{- if .Values.prometheusRule.defaultRules.enabled }}
+Default rules enabled:
+  Critical:
+    {{- if .Values.prometheusRule.defaultRules.critical.highErrorRate.enabled }}
+    - HadrianHighErrorRate (>{{ mulf .Values.prometheusRule.defaultRules.critical.highErrorRate.threshold 100 | int }}% 5xx errors)
+    {{- end }}
+    {{- if .Values.prometheusRule.defaultRules.critical.allProvidersUnhealthy.enabled }}
+    - HadrianAllProvidersUnhealthy
+    {{- end }}
+    {{- if .Values.prometheusRule.defaultRules.critical.fallbackExhausted.enabled }}
+    - HadrianFallbackExhausted
+    {{- end }}
+    {{- if .Values.prometheusRule.defaultRules.critical.highAuthFailureRate.enabled }}
+    - HadrianHighAuthFailureRate (>{{ mulf .Values.prometheusRule.defaultRules.critical.highAuthFailureRate.threshold 100 | int }}% failures)
+    {{- end }}
+  Warning:
+    {{- if .Values.prometheusRule.defaultRules.warning.highLatency.enabled }}
+    - HadrianHighLatency (p95 >{{ .Values.prometheusRule.defaultRules.warning.highLatency.threshold }}s)
+    {{- end }}
+    {{- if .Values.prometheusRule.defaultRules.warning.circuitBreakerOpen.enabled }}
+    - HadrianCircuitBreakerOpen
+    {{- end }}
+    {{- if .Values.prometheusRule.defaultRules.warning.providerUnhealthy.enabled }}
+    - HadrianProviderUnhealthy
+    {{- end }}
+    {{- if .Values.prometheusRule.defaultRules.warning.highRateLimitRate.enabled }}
+    - HadrianHighRateLimitRate
+    {{- end }}
+  Info:
+    {{- if .Values.prometheusRule.defaultRules.info.highCacheMissRate.enabled }}
+    - HadrianHighCacheMissRate
+    {{- end }}
+    {{- if .Values.prometheusRule.defaultRules.info.dlqGrowing.enabled }}
+    - HadrianDLQGrowing
+    {{- end }}
+{{- end }}
+
+Check PrometheusRule status:
+  kubectl get prometheusrule {{ include "hadrian.fullname" . }} -n {{ .Values.prometheusRule.namespace | default .Release.Namespace }}
+
+View active alerts in Prometheus:
+  kubectl port-forward -n <prometheus-namespace> svc/prometheus-operated 9090:9090
+  # Then visit http://localhost:9090/alerts and search for "Hadrian"
+
+{{- if not .Values.prometheusRule.labels }}
+
+NOTE: No labels are set on the PrometheusRule. If Prometheus uses label selectors
+to discover rules (e.g., "release: prometheus"), you may need to add:
+
+  helm upgrade {{ .Release.Name }} hadrian/hadrian \
+    --set prometheusRule.labels.release=prometheus
+
+{{- end }}
+{{- end }}
+
+{{- if .Values.networkPolicy.enabled }}
+
+-------------------------------------------------------------------------------
+  Network Policy
+-------------------------------------------------------------------------------
+
+NetworkPolicy "{{ include "hadrian.fullname" . }}" restricts pod communication.
+
+  Ingress rules: {{ if .Values.networkPolicy.ingress.enabled }}enabled{{ else }}disabled{{ end }}
+  {{- if .Values.networkPolicy.ingress.enabled }}
+    - Same namespace: {{ if .Values.networkPolicy.ingress.allowSameNamespace }}allowed{{ else }}denied{{ end }}
+    {{- if .Values.networkPolicy.ingress.ingressController.enabled }}
+    - Ingress controller: {{ .Values.networkPolicy.ingress.ingressController.namespace }} namespace
+    {{- end }}
+    {{- if .Values.networkPolicy.ingress.prometheus.enabled }}
+    - Prometheus: {{ .Values.networkPolicy.ingress.prometheus.namespace }} namespace
+    {{- end }}
+  {{- end }}
+
+  Egress rules: {{ if .Values.networkPolicy.egress.enabled }}enabled{{ else }}disabled{{ end }}
+  {{- if .Values.networkPolicy.egress.enabled }}
+    - DNS: {{ if .Values.networkPolicy.egress.dns.enabled }}allowed{{ else }}denied{{ end }}
+    - HTTPS (LLM providers): {{ if .Values.networkPolicy.egress.https.enabled }}allowed{{ else }}denied{{ end }}
+    {{- if or .Values.postgresql.enabled (eq .Values.gateway.database.type "postgres") }}
+    - PostgreSQL: allowed
+    {{- end }}
+    {{- if or .Values.redis.enabled (eq .Values.gateway.cache.type "redis") }}
+    - Redis: allowed
+    {{- end }}
+  {{- end }}
+
+Check NetworkPolicy:
+  kubectl get networkpolicy {{ include "hadrian.fullname" . }} -n {{ .Release.Namespace }}
+  kubectl describe networkpolicy {{ include "hadrian.fullname" . }} -n {{ .Release.Namespace }}
+
+{{- if not .Values.networkPolicy.ingress.ingressController.enabled }}
+{{- if or .Values.ingress.enabled .Values.gatewayAPI.enabled }}
+
+WARNING: Ingress/Gateway API is enabled but ingress controller is not allowed
+in the NetworkPolicy. Enable it with:
+
+  helm upgrade {{ .Release.Name }} hadrian/hadrian \
+    --set networkPolicy.ingress.ingressController.enabled=true \
+    --set networkPolicy.ingress.ingressController.namespace=ingress-nginx
+
+{{- end }}
+{{- end }}
+
+{{- if and .Values.serviceMonitor.enabled (not .Values.networkPolicy.ingress.prometheus.enabled) }}
+
+WARNING: ServiceMonitor is enabled but Prometheus is not allowed in the
+NetworkPolicy. Metrics scraping will fail. Enable it with:
+
+  helm upgrade {{ .Release.Name }} hadrian/hadrian \
+    --set networkPolicy.ingress.prometheus.enabled=true \
+    --set networkPolicy.ingress.prometheus.namespace=monitoring
+
+{{- end }}
+{{- end }}
+
+{{- if or .Values.initContainers.waitForDb.enabled .Values.initContainers.migrate.enabled .Values.extraInitContainers }}
+
+-------------------------------------------------------------------------------
+  Init Containers
+-------------------------------------------------------------------------------
+
+The following init containers will run before the gateway starts:
+
+{{- if .Values.initContainers.waitForDb.enabled }}
+  1. wait-for-db
+     - Waits up to {{ .Values.initContainers.waitForDb.timeoutSeconds }}s for database to be ready
+     {{- if eq .Values.gateway.database.type "postgres" }}
+     {{- if .Values.postgresql.enabled }}
+     - Target: {{ include "hadrian.fullname" . }}-postgresql:{{ include "hadrian.postgresql.port" . }}
+     {{- else }}
+     - Target: {{ .Values.gateway.database.postgres.host }}:{{ include "hadrian.postgresql.port" . }}
+     {{- end }}
+     {{- else }}
+     - SQLite mode: no wait required (immediate success)
+     {{- end }}
+{{- end }}
+
+{{- if .Values.initContainers.migrate.enabled }}
+  {{ if .Values.initContainers.waitForDb.enabled }}2{{ else }}1{{ end }}. migrate
+     - Runs database migrations before gateway starts
+     - Command: hadrian migrate --config /app/config/hadrian.toml
+     - Ensures schema is up-to-date before any replicas start
+{{- end }}
+
+{{- if .Values.extraInitContainers }}
+  {{ if and .Values.initContainers.waitForDb.enabled .Values.initContainers.migrate.enabled }}3+{{ else if or .Values.initContainers.waitForDb.enabled .Values.initContainers.migrate.enabled }}2+{{ else }}1+{{ end }}. Custom init containers ({{ len .Values.extraInitContainers }} configured)
+{{- end }}
+
+Check init container logs:
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "hadrian.name" . }} -c wait-for-db --previous
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "hadrian.name" . }} -c migrate --previous
+
+{{- end }}
+
+{{- if or .Values.sidecars.vaultAgent.enabled .Values.sidecars.cloudSqlProxy.enabled .Values.sidecars.oauth2Proxy.enabled .Values.extraContainers }}
+
+-------------------------------------------------------------------------------
+  Sidecar Containers
+-------------------------------------------------------------------------------
+
+The following sidecar containers run alongside the gateway:
+
+{{- if .Values.sidecars.vaultAgent.enabled }}
+  - vault-agent
+    Purpose:    Continuous secret injection from HashiCorp Vault
+    Vault Addr: {{ .Values.sidecars.vaultAgent.vaultAddr }}
+    Auth:       {{ .Values.sidecars.vaultAgent.authMethod }}{{ if eq .Values.sidecars.vaultAgent.authMethod "kubernetes" }} (role: {{ .Values.sidecars.vaultAgent.role }}){{ end }}
+    Secrets:    {{ .Values.sidecars.vaultAgent.secretsPath }}
+
+    Check Vault Agent logs:
+      kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "hadrian.name" . }} -c vault-agent
+{{- end }}
+
+{{- if .Values.sidecars.cloudSqlProxy.enabled }}
+  - cloud-sql-proxy
+    Purpose:    Secure connection to Google Cloud SQL
+    Instance:   {{ .Values.sidecars.cloudSqlProxy.instanceConnectionName }}
+    Port:       {{ .Values.sidecars.cloudSqlProxy.port }} (connect to localhost:{{ .Values.sidecars.cloudSqlProxy.port }})
+    Auth:       {{ if .Values.sidecars.cloudSqlProxy.credentials.useWorkloadIdentity }}Workload Identity{{ else }}Service Account Key{{ end }}
+    {{- if .Values.sidecars.cloudSqlProxy.iamAuthentication }}
+    IAM Auth:   Enabled (no password required)
+    {{- end }}
+
+    Check Cloud SQL Proxy logs:
+      kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "hadrian.name" . }} -c cloud-sql-proxy
+
+    {{- if gt (int .Values.sidecars.cloudSqlProxy.adminPort) 0 }}
+    Metrics available at port {{ .Values.sidecars.cloudSqlProxy.adminPort }}
+    {{- end }}
+{{- end }}
+
+{{- if .Values.sidecars.oauth2Proxy.enabled }}
+  - oauth2-proxy
+    Purpose:    OAuth2/OIDC authentication proxy
+    Listen:     :{{ .Values.sidecars.oauth2Proxy.port }}
+    Provider:   {{ .Values.sidecars.oauth2Proxy.provider }}
+    {{- if .Values.sidecars.oauth2Proxy.oidcIssuerUrl }}
+    Issuer:     {{ .Values.sidecars.oauth2Proxy.oidcIssuerUrl }}
+    {{- end }}
+
+    Check OAuth2 Proxy logs:
+      kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "hadrian.name" . }} -c oauth2-proxy
+
+    NOTE: When using OAuth2 Proxy, external traffic should be routed to port {{ .Values.sidecars.oauth2Proxy.port }}
+    instead of the gateway's direct port. Update your Service/Ingress accordingly.
+{{- end }}
+
+{{- if .Values.extraContainers }}
+  - Custom sidecars: {{ len .Values.extraContainers }} configured
+{{- end }}
+
+{{- end }}
+
+{{- if .Values.tests.enabled }}
+
+-------------------------------------------------------------------------------
+  Helm Tests
+-------------------------------------------------------------------------------
+
+Run the chart tests to validate the deployment:
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+Available tests:
+{{- if .Values.tests.connection.enabled }}
+  - test-connection: Validates gateway service is accessible via /health endpoint
+{{- end }}
+{{- if .Values.tests.api.enabled }}
+  - test-api: Validates API endpoints (OpenAPI spec, health{{- if .Values.gateway.observability.metrics.enabled }}, metrics{{ end }})
+{{- end }}
+
+View test logs:
+  kubectl logs {{ include "hadrian.fullname" . }}-test-connection -n {{ .Release.Namespace }}
+  kubectl logs {{ include "hadrian.fullname" . }}-test-api -n {{ .Release.Namespace }}
+
+{{- end }}
+
+-------------------------------------------------------------------------------
+  Next Steps
+-------------------------------------------------------------------------------
+
+1. {{- if .Values.tests.enabled }} Run tests to validate the deployment:
+   helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+2. {{ end }}Create an API key to access the gateway:
+   kubectl exec -it deploy/{{ include "hadrian.fullname" . }} -- \
+     /app/gateway admin create-api-key --name "my-key"
+
+{{ if .Values.tests.enabled }}3{{ else }}2{{ end }}. Test the gateway:
+   curl -H "X-API-Key: YOUR_API_KEY" \
+     http://localhost:8080/v1/chat/completions \
+     -d '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello!"}]}'
+
+{{ if .Values.tests.enabled }}4{{ else }}3{{ end }}. Access the web UI for chat and administration
+
+For more information, visit: https://github.com/ScriptSmith/hadrian
+

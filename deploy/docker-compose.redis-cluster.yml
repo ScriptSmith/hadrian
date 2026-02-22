@@ -1,0 +1,228 @@
+# Docker Compose with Redis Cluster
+# 6-node Redis Cluster (3 masters + 3 replicas) for high availability
+#
+# Port configuration (override via environment variables for parallel testing):
+#   GATEWAY_PORT - Gateway HTTP port (default: 8080)
+#   Note: Redis cluster ports (6379-6384, 16379-16384) are fixed for cluster operation
+#
+# Setup:
+# 1. Start containers: docker compose -f docker-compose.redis-cluster.yml up -d
+# 2. Create cluster: docker exec hadrian-redis-1 redis-cli --cluster create \
+#      redis-1:6379 redis-2:6379 redis-3:6379 redis-4:6379 redis-5:6379 redis-6:6379 \
+#      --cluster-replicas 1 --cluster-yes
+#
+# The gateway connects via any cluster node; Redis handles routing internally.
+
+services:
+  gateway:
+    image: hadrian:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    volumes:
+      - ./config/hadrian.redis-cluster.toml:/app/config/hadrian.toml:ro
+      - gateway-data:/app/data
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # Redis Cluster connection (comma-separated nodes)
+      - REDIS_CLUSTER_NODES=redis-1:6379,redis-2:6379,redis-3:6379
+      # Or use Redis Sentinel
+      # - REDIS_SENTINEL_MASTER=mymaster
+      # - REDIS_SENTINEL_NODES=sentinel-1:26379,sentinel-2:26379,sentinel-3:26379
+    depends_on:
+      redis-1:
+        condition: service_healthy
+      redis-2:
+        condition: service_healthy
+      redis-3:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks:
+      - redis-cluster
+
+  # Redis Cluster Nodes (Masters)
+  # Note: Ports are not exposed to host - gateway connects via internal Docker network
+  # For local debugging, uncomment the ports sections below
+  redis-1:
+    image: redis:7-alpine
+    # ports:
+    #   - "6379:6379"
+    #   - "16379:16379"
+    volumes:
+      - redis-1-data:/data
+      - ./config/redis-cluster.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf --cluster-announce-ip redis-1
+    networks:
+      - redis-cluster
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  redis-2:
+    image: redis:7-alpine
+    # ports:
+    #   - "6380:6379"
+    #   - "16380:16379"
+    volumes:
+      - redis-2-data:/data
+      - ./config/redis-cluster.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf --cluster-announce-ip redis-2
+    networks:
+      - redis-cluster
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  redis-3:
+    image: redis:7-alpine
+    # ports:
+    #   - "6381:6379"
+    #   - "16381:16379"
+    volumes:
+      - redis-3-data:/data
+      - ./config/redis-cluster.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf --cluster-announce-ip redis-3
+    networks:
+      - redis-cluster
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # Redis Cluster Nodes (Replicas)
+  redis-4:
+    image: redis:7-alpine
+    # ports:
+    #   - "6382:6379"
+    #   - "16382:16379"
+    volumes:
+      - redis-4-data:/data
+      - ./config/redis-cluster.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf --cluster-announce-ip redis-4
+    networks:
+      - redis-cluster
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  redis-5:
+    image: redis:7-alpine
+    # ports:
+    #   - "6383:6379"
+    #   - "16383:16379"
+    volumes:
+      - redis-5-data:/data
+      - ./config/redis-cluster.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf --cluster-announce-ip redis-5
+    networks:
+      - redis-cluster
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  redis-6:
+    image: redis:7-alpine
+    # ports:
+    #   - "6384:6379"
+    #   - "16384:16379"
+    volumes:
+      - redis-6-data:/data
+      - ./config/redis-cluster.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf --cluster-announce-ip redis-6
+    networks:
+      - redis-cluster
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # Redis Cluster initialization helper
+  redis-cluster-init:
+    image: redis:7-alpine
+    depends_on:
+      redis-1:
+        condition: service_healthy
+      redis-2:
+        condition: service_healthy
+      redis-3:
+        condition: service_healthy
+      redis-4:
+        condition: service_healthy
+      redis-5:
+        condition: service_healthy
+      redis-6:
+        condition: service_healthy
+    command: >
+      sh -c "
+        sleep 5 &&
+        redis-cli --cluster create \
+          redis-1:6379 redis-2:6379 redis-3:6379 \
+          redis-4:6379 redis-5:6379 redis-6:6379 \
+          --cluster-replicas 1 --cluster-yes
+      "
+    networks:
+      - redis-cluster
+    restart: "no"
+    profiles:
+      - init
+
+  # Redis Insight - Web UI for Redis management
+  redis-insight:
+    image: redislabs/redisinsight:latest
+    ports:
+      - "8001:8001"
+    volumes:
+      - redis-insight-data:/db
+    networks:
+      - redis-cluster
+    restart: unless-stopped
+    profiles:
+      - ui
+
+networks:
+  redis-cluster:
+    driver: bridge
+
+volumes:
+  gateway-data:
+    driver: local
+  redis-1-data:
+    driver: local
+  redis-2-data:
+    driver: local
+  redis-3-data:
+    driver: local
+  redis-4-data:
+    driver: local
+  redis-5-data:
+    driver: local
+  redis-6-data:
+    driver: local
+  redis-insight-data:
+    driver: local

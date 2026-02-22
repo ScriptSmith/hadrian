@@ -1,0 +1,233 @@
+# Docker Compose with Full Observability Stack
+# Includes: OpenTelemetry Collector, Prometheus, Grafana, Jaeger, Loki, Sentry
+#
+# !! LOCAL DEVELOPMENT/TESTING ONLY - NOT FOR PRODUCTION !!
+# Uses default passwords for convenience. For production, use docker-compose.production.yml
+#
+# Port configuration (override via environment variables for parallel testing):
+#   GATEWAY_PORT - Gateway HTTP port (default: 8080)
+#   OTEL_GRPC_PORT - OTEL Collector gRPC port (default: 4317)
+#   OTEL_HTTP_PORT - OTEL Collector HTTP port (default: 4318)
+#   PROMETHEUS_PORT - Prometheus port (default: 9090)
+#   GRAFANA_PORT - Grafana port (default: 3001)
+#   JAEGER_UI_PORT - Jaeger UI port (default: 16686)
+#   JAEGER_GRPC_PORT - Jaeger gRPC port (default: 14250)
+#   LOKI_PORT - Loki port (default: 3100)
+#   ALERTMANAGER_PORT - Alertmanager port (default: 9093)
+#
+# Endpoints:
+# - Gateway: http://localhost:8080
+# - Grafana: http://localhost:3001 (admin/admin)
+# - Prometheus: http://localhost:9090
+# - Jaeger UI: http://localhost:16686
+# - OTEL Collector: http://localhost:4317 (gRPC), http://localhost:4318 (HTTP)
+
+services:
+  gateway:
+    image: hadrian:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    volumes:
+      - ./config/hadrian.observability.toml:/app/config/hadrian.toml:ro
+      - gateway-data:/app/data
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - REDIS_URL=redis://redis:6379
+      # OpenTelemetry configuration
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=hadrian-gateway
+      - OTEL_RESOURCE_ATTRIBUTES=service.version=1.0.0,deployment.environment=production
+      - OTEL_TRACES_SAMPLER=parentbased_traceidratio
+      - OTEL_TRACES_SAMPLER_ARG=0.1
+      # Sentry (optional)
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-production}
+      - SENTRY_TRACES_SAMPLE_RATE=0.1
+      # Rust-specific tracing
+      - RUST_LOG=hadrian_gateway=info,tower_http=debug
+    depends_on:
+      otel-collector:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    # Expose metrics endpoint for Prometheus scraping
+    labels:
+      - "prometheus.scrape=true"
+      - "prometheus.port=8080"
+      - "prometheus.path=/metrics"
+
+  # OpenTelemetry Collector - Central telemetry pipeline
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.91.0
+    # No ports exposed - gateway connects via Docker network
+    # OTEL collector's internal health extension is at :13133
+    # Uncomment below to expose ports on host (for external trace ingestion):
+    # ports:
+    #   - "${OTEL_GRPC_PORT:-4317}:4317"   # OTLP gRPC
+    #   - "${OTEL_HTTP_PORT:-4318}:4318"   # OTLP HTTP
+    #   - "13133:13133" # Health check endpoint
+    #   - "8888:8888"   # Prometheus metrics (collector itself)
+    #   - "8889:8889"   # Prometheus exporter (for gateway metrics)
+    volumes:
+      - ./config/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    restart: unless-stopped
+
+  # Prometheus - Metrics storage and querying
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./config/prometheus-alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+      - "--web.enable-admin-api"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Grafana - Visualization and dashboards
+  grafana:
+    image: grafana/grafana:10.2.2
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3001
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    depends_on:
+      - prometheus
+      - jaeger
+      - loki
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Jaeger - Distributed tracing
+  jaeger:
+    image: jaegertracing/all-in-one:1.52
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"  # UI
+      - "${JAEGER_GRPC_PORT:-14250}:14250"  # gRPC (used by OTEL collector)
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - SPAN_STORAGE_TYPE=badger
+      # Use ephemeral storage by default for local dev/testing (avoids permission issues)
+      # Set BADGER_EPHEMERAL=false and mount a properly-permissioned volume for persistence
+      - BADGER_EPHEMERAL=${BADGER_EPHEMERAL:-true}
+      - BADGER_DIRECTORY_VALUE=/badger/data
+      - BADGER_DIRECTORY_KEY=/badger/key
+    volumes:
+      - jaeger-data:/badger
+    # Run as root to avoid volume permission issues (only for local dev/testing)
+    user: "0:0"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:14269/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Loki - Log aggregation
+  loki:
+    image: grafana/loki:2.9.2
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    volumes:
+      - ./config/loki.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3100/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Promtail - Log shipper (collects container logs)
+  promtail:
+    image: grafana/promtail:2.9.2
+    volumes:
+      - ./config/promtail.yaml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  # Alertmanager - Alert routing and notifications
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      - ./config/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9093/-/healthy"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  gateway-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+  jaeger-data:
+    driver: local
+  loki-data:
+    driver: local
+  alertmanager-data:
+    driver: local
+  redis-data:
+    driver: local

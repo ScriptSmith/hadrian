@@ -1,0 +1,483 @@
+{
+  "realm": "hadrian",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "super_admin",
+        "description": "System-wide administrator with full access"
+      },
+      {
+        "name": "org_admin",
+        "description": "Organization administrator - can manage their organization"
+      },
+      {
+        "name": "team_admin",
+        "description": "Team administrator - can manage their team"
+      },
+      {
+        "name": "user",
+        "description": "Regular user role"
+      },
+      {
+        "name": "premium",
+        "description": "Premium API access - high token limits, premium models"
+      },
+      {
+        "name": "tools_enabled",
+        "description": "API tools/function calling enabled"
+      },
+      {
+        "name": "rag_enabled",
+        "description": "API file_search/RAG feature enabled"
+      }
+    ]
+  },
+  "groups": [
+    {
+      "name": "cs",
+      "path": "/cs",
+      "attributes": {
+        "org_id": ["cs"]
+      },
+      "subGroups": [
+        {
+          "name": "faculty",
+          "path": "/cs/faculty",
+          "attributes": {
+            "team_id": ["cs-faculty"]
+          }
+        },
+        {
+          "name": "phd-students",
+          "path": "/cs/phd-students",
+          "attributes": {
+            "team_id": ["cs-phd-students"]
+          }
+        },
+        {
+          "name": "undergrad-tas",
+          "path": "/cs/undergrad-tas",
+          "attributes": {
+            "team_id": ["cs-undergrad-tas"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "med",
+      "path": "/med",
+      "attributes": {
+        "org_id": ["med"]
+      },
+      "subGroups": [
+        {
+          "name": "research",
+          "path": "/med/research",
+          "attributes": {
+            "team_id": ["med-research"]
+          }
+        },
+        {
+          "name": "administration",
+          "path": "/med/administration",
+          "attributes": {
+            "team_id": ["med-administration"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "it",
+      "path": "/it",
+      "attributes": {
+        "org_id": ["it"]
+      },
+      "subGroups": [
+        {
+          "name": "platform",
+          "path": "/it/platform",
+          "attributes": {
+            "team_id": ["it-platform"]
+          }
+        }
+      ]
+    }
+  ],
+  "scopeMappings": [
+    {
+      "client": "hadrian-gateway",
+      "roles": ["super_admin", "org_admin", "team_admin", "user", "premium", "tools_enabled", "rag_enabled"]
+    }
+  ],
+  "clientScopeMappings": {
+    "hadrian-gateway": [
+      {
+        "client": "hadrian-gateway",
+        "roles": ["super_admin", "org_admin", "team_admin", "user", "premium", "tools_enabled", "rag_enabled"]
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "hadrian-gateway",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "test-secret-for-e2e",
+      "protocol": "openid-connect",
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": true,
+      "serviceAccountsEnabled": true,
+      "authorizationServicesEnabled": false,
+      "redirectUris": [
+        "http://localhost:8080/*",
+        "http://localhost:3000/*"
+      ],
+      "webOrigins": [
+        "http://localhost:8080",
+        "http://localhost:3000"
+      ],
+      "attributes": {
+        "access.token.lifespan": "3600"
+      },
+      "protocolMappers": [
+        {
+          "name": "realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "roles",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "groups",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "username",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "preferred_username",
+            "user.attribute": "username",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "hadrian-gateway",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "org",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "org",
+            "claim.value": "university",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-hadrian-gateway",
+      "enabled": true,
+      "serviceAccountClientId": "hadrian-gateway",
+      "realmRoles": ["super_admin", "user"]
+    },
+    {
+      "username": "admin_super",
+      "email": "admin.super@university.edu",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Super",
+      "lastName": "Admin",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["super_admin", "user", "premium", "tools_enabled", "rag_enabled"],
+      "groups": ["/it/platform"]
+    },
+    {
+      "username": "admin_backup",
+      "email": "admin.backup@university.edu",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Backup",
+      "lastName": "Admin",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["super_admin", "user"],
+      "groups": ["/it/platform"]
+    },
+    {
+      "username": "cs_admin",
+      "email": "cs.admin@university.edu",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "CS",
+      "lastName": "Administrator",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "orgadmin123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["org_admin", "user"],
+      "groups": ["/cs"]
+    },
+    {
+      "username": "med_admin",
+      "email": "med.admin@university.edu",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Medical",
+      "lastName": "Administrator",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "orgadmin123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["org_admin", "user"],
+      "groups": ["/med"]
+    },
+    {
+      "username": "it_admin",
+      "email": "it.admin@university.edu",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "IT",
+      "lastName": "Administrator",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "orgadmin123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["org_admin", "user"],
+      "groups": ["/it"]
+    },
+    {
+      "username": "prof_smith",
+      "email": "prof.smith@university.edu",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "John",
+      "lastName": "Smith",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "teamadmin123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["team_admin", "user", "premium", "tools_enabled", "rag_enabled"],
+      "groups": ["/cs/faculty"]
+    },
+    {
+      "username": "prof_jones",
+      "email": "prof.jones@university.edu",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Sarah",
+      "lastName": "Jones",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "user123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["user"],
+      "groups": ["/cs/faculty"]
+    },
+    {
+      "username": "phd_alice",
+      "email": "phd.alice@university.edu",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Chen",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "teamadmin123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["team_admin", "user"],
+      "groups": ["/cs/phd-students"]
+    },
+    {
+      "username": "phd_bob",
+      "email": "phd.bob@university.edu",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Bob",
+      "lastName": "Martinez",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "user123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["user"],
+      "groups": ["/cs/phd-students"]
+    },
+    {
+      "username": "ta_dave",
+      "email": "ta.dave@university.edu",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Dave",
+      "lastName": "Wilson",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "user123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["user"],
+      "groups": ["/cs/undergrad-tas"]
+    },
+    {
+      "username": "dr_wilson",
+      "email": "dr.wilson@university.edu",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Emily",
+      "lastName": "Wilson",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "teamadmin123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["team_admin", "user"],
+      "groups": ["/med/research"]
+    },
+    {
+      "username": "dr_chen",
+      "email": "dr.chen@university.edu",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Michael",
+      "lastName": "Chen",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "user123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["user"],
+      "groups": ["/med/research"]
+    },
+    {
+      "username": "admin_frank",
+      "email": "admin.frank@university.edu",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Frank",
+      "lastName": "Garcia",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "user123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["user"],
+      "groups": ["/med/administration"]
+    },
+    {
+      "username": "platform_lead",
+      "email": "platform.lead@university.edu",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Platform",
+      "lastName": "Lead",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "teamadmin123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["team_admin", "user"],
+      "groups": ["/it/platform"]
+    },
+    {
+      "username": "testuser",
+      "email": "test@example.com",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Test",
+      "lastName": "User",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "testpassword",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["user"]
+    }
+  ]
+}

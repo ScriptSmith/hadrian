@@ -1,0 +1,58 @@
+{
+  "id": "openrouter:chat_completion:success",
+  "description": "Successful non-streaming chat completion via OpenRouter with cost",
+  "request": {
+    "method": "POST",
+    "path": "/chat/completions"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-content-type-options": "nosniff",
+      "content-type": "application/json"
+    },
+    "body": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "logprobs": null,
+          "message": {
+            "content": "2  \n3  \n5  \n7  \n11  \n13  \n17  \n19  \n23  \n29  ",
+            "reasoning": null,
+            "refusal": null,
+            "role": "assistant"
+          },
+          "native_finish_reason": "stop"
+        }
+      ],
+      "created": 1766147971,
+      "id": "gen-1766147971-NUqOaiCY1SdhchZhna90",
+      "model": "openai/gpt-4o-mini",
+      "object": "chat.completion",
+      "provider": "OpenAI",
+      "system_fingerprint": "fp_ee69c2ef48",
+      "usage": {
+        "completion_tokens": 20,
+        "completion_tokens_details": {
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "cost": 0.0000156,
+        "cost_details": {
+          "upstream_inference_completions_cost": 0.000012,
+          "upstream_inference_cost": null,
+          "upstream_inference_prompt_cost": 3.6e-6
+        },
+        "is_byok": false,
+        "prompt_tokens": 24,
+        "prompt_tokens_details": {
+          "audio_tokens": 0,
+          "cached_tokens": 0,
+          "video_tokens": 0
+        },
+        "total_tokens": 44
+      }
+    }
+  }
+}

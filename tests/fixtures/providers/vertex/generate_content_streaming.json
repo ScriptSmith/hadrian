@@ -1,0 +1,138 @@
+{
+  "id": "vertex:generate_content:streaming",
+  "description": "Streaming Vertex generateContent response with SSE",
+  "request": {
+    "method": "POST",
+    "path": "/gemini-2.0-flash:streamGenerateContent",
+    "path_pattern": "/.+:streamGenerateContent"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "transfer-encoding": "chunked"
+    },
+    "streaming": true,
+    "chunks": [
+      {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "1"
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2025-12-21T08:54:06.538828Z",
+        "modelVersion": "gemini-2.0-flash",
+        "responseId": "rrVHaczxIN7nidsPvpHV0QU",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "\n2\n"
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2025-12-21T08:54:06.538828Z",
+        "modelVersion": "gemini-2.0-flash",
+        "responseId": "rrVHaczxIN7nidsPvpHV0QU",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "3\n4\n5\n6\n7\n8\n9\n10"
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2025-12-21T08:54:06.538828Z",
+        "modelVersion": "gemini-2.0-flash",
+        "responseId": "rrVHaczxIN7nidsPvpHV0QU",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "\n11\n12\n13\n14\n15\n"
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2025-12-21T08:54:06.538828Z",
+        "modelVersion": "gemini-2.0-flash",
+        "responseId": "rrVHaczxIN7nidsPvpHV0QU",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "16\n17\n18\n19\n20\n"
+                }
+              ],
+              "role": "model"
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "createTime": "2025-12-21T08:54:06.538828Z",
+        "modelVersion": "gemini-2.0-flash",
+        "responseId": "rrVHaczxIN7nidsPvpHV0QU",
+        "usageMetadata": {
+          "candidatesTokenCount": 51,
+          "candidatesTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 51
+            }
+          ],
+          "promptTokenCount": 19,
+          "promptTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 19
+            }
+          ],
+          "totalTokenCount": 70,
+          "trafficType": "ON_DEMAND"
+        }
+      }
+    ]
+  }
+}

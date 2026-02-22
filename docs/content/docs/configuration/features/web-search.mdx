@@ -1,0 +1,135 @@
+---
+title: Web Search
+description: Configure web search providers for the web_search tool
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The `[features.web_search]` section configures web search providers that can be used by the `web_search` tool in chat conversations.
+
+## Configuration Reference
+
+### Main Settings
+
+```toml
+[features.web_search]
+enabled = true
+default_provider = "tavily"
+max_results = 10
+```
+
+| Key                | Type    | Default | Description               |
+| ------------------ | ------- | ------- | ------------------------- |
+| `enabled`          | boolean | `true`  | Enable web search         |
+| `default_provider` | string  | none    | Default provider name     |
+| `max_results`      | integer | `10`    | Maximum results to return |
+
+## Providers
+
+### Tavily
+
+AI-optimized search API:
+
+```toml
+[[features.web_search.providers]]
+type = "tavily"
+api_key = "${TAVILY_API_KEY}"
+```
+
+| Key       | Type   | Description    |
+| --------- | ------ | -------------- |
+| `api_key` | string | Tavily API key |
+
+### Brave Search
+
+Privacy-focused search API:
+
+```toml
+[[features.web_search.providers]]
+type = "brave"
+api_key = "${BRAVE_SEARCH_API_KEY}"
+```
+
+| Key       | Type   | Description          |
+| --------- | ------ | -------------------- |
+| `api_key` | string | Brave Search API key |
+
+### Google Custom Search
+
+Google search via Custom Search JSON API:
+
+```toml
+[[features.web_search.providers]]
+type = "google"
+api_key = "${GOOGLE_API_KEY}"
+search_engine_id = "${GOOGLE_CSE_ID}"
+```
+
+| Key                | Type   | Description             |
+| ------------------ | ------ | ----------------------- |
+| `api_key`          | string | Google API key          |
+| `search_engine_id` | string | Custom Search Engine ID |
+
+### Bing Search
+
+Microsoft Bing Web Search API:
+
+```toml
+[[features.web_search.providers]]
+type = "bing"
+api_key = "${BING_SEARCH_API_KEY}"
+```
+
+| Key       | Type   | Description         |
+| --------- | ------ | ------------------- |
+| `api_key` | string | Bing Search API key |
+
+### SerpAPI
+
+Scraping-based search API (Google, Bing, etc.):
+
+```toml
+[[features.web_search.providers]]
+type = "serp"
+api_key = "${SERPAPI_KEY}"
+```
+
+| Key       | Type   | Description |
+| --------- | ------ | ----------- |
+| `api_key` | string | SerpAPI key |
+
+## Complete Example
+
+```toml
+[features.web_search]
+enabled = true
+default_provider = "tavily"
+max_results = 10
+
+[[features.web_search.providers]]
+type = "tavily"
+api_key = "${TAVILY_API_KEY}"
+
+[[features.web_search.providers]]
+type = "brave"
+api_key = "${BRAVE_SEARCH_API_KEY}"
+
+[[features.web_search.providers]]
+type = "google"
+api_key = "${GOOGLE_API_KEY}"
+search_engine_id = "${GOOGLE_CSE_ID}"
+```
+
+## Provider Comparison
+
+| Provider | Pricing       | Best For                                |
+| -------- | ------------- | --------------------------------------- |
+| Tavily   | Freemium      | AI/LLM applications, clean results      |
+| Brave    | Freemium      | Privacy-conscious, web search           |
+| Google   | Pay-per-query | Comprehensive results, custom filtering |
+| Bing     | Pay-per-query | Microsoft ecosystem                     |
+| SerpAPI  | Pay-per-query | Multiple search engines, SERP data      |
+
+<Callout type="info">
+  Web search results are formatted for LLM consumption and injected into the conversation context.
+</Callout>

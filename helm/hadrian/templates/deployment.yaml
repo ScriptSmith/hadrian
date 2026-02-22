@@ -1,0 +1,554 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hadrian.fullname" . }}
+  labels:
+    {{- include "hadrian.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "hadrian.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.sidecars.vaultAgent.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "hadrian.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "hadrian.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if or .Values.initContainers.waitForDb.enabled .Values.initContainers.migrate.enabled .Values.extraInitContainers }}
+      initContainers:
+        {{- /* Wait-for-database init container */ -}}
+        {{- if .Values.initContainers.waitForDb.enabled }}
+        - name: wait-for-db
+          image: "{{ .Values.initContainers.waitForDb.image.repository }}:{{ .Values.initContainers.waitForDb.image.tag }}"
+          imagePullPolicy: {{ .Values.initContainers.waitForDb.image.pullPolicy }}
+          {{- if eq .Values.gateway.database.type "postgres" }}
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for PostgreSQL to be ready..."
+              TIMEOUT={{ .Values.initContainers.waitForDb.timeoutSeconds }}
+              INTERVAL={{ .Values.initContainers.waitForDb.intervalSeconds }}
+              ELAPSED=0
+              HOST="{{ include "hadrian.postgresql.host" . }}"
+              PORT={{ include "hadrian.postgresql.port" . }}
+              while [ $ELAPSED -lt $TIMEOUT ]; do
+                if nc -z "$HOST" "$PORT" 2>/dev/null; then
+                  echo "PostgreSQL is ready at $HOST:$PORT"
+                  exit 0
+                fi
+                echo "Waiting for PostgreSQL at $HOST:$PORT... ($ELAPSED/$TIMEOUT seconds)"
+                sleep $INTERVAL
+                ELAPSED=$((ELAPSED + INTERVAL))
+              done
+              echo "Timeout waiting for PostgreSQL at $HOST:$PORT"
+              exit 1
+          {{- else }}
+          {{- /* SQLite doesn't need wait-for-db, just succeed */ -}}
+          command:
+            - sh
+            - -c
+            - echo "SQLite mode - no database wait required"
+          {{- end }}
+          resources:
+            {{- toYaml .Values.initContainers.waitForDb.resources | nindent 12 }}
+        {{- end }}
+        {{- /* Database migration init container */ -}}
+        {{- if .Values.initContainers.migrate.enabled }}
+        - name: migrate
+          image: "{{ .Values.initContainers.migrate.image.repository | default .Values.image.repository }}:{{ .Values.initContainers.migrate.image.tag | default .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.initContainers.migrate.image.pullPolicy | default .Values.image.pullPolicy }}
+          command:
+            - /app/hadrian
+            - migrate
+            - --config
+            - /app/config/hadrian.toml
+          {{- with .Values.initContainers.migrate.securityContext | default .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            {{- /* Database password for migrations */ -}}
+            {{- if or .Values.postgresql.enabled (and (eq .Values.gateway.database.type "postgres") (or .Values.gateway.database.postgres.password .Values.gateway.database.postgres.existingSecret)) }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hadrian.postgresql.secretName" . | trim }}
+                  key: {{ include "hadrian.postgresql.secretKey" . | trim }}
+            {{- end }}
+            {{- with .Values.initContainers.migrate.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.initContainers.migrate.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+            {{- if eq .Values.gateway.database.type "sqlite" }}
+            - name: data
+              mountPath: /app/data
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
+            {{- if and (eq .Values.gateway.database.type "postgres") .Values.gateway.database.postgres.ssl.enabled .Values.gateway.database.postgres.ssl.existingSecret }}
+            - name: postgres-ssl
+              mountPath: {{ .Values.gateway.database.postgres.ssl.mountPath | default "/etc/ssl/postgres" }}
+              readOnly: true
+            {{- end }}
+        {{- end }}
+        {{- /* Extra init containers */ -}}
+        {{- with .Values.extraInitContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.gateway.server.port }}
+              protocol: TCP
+          env:
+            # Server configuration
+            - name: RUST_LOG
+              value: {{ .Values.gateway.logLevel | quote }}
+            {{- if .Values.gateway.observability.tracing.enabled }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.gateway.observability.tracing.otlpEndpoint | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ .Values.gateway.observability.tracing.serviceName | quote }}
+            {{- end }}
+            # Database password (if PostgreSQL subchart or external PostgreSQL with password)
+            {{- if or .Values.postgresql.enabled (and (eq .Values.gateway.database.type "postgres") (or .Values.gateway.database.postgres.password .Values.gateway.database.postgres.existingSecret)) }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hadrian.postgresql.secretName" . | trim }}
+                  key: {{ include "hadrian.postgresql.secretKey" . | trim }}
+            {{- end }}
+            # Redis password (if Redis subchart with auth, or external Redis with password)
+            {{- if or (and .Values.redis.enabled .Values.redis.auth.enabled) (and (eq .Values.gateway.cache.type "redis") (or .Values.gateway.cache.redis.password .Values.gateway.cache.redis.existingSecret)) }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hadrian.redis.secretName" . | trim }}
+                  key: {{ include "hadrian.redis.secretKey" . | trim }}
+            {{- end }}
+            # Provider API keys (only reference secret when apiKey or existingSecret is provided)
+            {{- if and .Values.gateway.providers.openrouter.enabled (or .Values.gateway.providers.openrouter.apiKey .Values.gateway.providers.openrouter.existingSecret) }}
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hadrian.providerSecretName" (list "openrouter" .) }}
+                  key: {{ include "hadrian.providerSecretKey" (list "openrouter" .) }}
+            {{- end }}
+            {{- if and .Values.gateway.providers.openai.enabled (or .Values.gateway.providers.openai.apiKey .Values.gateway.providers.openai.existingSecret) }}
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hadrian.providerSecretName" (list "openai" .) }}
+                  key: {{ include "hadrian.providerSecretKey" (list "openai" .) }}
+            {{- end }}
+            {{- if and .Values.gateway.providers.anthropic.enabled (or .Values.gateway.providers.anthropic.apiKey .Values.gateway.providers.anthropic.existingSecret) }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hadrian.providerSecretName" (list "anthropic" .) }}
+                  key: {{ include "hadrian.providerSecretKey" (list "anthropic" .) }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          command:
+            - /app/hadrian
+          args:
+            - "--config"
+            - "/app/config/hadrian.toml"
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+            {{- if eq .Values.gateway.database.type "sqlite" }}
+            - name: data
+              mountPath: /app/data
+            {{- end }}
+            # Temp directory for read-only root filesystem
+            - name: tmp
+              mountPath: /tmp
+            {{- if and (eq .Values.gateway.database.type "postgres") .Values.gateway.database.postgres.ssl.enabled .Values.gateway.database.postgres.ssl.existingSecret }}
+            # PostgreSQL SSL CA certificate
+            - name: postgres-ssl
+              mountPath: {{ .Values.gateway.database.postgres.ssl.mountPath | default "/etc/ssl/postgres" }}
+              readOnly: true
+            {{- end }}
+            {{- if and (eq .Values.gateway.cache.type "redis") .Values.gateway.cache.redis.tls.enabled .Values.gateway.cache.redis.tls.existingSecret }}
+            # Redis TLS CA certificate
+            - name: redis-tls
+              mountPath: /etc/ssl/redis
+              readOnly: true
+            {{- end }}
+            {{- if .Values.fileStorage.enabled }}
+            # File storage for Files API
+            - name: files
+              mountPath: {{ .Values.fileStorage.mountPath }}
+            {{- end }}
+            {{- if .Values.sidecars.vaultAgent.enabled }}
+            # Vault Agent secrets volume (shared with sidecar)
+            - name: vault-secrets
+              mountPath: {{ .Values.sidecars.vaultAgent.secretsPath }}
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- /* ================================================================ */}}
+        {{- /* Sidecar Containers                                              */}}
+        {{- /* ================================================================ */}}
+        {{- /* Vault Agent sidecar */ -}}
+        {{- if .Values.sidecars.vaultAgent.enabled }}
+        - name: vault-agent
+          image: "{{ .Values.sidecars.vaultAgent.image.repository }}:{{ .Values.sidecars.vaultAgent.image.tag }}"
+          imagePullPolicy: {{ .Values.sidecars.vaultAgent.image.pullPolicy }}
+          args:
+            - agent
+            - -config=/vault/config/agent.hcl
+          env:
+            - name: VAULT_ADDR
+              value: {{ .Values.sidecars.vaultAgent.vaultAddr | quote }}
+            {{- with .Values.sidecars.vaultAgent.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.sidecars.vaultAgent.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 100
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: vault-agent-config
+              mountPath: /vault/config
+              readOnly: true
+            - name: vault-secrets
+              mountPath: {{ .Values.sidecars.vaultAgent.secretsPath }}
+            - name: vault-home
+              mountPath: /home/vault
+            {{- with .Values.sidecars.vaultAgent.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+        {{- /* Cloud SQL Auth Proxy sidecar */ -}}
+        {{- if .Values.sidecars.cloudSqlProxy.enabled }}
+        - name: cloud-sql-proxy
+          image: "{{ .Values.sidecars.cloudSqlProxy.image.repository }}:{{ .Values.sidecars.cloudSqlProxy.image.tag }}"
+          imagePullPolicy: {{ .Values.sidecars.cloudSqlProxy.image.pullPolicy }}
+          args:
+            - {{ .Values.sidecars.cloudSqlProxy.instanceConnectionName | quote }}
+            - --port={{ .Values.sidecars.cloudSqlProxy.port }}
+            {{- if .Values.sidecars.cloudSqlProxy.privateIP }}
+            - --private-ip
+            {{- end }}
+            {{- if .Values.sidecars.cloudSqlProxy.iamAuthentication }}
+            - --auto-iam-authn
+            {{- end }}
+            {{- if .Values.sidecars.cloudSqlProxy.structuredLogs }}
+            - --structured-logs
+            {{- end }}
+            {{- if gt (int .Values.sidecars.cloudSqlProxy.healthCheckPort) 0 }}
+            - --health-check
+            - --http-port={{ .Values.sidecars.cloudSqlProxy.healthCheckPort }}
+            {{- end }}
+            {{- if gt (int .Values.sidecars.cloudSqlProxy.adminPort) 0 }}
+            - --admin-port={{ .Values.sidecars.cloudSqlProxy.adminPort }}
+            {{- end }}
+            {{- if and (not .Values.sidecars.cloudSqlProxy.credentials.useWorkloadIdentity) .Values.sidecars.cloudSqlProxy.credentials.secretName }}
+            - --credentials-file={{ .Values.sidecars.cloudSqlProxy.credentials.mountPath }}/{{ .Values.sidecars.cloudSqlProxy.credentials.secretKey }}
+            {{- end }}
+            {{- with .Values.sidecars.cloudSqlProxy.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.sidecars.cloudSqlProxy.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.sidecars.cloudSqlProxy.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          {{- if gt (int .Values.sidecars.cloudSqlProxy.healthCheckPort) 0 }}
+          livenessProbe:
+            httpGet:
+              path: /liveness
+              port: {{ .Values.sidecars.cloudSqlProxy.healthCheckPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readiness
+              port: {{ .Values.sidecars.cloudSqlProxy.healthCheckPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- end }}
+          {{- if and (not .Values.sidecars.cloudSqlProxy.credentials.useWorkloadIdentity) .Values.sidecars.cloudSqlProxy.credentials.secretName }}
+          volumeMounts:
+            - name: cloudsql-credentials
+              mountPath: {{ .Values.sidecars.cloudSqlProxy.credentials.mountPath }}
+              readOnly: true
+          {{- end }}
+        {{- end }}
+        {{- /* OAuth2 Proxy sidecar */ -}}
+        {{- if .Values.sidecars.oauth2Proxy.enabled }}
+        - name: oauth2-proxy
+          image: "{{ .Values.sidecars.oauth2Proxy.image.repository }}:{{ .Values.sidecars.oauth2Proxy.image.tag }}"
+          imagePullPolicy: {{ .Values.sidecars.oauth2Proxy.image.pullPolicy }}
+          args:
+            - --http-address=0.0.0.0:{{ .Values.sidecars.oauth2Proxy.port }}
+            - --upstream={{ .Values.sidecars.oauth2Proxy.upstreamUrl | default (printf "http://localhost:%d" (int .Values.gateway.server.port)) }}
+            - --provider={{ .Values.sidecars.oauth2Proxy.provider }}
+            {{- if .Values.sidecars.oauth2Proxy.oidcIssuerUrl }}
+            - --oidc-issuer-url={{ .Values.sidecars.oauth2Proxy.oidcIssuerUrl }}
+            {{- end }}
+            {{- if .Values.sidecars.oauth2Proxy.emailDomains }}
+            {{- range .Values.sidecars.oauth2Proxy.emailDomains }}
+            - --email-domain={{ . }}
+            {{- end }}
+            {{- else }}
+            - --email-domain=*
+            {{- end }}
+            {{- range .Values.sidecars.oauth2Proxy.allowedGroups }}
+            - --allowed-group={{ . }}
+            {{- end }}
+            {{- range .Values.sidecars.oauth2Proxy.skipAuthPaths }}
+            - --skip-auth-route={{ . }}
+            {{- end }}
+            {{- if .Values.sidecars.oauth2Proxy.passAuthorizationHeader }}
+            - --pass-authorization-header=true
+            {{- end }}
+            {{- if .Values.sidecars.oauth2Proxy.setXAuthRequestHeaders }}
+            - --set-xauthrequest=true
+            {{- end }}
+            - --cookie-name={{ .Values.sidecars.oauth2Proxy.cookie.name }}
+            - --cookie-secure={{ .Values.sidecars.oauth2Proxy.cookie.secure }}
+            {{- if .Values.sidecars.oauth2Proxy.cookie.domain }}
+            - --cookie-domain={{ .Values.sidecars.oauth2Proxy.cookie.domain }}
+            {{- end }}
+            - --cookie-expire={{ .Values.sidecars.oauth2Proxy.cookie.expire }}
+            - --cookie-refresh={{ .Values.sidecars.oauth2Proxy.cookie.refresh }}
+            {{- with .Values.sidecars.oauth2Proxy.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            {{- if .Values.sidecars.oauth2Proxy.existingSecret }}
+            - name: OAUTH2_PROXY_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.sidecars.oauth2Proxy.existingSecret }}
+                  key: {{ .Values.sidecars.oauth2Proxy.clientIdKey }}
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.sidecars.oauth2Proxy.existingSecret }}
+                  key: {{ .Values.sidecars.oauth2Proxy.clientSecretKey }}
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.sidecars.oauth2Proxy.existingSecret }}
+                  key: {{ .Values.sidecars.oauth2Proxy.cookieSecretKey }}
+            {{- else }}
+            - name: OAUTH2_PROXY_CLIENT_ID
+              value: {{ .Values.sidecars.oauth2Proxy.clientId | quote }}
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              value: {{ .Values.sidecars.oauth2Proxy.clientSecret | quote }}
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              value: {{ .Values.sidecars.oauth2Proxy.cookieSecret | quote }}
+            {{- end }}
+            {{- with .Values.sidecars.oauth2Proxy.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: oauth2-proxy
+              containerPort: {{ .Values.sidecars.oauth2Proxy.port }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.sidecars.oauth2Proxy.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 2000
+            runAsGroup: 2000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: {{ .Values.sidecars.oauth2Proxy.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: {{ .Values.sidecars.oauth2Proxy.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+        {{- end }}
+        {{- /* Extra sidecar containers */ -}}
+        {{- with .Values.extraContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "hadrian.configMapName" . }}
+        {{- if and (eq .Values.gateway.database.type "sqlite") .Values.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "hadrian.fullname" .)) }}
+        {{- else if eq .Values.gateway.database.type "sqlite" }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+        {{- if and (eq .Values.gateway.database.type "postgres") .Values.gateway.database.postgres.ssl.enabled .Values.gateway.database.postgres.ssl.existingSecret }}
+        # PostgreSQL SSL CA certificate
+        - name: postgres-ssl
+          secret:
+            secretName: {{ .Values.gateway.database.postgres.ssl.existingSecret }}
+            items:
+              - key: {{ .Values.gateway.database.postgres.ssl.caKey | default "ca.crt" }}
+                path: ca.crt
+        {{- end }}
+        {{- if and (eq .Values.gateway.cache.type "redis") .Values.gateway.cache.redis.tls.enabled .Values.gateway.cache.redis.tls.existingSecret }}
+        # Redis TLS CA certificate
+        - name: redis-tls
+          secret:
+            secretName: {{ .Values.gateway.cache.redis.tls.existingSecret }}
+            items:
+              - key: {{ .Values.gateway.cache.redis.tls.caKey | default "ca.crt" }}
+                path: ca.crt
+        {{- end }}
+        {{- if .Values.fileStorage.enabled }}
+        # File storage for Files API
+        {{- if .Values.fileStorage.persistence.enabled }}
+        - name: files
+          persistentVolumeClaim:
+            claimName: {{ .Values.fileStorage.persistence.existingClaim | default (printf "%s-files" (include "hadrian.fullname" .)) }}
+        {{- else }}
+        - name: files
+          emptyDir: {}
+        {{- end }}
+        {{- end }}
+        {{- /* ================================================================ */}}
+        {{- /* Sidecar Volumes                                                 */}}
+        {{- /* ================================================================ */}}
+        {{- if .Values.sidecars.vaultAgent.enabled }}
+        # Vault Agent configuration
+        - name: vault-agent-config
+          configMap:
+            name: {{ include "hadrian.fullname" . }}-vault-agent
+        # Vault Agent secrets (shared with main container)
+        - name: vault-secrets
+          emptyDir:
+            medium: Memory
+        # Vault Agent home directory (for token storage)
+        - name: vault-home
+          emptyDir:
+            medium: Memory
+        {{- end }}
+        {{- if and .Values.sidecars.cloudSqlProxy.enabled (not .Values.sidecars.cloudSqlProxy.credentials.useWorkloadIdentity) .Values.sidecars.cloudSqlProxy.credentials.secretName }}
+        # Cloud SQL Auth Proxy credentials
+        - name: cloudsql-credentials
+          secret:
+            secretName: {{ .Values.sidecars.cloudSqlProxy.credentials.secretName }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- range . }}
+        - maxSkew: {{ .maxSkew }}
+          topologyKey: {{ .topologyKey }}
+          whenUnsatisfiable: {{ .whenUnsatisfiable }}
+          {{- if .labelSelector }}
+          labelSelector:
+            {{- toYaml .labelSelector | nindent 12 }}
+          {{- else }}
+          labelSelector:
+            matchLabels:
+              {{- include "hadrian.selectorLabels" $ | nindent 14 }}
+          {{- end }}
+          {{- if .matchLabelKeys }}
+          matchLabelKeys:
+            {{- toYaml .matchLabelKeys | nindent 12 }}
+          {{- end }}
+          {{- if .nodeAffinityPolicy }}
+          nodeAffinityPolicy: {{ .nodeAffinityPolicy }}
+          {{- end }}
+          {{- if .nodeTaintsPolicy }}
+          nodeTaintsPolicy: {{ .nodeTaintsPolicy }}
+          {{- end }}
+          {{- if .minDomains }}
+          minDomains: {{ .minDomains }}
+          {{- end }}
+        {{- end }}
+      {{- end }}

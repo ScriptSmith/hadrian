@@ -1,0 +1,228 @@
+# Docker Compose with Traefik Reverse Proxy and Load Balancing
+# Features: SSL termination, automatic HTTPS, load balancing, rate limiting
+#
+# Default password is "gateway" for testing. Override with POSTGRES_PASSWORD in .env file.
+# For production, use docker-compose.production.yml instead.
+#
+# Endpoints:
+# - Gateway (via Traefik): https://gateway.localhost
+# - Traefik Dashboard: http://localhost:8080
+#
+# For production, configure:
+# - Real domain names
+# - Let's Encrypt certificates
+# - Proper network segmentation
+
+services:
+  traefik:
+    image: traefik:v3.0
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8081:8080"   # Dashboard (moved from 8080 to avoid conflicts)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./config/traefik:/etc/traefik:ro
+      - traefik-certs:/letsencrypt
+    command:
+      # API and Dashboard
+      - --api.dashboard=true
+      - --api.insecure=true
+      # Providers
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=hadrian-network
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      # Entrypoints
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      # HTTP to HTTPS redirect
+      - --entrypoints.web.http.redirections.entryPoint.to=websecure
+      - --entrypoints.web.http.redirections.entryPoint.scheme=https
+      # Let's Encrypt (uncomment for production)
+      # - --certificatesresolvers.letsencrypt.acme.email=admin@example.com
+      # - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      # - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      # Logging
+      - --log.level=INFO
+      - --accesslog=true
+      # Metrics
+      - --metrics.prometheus=true
+      - --metrics.prometheus.entryPoint=metrics
+      - --entrypoints.metrics.address=:9100
+    networks:
+      - hadrian-network
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      # Dashboard routing (optional)
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+
+  # Gateway instances for load balancing
+  gateway-1:
+    image: hadrian:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    volumes:
+      - ./config/hadrian.postgres.toml:/app/config/hadrian.toml:ro
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DATABASE_URL=postgres://gateway:${POSTGRES_PASSWORD:-gateway}@postgres:5432/gateway
+      - REDIS_URL=redis://redis:6379
+      - INSTANCE_ID=gateway-1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - hadrian-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "traefik.enable=true"
+      # HTTP Router
+      - "traefik.http.routers.gateway.rule=Host(`gateway.localhost`)"
+      - "traefik.http.routers.gateway.entrypoints=websecure"
+      - "traefik.http.routers.gateway.tls=true"
+      # - "traefik.http.routers.gateway.tls.certresolver=letsencrypt"
+      # Service
+      - "traefik.http.services.gateway.loadbalancer.server.port=8080"
+      - "traefik.http.services.gateway.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.gateway.loadbalancer.healthcheck.interval=10s"
+      - "traefik.http.services.gateway.loadbalancer.sticky.cookie.name=gateway_sticky"
+      - "traefik.http.services.gateway.loadbalancer.sticky.cookie.secure=true"
+      # Middlewares
+      - "traefik.http.routers.gateway.middlewares=gateway-ratelimit,gateway-headers,gateway-compress"
+      # Rate limiting
+      - "traefik.http.middlewares.gateway-ratelimit.ratelimit.average=100"
+      - "traefik.http.middlewares.gateway-ratelimit.ratelimit.burst=50"
+      - "traefik.http.middlewares.gateway-ratelimit.ratelimit.period=1s"
+      # Security headers
+      - "traefik.http.middlewares.gateway-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.gateway-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.gateway-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.gateway-headers.headers.browserXssFilter=true"
+      - "traefik.http.middlewares.gateway-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
+      # Compression
+      - "traefik.http.middlewares.gateway-compress.compress=true"
+
+  gateway-2:
+    image: hadrian:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    volumes:
+      - ./config/hadrian.postgres.toml:/app/config/hadrian.toml:ro
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DATABASE_URL=postgres://gateway:${POSTGRES_PASSWORD:-gateway}@postgres:5432/gateway
+      - REDIS_URL=redis://redis:6379
+      - INSTANCE_ID=gateway-2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - hadrian-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gateway.rule=Host(`gateway.localhost`)"
+      - "traefik.http.services.gateway.loadbalancer.server.port=8080"
+
+  gateway-3:
+    image: hadrian:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    volumes:
+      - ./config/hadrian.postgres.toml:/app/config/hadrian.toml:ro
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DATABASE_URL=postgres://gateway:${POSTGRES_PASSWORD:-gateway}@postgres:5432/gateway
+      - REDIS_URL=redis://redis:6379
+      - INSTANCE_ID=gateway-3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - hadrian-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gateway.rule=Host(`gateway.localhost`)"
+      - "traefik.http.services.gateway.loadbalancer.server.port=8080"
+
+  postgres:
+    image: postgres:16-alpine
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./migrations/postgres:/docker-entrypoint-initdb.d:ro
+    environment:
+      - POSTGRES_DB=gateway
+      - POSTGRES_USER=gateway
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-gateway}
+    networks:
+      - hadrian-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    networks:
+      - hadrian-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+networks:
+  hadrian-network:
+    driver: bridge
+
+volumes:
+  traefik-certs:
+    driver: local
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local

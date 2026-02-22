@@ -1,0 +1,121 @@
+{
+  "id": "openai:responses_tool_call:with_result",
+  "description": "Responses API response after function_call_output is provided",
+  "request": {
+    "method": "POST",
+    "path": "/responses"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-ratelimit-reset-requests": "1m4.101s",
+      "x-ratelimit-remaining-tokens": "199660",
+      "x-ratelimit-limit-tokens": "200000",
+      "x-ratelimit-reset-tokens": "102ms",
+      "x-envoy-upstream-service-time": "1129",
+      "x-ratelimit-remaining-requests": "9992",
+      "content-type": "application/json",
+      "x-content-type-options": "nosniff",
+      "x-request-id": "req_2577b0a6bedc4d8580c369a8d9942a2f",
+      "x-ratelimit-limit-requests": "10000"
+    },
+    "body": {
+      "background": false,
+      "billing": {
+        "payer": "developer"
+      },
+      "completed_at": 1766147516,
+      "created_at": 1766147515,
+      "error": null,
+      "id": "resp_05744e081fcc900400694545bb4b74819ebe8b0e6ee66a8f44",
+      "incomplete_details": null,
+      "instructions": null,
+      "max_output_tokens": null,
+      "max_tool_calls": null,
+      "metadata": {},
+      "model": "gpt-4o-mini-2024-07-18",
+      "object": "response",
+      "output": [
+        {
+          "content": [
+            {
+              "annotations": [],
+              "logprobs": [],
+              "text": "The current weather in San Francisco is 18°C with partly cloudy skies and a humidity level of 65%.",
+              "type": "output_text"
+            }
+          ],
+          "id": "msg_05744e081fcc900400694545bbc860819e8243277b4c752375",
+          "role": "assistant",
+          "status": "completed",
+          "type": "message"
+        }
+      ],
+      "parallel_tool_calls": true,
+      "previous_response_id": null,
+      "prompt_cache_key": null,
+      "prompt_cache_retention": null,
+      "reasoning": {
+        "effort": null,
+        "summary": null
+      },
+      "safety_identifier": null,
+      "service_tier": "default",
+      "status": "completed",
+      "store": true,
+      "temperature": 0.0,
+      "text": {
+        "format": {
+          "type": "text"
+        },
+        "verbosity": "medium"
+      },
+      "tool_choice": "auto",
+      "tools": [
+        {
+          "description": "Get the current weather in a location",
+          "name": "get_weather",
+          "parameters": {
+            "additionalProperties": false,
+            "properties": {
+              "location": {
+                "description": "The city and country, e.g. San Francisco, USA",
+                "type": "string"
+              },
+              "unit": {
+                "description": "The temperature unit",
+                "enum": [
+                  "celsius",
+                  "fahrenheit"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "location",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "strict": true,
+          "type": "function"
+        }
+      ],
+      "top_logprobs": 0,
+      "top_p": 1.0,
+      "truncation": "disabled",
+      "usage": {
+        "input_tokens": 123,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 24,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 147
+      },
+      "user": null
+    }
+  }
+}

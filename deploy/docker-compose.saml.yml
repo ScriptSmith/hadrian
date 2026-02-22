@@ -1,0 +1,206 @@
+# Docker Compose for SAML E2E Tests with Authentik
+# Tests SAML 2.0 authentication + CEL RBAC policies with per-org SSO
+#
+# Port configuration (override via environment variables for parallel testing):
+#   GATEWAY_PORT - Gateway HTTP port (default: 3000)
+#   AUTHENTIK_HTTP_PORT - Authentik HTTP port (default: 9000)
+#   AUTHENTIK_HTTPS_PORT - Authentik HTTPS port (default: 9443)
+#   QDRANT_HTTP_PORT - Qdrant HTTP port (default: 6333)
+#   QDRANT_GRPC_PORT - Qdrant gRPC port (default: 6334)
+#
+# This deployment demonstrates SAML-based authentication:
+# - Single "university" organization with per-org SAML SSO config
+# - JIT provisioning: new users are automatically added to the university org
+# - SSO group mappings: Authentik groups map to teams via Admin API
+# - Authorization uses database memberships, not SAML assertions directly
+# - CEL policies evaluate subject.org_ids/team_ids from database
+#
+# Pre-configured via Authentik blueprint:
+# - SAML provider for Hadrian gateway
+# - Users with same credentials as Keycloak tests
+# - Groups matching Keycloak hierarchy
+#
+# Usage:
+#   cd deploy/tests && pnpm test saml      # Run SAML deployment tests
+#   cd deploy/tests && pnpm test -- --grep "SAML" # Run specific test patterns
+#
+# Test credentials (from Authentik blueprint):
+#   | Role        | Username     | Password      |
+#   |-------------|--------------|---------------|
+#   | super_admin | admin_super  | admin123      |
+#   | org_admin   | cs_admin     | orgadmin123   |
+#   | team_admin  | prof_smith   | teamadmin123  |
+#   | user        | phd_bob      | user123       |
+#
+# Endpoints:
+# - Gateway: http://localhost:3000
+# - Authentik: http://localhost:9000
+# - Authentik Admin: http://localhost:9000/if/admin/ (akadmin / bootstrap-password-for-e2e)
+
+services:
+  gateway:
+    image: hadrian:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "${GATEWAY_PORT:-3000}:8080"
+    extra_hosts:
+      # Allow gateway to reach localhost:9000 (Authentik) from inside the container
+      - "localhost:host-gateway"
+    volumes:
+      # Use SAML config with CEL RBAC policies
+      - ./config/hadrian.saml.toml:/app/config/hadrian.toml:ro
+      - gateway-data:/app/data
+    environment:
+      - RUST_LOG=gateway=debug,info
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - REDIS_URL=redis://redis:6379
+      - QDRANT_URL=http://qdrant:6333
+    depends_on:
+      authentik-server:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  authentik-server:
+    image: ghcr.io/goauthentik/server:2024.12
+    command: server
+    ports:
+      - "${AUTHENTIK_HTTP_PORT:-9000}:9000"
+      - "${AUTHENTIK_HTTPS_PORT:-9443}:9443"
+    volumes:
+      # Import blueprint configuration on startup
+      - ./config/authentik:/blueprints/custom:ro
+      - authentik-media:/media
+      - authentik-templates:/templates
+    environment:
+      - AUTHENTIK_REDIS__HOST=authentik-redis
+      - AUTHENTIK_POSTGRESQL__HOST=authentik-db
+      - AUTHENTIK_POSTGRESQL__USER=authentik
+      - AUTHENTIK_POSTGRESQL__NAME=authentik
+      - AUTHENTIK_POSTGRESQL__PASSWORD=${AUTHENTIK_DB_PASSWORD:-authentik}
+      - AUTHENTIK_SECRET_KEY=${AUTHENTIK_SECRET_KEY:-test-secret-key-for-e2e-testing-only}
+      # Bootstrap token for API access in tests
+      - AUTHENTIK_BOOTSTRAP_TOKEN=${AUTHENTIK_BOOTSTRAP_TOKEN:-test-bootstrap-token-for-e2e}
+      # Bootstrap password for akadmin user
+      - AUTHENTIK_BOOTSTRAP_PASSWORD=${AUTHENTIK_BOOTSTRAP_PASSWORD:-bootstrap-password-for-e2e}
+      # Disable email verification for testing
+      - AUTHENTIK_EMAIL__FROM=test@localhost
+      - AUTHENTIK_DEFAULT_USER_CHANGE_EMAIL=false
+      # Import blueprints on startup
+      - AUTHENTIK_BLUEPRINTS_DIR=/blueprints
+    depends_on:
+      authentik-db:
+        condition: service_healthy
+      authentik-redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ak", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:2024.12
+    command: worker
+    volumes:
+      - ./config/authentik:/blueprints/custom:ro
+      - authentik-media:/media
+      - authentik-templates:/templates
+      - authentik-certs:/certs
+    environment:
+      - AUTHENTIK_REDIS__HOST=authentik-redis
+      - AUTHENTIK_POSTGRESQL__HOST=authentik-db
+      - AUTHENTIK_POSTGRESQL__USER=authentik
+      - AUTHENTIK_POSTGRESQL__NAME=authentik
+      - AUTHENTIK_POSTGRESQL__PASSWORD=${AUTHENTIK_DB_PASSWORD:-authentik}
+      - AUTHENTIK_SECRET_KEY=${AUTHENTIK_SECRET_KEY:-test-secret-key-for-e2e-testing-only}
+      - AUTHENTIK_BLUEPRINTS_DIR=/blueprints
+    depends_on:
+      authentik-db:
+        condition: service_healthy
+      authentik-redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  authentik-db:
+    image: postgres:16-alpine
+    volumes:
+      - authentik-db-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=authentik
+      - POSTGRES_USER=authentik
+      - POSTGRES_PASSWORD=${AUTHENTIK_DB_PASSWORD:-authentik}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authentik"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  authentik-redis:
+    image: redis:7-alpine
+    volumes:
+      - authentik-redis-data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  qdrant:
+    image: qdrant/qdrant:v1.7.4
+    ports:
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    restart: unless-stopped
+
+volumes:
+  gateway-data:
+    driver: local
+  authentik-db-data:
+    driver: local
+  authentik-redis-data:
+    driver: local
+  authentik-media:
+    driver: local
+  authentik-templates:
+    driver: local
+  authentik-certs:
+    driver: local
+  redis-data:
+    driver: local
+  qdrant-data:
+    driver: local

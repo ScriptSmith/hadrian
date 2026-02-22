@@ -1,0 +1,115 @@
+{
+  "id": "openai:responses_tool_call:success",
+  "description": "Responses API with single tool call (function_call output)",
+  "request": {
+    "method": "POST",
+    "path": "/responses"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-ratelimit-remaining-tokens": "199706",
+      "x-request-id": "req_8e07476264e540d3b15fddbb665f5cbf",
+      "x-ratelimit-reset-requests": "45.147s",
+      "x-envoy-upstream-service-time": "2539",
+      "x-ratelimit-limit-tokens": "200000",
+      "content-type": "application/json",
+      "x-ratelimit-limit-requests": "10000",
+      "x-ratelimit-remaining-requests": "9994",
+      "x-ratelimit-reset-tokens": "88ms",
+      "x-content-type-options": "nosniff"
+    },
+    "body": {
+      "background": false,
+      "billing": {
+        "payer": "developer"
+      },
+      "completed_at": 1766147510,
+      "created_at": 1766147508,
+      "error": null,
+      "id": "resp_098aa9fc14a42edc00694545b42498819c8091498b03aa389d",
+      "incomplete_details": null,
+      "instructions": null,
+      "max_output_tokens": null,
+      "max_tool_calls": null,
+      "metadata": {},
+      "model": "gpt-4o-mini-2024-07-18",
+      "object": "response",
+      "output": [
+        {
+          "arguments": "{\"location\":\"San Francisco, USA\",\"unit\":\"celsius\"}",
+          "call_id": "call_OZKPMiUW4uSIO5GcNYVMCMhG",
+          "id": "fc_098aa9fc14a42edc00694545b672c4819ca0f676e4c382fd5c",
+          "name": "get_weather",
+          "status": "completed",
+          "type": "function_call"
+        }
+      ],
+      "parallel_tool_calls": true,
+      "previous_response_id": null,
+      "prompt_cache_key": null,
+      "prompt_cache_retention": null,
+      "reasoning": {
+        "effort": null,
+        "summary": null
+      },
+      "safety_identifier": null,
+      "service_tier": "default",
+      "status": "completed",
+      "store": true,
+      "temperature": 0.0,
+      "text": {
+        "format": {
+          "type": "text"
+        },
+        "verbosity": "medium"
+      },
+      "tool_choice": "auto",
+      "tools": [
+        {
+          "description": "Get the current weather in a location",
+          "name": "get_weather",
+          "parameters": {
+            "additionalProperties": false,
+            "properties": {
+              "location": {
+                "description": "The city and country, e.g. San Francisco, USA",
+                "type": "string"
+              },
+              "unit": {
+                "description": "The temperature unit",
+                "enum": [
+                  "celsius",
+                  "fahrenheit"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "location",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "strict": true,
+          "type": "function"
+        }
+      ],
+      "top_logprobs": 0,
+      "top_p": 1.0,
+      "truncation": "disabled",
+      "usage": {
+        "input_tokens": 77,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 23,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 100
+      },
+      "user": null
+    }
+  }
+}

@@ -1,0 +1,536 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Backend checks
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Docker Hub mirror
+        run: |
+          sudo mkdir -p /etc/docker
+          echo '{"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust nightly (for formatting)
+        run: rustup install nightly && rustup component add rustfmt --toolchain nightly
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxml2-dev libxslt1-dev libxmlsec1-dev libclang-dev tesseract-ocr tesseract-ocr-eng
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Create placeholder directories for rust-embed
+        run: |
+          mkdir -p ui/dist docs/out
+          echo '<!DOCTYPE html><html><body>Placeholder</body></html>' > ui/dist/index.html
+          echo '<!DOCTYPE html><html><body>Placeholder</body></html>' > docs/out/index.html
+
+      - name: Fetch model catalog
+        run: ./scripts/fetch-model-catalog.sh
+
+      - name: Fetch reference specs
+        run: pip install pyyaml && ./scripts/fetch-openapi-specs.sh openai
+
+      - name: Check formatting
+        run: cargo +nightly fmt -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D clippy::correctness -W clippy::style
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Tests (unit)
+        run: cargo nextest run
+
+      - name: Tests (integration)
+        run: cargo test -- --ignored
+
+  # Feature matrix builds
+  feature-check:
+    name: Feature Check (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features: [tiny, minimal, standard, full]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Docker Hub mirror
+        run: |
+          sudo mkdir -p /etc/docker
+          echo '{"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxml2-dev libxslt1-dev libxmlsec1-dev libclang-dev tesseract-ocr tesseract-ocr-eng
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.features }}
+
+      - name: Create placeholder directories for rust-embed
+        run: |
+          mkdir -p ui/dist docs/out
+          echo '<!DOCTYPE html><html><body>Placeholder</body></html>' > ui/dist/index.html
+          echo '<!DOCTYPE html><html><body>Placeholder</body></html>' > docs/out/index.html
+
+      - name: Fetch model catalog
+        run: ./scripts/fetch-model-catalog.sh
+
+      - name: Fetch reference specs
+        run: pip install pyyaml && ./scripts/fetch-openapi-specs.sh openai
+
+      - name: Clippy
+        run: cargo clippy --no-default-features --features ${{ matrix.features }} --all-targets -- -D warnings
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Tests (unit)
+        run: cargo nextest run --no-default-features --features ${{ matrix.features }}
+
+      - name: Tests (integration)
+        run: cargo test --no-default-features --features ${{ matrix.features }} -- --ignored
+
+  # Cross-platform builds
+  cross-build:
+    name: Cross Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            features: full
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            features: minimal
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            features: minimal
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            features: full
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            features: minimal
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install dependencies (Linux full)
+        if: matrix.features == 'full' && runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxml2-dev libxslt1-dev libxmlsec1-dev libclang-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libxml2 libxslt libxmlsec1 llvm
+
+      - name: Install musl toolchain
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install aarch64 cross toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.target }}
+
+      - name: Create placeholder directories for rust-embed
+        run: |
+          mkdir -p ui/dist
+          mkdir -p docs/out
+          echo '<!DOCTYPE html><html><body>Placeholder</body></html>' > ui/dist/index.html
+          echo '<!DOCTYPE html><html><body>Placeholder</body></html>' > docs/out/index.html
+
+      - name: Fetch model catalog
+        shell: bash
+        run: mkdir -p data && curl -sSL https://models.dev/api.json -o data/models-dev-catalog.json
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} --no-default-features --features ${{ matrix.features }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+  # Security audit with cargo-audit
+  security-audit:
+    name: Security Audit (cargo-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo audit
+        run: cargo audit
+
+  # Dependency checks with cargo-deny
+  cargo-deny:
+    name: Dependency Check (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Run cargo deny
+        run: cargo deny check
+
+  # Frontend checks
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Cache pnpm
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate API client
+        run: pnpm run generate-api
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Format check
+        run: pnpm format:check
+
+      - name: Type check
+        run: pnpm exec tsc --noEmit
+
+      - name: Build
+        run: pnpm build
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build Storybook
+        run: pnpm storybook:build
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Storybook tests
+        run: |
+          npx concurrently -k -s first -n "SB,TEST" \
+            "npx http-server storybook-static --port 6006 --silent" \
+            "npx wait-on tcp:127.0.0.1:6006 && pnpm test-storybook"
+
+  # Frontend security audit
+  security-frontend:
+    name: Security Audit (Frontend)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run pnpm audit
+        run: pnpm audit --audit-level=high
+
+  # Documentation site checks
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Cache pnpm
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-docs-${{ hashFiles('docs/pnpm-lock.yaml', 'ui/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-docs-
+
+      # Build Storybook first (docs embeds it via symlink)
+      - name: Install UI dependencies
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate API client
+        working-directory: ui
+        run: pnpm run generate-api
+
+      - name: Build Storybook
+        working-directory: ui
+        run: pnpm storybook:build
+
+      # Build docs
+      - name: Install docs dependencies
+        working-directory: docs
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint docs
+        working-directory: docs
+        run: pnpm lint
+
+      - name: Format check docs
+        working-directory: docs
+        run: pnpm format:check
+
+      - name: Type check docs
+        working-directory: docs
+        run: pnpm types:check
+
+      - name: Build docs
+        working-directory: docs
+        run: pnpm build
+
+  # OpenAPI conformance check
+  openapi-conformance:
+    name: OpenAPI Conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Fetch reference specs
+        run: ./scripts/fetch-openapi-specs.sh openai
+
+      - name: Run conformance check
+        run: ./scripts/openapi-conformance.py
+
+      - name: Generate JSON report
+        if: always()
+        run: ./scripts/openapi-conformance.py --format json > conformance-report.json || true
+
+      - name: Upload conformance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi-conformance-report
+          path: conformance-report.json
+
+  # Docker build - shared image used by e2e tests
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Docker Hub mirror
+        run: |
+          sudo mkdir -p /etc/docker
+          echo '{"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and export Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: hadrian:local
+          outputs: type=docker,dest=${{ runner.temp }}/hadrian.tar
+          cache-from: type=gha,scope=docker
+          cache-to: type=gha,mode=max,scope=docker
+
+      - name: Upload Docker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: ${{ runner.temp }}/hadrian.tar
+          retention-days: 1
+
+  # TypeScript E2E tests with testcontainers
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Docker Hub mirror
+        run: |
+          sudo mkdir -p /etc/docker
+          echo '{"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+
+      - name: Download Docker image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: ${{ runner.temp }}
+
+      - name: Load Docker image
+        run: docker load --input ${{ runner.temp }}/hadrian.tar
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Cache pnpm
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-e2e-${{ hashFiles('deploy/tests/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-e2e-
+
+      - name: Install dependencies
+        working-directory: deploy/tests
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        working-directory: deploy/tests
+        run: npx playwright install chromium --with-deps
+
+      - name: Generate API client
+        working-directory: deploy/tests
+        run: pnpm generate-client
+
+      - name: Pre-pull Docker images for E2E tests
+        working-directory: deploy
+        run: |
+          # Pull all images from all compose files upfront so testcontainers
+          # don't timeout waiting for pulls. --ignore-pull-failures skips the
+          # gateway service which uses a pre-built local image.
+          args=()
+          for f in docker-compose.*.yml; do
+            args+=(-f "$f")
+          done
+          docker compose "${args[@]}" pull --ignore-pull-failures
+
+      - name: Run E2E tests
+        working-directory: deploy/tests
+        env:
+          CI: 'true'
+          # Run tests serially to avoid Docker resource contention on 2-vCPU runners.
+          # This merges all workspace projects into a single sequential project.
+          E2E_SERIAL: 'true'
+          TESTCONTAINERS_RYUK_DISABLED: 'true'
+          # Skip Docker build - image was pre-built in the docker-build job
+          SKIP_BUILD: 'true'
+          # API coverage thresholds - CI will fail if coverage drops below these values.
+          # Set to 0 to disable threshold enforcement for that metric.
+          # Current baseline: ~13.7% endpoints, ~5% parameters, ~5.7% status codes
+          # Start with conservative endpoint threshold to prevent regression.
+          API_COVERAGE_ENDPOINTS_THRESHOLD: '10'
+          API_COVERAGE_PARAMETERS_THRESHOLD: '0'
+          API_COVERAGE_STATUS_CODES_THRESHOLD: '0'
+        run: pnpm test
+        timeout-minutes: 50
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-api-coverage
+          path: deploy/tests/coverage/api-coverage.json
+          retention-days: 30
+
+      - name: Upload test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-artifacts
+          path: |
+            deploy/tests/test-results/
+          retention-days: 7

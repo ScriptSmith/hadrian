@@ -1,0 +1,59 @@
+{
+  "id": "openai:reasoning:success",
+  "description": "Chat completion from o3-mini reasoning model with reasoning_tokens in usage",
+  "request": {
+    "method": "POST",
+    "path": "/chat/completions"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-content-type-options": "nosniff",
+      "x-ratelimit-reset-tokens": "5ms",
+      "x-ratelimit-reset-requests": "120ms",
+      "x-ratelimit-limit-requests": "500",
+      "x-request-id": "req_20aa9890b289420abd3b56aa71f4a46f",
+      "x-envoy-upstream-service-time": "3016",
+      "content-type": "application/json",
+      "x-ratelimit-limit-tokens": "200000",
+      "x-ratelimit-remaining-requests": "499",
+      "x-ratelimit-remaining-tokens": "199982",
+      "x-openai-proxy-wasm": "v0.1"
+    },
+    "body": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+            "annotations": [],
+            "content": "Let's identify the primes one by one:\n\n1. 2  \n2. 3  \n3. 5  \n4. 7  \n5. 11  \n6. 13  \n7. 17  \n8. 19  \n9. 23  \n10. 29  \n11. 31  \n12. 37  \n13. 41  \n14. 43  \n15. 47  \n\nThus, the 15th prime number is 47.",
+            "refusal": null,
+            "role": "assistant"
+          }
+        }
+      ],
+      "created": 1766147500,
+      "id": "chatcmpl-CoTvwEZEPj0O1nmCZj10OX1v6WWOL",
+      "model": "o3-mini-2025-01-31",
+      "object": "chat.completion",
+      "service_tier": "default",
+      "system_fingerprint": "fp_eac5865066",
+      "usage": {
+        "completion_tokens": 301,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": 0,
+          "audio_tokens": 0,
+          "reasoning_tokens": 192,
+          "rejected_prediction_tokens": 0
+        },
+        "prompt_tokens": 22,
+        "prompt_tokens_details": {
+          "audio_tokens": 0,
+          "cached_tokens": 0
+        },
+        "total_tokens": 323
+      }
+    }
+  }
+}

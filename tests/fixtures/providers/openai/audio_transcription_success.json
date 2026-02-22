@@ -1,0 +1,18 @@
+{
+  "id": "openai:audio_transcription:success",
+  "description": "Successful audio transcription response (Whisper)",
+  "request": {
+    "method": "POST",
+    "path": "/audio/transcriptions"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "req_audio_trans_67890"
+    },
+    "body": {
+      "text": "Hello, this is a test transcription of the audio file."
+    }
+  }
+}

@@ -1,0 +1,535 @@
+---
+title: Frontend Tools
+description: Client-side tool execution in the browser via WebAssembly
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The chat UI includes built-in tools that execute entirely in the browser using WebAssembly (WASM). When an LLM returns tool calls, they are executed client-side with results displayed inline as interactive artifacts and sent back to the LLM to continue the conversation.
+
+## Available Tools
+
+| Tool       | Name                  | Runtime        | Use Cases                                              |
+| ---------- | --------------------- | -------------- | ------------------------------------------------------ |
+| Python     | `code_interpreter`    | Pyodide        | Data analysis, calculations, matplotlib visualizations |
+| JavaScript | `js_code_interpreter` | QuickJS        | JSON processing, algorithms, text manipulation         |
+| SQL        | `sql_query`           | DuckDB         | Query CSV/Parquet files, data aggregation              |
+| Charts     | `chart_render`        | Vega-Lite      | Bar, line, scatter, area charts                        |
+| HTML       | `html_render`         | iframe sandbox | Reports, formatted content, interactive demos          |
+| Wikipedia  | `wikipedia`           | MediaWiki API  | Article search and retrieval, encyclopedic content     |
+| Wikidata   | `wikidata`            | Wikidata API   | Structured facts, entity data, knowledge graph         |
+
+## Python Interpreter
+
+The Python interpreter uses [Pyodide](https://pyodide.org/), the CPython interpreter compiled to WebAssembly. Code runs in a Web Worker to prevent blocking the main thread.
+
+### Pre-installed Packages
+
+| Package      | Description                                      |
+| ------------ | ------------------------------------------------ |
+| matplotlib   | Plotting and visualization                       |
+| numpy        | Numerical computing (auto-loaded when imported)  |
+| pandas       | Data analysis (auto-loaded when imported)        |
+| scipy        | Scientific computing (auto-loaded when imported) |
+| scikit-learn | Machine learning (auto-loaded when imported)     |
+| pillow       | Image processing (auto-loaded when imported)     |
+
+Additional packages are automatically installed via [micropip](https://micropip.pyodide.org/) when imported.
+
+### Capabilities
+
+- **Standard output**: Captured via `print()` statements
+- **Return values**: Final expression value returned to model
+- **Matplotlib figures**: Automatically captured as PNG images
+- **Package installation**: Auto-detects imports and loads packages
+
+### Example Usage
+
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Create sample data
+data = {'Month': ['Jan', 'Feb', 'Mar', 'Apr'],
+        'Sales': [100, 150, 120, 180]}
+df = pd.DataFrame(data)
+
+# Create visualization
+plt.figure(figsize=(8, 5))
+plt.bar(df['Month'], df['Sales'], color='steelblue')
+plt.xlabel('Month')
+plt.ylabel('Sales ($)')
+plt.title('Monthly Sales')
+plt.tight_layout()
+plt.show()
+
+print(f"Total sales: ${df['Sales'].sum()}")
+```
+
+### Configuration
+
+| Setting | Value         | Description                           |
+| ------- | ------------- | ------------------------------------- |
+| Timeout | 60 seconds    | Maximum execution time                |
+| Memory  | Browser limit | Uses browser's WASM memory allocation |
+
+<Callout type="info">
+  The Python runtime is loaded on first use. Subsequent executions reuse the same runtime for faster
+  performance.
+</Callout>
+
+## JavaScript Interpreter
+
+The JavaScript interpreter uses [QuickJS](https://bellard.org/quickjs/), a small embeddable JavaScript engine compiled to WebAssembly. Execution is fully sandboxed with no access to browser APIs.
+
+### Capabilities
+
+- **Console output**: `console.log()`, `console.error()`, `console.warn()`
+- **Return values**: Final expression value returned to model
+- **ES2020 support**: Modern JavaScript features
+
+### Limitations
+
+- No access to DOM, `fetch`, `setTimeout`, or browser APIs
+- No external module imports
+- Memory limit: 16 MB
+- Timeout: 30 seconds
+
+### Example Usage
+
+```javascript
+// JSON data processing
+const data = [
+  { name: "Alice", score: 85 },
+  { name: "Bob", score: 92 },
+  { name: "Charlie", score: 78 },
+];
+
+const average = data.reduce((sum, p) => sum + p.score, 0) / data.length;
+const highest = data.reduce((max, p) => (p.score > max.score ? p : max));
+
+console.log(`Average score: ${average.toFixed(1)}`);
+console.log(`Highest scorer: ${highest.name} (${highest.score})`);
+
+// Return summary
+({ average, highest: highest.name, count: data.length });
+```
+
+<Callout type="warn">
+  JavaScript runs in a sandboxed QuickJS environment, not the browser's V8/SpiderMonkey. Some
+  browser-specific features are unavailable.
+</Callout>
+
+## SQL Query
+
+The SQL tool uses [DuckDB WASM](https://duckdb.org/docs/api/wasm/overview.html), an analytical SQL database compiled to WebAssembly. Query uploaded files directly using SQL.
+
+### Supported File Types
+
+| Format  | Extension  | Query Syntax                       |
+| ------- | ---------- | ---------------------------------- |
+| CSV     | `.csv`     | `SELECT * FROM 'filename.csv'`     |
+| Parquet | `.parquet` | `SELECT * FROM 'filename.parquet'` |
+| JSON    | `.json`    | `SELECT * FROM 'filename.json'`    |
+
+### Capabilities
+
+- Full SQL syntax with DuckDB extensions
+- Aggregations, joins, window functions
+- Results displayed as interactive tables
+- Up to 50 rows sent back to the model (full results shown in UI)
+
+### Example Usage
+
+```sql
+-- Analyze sales data from uploaded CSV
+SELECT
+    region,
+    COUNT(*) as order_count,
+    SUM(amount) as total_sales,
+    AVG(amount) as avg_order
+FROM 'sales_data.csv'
+GROUP BY region
+ORDER BY total_sales DESC
+```
+
+### Configuration
+
+| Setting      | Value      | Description                       |
+| ------------ | ---------- | --------------------------------- |
+| Timeout      | 60 seconds | Maximum query execution time      |
+| Result limit | 50 rows    | Rows sent to model (UI shows all) |
+
+<Callout type="info">
+  Files must be uploaded to the conversation before querying. Use the attachment button in the chat
+  input to upload CSV, Parquet, or JSON files.
+</Callout>
+
+## Charts
+
+The chart tool uses [Vega-Lite](https://vega.github.io/vega-lite/), a high-level grammar for interactive visualizations. The LLM provides a Vega-Lite specification and the chart renders inline.
+
+### Supported Chart Types
+
+| Type      | Vega-Lite Mark | Use Case                       |
+| --------- | -------------- | ------------------------------ |
+| Bar       | `bar`          | Comparisons, distributions     |
+| Line      | `line`         | Time series, trends            |
+| Area      | `area`         | Cumulative values, composition |
+| Scatter   | `point`        | Correlations, distributions    |
+| Pie/Donut | `arc`          | Part-to-whole relationships    |
+| Heatmap   | `rect`         | Density, matrices              |
+
+### Example Specification
+
+```json
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "title": "Monthly Revenue",
+  "data": {
+    "values": [
+      { "month": "Jan", "revenue": 45000 },
+      { "month": "Feb", "revenue": 52000 },
+      { "month": "Mar", "revenue": 48000 }
+    ]
+  },
+  "mark": "bar",
+  "encoding": {
+    "x": { "field": "month", "type": "nominal", "title": "Month" },
+    "y": { "field": "revenue", "type": "quantitative", "title": "Revenue ($)" },
+    "color": { "value": "steelblue" }
+  }
+}
+```
+
+### Features
+
+- **Interactive**: Hover tooltips, pan, zoom (where supported)
+- **Export**: Download as PNG or SVG
+- **View spec**: Toggle to see the Vega-Lite JSON
+- **Vega Editor**: Open in the online Vega Editor
+
+<Callout type="info">
+  Data must be embedded inline in the specification. The chart tool cannot fetch external data
+  sources.
+</Callout>
+
+## HTML Preview
+
+The HTML tool renders HTML content in a sandboxed iframe. Use it for formatted reports, interactive demos, or styled content.
+
+### Security
+
+HTML runs in a strictly sandboxed iframe:
+
+| Sandbox Attribute         | Effect                    |
+| ------------------------- | ------------------------- |
+| `allow-scripts`           | JavaScript enabled        |
+| No `allow-same-origin`    | Cannot access parent page |
+| No `allow-forms`          | Form submission blocked   |
+| No `allow-popups`         | Cannot open new windows   |
+| No `allow-top-navigation` | Cannot redirect parent    |
+
+### Features
+
+- **Preview mode**: Rendered HTML display
+- **Source mode**: View raw HTML code
+- **Copy**: Copy HTML to clipboard
+- **Open in tab**: View in full browser tab
+- **Fullscreen**: Maximize within the app
+
+### Example Usage
+
+```html
+<div style="font-family: system-ui; padding: 20px; max-width: 600px;">
+  <h1 style="color: #2563eb; margin-bottom: 8px;">Report Summary</h1>
+  <p style="color: #6b7280; margin-bottom: 16px;">Generated on January 7, 2026</p>
+
+  <table style="width: 100%; border-collapse: collapse;">
+    <thead>
+      <tr style="background: #f3f4f6;">
+        <th style="padding: 12px; text-align: left; border-bottom: 2px solid #e5e7eb;">Metric</th>
+        <th style="padding: 12px; text-align: right; border-bottom: 2px solid #e5e7eb;">Value</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td style="padding: 12px; border-bottom: 1px solid #e5e7eb;">Total Users</td>
+        <td style="padding: 12px; text-align: right; border-bottom: 1px solid #e5e7eb;">1,234</td>
+      </tr>
+      <tr>
+        <td style="padding: 12px; border-bottom: 1px solid #e5e7eb;">Active Sessions</td>
+        <td style="padding: 12px; text-align: right; border-bottom: 1px solid #e5e7eb;">456</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+```
+
+<Callout type="warn">
+  External resources (images, stylesheets, scripts from URLs) are blocked by the sandbox. All
+  content must be inline.
+</Callout>
+
+## Wikipedia
+
+The Wikipedia tool fetches articles from Wikipedia using the [MediaWiki API](https://www.mediawiki.org/wiki/API:Main_page). Content is retrieved directly from Wikimedia servers with full CORS support.
+
+### Actions
+
+| Action   | Description                         | Returns                                    |
+| -------- | ----------------------------------- | ------------------------------------------ |
+| `search` | Find articles matching a query      | List of titles, descriptions, and excerpts |
+| `get`    | Fetch full article content by title | Complete wikitext, sections, and metadata  |
+
+### Search Example
+
+```json
+{
+  "action": "search",
+  "query": "machine learning",
+  "limit": 5
+}
+```
+
+Returns matching articles with titles and descriptions for the model to choose from.
+
+### Get Article Example
+
+```json
+{
+  "action": "get",
+  "query": "MIT",
+  "language": "en"
+}
+```
+
+Returns the full article including:
+
+- **Wikitext**: Complete article source (infoboxes, sections, references)
+- **Sections**: Table of contents with section numbers
+- **Categories**: Article categories
+- **Wikidata properties**: Structured facts from linked Wikidata entity
+
+### Multi-language Support
+
+| Parameter  | Default | Examples                     |
+| ---------- | ------- | ---------------------------- |
+| `language` | `en`    | `de`, `fr`, `es`, `ja`, `zh` |
+
+The tool queries the specified language edition of Wikipedia (e.g., `de.wikipedia.org` for German).
+
+### Artifact Display
+
+Article artifacts include:
+
+- Rendered Wikipedia HTML with infobox, images, and tables
+- Collapsible table of contents
+- Wikidata properties table
+- Categories
+- License information and attribution notice
+
+<Callout type="info">
+  Wikipedia content is licensed under [CC BY-SA
+  4.0](https://creativecommons.org/licenses/by-sa/4.0/). If you redistribute the content, you must
+  provide attribution and use the same license.
+</Callout>
+
+## Wikidata
+
+The Wikidata tool fetches structured data from [Wikidata](https://www.wikidata.org/), the free knowledge base that provides structured data for Wikipedia and other projects.
+
+### Actions
+
+| Action   | Description                       | Returns                                       |
+| -------- | --------------------------------- | --------------------------------------------- |
+| `search` | Find entities by label            | List of Q-IDs with labels and descriptions    |
+| `get`    | Fetch entity data by Q-ID or P-ID | Labels, descriptions, claims, Wikipedia links |
+
+### Search Example
+
+```json
+{
+  "action": "search",
+  "query": "Albert Einstein",
+  "type": "item",
+  "limit": 5
+}
+```
+
+Returns matching entities:
+
+```json
+{
+  "results": [
+    {
+      "id": "Q937",
+      "label": "Albert Einstein",
+      "description": "German-born physicist (1879–1955)"
+    },
+    { "id": "Q1234567", "label": "Albert Einstein (crater)", "description": "..." }
+  ]
+}
+```
+
+### Get Entity Example
+
+```json
+{
+  "action": "get",
+  "query": "Q937"
+}
+```
+
+Returns structured entity data:
+
+- **Labels and descriptions** in the requested language
+- **Aliases**: Alternative names
+- **Claims**: Property-value pairs (inception, official website, coordinates, etc.)
+- **Wikipedia links**: Links to Wikipedia articles in different languages
+
+### Entity Types
+
+| Type       | ID Format | Example                                 |
+| ---------- | --------- | --------------------------------------- |
+| Items      | `Q...`    | `Q937` (Albert Einstein)                |
+| Properties | `P...`    | `P31` (instance of), `P571` (inception) |
+
+### Property Labels
+
+The tool automatically fetches human-readable labels for property IDs:
+
+| Property ID | Label               | Example Value         |
+| ----------- | ------------------- | --------------------- |
+| `P31`       | instance of         | `Q5` (human)          |
+| `P571`      | inception           | `1879-03-14`          |
+| `P856`      | official website    | `https://example.com` |
+| `P625`      | coordinate location | `48.8566, 2.3522`     |
+
+### Artifact Display
+
+Entity artifacts include:
+
+- Entity label and description
+- Aliases
+- Properties table with human-readable labels
+- Links to Wikipedia articles
+- Link to Wikidata page
+
+<Callout type="info">
+  Wikidata content is released under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)
+  (public domain). No attribution is required when using Wikidata facts.
+</Callout>
+
+## Rate Limiting
+
+Both Wikipedia and Wikidata tools share a rate limiter to respect Wikimedia API guidelines:
+
+| Setting             | Value                                                          |
+| ------------------- | -------------------------------------------------------------- |
+| Rate limit          | 10 requests/second (conservative; API allows 200)              |
+| User-Agent          | `Hadrian-Gateway/1.0 (https://github.com/ScriptSmith/hadrian)` |
+| Concurrent requests | Throttled via sliding window                                   |
+
+<Callout type="warn">
+  Wikipedia and Wikidata content is community-edited and may contain errors. Verify important facts
+  from authoritative sources when accuracy is critical.
+</Callout>
+
+## Enabling Tools
+
+Tools are enabled per-conversation via the toolbar in the chat interface.
+
+### Tool Selection
+
+1. Click the **Tools** button in the chat input toolbar
+2. Toggle individual tools on/off
+3. Selected tools are sent to the model as available functions
+
+### Tool Dependencies
+
+| Tool        | Requires                     |
+| ----------- | ---------------------------- |
+| Python      | None                         |
+| JavaScript  | None                         |
+| SQL         | Uploaded data files          |
+| Charts      | None (data embedded in spec) |
+| HTML        | None                         |
+| Wikipedia   | Internet connection          |
+| Wikidata    | Internet connection          |
+| File Search | Attached vector store        |
+
+## Execution Flow
+
+```
+1. User sends message with tools enabled
+2. Model generates tool_calls in response
+3. Frontend executes tools client-side:
+   - Python/JS: Web Worker execution
+   - SQL: DuckDB WASM query
+   - Charts: Vega-Lite render
+   - HTML: Sandboxed iframe
+4. Results displayed as artifacts
+5. Results sent back to model
+6. Model continues with tool results
+7. Repeat until model provides final response
+```
+
+## Artifacts
+
+Tool executions produce **artifacts** - rich output objects displayed in the UI:
+
+| Artifact Type | Source Tools                | Display                        |
+| ------------- | --------------------------- | ------------------------------ |
+| Code          | Python, JavaScript, SQL     | Syntax-highlighted code block  |
+| Table         | SQL, Wikipedia, Wikidata    | Interactive table with sorting |
+| Chart         | Charts, Python (matplotlib) | Vega-Lite or PNG visualization |
+| Image         | Python (matplotlib)         | PNG image display              |
+| HTML          | HTML, Wikipedia, Wikidata   | Sandboxed iframe preview       |
+
+Artifacts are displayed inline in the conversation and can be expanded to fullscreen.
+
+## Multi-Turn Execution
+
+Tools support multi-turn execution where the model iteratively refines its approach:
+
+```
+Round 1: Model calls code_interpreter with analysis code
+         → Code executes, returns error "KeyError: 'date'"
+
+Round 2: Model adjusts code to use correct column name
+         → Code executes successfully, returns results
+
+Round 3: Model calls chart_render with visualization
+         → Chart renders inline
+
+Final:   Model provides summary with insights
+```
+
+The execution timeline shows all rounds, allowing users to see the model's reasoning process.
+
+## Performance Considerations
+
+### First Execution
+
+| Tool       | Initial Load                     | Subsequent    |
+| ---------- | -------------------------------- | ------------- |
+| Python     | 3-5 seconds (Pyodide + packages) | < 100ms       |
+| JavaScript | < 500ms (QuickJS)                | < 10ms        |
+| SQL        | 1-2 seconds (DuckDB)             | < 100ms       |
+| Charts     | < 100ms                          | < 50ms        |
+| HTML       | Instant                          | Instant       |
+| Wikipedia  | 1-3 seconds (network)            | 1-3 seconds   |
+| Wikidata   | 0.5-2 seconds (network)          | 0.5-2 seconds |
+
+### Best Practices
+
+1. **Keep code focused**: Shorter scripts execute faster
+2. **Avoid large packages**: Some Python packages are slow to load
+3. **Use appropriate tools**: SQL is faster than Python for tabular data
+4. **Limit result size**: Large outputs slow down the model response
+
+<Callout type="info">
+  Runtimes persist for the browser session. Refreshing the page clears all loaded runtimes and
+  requires re-initialization.
+</Callout>

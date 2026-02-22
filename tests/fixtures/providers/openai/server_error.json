@@ -1,0 +1,21 @@
+{
+  "id": "openai:chat_completion:server_error",
+  "description": "Internal server error (500) response",
+  "request": {
+    "method": "POST",
+    "path": "/chat/completions"
+  },
+  "response": {
+    "status": 500,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "type": "server_error",
+        "message": "Internal server error. Please try again later.",
+        "code": "internal_error"
+      }
+    }
+  }
+}

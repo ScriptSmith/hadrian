@@ -1,0 +1,38 @@
+# Hadrian Gateway Configuration - SQLite (Development)
+# Simple configuration with SQLite database and no caching
+
+[database]
+type = "sqlite"
+path = "/app/data/hadrian.db"
+
+[cache]
+type = "memory"
+
+[auth.gateway]
+type = "api_key"
+header_name = "X-API-Key"
+key_prefix = "gw_"
+cache_ttl_secs = 60
+
+[providers]
+default_provider = "test"
+
+# Test provider for e2e testing (echoes back requests)
+[providers.test]
+type = "test"
+
+# Production providers (uncomment and configure as needed)
+# [providers.openrouter]
+# type = "open_ai"
+# api_key = "${OPENROUTER_API_KEY}"
+# base_url = "https://openrouter.ai/api/v1/"
+# timeout_secs = 60
+
+# [providers.anthropic]
+# type = "anthropic"
+# api_key = "${ANTHROPIC_API_KEY}"
+
+# [providers.openai]
+# type = "open_ai"
+# api_key = "${OPENAI_API_KEY}"
+# base_url = "https://api.openai.com/v1/"

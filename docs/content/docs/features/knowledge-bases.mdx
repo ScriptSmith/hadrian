@@ -1,0 +1,673 @@
+---
+title: Knowledge Bases
+description: Build RAG applications with OpenAI-compatible Vector Stores API
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Knowledge Bases provide retrieval-augmented generation (RAG) capabilities through an OpenAI-compatible Vector Stores API. Upload documents, automatically extract and chunk text, generate embeddings, and search with vector similarity, keyword matching, or hybrid approaches.
+
+<Callout type="info">
+  Knowledge Bases are called "Vector Stores" in the API to maintain OpenAI compatibility. The UI
+  uses "Knowledge Bases" for clarity.
+</Callout>
+
+## Overview
+
+The Knowledge Bases feature provides:
+
+- **OpenAI-compatible API** - Drop-in replacement for OpenAI's Vector Stores and Files APIs
+- **Automatic document processing** - Extract text from PDF, DOCX, HTML, and more via Kreuzberg
+- **OCR support** - Extract text from scanned documents and images
+- **Flexible chunking** - Auto or fixed-size chunking strategies
+- **Multiple vector backends** - pgvector (PostgreSQL) or Qdrant
+- **Hybrid search** - Combine vector similarity with keyword matching
+- **LLM re-ranking** - Improve relevance with a second-stage LLM scorer
+- **File search tool** - Integrate with Responses API for automatic retrieval
+
+## Quick Start
+
+### 1. Enable the Feature
+
+```toml
+[features.file_search]
+enabled = true
+
+[features.file_search.embedding]
+provider = "openai"
+model = "text-embedding-3-small"
+dimensions = 1536
+
+[features.file_search.vector_backend]
+type = "pgvector"
+```
+
+### 2. Create a Knowledge Base
+
+```bash
+curl -X POST http://localhost:8080/v1/vector_stores \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Product Documentation"
+  }'
+```
+
+Response:
+
+```json
+{
+  "id": "vs_abc123",
+  "object": "vector_store",
+  "name": "Product Documentation",
+  "status": "completed",
+  "file_counts": {
+    "in_progress": 0,
+    "completed": 0,
+    "failed": 0,
+    "cancelled": 0,
+    "total": 0
+  },
+  "usage_bytes": 0,
+  "created_at": 1704672000
+}
+```
+
+### 3. Upload and Add a File
+
+```bash
+# Upload file
+FILE_ID=$(curl -X POST http://localhost:8080/v1/files \
+  -H "Authorization: Bearer $API_KEY" \
+  -F "file=@documentation.pdf" \
+  -F "purpose=assistants" | jq -r '.id')
+
+# Add to knowledge base (triggers processing)
+curl -X POST http://localhost:8080/v1/vector_stores/vs_abc123/files \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"file_id\": \"$FILE_ID\"}"
+```
+
+### 4. Search
+
+```bash
+curl -X POST http://localhost:8080/v1/vector_stores/vs_abc123/search \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "How do I configure authentication?",
+    "max_num_results": 5
+  }'
+```
+
+## Configuration
+
+### Embedding Settings
+
+Configure the embedding model used to vectorize documents:
+
+```toml
+[features.file_search.embedding]
+# Embedding provider (must be configured in [providers])
+provider = "openai"
+
+# Embedding model
+model = "text-embedding-3-small"
+
+# Vector dimensions (must match model output)
+dimensions = 1536
+```
+
+<Callout type="warn">
+  Embedding model and dimensions are **immutable** after creating a knowledge base. All files in a
+  knowledge base must use the same embedding model.
+</Callout>
+
+### Vector Backend
+
+#### PostgreSQL with pgvector
+
+Best for simple deployments using existing PostgreSQL:
+
+```toml
+[features.file_search.vector_backend]
+type = "pgvector"
+
+# Table name for embeddings (default: "semantic_cache_embeddings")
+table_name = "semantic_cache_embeddings"
+
+# Index type: "ivfflat" or "hnsw"
+index_type = "hnsw"
+
+# Distance metric: "cosine", "dot_product", or "euclidean"
+distance_metric = "cosine"
+```
+
+#### Qdrant
+
+Best for high-performance vector search at scale:
+
+```toml
+[features.file_search.vector_backend]
+type = "qdrant"
+
+# Qdrant server URL
+url = "http://localhost:6333"
+
+# Optional API key
+api_key = "${QDRANT_API_KEY}"
+
+# Collection name
+collection_name = "hadrian_vectors"
+
+# Distance metric
+distance_metric = "cosine"
+```
+
+### Distance Metrics
+
+| Metric             | Use Case                                                            |
+| ------------------ | ------------------------------------------------------------------- |
+| `cosine` (default) | Text similarity, semantic search. Works with most embedding models. |
+| `dot_product`      | When embedding magnitude matters. Requires normalized vectors.      |
+| `euclidean`        | Absolute distances. Common for image embeddings.                    |
+
+### Document Extraction
+
+Configure text extraction from documents:
+
+```toml
+[features.file_search]
+# Enable OCR for scanned documents and images
+enable_ocr = false
+
+# Force OCR even for text-based PDFs
+force_ocr = false
+
+# Tesseract language code for OCR
+ocr_language = "eng"
+
+# Extract images from PDFs for OCR
+pdf_extract_images = false
+
+# DPI for extracted PDF images
+pdf_image_dpi = 300
+```
+
+### Chunking Strategies
+
+#### Auto Chunking (Default)
+
+Intelligently chunks based on content structure (paragraphs, sections, semantic boundaries):
+
+```json
+{
+  "chunking_strategy": {
+    "type": "auto"
+  }
+}
+```
+
+#### Static Chunking
+
+Fixed-size chunks with configurable overlap:
+
+```json
+{
+  "chunking_strategy": {
+    "type": "static",
+    "static": {
+      "max_chunk_size_tokens": 800,
+      "chunk_overlap_tokens": 400
+    }
+  }
+}
+```
+
+| Parameter               | Default | Description                        |
+| ----------------------- | ------- | ---------------------------------- |
+| `max_chunk_size_tokens` | 800     | Maximum tokens per chunk           |
+| `chunk_overlap_tokens`  | 400     | Overlap between consecutive chunks |
+
+### Re-ranking
+
+Enable LLM-based re-ranking for improved relevance:
+
+```toml
+[features.file_search.rerank]
+enabled = true
+
+# LLM model for re-ranking
+model = "gpt-4o-mini"
+provider = "openai"
+
+# Top N results to re-rank (default: 20)
+max_results_to_rerank = 20
+
+# Batch size for parallel re-ranking
+batch_size = 5
+
+# Timeout in seconds
+timeout_secs = 30
+
+# Fall back to vector scores on error
+fallback_on_error = true
+```
+
+Re-ranking flow:
+
+1. Initial search returns top N results (e.g., 20)
+2. Results sent to LLM in batches for relevance scoring
+3. Results re-sorted by LLM scores
+4. Top M results returned to user (e.g., 5)
+
+### Search Settings
+
+```toml
+[features.file_search]
+# Max file_search calls per request (prevents loops)
+max_iterations = 5
+
+# Max results per search
+max_results_per_search = 10
+
+# Search timeout in seconds
+timeout_secs = 30
+
+# Minimum similarity threshold (0.0-1.0)
+score_threshold = 0.7
+
+# Max characters per result
+max_search_result_chars = 4000
+```
+
+## Supported File Types
+
+### Text Files
+
+| Extension                  | Description             |
+| -------------------------- | ----------------------- |
+| `.txt`, `.md`, `.markdown` | Plain text and Markdown |
+| `.json`, `.csv`, `.xml`    | Structured data         |
+| `.html`, `.htm`            | Web pages               |
+
+### Code Files
+
+| Extension                    | Languages                            |
+| ---------------------------- | ------------------------------------ |
+| `.rs`, `.py`, `.js`, `.ts`   | Rust, Python, JavaScript, TypeScript |
+| `.java`, `.c`, `.cpp`, `.go` | Java, C, C++, Go                     |
+| `.rb`, `.php`, `.sh`         | Ruby, PHP, Shell                     |
+
+### Rich Documents
+
+| Extension                      | Description                   |
+| ------------------------------ | ----------------------------- |
+| `.pdf`                         | PDF documents (via Kreuzberg) |
+| `.docx`, `.doc`                | Microsoft Word                |
+| `.xlsx`, `.xls`                | Microsoft Excel               |
+| `.pptx`, `.ppt`                | Microsoft PowerPoint          |
+| `.rtf`, `.odt`, `.ods`, `.odp` | Rich text and OpenDocument    |
+
+### Images (OCR Required)
+
+| Extension                        | Description          |
+| -------------------------------- | -------------------- |
+| `.png`, `.jpg`, `.jpeg`          | Common image formats |
+| `.gif`, `.bmp`, `.tiff`, `.webp` | Additional formats   |
+
+<Callout type="info">
+  Image OCR requires `enable_ocr = true` in configuration and Tesseract installed on the system.
+</Callout>
+
+## Search Types
+
+### Vector Search
+
+Semantic similarity using embeddings. Best for conceptual queries:
+
+```bash
+curl -X POST http://localhost:8080/v1/vector_stores/vs_abc123/search \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "How do I handle authentication errors?",
+    "max_num_results": 5,
+    "ranking_options": {
+      "ranker": "auto"
+    }
+  }'
+```
+
+### Keyword Search
+
+Full-text search using BM25/TF-IDF. Best for exact term matching:
+
+```bash
+curl -X POST http://localhost:8080/v1/vector_stores/vs_abc123/search \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "AuthenticationError 401",
+    "max_num_results": 5,
+    "ranking_options": {
+      "ranker": "keyword"
+    }
+  }'
+```
+
+### Hybrid Search
+
+Combines vector and keyword search using Reciprocal Rank Fusion (RRF):
+
+```bash
+curl -X POST http://localhost:8080/v1/vector_stores/vs_abc123/search \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "AuthenticationError handling",
+    "max_num_results": 5,
+    "ranking_options": {
+      "ranker": "hybrid",
+      "rrf_k": 60,
+      "vector_weight": 1.0,
+      "keyword_weight": 0.5
+    }
+  }'
+```
+
+| Parameter        | Default | Description                |
+| ---------------- | ------- | -------------------------- |
+| `rrf_k`          | 60      | RRF smoothing constant     |
+| `vector_weight`  | 1.0     | Weight for vector results  |
+| `keyword_weight` | 1.0     | Weight for keyword results |
+
+## Attribute Filtering
+
+Filter search results by file attributes using OpenAI-compatible filters:
+
+```bash
+curl -X POST http://localhost:8080/v1/vector_stores/vs_abc123/search \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "deployment guide",
+    "max_num_results": 5,
+    "filters": {
+      "type": "and",
+      "filters": [
+        {"type": "eq", "key": "category", "value": "documentation"},
+        {"type": "gte", "key": "version", "value": 2}
+      ]
+    }
+  }'
+```
+
+### Comparison Operators
+
+| Operator | Description              |
+| -------- | ------------------------ |
+| `eq`     | Equal to                 |
+| `ne`     | Not equal to             |
+| `gt`     | Greater than             |
+| `gte`    | Greater than or equal to |
+| `lt`     | Less than                |
+| `lte`    | Less than or equal to    |
+
+### Logical Operators
+
+| Operator | Description                    |
+| -------- | ------------------------------ |
+| `and`    | All filters must match         |
+| `or`     | At least one filter must match |
+
+### Setting Attributes
+
+Set attributes when adding a file to a knowledge base:
+
+```bash
+curl -X POST http://localhost:8080/v1/vector_stores/vs_abc123/files \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file_id": "file-abc123",
+    "attributes": {
+      "category": "documentation",
+      "version": 2,
+      "author": "engineering"
+    }
+  }'
+```
+
+## API Reference
+
+### Files API
+
+| Endpoint                      | Method | Description           |
+| ----------------------------- | ------ | --------------------- |
+| `/v1/files`                   | POST   | Upload a file         |
+| `/v1/files`                   | GET    | List files            |
+| `/v1/files/{file_id}`         | GET    | Get file metadata     |
+| `/v1/files/{file_id}`         | DELETE | Delete a file         |
+| `/v1/files/{file_id}/content` | GET    | Download file content |
+
+### Vector Stores API
+
+| Endpoint                                        | Method | Description                  |
+| ----------------------------------------------- | ------ | ---------------------------- |
+| `/v1/vector_stores`                             | POST   | Create a knowledge base      |
+| `/v1/vector_stores`                             | GET    | List knowledge bases         |
+| `/v1/vector_stores/{id}`                        | GET    | Get knowledge base details   |
+| `/v1/vector_stores/{id}`                        | POST   | Update knowledge base        |
+| `/v1/vector_stores/{id}`                        | DELETE | Delete knowledge base        |
+| `/v1/vector_stores/{id}/files`                  | POST   | Add file to knowledge base   |
+| `/v1/vector_stores/{id}/files`                  | GET    | List files in knowledge base |
+| `/v1/vector_stores/{id}/files/{file_id}`        | GET    | Get file details             |
+| `/v1/vector_stores/{id}/files/{file_id}`        | DELETE | Remove file                  |
+| `/v1/vector_stores/{id}/files/{file_id}/chunks` | GET    | List chunks for a file       |
+| `/v1/vector_stores/{id}/search`                 | POST   | Search knowledge base        |
+
+### File Batches API
+
+| Endpoint                                               | Method | Description         |
+| ------------------------------------------------------ | ------ | ------------------- |
+| `/v1/vector_stores/{id}/file_batches`                  | POST   | Create file batch   |
+| `/v1/vector_stores/{id}/file_batches/{batch_id}`       | GET    | Get batch status    |
+| `/v1/vector_stores/{id}/file_batches/{batch_id}`       | DELETE | Cancel batch        |
+| `/v1/vector_stores/{id}/file_batches/{batch_id}/files` | GET    | List files in batch |
+
+## Document Processing
+
+When a file is added to a knowledge base, the following pipeline executes:
+
+```
+1. File Upload
+   └─ Store raw file in database/storage
+
+2. Add to Knowledge Base
+   └─ Trigger document processing
+
+3. Text Extraction (Kreuzberg)
+   ├─ PDF: Extract text, optionally OCR images
+   ├─ Office: DOCX, XLSX, PPTX conversion
+   ├─ HTML: Parse and extract content
+   └─ Images: OCR if enabled
+
+4. Chunking
+   ├─ Auto: Semantic boundaries, paragraphs
+   └─ Static: Fixed size with overlap
+
+5. Embedding
+   └─ Generate vectors for each chunk
+
+6. Storage
+   └─ Store chunks with processing_version
+
+7. Cleanup
+   └─ Delete old chunks (shadow-copy pattern)
+
+8. Status Update
+   └─ Mark file as "completed" or "failed"
+```
+
+### Shadow-Copy Pattern
+
+The gateway uses a shadow-copy pattern for safe document reprocessing:
+
+1. New chunks stored with incremented `processing_version`
+2. Only after successful completion, old chunks are deleted
+3. Failed processing leaves old chunks intact
+
+This ensures documents remain searchable even if reprocessing fails.
+
+### File Status
+
+| Status        | Description                              |
+| ------------- | ---------------------------------------- |
+| `in_progress` | File is being processed                  |
+| `completed`   | Processing succeeded, file is searchable |
+| `failed`      | Processing failed (see `last_error`)     |
+| `cancelled`   | Processing was cancelled                 |
+
+### Stale Detection
+
+Files stuck in `in_progress` for longer than the timeout (default 30 minutes) are automatically reset and can be reprocessed.
+
+## File Search Tool Integration
+
+Knowledge bases integrate with the Responses API via the `file_search` tool:
+
+```bash
+curl -X POST http://localhost:8080/v1/responses \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "input": "What does the documentation say about rate limits?",
+    "tools": [
+      {
+        "type": "file_search",
+        "vector_store_ids": ["vs_abc123"]
+      }
+    ]
+  }'
+```
+
+The gateway automatically:
+
+1. Intercepts `file_search` tool calls from the LLM
+2. Executes vector search against specified knowledge bases
+3. Returns results to the LLM for answer synthesis
+4. Limits iterations to prevent infinite loops (`max_iterations`)
+
+## Multi-Tenancy
+
+Knowledge bases support the full multi-tenancy hierarchy:
+
+| Owner Type   | Description                          |
+| ------------ | ------------------------------------ |
+| Organization | Shared across all teams and projects |
+| Team         | Shared within a team                 |
+| Project      | Isolated to a specific project       |
+| User         | Personal knowledge base              |
+
+Access control is enforced on all API operations. Users can only access knowledge bases they own or have permissions for.
+
+## Error Responses
+
+### Processing Errors
+
+```json
+{
+  "id": "vsf_abc123",
+  "status": "failed",
+  "last_error": {
+    "code": "extraction_failed",
+    "message": "Failed to extract text from PDF: encrypted document"
+  }
+}
+```
+
+### Search Errors
+
+```json
+{
+  "error": {
+    "type": "invalid_request_error",
+    "message": "Vector store not found",
+    "code": "resource_not_found"
+  }
+}
+```
+
+### Common Error Codes
+
+| Code                 | Description                      |
+| -------------------- | -------------------------------- |
+| `extraction_failed`  | Text extraction failed           |
+| `embedding_failed`   | Embedding generation failed      |
+| `chunking_failed`    | Document chunking failed         |
+| `timeout`            | Processing or search timed out   |
+| `resource_not_found` | Knowledge base or file not found |
+| `permission_denied`  | Insufficient permissions         |
+
+## Complete Configuration Example
+
+```toml
+[features.file_search]
+enabled = true
+max_iterations = 5
+max_results_per_search = 10
+timeout_secs = 30
+score_threshold = 0.7
+max_search_result_chars = 4000
+
+# Document extraction
+enable_ocr = true
+force_ocr = false
+ocr_language = "eng"
+pdf_extract_images = true
+pdf_image_dpi = 300
+
+# Embedding configuration
+[features.file_search.embedding]
+provider = "openai"
+model = "text-embedding-3-small"
+dimensions = 1536
+
+# Re-ranking configuration
+[features.file_search.rerank]
+enabled = true
+model = "gpt-4o-mini"
+provider = "openai"
+max_results_to_rerank = 20
+batch_size = 5
+timeout_secs = 30
+fallback_on_error = true
+
+# Vector backend (PostgreSQL)
+[features.file_search.vector_backend]
+type = "pgvector"
+table_name = "hadrian_vectors"
+index_type = "hnsw"
+distance_metric = "cosine"
+```
+
+## Best Practices
+
+1. **Choose the right chunking strategy** - Use auto for documents with clear structure, static for uniform content like logs or code.
+
+2. **Set appropriate chunk sizes** - Smaller chunks (400-800 tokens) for precise retrieval, larger (1000-1600) for more context per result.
+
+3. **Enable re-ranking for quality** - LLM re-ranking significantly improves relevance at the cost of latency.
+
+4. **Use hybrid search** - Combining vector and keyword search often outperforms either alone.
+
+5. **Set score thresholds** - Filter low-confidence results to improve answer quality.
+
+6. **Use attributes for filtering** - Tag files with metadata to enable filtered searches.
+
+7. **Monitor processing status** - Check for failed files and investigate extraction issues.
+
+8. **Use HNSW index for pgvector** - Faster queries than IVFFlat at the cost of index build time.

@@ -1,0 +1,245 @@
+[package]
+name = "hadrian"
+version = "0.0.0-alpha.1"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+description = "An open-source AI Gateway providing a unified OpenAI-compatible API for routing requests to multiple LLM providers"
+repository = "https://github.com/ScriptSmith/hadrian"
+homepage = "https://hadriangateway.com"
+keywords = ["ai", "llm", "gateway", "openai", "proxy"]
+categories = ["web-programming::http-server", "api-bindings"]
+default-run = "hadrian"
+include = [
+    "src/**/*",
+    "migrations_sqlx/**/*",
+    "data/models-dev-catalog.json",
+    "ui/dist/**/*",
+    "docs/out/**/*",
+    "Cargo.toml",
+    "LICENSE*",
+    "README.md",
+]
+
+[features]
+default = ["full"]
+
+# Meta profiles for different deployment scenarios
+tiny = ["provider-openai", "provider-test"]
+minimal = [
+    "tiny",
+    "database-sqlite",
+    "embed-ui",
+    "provider-anthropic",
+    "provider-azure",
+    "provider-bedrock",
+    "provider-vertex",
+    "wizard",
+]
+standard = [
+    "minimal",
+    "cel",
+    "csv-export",
+    "database-postgres",
+    "document-extraction-basic",
+    "embed-docs",
+    "forecasting",
+    "json-schema",
+    "otlp",
+    "prometheus",
+    "redis",
+    "response-validation",
+    "s3-storage",
+    "secrets-aws",
+    "secrets-azure",
+    "secrets-gcp",
+    "sso",
+    "utoipa",
+    "vault",
+]
+full = [
+    "standard",
+    "document-extraction-full",
+    "saml",
+    "virus-scan",
+]
+
+# Providers (always-available: openai, anthropic, test)
+provider-openai = []
+provider-anthropic = []
+provider-test = []
+provider-bedrock = ["aws-sdk"]
+provider-vertex = ["gcp-sdk"]
+provider-azure = ["azure-sdk"]
+
+# Cloud SDKs (shared dependencies for providers and secrets)
+aws-sdk = [
+    "dep:aws-config",
+    "dep:aws-credential-types",
+    "dep:aws-sigv4",
+    "dep:aws-smithy-eventstream",
+    "dep:aws-smithy-types",
+]
+azure-sdk = ["dep:azure_core", "dep:azure_identity", "dep:time"]
+gcp-sdk = ["dep:google-cloud-auth", "dep:google-cloud-token"]
+
+# Secrets managers
+secrets-aws = ["aws-sdk", "dep:aws-sdk-secretsmanager"]
+secrets-azure = ["azure-sdk", "dep:azure_security_keyvault_secrets"]
+secrets-gcp = ["gcp-sdk", "dep:google-cloud-secretmanager-v1"]
+vault = ["dep:vaultrs"]
+
+# Auth
+sso = ["dep:hickory-resolver"]
+saml = ["sso", "dep:samael", "dep:openssl", "dep:flate2"]
+
+# Cache/Storage
+redis = ["dep:redis"]
+s3-storage = ["aws-sdk", "dep:aws-sdk-s3"]
+
+# Embedded assets
+embed-ui = ["dep:rust-embed"]
+embed-docs = ["dep:rust-embed"]
+
+# Databases
+database-sqlite = ["dep:sqlx", "sqlx/sqlite"]
+database-postgres = ["dep:sqlx", "sqlx/postgres"]
+
+# Authorization
+cel = ["dep:cel-interpreter"]
+
+# Metrics
+prometheus = ["dep:metrics", "dep:metrics-exporter-prometheus"]
+
+# OpenAPI documentation
+utoipa = ["dep:utoipa", "dep:utoipa-scalar"]
+
+# Document processing
+document-extraction-basic = ["dep:tiktoken-rs"]
+document-extraction-full = ["document-extraction-basic", "dep:kreuzberg"]
+
+# New feature flags
+forecasting = ["dep:augurs"]
+wizard = ["dep:dialoguer", "dep:open", "dep:dirs"]
+json-schema = ["dep:schemars"]
+response-validation = ["dep:jsonschema"]
+csv-export = ["dep:csv"]
+
+# Observability
+otlp = [
+    "dep:opentelemetry",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-semantic-conventions",
+    "dep:tracing-opentelemetry",
+    "dep:tonic",
+    "dep:hostname",
+]
+
+# Optional integrations
+virus-scan = ["dep:clamav-client"]
+
+[dependencies]
+# Mandatory dependencies
+async-trait = "0.1.89"
+axum = { version = "0.8.7", features = ["ws", "multipart"] }
+axum-valid = "0.24.0"
+base64 = "0.22"
+bytes = "1.11.0"
+chrono = { version = "0.4.39", features = ["serde"] }
+clap = { version = "4.5.53", features = ["derive"] }
+crossbeam-channel = "0.5"
+dashmap = "6.0"
+futures = "0.3.31"
+futures-util = "0.3.31"
+hex = "0.4"
+http = "1.3.1"
+http-body-util = "0.1.3"
+ipnet = "2"
+jsonwebtoken = { version = "9", features = ["use_pem"] }
+once_cell = "1.21"
+parking_lot = "0.12.5"
+rand = "0.8"
+regex = "1.12.2"
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "stream", "rustls-tls", "http2", "charset", "macos-system-configuration", "multipart"] }
+rust_decimal = { version = "1.40.0", features = ["macros"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+sha2 = "0.10"
+subtle = "2.6.1"
+thiserror = "2.0.17"
+tokio = { version = "1.48.0", features = ["full"] }
+tokio-util = { version = "0.7.17", features = ["rt"] }
+toml = "0.9.8"
+tower = "0.5.2"
+tower-cookies = "0.11"
+tower-http = { version = "0.6", features = ["cors", "trace", "request-id", "propagate-header", "fs", "set-header", "limit"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
+unicode-normalization = "0.1"
+url = "2"
+uuid = { version = "1.18.1", features = ["v4", "v5", "serde"] }
+validator = { version = "0.20.0", features = ["derive"] }
+
+# Optional dependencies
+augurs = { version = "0.10.1", features = ["ets", "mstl", "forecaster"], optional = true }
+aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
+aws-credential-types = { version = "1", features = ["hardcoded-credentials"], optional = true }
+aws-sdk-s3 = { version = "1.120.0", optional = true }
+aws-sdk-secretsmanager = { version = "1.97", optional = true }
+aws-sigv4 = { version = "1", optional = true }
+aws-smithy-eventstream = { version = "0.60.13", optional = true }
+aws-smithy-types = { version = "1.3.4", optional = true }
+azure_core = { version = "0.30", default-features = false, features = ["reqwest", "reqwest_deflate", "reqwest_gzip", "hmac_rust", "tokio"], optional = true }
+azure_identity = { version = "0.30", default-features = false, features = ["tokio"], optional = true }
+azure_security_keyvault_secrets = { version = "0.9", default-features = false, optional = true }
+cel-interpreter = { version = "0.10", optional = true }
+clamav-client = { version = "2.1", features = ["tokio"], optional = true }
+csv = { version = "1.3", optional = true }
+dialoguer = { version = "0.12.0", features = ["fuzzy-select", "completion"], optional = true }
+dirs = { version = "6.0.0", optional = true }
+flate2 = { version = "1", optional = true }
+google-cloud-auth = { version = "0.17", default-features = false, features = ["rustls-tls"], optional = true }
+google-cloud-secretmanager-v1 = { version = "1.2", optional = true }
+google-cloud-token = { version = "0.1", optional = true }
+hickory-resolver = { version = "0.25", features = ["tokio", "system-config"], optional = true }
+hostname = { version = "0.4.2", optional = true }
+jsonschema = { version = "0.29", optional = true }
+kreuzberg = { version = "4.3.6", default-features = false, features = ["tokio-runtime", "bundled-pdfium", "office", "excel", "ocr"], optional = true }
+metrics = { version = "0.24", optional = true }
+metrics-exporter-prometheus = { version = "0.16", optional = true }
+open = { version = "5.3.3", optional = true }
+openssl = { version = "0.10", optional = true }
+opentelemetry = { version = "0.30", optional = true }
+opentelemetry-otlp = { version = "0.30", features = ["trace", "logs", "grpc-tonic", "http-proto"], optional = true }
+opentelemetry-semantic-conventions = { version = "0.30", optional = true }
+opentelemetry_sdk = { version = "0.30", features = ["rt-tokio", "logs"], optional = true }
+redis = { version = "0.32.7", features = ["aio", "tokio-comp", "cluster-async"], optional = true }
+rust-embed = { version = "8", features = ["mime-guess"], optional = true }
+samael = { version = "0.0.19", optional = true }
+schemars = { version = "0.8", optional = true }
+sqlx = { version = "0.8", features = ["runtime-tokio", "uuid", "chrono", "rust_decimal", "migrate", "json"], optional = true }
+tiktoken-rs = { version = "0.9.1", optional = true }
+time = { version = "0.3.47", default-features = false, optional = true }
+tonic = { version = "0.13", optional = true }
+tracing-opentelemetry = { version = "0.31", optional = true }
+utoipa = { version = "5", features = ["chrono", "uuid", "axum_extras"], optional = true }
+utoipa-scalar = { version = "0.3", features = ["axum"], optional = true }
+vaultrs = { version = "0.7.4", features = ["rustls"], optional = true }
+
+[dev-dependencies]
+rstest = "0.24"
+serial_test = "3.2"
+temp-env = "0.3"
+tempfile = "3.23.0"
+testcontainers-modules = { version = "0.14", features = ["postgres", "redis"] }
+tokio-stream = "0.1.17"
+wiremock = "0.6"
+
+[[bin]]
+name = "hadrian"
+path = "src/main.rs"
+
+[[bin]]
+name = "record_fixtures"
+path = "src/bin/record_fixtures.rs"
+required-features = ["provider-bedrock"]

@@ -1,0 +1,489 @@
+---
+title: Chat Modes
+description: Advanced multi-model interaction modes for synthesized, chained, debated, and collaborative conversations
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Hadrian's chat UI supports multiple conversation modes that define how selected models interact when responding to prompts. These modes enable sophisticated multi-model workflows beyond simple parallel responses.
+
+## Overview
+
+Chat modes are organized into five phases based on complexity:
+
+| Phase               | Modes                              | Description                            |
+| ------------------- | ---------------------------------- | -------------------------------------- |
+| **1. Core**         | Multiple, Chained, Routed          | Basic parallel and sequential patterns |
+| **2. Synthesis**    | Synthesized, Refined, Critiqued    | Combining and improving responses      |
+| **3. Competitive**  | Elected, Tournament, Consensus     | Voting and agreement-based selection   |
+| **4. Advanced**     | Debated, Council, Hierarchical     | Complex multi-model orchestration      |
+| **5. Experimental** | Scattershot, Explainer, Confidence | Parameter variations and special modes |
+
+<Callout type="info">
+  All modes work with model instances, allowing the same model to participate multiple times with
+  different settings (e.g., "GPT-4 Creative" vs "GPT-4 Precise").
+</Callout>
+
+---
+
+## Phase 1: Core Modes
+
+### Multiple (Default)
+
+Each model responds independently in parallel. This is the default mode.
+
+| Attribute  | Value                                |
+| ---------- | ------------------------------------ |
+| Min models | 1                                    |
+| Flow       | All models respond simultaneously    |
+| Output     | All responses displayed side-by-side |
+
+**Use cases:** Getting diverse perspectives, comparing model outputs, maximum throughput.
+
+---
+
+### Chained
+
+Models respond sequentially, each building on previous responses.
+
+| Attribute  | Value                              |
+| ---------- | ---------------------------------- |
+| Min models | 2                                  |
+| Flow       | Model 1 → Model 2 → Model 3 → ...  |
+| Output     | Each response shows chain position |
+
+<StoryEmbed storyId="chat-chainprogress--four-models" height={180} />
+
+**Configuration:**
+
+| Option       | Type       | Default         | Description           |
+| ------------ | ---------- | --------------- | --------------------- |
+| `chainOrder` | `string[]` | Selection order | Custom model sequence |
+
+**Flow:**
+
+1. First model responds to original prompt
+2. Each subsequent model sees all previous responses
+3. Instruction: "Build upon, refine, or improve the previous response(s)"
+
+**Use cases:** Iterative refinement, building on ideas, progressive deepening.
+
+---
+
+### Routed
+
+A router model selects which model should respond based on the prompt.
+
+| Attribute  | Value                                                          |
+| ---------- | -------------------------------------------------------------- |
+| Min models | 2                                                              |
+| Flow       | Router analyzes → Selects best model → Selected model responds |
+| Output     | Single response with routing reasoning                         |
+
+<StoryEmbed storyId="chat-routingdecision--selected" height={200} />
+
+**Configuration:**
+
+| Option             | Type     | Default        | Description           |
+| ------------------ | -------- | -------------- | --------------------- |
+| `routerInstanceId` | `string` | First instance | Which instance routes |
+| `routingPrompt`    | `string` | Built-in       | Custom routing logic  |
+
+**Flow:**
+
+1. Router model analyzes the prompt (temperature=0 for deterministic selection)
+2. Router selects the best target model with reasoning
+3. Selected model responds to original prompt
+
+**Use cases:** Optimal model selection, cost efficiency, specialized routing.
+
+---
+
+## Phase 2: Synthesis Modes
+
+### Synthesized
+
+All models respond, then a synthesizer combines the results.
+
+| Attribute  | Value                                            |
+| ---------- | ------------------------------------------------ |
+| Min models | 2                                                |
+| Flow       | Parallel responses → Synthesizer combines        |
+| Output     | Single synthesized response with source metadata |
+
+<StoryEmbed storyId="chat-synthesisprogress--done" height={350} />
+
+**Configuration:**
+
+| Option                  | Type     | Default        | Description                  |
+| ----------------------- | -------- | -------------- | ---------------------------- |
+| `synthesizerInstanceId` | `string` | First instance | Which instance synthesizes   |
+| `synthesisPrompt`       | `string` | Built-in       | Custom synthesis instruction |
+
+**Flow:**
+
+1. **Gathering phase:** All non-synthesizer models respond in parallel
+2. **Synthesis phase:** Synthesizer reads all responses and creates unified answer
+
+**Use cases:** Creating definitive answers, combining expert views, resolving contradictions.
+
+---
+
+### Refined
+
+Models take turns improving a response through multiple rounds.
+
+| Attribute  | Value                                    |
+| ---------- | ---------------------------------------- |
+| Min models | 2                                        |
+| Flow       | Initial → Refine → Refine → ... → Final  |
+| Output     | Final refined response with full history |
+
+<StoryEmbed storyId="components-refinementprogress--done" height={300} />
+
+**Configuration:**
+
+| Option             | Type     | Default  | Description                   |
+| ------------------ | -------- | -------- | ----------------------------- |
+| `refinementRounds` | `number` | 2        | Number of refinement cycles   |
+| `refinementPrompt` | `string` | Built-in | Custom refinement instruction |
+
+**Flow:**
+
+1. First model generates initial response
+2. Each subsequent model refines the previous response
+3. Process cycles through models for N rounds (round-robin)
+4. Returns final refined response
+
+**Use cases:** Progressive quality improvement, error correction, iterative enhancement.
+
+---
+
+### Critiqued
+
+One model responds, others critique, then the original revises.
+
+| Attribute  | Value                                            |
+| ---------- | ------------------------------------------------ |
+| Min models | 2                                                |
+| Flow       | Initial response → Parallel critiques → Revision |
+| Output     | Revised response with critique history           |
+
+<StoryEmbed storyId="components-critiqueprogress--done" height={350} />
+
+**Configuration:**
+
+| Option              | Type     | Default        | Description                 |
+| ------------------- | -------- | -------------- | --------------------------- |
+| `primaryInstanceId` | `string` | First instance | Initial responder           |
+| `critiquePrompt`    | `string` | Built-in       | Custom critique instruction |
+
+**Flow:**
+
+1. Primary model generates initial response
+2. All other models provide critiques in parallel
+3. Primary model revises based on all critiques received
+
+**Use cases:** Quality assurance, peer review, error detection.
+
+---
+
+## Phase 3: Competitive Modes
+
+### Elected
+
+Models vote democratically to select the best response.
+
+| Attribute  | Value                                    |
+| ---------- | ---------------------------------------- |
+| Min models | 3                                        |
+| Flow       | All respond → All vote → Winner selected |
+| Output     | Winning response with vote counts        |
+
+<StoryEmbed storyId="chat-electedprogress--done" height={350} />
+
+**Configuration:**
+
+| Option         | Type     | Default  | Description            |
+| -------------- | -------- | -------- | ---------------------- |
+| `votingPrompt` | `string` | Built-in | Custom voting criteria |
+
+**Flow:**
+
+1. **Responding phase:** All models respond in parallel
+2. **Voting phase:** All models vote on which response is best
+3. Winner determined by vote counts
+
+**Use cases:** Selecting best solution, consensus quality assurance, democratic selection.
+
+---
+
+### Tournament
+
+Models compete in elimination brackets with judge-based comparisons.
+
+| Attribute  | Value                                                          |
+| ---------- | -------------------------------------------------------------- |
+| Min models | 4                                                              |
+| Flow       | All respond → Bracket matches → Winner advances → Final winner |
+| Output     | Tournament winner with bracket history                         |
+
+<StoryEmbed storyId="components-tournamentprogress--done-4-models" height={400} />
+
+**Configuration:**
+
+| Option              | Type         | Default        | Description              |
+| ------------------- | ------------ | -------------- | ------------------------ |
+| `tournamentBracket` | `string[][]` | Auto-generated | Custom bracket structure |
+
+**Flow:**
+
+1. **Generating phase:** All models respond in parallel
+2. **Competing phase:** Models paired into brackets
+3. Judge model compares each pair, selects winner
+4. Winners advance to next round (bye for odd numbers)
+5. Process repeats until one winner remains
+
+**Use cases:** Finding best response through elimination, multi-criteria competition.
+
+---
+
+### Consensus
+
+Models revise their responses until they reach agreement.
+
+| Attribute  | Value                                         |
+| ---------- | --------------------------------------------- |
+| Min models | 2                                             |
+| Flow       | Round 0 → Revise → Revise → ... → Consensus   |
+| Output     | Final consensus response with agreement score |
+
+<StoryEmbed storyId="chat-consensusprogress--consensus-reached" height={300} />
+
+**Configuration:**
+
+| Option               | Type     | Default  | Description                  |
+| -------------------- | -------- | -------- | ---------------------------- |
+| `maxConsensusRounds` | `number` | 5        | Maximum iterations           |
+| `consensusThreshold` | `number` | 0.8      | Agreement threshold (0-1)    |
+| `consensusPrompt`    | `string` | Built-in | Custom consensus instruction |
+
+**Flow:**
+
+1. All models respond in parallel (round 0)
+2. Each model sees all responses, provides revised response
+3. System measures similarity/agreement between responses
+4. Process repeats until threshold reached or max rounds
+
+**Use cases:** Reaching agreement, finding common ground, collaborative refinement.
+
+---
+
+## Phase 4: Advanced Modes
+
+### Debated
+
+Models argue different positions back-and-forth, then summarize.
+
+| Attribute  | Value                                         |
+| ---------- | --------------------------------------------- |
+| Min models | 2                                             |
+| Flow       | Opening arguments → Rebuttals → ... → Summary |
+| Output     | Balanced summary with full debate transcript  |
+
+<StoryEmbed storyId="chat-debateprogress--done" height={350} />
+
+**Configuration:**
+
+| Option                  | Type     | Default        | Description               |
+| ----------------------- | -------- | -------------- | ------------------------- |
+| `debateRounds`          | `number` | 3              | Number of rebuttal rounds |
+| `debatePrompt`          | `string` | Built-in       | Custom debate instruction |
+| `synthesizerInstanceId` | `string` | First instance | Summarizer model          |
+
+**Flow:**
+
+1. Assign positions (pro/con by default) to models
+2. **Round 0:** Each model presents opening argument from their position
+3. **Rounds 1-N:** Each model responds to opposing arguments (rebuttal)
+4. Summarizer synthesizes debate into balanced conclusion
+
+**Use cases:** Exploring tradeoffs, multi-perspective analysis, arguments & counterarguments.
+
+---
+
+### Council
+
+Models discuss from assigned roles/perspectives, then synthesize.
+
+| Attribute  | Value                                             |
+| ---------- | ------------------------------------------------- |
+| Min models | 2                                                 |
+| Flow       | Role perspectives → Discussion rounds → Synthesis |
+| Output     | Comprehensive response with all perspectives      |
+
+<StoryEmbed storyId="chat-councilprogress--done" height={400} />
+
+**Configuration:**
+
+| Option                   | Type                     | Default       | Description                  |
+| ------------------------ | ------------------------ | ------------- | ---------------------------- |
+| `councilRoles`           | `Record<string, string>` | Auto-assigned | Manual role assignments      |
+| `councilAutoAssignRoles` | `boolean`                | false         | Let first model assign roles |
+| `councilPrompt`          | `string`                 | Built-in      | Custom council instruction   |
+
+**Default roles:** Technical Expert, Business Analyst, User Advocate, Risk Assessor, Innovation Specialist
+
+**Flow:**
+
+1. Assign roles (manually or auto-assigned based on query)
+2. **Round 0:** Each model presents initial perspective from their role
+3. **Rounds 1-N:** Each model responds to other perspectives (discussion)
+4. Synthesizer combines all perspectives into comprehensive response
+
+**Use cases:** Multi-stakeholder perspectives, domain expertise integration, holistic analysis.
+
+---
+
+### Hierarchical
+
+A coordinator decomposes tasks and delegates to worker models.
+
+| Attribute  | Value                                     |
+| ---------- | ----------------------------------------- |
+| Min models | 2                                         |
+| Flow       | Decompose → Parallel workers → Synthesize |
+| Output     | Synthesized response with subtask results |
+
+<StoryEmbed storyId="components-hierarchicalprogress--done" height={400} />
+
+**Configuration:**
+
+| Option                     | Type     | Default        | Description               |
+| -------------------------- | -------- | -------------- | ------------------------- |
+| `coordinatorInstanceId`    | `string` | First instance | Task coordinator          |
+| `hierarchicalWorkerPrompt` | `string` | Built-in       | Custom worker instruction |
+
+**Flow:**
+
+1. **Decomposition:** Coordinator analyzes prompt, creates subtask list with assignments
+2. **Execution:** Worker models complete assigned subtasks in parallel
+3. **Synthesis:** Coordinator combines all worker results into final response
+
+**Use cases:** Complex task breakdown, specialized workers, divide-and-conquer.
+
+---
+
+## Phase 5: Experimental Modes
+
+### Scattershot
+
+Run the same model multiple times with different parameter variations.
+
+| Attribute  | Value                                           |
+| ---------- | ----------------------------------------------- |
+| Min models | 1                                               |
+| Flow       | Same prompt → Multiple parameter sets → Compare |
+| Output     | All variations displayed with parameter labels  |
+
+<StoryEmbed storyId="components-scattershotprogress--done" height={350} />
+
+**Configuration:**
+
+| Option                | Type                | Default           | Description           |
+| --------------------- | ------------------- | ----------------- | --------------------- |
+| `parameterVariations` | `ModelParameters[]` | Built-in defaults | Custom parameter sets |
+
+**Default variations:**
+
+- `temp=0.0` (deterministic)
+- `temp=0.5` (balanced)
+- `temp=1.0` (creative)
+- `temp=1.5, top_p=0.9` (very creative)
+
+**Use cases:** Parameter tuning, content variation generation, creative sampling.
+
+---
+
+### Explainer
+
+Generate explanations at different audience levels.
+
+| Attribute  | Value                                        |
+| ---------- | -------------------------------------------- |
+| Min models | 1                                            |
+| Flow       | Expert level → Intermediate → Beginner → ... |
+| Output     | All explanations with audience labels        |
+
+<StoryEmbed storyId="chat-explainerprogress--done" height={350} />
+
+**Configuration:**
+
+| Option           | Type       | Default                                  | Description      |
+| ---------------- | ---------- | ---------------------------------------- | ---------------- |
+| `audienceLevels` | `string[]` | `["expert", "intermediate", "beginner"]` | Target audiences |
+
+**Default levels:** expert, intermediate, beginner, child, non-technical
+
+**Flow:**
+
+1. First instance explains at first audience level (e.g., expert)
+2. Subsequent instances adapt/simplify for remaining levels
+3. Instances cycle through levels if fewer instances than levels
+
+**Use cases:** Multi-audience explanations, progressive disclosure, accessibility.
+
+---
+
+### Confidence-Weighted
+
+Models provide confidence scores, synthesizer weights responses accordingly.
+
+| Attribute  | Value                                          |
+| ---------- | ---------------------------------------------- |
+| Min models | 2                                              |
+| Flow       | Responses with confidence → Weighted synthesis |
+| Output     | Synthesized response weighted by confidence    |
+
+<StoryEmbed storyId="chat-confidenceprogress--done" height={350} />
+
+**Configuration:**
+
+| Option                  | Type     | Default        | Description                   |
+| ----------------------- | -------- | -------------- | ----------------------------- |
+| `synthesizerInstanceId` | `string` | First instance | Synthesizer model             |
+| `confidencePrompt`      | `string` | Built-in       | Confidence response template  |
+| `confidenceThreshold`   | `number` | 0              | Minimum confidence to include |
+
+**Flow:**
+
+1. All non-synthesizer models respond with self-assessed confidence (0-1)
+2. Responses include `CONFIDENCE: [score]` marker
+3. Synthesizer combines responses, weighting by confidence scores
+
+**Use cases:** Uncertainty-aware synthesis, reliable information prioritization.
+
+---
+
+## Mode Selection Guide
+
+| Scenario               | Recommended Mode     |
+| ---------------------- | -------------------- |
+| Quick comparison       | Multiple             |
+| Iterative improvement  | Refined, Chained     |
+| Best answer from many  | Synthesized, Elected |
+| Explore tradeoffs      | Debated              |
+| Multi-stakeholder view | Council              |
+| Complex task           | Hierarchical         |
+| Find optimal settings  | Scattershot          |
+| Different audiences    | Explainer            |
+| Cost-efficient routing | Routed               |
+| Quality assurance      | Critiqued            |
+
+## Related Features
+
+<Cards>
+  <Card title="Chat UI" href="/docs/features/chat-ui" />
+  <Card title="Frontend Tools" href="/docs/features/frontend-tools" />
+  <Card title="Provider Features" href="/docs/features/providers" />
+</Cards>

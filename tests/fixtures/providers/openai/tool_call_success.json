@@ -1,0 +1,70 @@
+{
+  "id": "openai:tool_call:success",
+  "description": "Chat completion with single tool call response",
+  "request": {
+    "method": "POST",
+    "path": "/chat/completions"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-ratelimit-reset-requests": "25.673s",
+      "x-ratelimit-remaining-tokens": "199986",
+      "x-ratelimit-reset-tokens": "4ms",
+      "x-content-type-options": "nosniff",
+      "content-type": "application/json",
+      "x-ratelimit-limit-requests": "10000",
+      "x-openai-proxy-wasm": "v0.1",
+      "x-envoy-upstream-service-time": "1132",
+      "x-ratelimit-limit-tokens": "200000",
+      "x-ratelimit-remaining-requests": "9997",
+      "x-request-id": "req_5a8bdc8a2ed84a07a80293a7da1dc859"
+    },
+    "body": {
+      "choices": [
+        {
+          "finish_reason": "tool_calls",
+          "index": 0,
+          "logprobs": null,
+          "message": {
+            "annotations": [],
+            "content": null,
+            "refusal": null,
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"location\":\"San Francisco, USA\"}",
+                  "name": "get_weather"
+                },
+                "id": "call_uUslRIor8IhxtJdFrDjdwrHK",
+                "type": "function"
+              }
+            ]
+          }
+        }
+      ],
+      "created": 1766147493,
+      "id": "chatcmpl-CoTvpDyQTy15wjHsWjTNJ7C83yKbI",
+      "model": "gpt-4o-mini-2024-07-18",
+      "object": "chat.completion",
+      "service_tier": "default",
+      "system_fingerprint": "fp_644f11dd4d",
+      "usage": {
+        "completion_tokens": 17,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": 0,
+          "audio_tokens": 0,
+          "reasoning_tokens": 0,
+          "rejected_prediction_tokens": 0
+        },
+        "prompt_tokens": 83,
+        "prompt_tokens_details": {
+          "audio_tokens": 0,
+          "cached_tokens": 0
+        },
+        "total_tokens": 100
+      }
+    }
+  }
+}

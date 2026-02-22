@@ -1,0 +1,58 @@
+# Docker Compose for Provider Health Dashboard Tests
+# Includes: Gateway with health checks, circuit breaker, and Prometheus for metrics
+#
+# Port configuration (override via environment variables for parallel testing):
+#   GATEWAY_PORT - Gateway HTTP port (default: 8090)
+#   PROMETHEUS_PORT - Prometheus port (default: 9091)
+#
+# Endpoints:
+# - Gateway: http://localhost:8090
+# - Prometheus: http://localhost:9091
+
+services:
+  gateway:
+    image: hadrian:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "${GATEWAY_PORT:-8090}:8080"
+    volumes:
+      - ./config/hadrian.provider-health.toml:/app/config/hadrian.toml:ro
+      - gateway-data:/app/data
+    environment:
+      - PROMETHEUS_URL=http://prometheus:9090
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    ports:
+      - "${PROMETHEUS_PORT:-9091}:9090"
+    volumes:
+      - ./config/prometheus-provider-health.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  gateway-data:
+    driver: local
+  prometheus-data:
+    driver: local

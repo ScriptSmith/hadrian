@@ -1,0 +1,2022 @@
+# Default values for Hadrian AI Gateway
+# This is a YAML-formatted file.
+
+# -- Number of gateway replicas
+replicaCount: 1
+
+image:
+  # -- Container image repository
+  repository: ghcr.io/ScriptSmith/hadrian
+  # -- Image pull policy
+  pullPolicy: IfNotPresent
+  # -- Overrides the image tag (default: Chart appVersion)
+  tag: ""
+
+# -- Image pull secrets for private registries
+imagePullSecrets: []
+
+# -- Override the chart name
+nameOverride: ""
+
+# -- Override the full release name
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Create a service account
+  create: true
+  # -- Annotations for the service account
+  annotations: {}
+  # -- Name of the service account (auto-generated if empty)
+  name: ""
+  # -- Automount service account token
+  automount: true
+
+# -- Pod annotations
+podAnnotations: {}
+
+# -- Pod labels
+podLabels: {}
+
+# -- Pod security context
+podSecurityContext:
+  fsGroup: 1000
+
+# -- Container security context
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  # -- Service type (ClusterIP, NodePort, LoadBalancer)
+  type: ClusterIP
+  # -- Service port
+  port: 80
+  # -- Container port
+  targetPort: 8080
+  # -- Node port (only used if type is NodePort)
+  nodePort: ""
+  # -- Cluster IP (only used if type is ClusterIP, set to "None" for headless)
+  clusterIP: ""
+  # -- Load balancer IP (only used if type is LoadBalancer)
+  loadBalancerIP: ""
+  # -- Load balancer source ranges (only used if type is LoadBalancer)
+  loadBalancerSourceRanges: []
+  # -- Service annotations
+  annotations: {}
+    # For AWS NLB:
+    # service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    # For GCP internal LB:
+    # cloud.google.com/load-balancer-type: Internal
+
+ingress:
+  # -- Enable ingress
+  enabled: false
+  # -- Ingress class name (nginx, traefik, alb, gce, etc.)
+  className: ""
+  # -- Ingress annotations
+  # @default -- See values.yaml for examples
+  annotations: {}
+    # -- nginx ingress controller:
+    # kubernetes.io/ingress.class: nginx  # deprecated, use className instead
+    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    #
+    # -- traefik ingress controller:
+    # traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    # traefik.ingress.kubernetes.io/router.tls: "true"
+    #
+    # -- AWS ALB ingress controller:
+    # alb.ingress.kubernetes.io/scheme: internet-facing
+    # alb.ingress.kubernetes.io/target-type: ip
+    # alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    #
+    # -- GKE ingress controller:
+    # kubernetes.io/ingress.global-static-ip-name: hadrian-ip
+    # networking.gke.io/managed-certificates: hadrian-cert
+    #
+    # -- cert-manager TLS provisioning:
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+    # cert-manager.io/issuer: my-issuer
+  # -- Ingress hosts configuration
+  hosts:
+    - host: gateway.local
+      paths:
+        - path: /
+          pathType: Prefix
+  # -- TLS configuration
+  # @default -- disabled
+  tls: []
+  #  - secretName: gateway-tls
+  #    hosts:
+  #      - gateway.local
+
+# Gateway API (alternative to Ingress for modern Kubernetes clusters)
+# Requires Gateway API CRDs: kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml
+gatewayAPI:
+  # -- Enable Gateway API HTTPRoute (alternative to Ingress)
+  enabled: false
+  # -- Annotations for the HTTPRoute
+  annotations: {}
+  # -- Parent Gateway references (required when enabled)
+  # @default -- See values.yaml for examples
+  parentRefs: []
+    # -- Traefik Gateway example:
+    # - name: traefik-gateway
+    #   namespace: traefik
+    #   sectionName: websecure  # optional: specific listener
+    #
+    # -- Envoy Gateway example:
+    # - name: eg
+    #   namespace: envoy-gateway-system
+    #
+    # -- nginx-gateway-fabric example:
+    # - name: nginx
+    #   namespace: nginx-gateway
+    #
+    # -- Istio Gateway example:
+    # - name: istio-gateway
+    #   namespace: istio-system
+    #
+    # -- Kong Gateway example:
+    # - name: kong
+    #   namespace: kong
+  # -- Hostnames for the HTTPRoute
+  hostnames:
+    - gateway.local
+  # -- Routing rules (if empty, defaults to routing all traffic to the service)
+  # @default -- Route all traffic to service
+  rules: []
+    # -- Example: path-based routing
+    # - matches:
+    #     - path:
+    #         type: PathPrefix
+    #         value: /api
+    #   # backendRefs defaults to this chart's service if not specified
+    #
+    # -- Example: header-based routing
+    # - matches:
+    #     - path:
+    #         type: PathPrefix
+    #         value: /
+    #       headers:
+    #         - name: X-Version
+    #           value: "v2"
+    #
+    # -- Example: method-based routing
+    # - matches:
+    #     - path:
+    #         type: PathPrefix
+    #         value: /webhooks
+    #       method: POST
+    #
+    # -- Example: canary deployment with traffic weighting
+    # - matches:
+    #     - path:
+    #         type: PathPrefix
+    #         value: /
+    #   backendRefs:
+    #     - name: hadrian-stable
+    #       port: 80
+    #       weight: 90
+    #     - name: hadrian-canary
+    #       port: 80
+    #       weight: 10
+    #
+    # -- Example: request timeout
+    # - matches:
+    #     - path:
+    #         type: PathPrefix
+    #         value: /
+    #   timeouts:
+    #     request: 30s
+    #     backendRequest: 10s
+
+# cert-manager integration for automatic TLS certificate provisioning
+# Requires cert-manager to be installed: https://cert-manager.io/docs/installation/
+certManager:
+  # -- Enable cert-manager Certificate resource
+  # When enabled, creates a Certificate CR that provisions TLS certificates automatically
+  enabled: false
+  # -- Annotations for the Certificate resource
+  annotations: {}
+  # -- Secret name for the TLS certificate (defaults to <release>-tls)
+  secretName: ""
+  # -- Issuer configuration (required when enabled)
+  issuer:
+    # -- Name of the Issuer or ClusterIssuer
+    name: ""
+    # -- Kind of the issuer (ClusterIssuer or Issuer)
+    kind: ClusterIssuer
+    # -- Group of the issuer (optional, defaults to cert-manager.io)
+    group: ""
+  # -- Common name for the certificate (optional)
+  commonName: ""
+  # -- DNS names to include in the certificate
+  # If empty, defaults to ingress.hosts[].host values
+  dnsNames: []
+  # -- Certificate validity duration (e.g., "2160h" for 90 days)
+  # Default is 90 days if not specified
+  duration: ""
+  # -- How long before expiry to renew (e.g., "360h" for 15 days)
+  # Default is 30 days if not specified
+  renewBefore: ""
+  # -- Private key configuration
+  privateKey:
+    # -- Algorithm (RSA, ECDSA, Ed25519)
+    algorithm: ""
+    # -- Key size (2048, 4096 for RSA; 256, 384, 521 for ECDSA)
+    size: ""
+    # -- Encoding format (PKCS1, PKCS8)
+    encoding: ""
+    # -- Rotation policy (Always, Never)
+    rotationPolicy: ""
+  # -- X.509 key usages
+  # @default -- cert-manager defaults (digital signature, key encipherment)
+  usages: []
+    # - digital signature
+    # - key encipherment
+    # - server auth
+  # -- Certificate subject fields
+  subject: {}
+    # organizations:
+    #   - "My Company"
+    # countries:
+    #   - "US"
+    # organizationalUnits:
+    #   - "Engineering"
+  # -- Secret template for annotations/labels on the generated secret
+  secretTemplate: {}
+    # annotations:
+    #   my-annotation: "value"
+    # labels:
+    #   my-label: "value"
+
+resources:
+  # -- Resource limits
+  limits:
+    cpu: "2"
+    memory: 2Gi
+  # -- Resource requests
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+# -- Liveness probe configuration
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 30
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# -- Readiness probe configuration
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# Autoscaling configuration (HorizontalPodAutoscaler)
+autoscaling:
+  # -- Enable horizontal pod autoscaling
+  # When enabled, the Deployment's replicas field is not set (HPA manages it)
+  enabled: false
+  # -- Minimum replicas
+  minReplicas: 1
+  # -- Maximum replicas
+  maxReplicas: 10
+  # -- Target CPU utilization percentage (0 to disable)
+  targetCPUUtilizationPercentage: 80
+  # -- Target memory utilization percentage (0 or empty to disable)
+  targetMemoryUtilizationPercentage: ""
+  # -- Custom metrics for autoscaling (advanced)
+  # @default -- disabled
+  customMetrics: []
+    # Example: scale based on requests per second from Prometheus
+    # - type: Pods
+    #   pods:
+    #     metric:
+    #       name: http_requests_per_second
+    #     target:
+    #       type: AverageValue
+    #       averageValue: 1000
+    # Example: scale based on external metric
+    # - type: External
+    #   external:
+    #     metric:
+    #       name: queue_messages_ready
+    #       selector:
+    #         matchLabels:
+    #           queue: hadrian-tasks
+    #     target:
+    #       type: AverageValue
+    #       averageValue: 30
+  # -- Scaling behavior configuration
+  # Controls how quickly pods scale up or down
+  # @default -- Kubernetes defaults (scale up immediately, scale down after 5 min stabilization)
+  behavior: {}
+    # Example: scale up quickly, scale down slowly to prevent thrashing
+    # scaleUp:
+    #   stabilizationWindowSeconds: 0
+    #   policies:
+    #     - type: Percent
+    #       value: 100
+    #       periodSeconds: 15
+    #     - type: Pods
+    #       value: 4
+    #       periodSeconds: 15
+    #   selectPolicy: Max
+    # scaleDown:
+    #   stabilizationWindowSeconds: 300
+    #   policies:
+    #     - type: Percent
+    #       value: 10
+    #       periodSeconds: 60
+    #   selectPolicy: Min
+    #
+    # Example: conservative scaling (slower scale-up and scale-down)
+    # scaleUp:
+    #   stabilizationWindowSeconds: 60
+    #   policies:
+    #     - type: Pods
+    #       value: 1
+    #       periodSeconds: 60
+    # scaleDown:
+    #   stabilizationWindowSeconds: 600
+    #   policies:
+    #     - type: Pods
+    #       value: 1
+    #       periodSeconds: 120
+  # -- Annotations for the HorizontalPodAutoscaler
+  annotations: {}
+  # -- Additional labels for the HorizontalPodAutoscaler
+  labels: {}
+
+# Pod Disruption Budget configuration
+# Ensures availability during voluntary disruptions (node maintenance, cluster upgrades)
+podDisruptionBudget:
+  # -- Enable PodDisruptionBudget
+  # Recommended when running multiple replicas for high availability
+  enabled: false
+  # -- Minimum number/percentage of pods that must remain available
+  # Can be an absolute number (e.g., 1) or percentage (e.g., "50%")
+  # Only one of minAvailable or maxUnavailable should be set
+  minAvailable: ""
+  # -- Maximum number/percentage of pods that can be unavailable
+  # Can be an absolute number (e.g., 1) or percentage (e.g., "25%")
+  # Only one of minAvailable or maxUnavailable should be set
+  maxUnavailable: ""
+  # -- Annotations for the PodDisruptionBudget
+  annotations: {}
+  # -- Additional labels for the PodDisruptionBudget
+  labels: {}
+
+# -- Node selector
+nodeSelector: {}
+
+# -- Tolerations
+tolerations: []
+
+# -- Affinity rules
+affinity: {}
+
+# -- Topology spread constraints for distributing pods across zones/nodes
+# When labelSelector is omitted, the chart automatically uses the deployment's selector labels
+# @default -- disabled
+topologySpreadConstraints: []
+  # -- Example: Spread across availability zones (recommended for HA)
+  # Ensures pods are evenly distributed across zones; won't schedule if it would create imbalance
+  # - maxSkew: 1
+  #   topologyKey: topology.kubernetes.io/zone
+  #   whenUnsatisfiable: DoNotSchedule
+  #   # labelSelector is auto-injected if omitted
+  #
+  # -- Example: Spread across nodes within a zone
+  # Distributes pods across nodes to avoid single points of failure
+  # - maxSkew: 1
+  #   topologyKey: kubernetes.io/hostname
+  #   whenUnsatisfiable: DoNotSchedule
+  #
+  # -- Example: Soft constraint (best-effort spreading)
+  # Prefers even distribution but schedules anyway if not possible
+  # - maxSkew: 1
+  #   topologyKey: topology.kubernetes.io/zone
+  #   whenUnsatisfiable: ScheduleAnyway
+  #
+  # -- Example: Combined zone and node spreading (production HA)
+  # First spread across zones, then spread across nodes within each zone
+  # - maxSkew: 1
+  #   topologyKey: topology.kubernetes.io/zone
+  #   whenUnsatisfiable: DoNotSchedule
+  # - maxSkew: 1
+  #   topologyKey: kubernetes.io/hostname
+  #   whenUnsatisfiable: ScheduleAnyway
+  #
+  # -- Example: With explicit labelSelector (advanced)
+  # - maxSkew: 1
+  #   topologyKey: topology.kubernetes.io/zone
+  #   whenUnsatisfiable: DoNotSchedule
+  #   labelSelector:
+  #     matchLabels:
+  #       app.kubernetes.io/name: hadrian
+  #       app.kubernetes.io/instance: my-release
+  #
+  # -- Example: With node affinity match (Kubernetes 1.26+)
+  # Only consider nodes matching the affinity when calculating skew
+  # - maxSkew: 1
+  #   topologyKey: topology.kubernetes.io/zone
+  #   whenUnsatisfiable: DoNotSchedule
+  #   nodeAffinityPolicy: Honor
+  #   nodeTaintsPolicy: Honor
+
+# -- Extra volumes to add to the pod
+extraVolumes: []
+
+# -- Extra volume mounts to add to the container
+extraVolumeMounts: []
+
+# -- Extra environment variables
+extraEnv: []
+
+# -- Extra environment variables from secrets/configmaps
+extraEnvFrom: []
+
+# -- Extra init containers to add to the pod
+# @default -- See initContainers section below
+extraInitContainers: []
+
+# -- Extra sidecar containers to add to the pod
+# These run alongside the main gateway container for the entire pod lifecycle
+# @default -- See sidecars section below for built-in options
+extraContainers: []
+
+# =============================================================================
+# Init Containers
+# =============================================================================
+
+# Init containers run before the main gateway container starts.
+# Use cases: database migrations, config validation, dependency checks
+initContainers:
+  # Database migration init container
+  # Runs `gateway migrate` before the main container starts
+  migrate:
+    # -- Enable migration init container
+    # Recommended for PostgreSQL deployments with multiple replicas
+    # Ensures migrations run exactly once before any gateway pods start
+    enabled: false
+    # -- Image configuration (defaults to same image as main container)
+    image:
+      repository: ""
+      tag: ""
+      pullPolicy: ""
+    # -- Resource requests and limits for migration container
+    # Migrations are typically fast; conservative limits are fine
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    # -- Security context for migration container
+    # @default -- Same as main container
+    securityContext: {}
+    # -- Extra environment variables for migration container
+    extraEnv: []
+    # -- Annotations (currently unused, reserved for future features)
+    annotations: {}
+
+  # Wait-for-database init container
+  # Waits for database to be ready before starting migrations or gateway
+  waitForDb:
+    # -- Enable wait-for-db init container
+    # Useful when database might not be immediately available (e.g., subchart starting)
+    enabled: false
+    # -- Container image for wait-for-db
+    # Uses busybox by default for lightweight database connectivity check
+    image:
+      repository: busybox
+      tag: "1.36"
+      pullPolicy: IfNotPresent
+    # -- Resource requests and limits
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        cpu: 50m
+        memory: 32Mi
+    # -- Maximum time to wait for database (seconds)
+    timeoutSeconds: 60
+    # -- Interval between connection attempts (seconds)
+    intervalSeconds: 2
+
+#
+# ==========================================================================
+# Init Container Examples
+# ==========================================================================
+#
+# -- Example: Enable migrations for PostgreSQL deployment
+# initContainers:
+#   migrate:
+#     enabled: true
+#
+# -- Example: Wait for database before starting
+# initContainers:
+#   waitForDb:
+#     enabled: true
+#     timeoutSeconds: 120
+#
+# -- Example: Both wait-for-db and migrations
+# initContainers:
+#   waitForDb:
+#     enabled: true
+#   migrate:
+#     enabled: true
+#
+# -- Example: Custom init container
+# extraInitContainers:
+#   - name: config-validator
+#     image: busybox:1.36
+#     command: ['sh', '-c', 'echo "Validating config..." && sleep 1']
+#     volumeMounts:
+#       - name: config
+#         mountPath: /app/config
+#         readOnly: true
+#
+# -- Example: Vault agent init container (fetch secrets before startup)
+# extraInitContainers:
+#   - name: vault-agent
+#     image: hashicorp/vault:1.15
+#     args:
+#       - agent
+#       - -config=/vault/config/agent.hcl
+#       - -exit-after-auth
+#     volumeMounts:
+#       - name: vault-config
+#         mountPath: /vault/config
+#       - name: vault-secrets
+#         mountPath: /vault/secrets
+#
+# -- Example: Cloud SQL Auth Proxy (for Google Cloud SQL)
+# extraInitContainers:
+#   - name: cloud-sql-proxy
+#     image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.8
+#     args:
+#       - --structured-logs
+#       - --port=5432
+#       - PROJECT:REGION:INSTANCE
+#     securityContext:
+#       runAsNonRoot: true
+
+# =============================================================================
+# Sidecar Containers
+# =============================================================================
+
+# Sidecar containers run alongside the main gateway container for the entire pod lifecycle.
+# Use cases: secret injection, database proxies, authentication proxies, log collectors
+#
+# Key difference from init containers:
+# - Init containers: Run once before main container starts (one-time setup)
+# - Sidecars: Run continuously alongside main container (ongoing services)
+
+sidecars:
+  # Vault Agent sidecar for continuous secret injection
+  # Vault Agent can automatically renew secrets and re-render templates
+  # See: https://developer.hashicorp.com/vault/docs/agent-and-proxy/agent
+  vaultAgent:
+    # -- Enable Vault Agent sidecar
+    enabled: false
+    # -- Vault Agent image
+    image:
+      repository: hashicorp/vault
+      tag: "1.15"
+      pullPolicy: IfNotPresent
+    # -- Vault server address
+    vaultAddr: ""
+    # -- Vault authentication method (kubernetes, aws, gcp, etc.)
+    authMethod: kubernetes
+    # -- Vault role for authentication
+    role: ""
+    # -- Path to Kubernetes auth mount (for kubernetes auth method)
+    authPath: "auth/kubernetes"
+    # -- Secret templates to render
+    # Each template renders Vault secrets to a file in the shared volume
+    # @default -- disabled
+    templates: []
+      # -- Example: Render database credentials
+      # - name: db-creds
+      #   destination: /vault/secrets/db-creds.json
+      #   contents: |
+      #     {{ with secret "database/creds/gateway" }}
+      #     {
+      #       "username": "{{ .Data.username }}",
+      #       "password": "{{ .Data.password }}"
+      #     }
+      #     {{ end }}
+      #
+      # -- Example: Render API keys as environment file
+      # - name: api-keys
+      #   destination: /vault/secrets/api-keys.env
+      #   contents: |
+      #     {{ with secret "secret/data/hadrian/providers" }}
+      #     OPENAI_API_KEY={{ .Data.data.openai_api_key }}
+      #     ANTHROPIC_API_KEY={{ .Data.data.anthropic_api_key }}
+      #     {{ end }}
+    # -- Shared volume mount path (where secrets are written)
+    secretsPath: /vault/secrets
+    # -- Resource requests and limits
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+    # -- Additional Vault Agent configuration
+    # @default -- disabled
+    extraConfig: {}
+      # -- Example: Auto-auth configuration
+      # auto_auth:
+      #   method:
+      #     type: kubernetes
+      #     config:
+      #       role: hadrian-gateway
+      #   sink:
+      #     type: file
+      #     config:
+      #       path: /home/vault/.vault-token
+    # -- Extra environment variables
+    extraEnv: []
+    # -- Extra volume mounts
+    extraVolumeMounts: []
+    # -- Annotations to add to the pod when Vault Agent is enabled
+    # Useful for Vault injector integration
+    podAnnotations: {}
+      # -- Example: Vault injector annotations (alternative to sidecar)
+      # vault.hashicorp.com/agent-inject: "true"
+      # vault.hashicorp.com/role: "hadrian-gateway"
+      # vault.hashicorp.com/agent-inject-secret-db-creds: "database/creds/gateway"
+
+  # Cloud SQL Auth Proxy sidecar for Google Cloud SQL connections
+  # Provides secure, IAM-based authentication to Cloud SQL instances
+  # See: https://cloud.google.com/sql/docs/mysql/connect-kubernetes-engine
+  cloudSqlProxy:
+    # -- Enable Cloud SQL Auth Proxy sidecar
+    enabled: false
+    # -- Cloud SQL Auth Proxy image
+    image:
+      repository: gcr.io/cloud-sql-connectors/cloud-sql-proxy
+      tag: "2.14.1"
+      pullPolicy: IfNotPresent
+    # -- Cloud SQL instance connection name (PROJECT:REGION:INSTANCE)
+    instanceConnectionName: ""
+    # -- Port to listen on (gateway connects to localhost:port)
+    port: 5432
+    # -- Enable private IP connection (requires VPC-native cluster)
+    privateIP: false
+    # -- Enable IAM authentication (instead of password)
+    # Requires IAM database authentication to be enabled on the instance
+    iamAuthentication: false
+    # -- Use structured logging (JSON format)
+    structuredLogs: true
+    # -- Health check port (0 to disable)
+    healthCheckPort: 9801
+    # -- Admin server port for metrics (0 to disable)
+    adminPort: 9091
+    # -- Credentials configuration
+    credentials:
+      # -- Use Workload Identity (recommended for GKE)
+      # Requires: serviceAccount.annotations["iam.gke.io/gcp-service-account"]
+      useWorkloadIdentity: true
+      # -- Use credential file from secret (alternative to Workload Identity)
+      secretName: ""
+      secretKey: "key.json"
+      mountPath: /secrets/cloudsql
+    # -- Resource requests and limits
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    # -- Extra arguments for cloud-sql-proxy
+    extraArgs: []
+      # -- Example: Set max connections
+      # - --max-connections=100
+      # -- Example: Enable verbose logging
+      # - --debug
+    # -- Extra environment variables
+    extraEnv: []
+
+  # OAuth2 Proxy sidecar for authentication
+  # Provides authentication in front of the gateway using OAuth2/OIDC providers
+  # See: https://oauth2-proxy.github.io/oauth2-proxy/
+  oauth2Proxy:
+    # -- Enable OAuth2 Proxy sidecar
+    enabled: false
+    # -- OAuth2 Proxy image
+    image:
+      repository: quay.io/oauth2-proxy/oauth2-proxy
+      tag: "v7.6.0"
+      pullPolicy: IfNotPresent
+    # -- Port for OAuth2 Proxy to listen on (external traffic hits this port)
+    port: 4180
+    # -- Upstream URL (the gateway service)
+    # @default -- http://localhost:<gateway.server.port>
+    upstreamUrl: ""
+    # -- OAuth2 provider (google, github, azure, oidc, etc.)
+    provider: oidc
+    # -- Client ID for OAuth2 provider
+    clientId: ""
+    # -- Client secret for OAuth2 provider (use existingSecret for production)
+    clientSecret: ""
+    # -- Existing secret containing OAuth2 credentials
+    existingSecret: ""
+    # -- Key in secret for client ID
+    clientIdKey: "client-id"
+    # -- Key in secret for client secret
+    clientSecretKey: "client-secret"
+    # -- Cookie secret (32-byte base64 string, auto-generated if empty)
+    cookieSecret: ""
+    # -- Key in existing secret for cookie secret
+    cookieSecretKey: "cookie-secret"
+    # -- OIDC issuer URL (required for provider=oidc)
+    oidcIssuerUrl: ""
+    # -- Email domains to allow (empty = allow all)
+    emailDomains: []
+      # - example.com
+    # -- Allowed groups (for providers that support groups)
+    allowedGroups: []
+    # -- Skip authentication for these paths (e.g., health checks)
+    skipAuthPaths:
+      - /health
+      - /metrics
+    # -- Pass authorization header to upstream
+    passAuthorizationHeader: true
+    # -- Set X-Auth-Request-* headers
+    setXAuthRequestHeaders: true
+    # -- Cookie settings
+    cookie:
+      # -- Cookie name
+      name: "_oauth2_proxy"
+      # -- Cookie secure flag (should be true in production)
+      secure: true
+      # -- Cookie domain (empty = request domain)
+      domain: ""
+      # -- Cookie expiration
+      expire: "168h"
+      # -- Cookie refresh interval
+      refresh: "1h"
+    # -- Resource requests and limits
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    # -- Extra arguments for oauth2-proxy
+    extraArgs: []
+      # -- Example: Skip provider verification
+      # - --skip-provider-button=true
+      # -- Example: Custom scope
+      # - --scope=openid email profile
+    # -- Extra environment variables
+    extraEnv: []
+
+#
+# ==========================================================================
+# Sidecar Container Examples
+# ==========================================================================
+#
+# -- Example: Custom logging sidecar (Fluent Bit)
+# extraContainers:
+#   - name: fluent-bit
+#     image: fluent/fluent-bit:2.2
+#     volumeMounts:
+#       - name: varlog
+#         mountPath: /var/log
+#       - name: fluent-bit-config
+#         mountPath: /fluent-bit/etc/
+#     resources:
+#       requests:
+#         cpu: 50m
+#         memory: 64Mi
+#       limits:
+#         cpu: 100m
+#         memory: 128Mi
+#
+# -- Example: Envoy sidecar for service mesh (manual, not Istio-injected)
+# extraContainers:
+#   - name: envoy
+#     image: envoyproxy/envoy:v1.28-latest
+#     args:
+#       - -c
+#       - /etc/envoy/envoy.yaml
+#     ports:
+#       - name: envoy-admin
+#         containerPort: 9901
+#     volumeMounts:
+#       - name: envoy-config
+#         mountPath: /etc/envoy
+#     resources:
+#       requests:
+#         cpu: 100m
+#         memory: 128Mi
+#       limits:
+#         cpu: 500m
+#         memory: 512Mi
+#
+# -- Example: Redis sidecar for local caching
+# extraContainers:
+#   - name: redis
+#     image: redis:7-alpine
+#     ports:
+#       - name: redis
+#         containerPort: 6379
+#     resources:
+#       requests:
+#         cpu: 50m
+#         memory: 64Mi
+#       limits:
+#         cpu: 200m
+#         memory: 256Mi
+#
+# -- Example: OpenTelemetry Collector sidecar
+# extraContainers:
+#   - name: otel-collector
+#     image: otel/opentelemetry-collector-contrib:0.91.0
+#     args:
+#       - --config=/etc/otel/config.yaml
+#     ports:
+#       - name: otlp-grpc
+#         containerPort: 4317
+#       - name: otlp-http
+#         containerPort: 4318
+#     volumeMounts:
+#       - name: otel-config
+#         mountPath: /etc/otel
+#     resources:
+#       requests:
+#         cpu: 100m
+#         memory: 128Mi
+#       limits:
+#         cpu: 500m
+#         memory: 512Mi
+
+# =============================================================================
+# Gateway Configuration
+# =============================================================================
+
+gateway:
+  # -- Log level (trace, debug, info, warn, error)
+  logLevel: info
+
+  # Server configuration
+  server:
+    # -- Server host
+    host: "0.0.0.0"
+    # -- Server port
+    port: 8080
+
+  # Database configuration
+  database:
+    # -- Database type: sqlite or postgres
+    type: sqlite
+
+    # SQLite configuration (used when type=sqlite)
+    sqlite:
+      # -- SQLite database path (relative to data volume)
+      path: "/app/data/hadrian.db"
+
+    # PostgreSQL configuration (used when type=postgres)
+    # Supports external managed databases: AWS RDS, Google Cloud SQL, Azure Database
+    postgres:
+      # -- PostgreSQL host
+      host: ""
+      # -- PostgreSQL port
+      port: 5432
+      # -- PostgreSQL database name
+      database: "gateway"
+      # -- PostgreSQL username
+      username: "gateway"
+      # -- PostgreSQL password (use existingSecret for production)
+      password: ""
+      # -- Use existing secret for PostgreSQL credentials
+      # Secret must contain 'password' key
+      existingSecret: ""
+      # -- Key in the secret containing the password
+      existingSecretKey: "password"
+      # -- Full connection URL (overrides individual settings)
+      # Use this for complex connection strings or managed databases
+      url: ""
+      # -- Read replica URL for read-heavy workloads
+      readUrl: ""
+      # -- SSL mode (disable, allow, prefer, require, verify-ca, verify-full)
+      sslMode: "prefer"
+      # -- SSL/TLS configuration for managed databases
+      ssl:
+        # -- Enable custom SSL certificate
+        enabled: false
+        # -- Use existing secret containing CA certificate
+        # Secret should contain 'ca.crt' key with the CA certificate
+        existingSecret: ""
+        # -- Key in secret containing CA certificate
+        caKey: "ca.crt"
+        # -- Mount path for SSL certificates
+        mountPath: "/etc/ssl/postgres"
+      #
+      # ==========================================================================
+      # External Managed Database Examples
+      # ==========================================================================
+      #
+      # -- AWS RDS Example:
+      # host: "mydb.abc123.us-east-1.rds.amazonaws.com"
+      # port: 5432
+      # database: "gateway"
+      # username: "gateway"
+      # existingSecret: "rds-credentials"  # Create with: kubectl create secret generic rds-credentials --from-literal=password=xxx
+      # sslMode: "verify-full"
+      # ssl:
+      #   enabled: true
+      #   existingSecret: "rds-ca-cert"  # Create with: kubectl create secret generic rds-ca-cert --from-file=ca.crt=rds-ca-2019-root.pem
+      #
+      # -- AWS RDS with IAM Authentication:
+      # For IAM auth, use a sidecar or init container to generate temporary tokens
+      # url: "postgres://gateway@mydb.abc123.us-east-1.rds.amazonaws.com:5432/gateway?sslmode=verify-full"
+      # See: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.html
+      #
+      # -- Google Cloud SQL Example (using Cloud SQL Auth Proxy sidecar):
+      # When using Cloud SQL Proxy sidecar, connect to localhost
+      # host: "127.0.0.1"
+      # port: 5432
+      # database: "gateway"
+      # username: "gateway"
+      # existingSecret: "cloudsql-credentials"
+      # sslMode: "disable"  # Proxy handles SSL
+      # See cloudSqlProxy section below for sidecar configuration
+      #
+      # -- Google Cloud SQL Example (direct connection):
+      # host: "10.20.30.40"  # Private IP of Cloud SQL instance
+      # port: 5432
+      # database: "gateway"
+      # username: "gateway"
+      # existingSecret: "cloudsql-credentials"
+      # sslMode: "verify-ca"
+      # ssl:
+      #   enabled: true
+      #   existingSecret: "cloudsql-ca-cert"
+      #
+      # -- Azure Database for PostgreSQL Example:
+      # host: "myserver.postgres.database.azure.com"
+      # port: 5432
+      # database: "gateway"
+      # username: "gateway@myserver"  # Azure requires username@servername format
+      # existingSecret: "azure-pg-credentials"
+      # sslMode: "require"  # Azure enforces SSL by default
+      #
+      # -- Azure Database with Managed Identity:
+      # Use Azure AD authentication with workload identity
+      # See: https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/how-to-configure-sign-in-azure-ad-authentication
+
+  # Cache configuration
+  cache:
+    # -- Cache type: memory or redis
+    type: memory
+
+    # Redis configuration (used when type=redis)
+    # Supports external managed Redis: AWS ElastiCache, Google MemoryStore, Azure Cache
+    redis:
+      # -- Redis host
+      host: ""
+      # -- Redis port
+      port: 6379
+      # -- Redis password
+      password: ""
+      # -- Use existing secret for Redis credentials
+      existingSecret: ""
+      # -- Key in the secret containing the password
+      existingSecretKey: "password"
+      # -- Full Redis URL (overrides individual settings)
+      url: ""
+      # -- Redis cluster mode
+      cluster: false
+      # -- Redis cluster nodes (comma-separated URLs for cluster discovery)
+      # Example: "redis://host1:6379,redis://host2:6379,redis://host3:6379"
+      clusterNodes: ""
+      # -- Cluster settings (only used when cluster: true)
+      # -- Read from replica nodes for read operations
+      readFromReplicas: true
+      # -- Number of retries for cluster operations
+      clusterRetries: 3
+      # -- Retry delay in milliseconds between retries
+      clusterRetryDelayMs: 100
+      # -- Connection timeout for cluster nodes in seconds
+      clusterConnectionTimeoutSecs: 5
+      # -- Response timeout for cluster operations in seconds
+      clusterResponseTimeoutSecs: 1
+      # -- TLS configuration for managed Redis services
+      tls:
+        # -- Enable TLS for Redis connection
+        enabled: false
+        # -- Use existing secret containing CA certificate
+        existingSecret: ""
+        # -- Key in secret containing CA certificate
+        caKey: "ca.crt"
+      #
+      # ==========================================================================
+      # External Managed Redis Examples
+      # ==========================================================================
+      #
+      # -- AWS ElastiCache (Redis) Example:
+      # host: "my-redis.abc123.cache.amazonaws.com"
+      # port: 6379
+      # existingSecret: "elasticache-credentials"  # If auth token enabled
+      # existingSecretKey: "auth-token"
+      #
+      # -- AWS ElastiCache with TLS:
+      # host: "my-redis.abc123.cache.amazonaws.com"
+      # port: 6379
+      # url: "rediss://:${REDIS_PASSWORD}@my-redis.abc123.cache.amazonaws.com:6379"  # Note: rediss:// for TLS
+      # existingSecret: "elasticache-credentials"
+      # tls:
+      #   enabled: true
+      #
+      # -- AWS ElastiCache Cluster Mode:
+      # cluster: true
+      # clusterNodes: "my-redis-0001-001.abc123.cache.amazonaws.com:6379,my-redis-0001-002.abc123.cache.amazonaws.com:6379"
+      #
+      # -- Google Cloud MemoryStore Example:
+      # host: "10.0.0.3"  # MemoryStore provides private IP
+      # port: 6379
+      # # MemoryStore basic tier doesn't require authentication
+      # # Standard tier with AUTH:
+      # existingSecret: "memorystore-credentials"
+      #
+      # -- Google Cloud MemoryStore with TLS:
+      # host: "10.0.0.3"
+      # port: 6378  # TLS port
+      # url: "rediss://:${REDIS_PASSWORD}@10.0.0.3:6378"
+      # existingSecret: "memorystore-credentials"
+      # tls:
+      #   enabled: true
+      #   existingSecret: "memorystore-ca-cert"
+      #
+      # -- Azure Cache for Redis Example:
+      # host: "my-redis.redis.cache.windows.net"
+      # port: 6380  # Azure uses 6380 for SSL
+      # url: "rediss://:${REDIS_PASSWORD}@my-redis.redis.cache.windows.net:6380"
+      # existingSecret: "azure-redis-credentials"
+      # # Azure access keys are in: Primary/Secondary key
+      # existingSecretKey: "primary-key"
+      #
+      # -- Azure Cache for Redis (non-SSL, not recommended):
+      # host: "my-redis.redis.cache.windows.net"
+      # port: 6379
+      # existingSecret: "azure-redis-credentials"
+
+  # Authentication configuration
+  auth:
+    gateway:
+      # -- Gateway authentication type: api_key or none
+      type: api_key
+      # -- Header name for API key
+      headerName: "X-API-Key"
+      # -- API key prefix
+      keyPrefix: "gw_"
+      # -- Cache TTL for API key lookups (seconds)
+      cacheTtlSecs: 300
+
+  # Provider configuration
+  providers:
+    # -- Default provider name
+    defaultProvider: "openrouter"
+
+    # OpenRouter provider
+    openrouter:
+      # -- Enable OpenRouter provider
+      enabled: false
+      # -- OpenRouter API key (use existingSecret for production)
+      apiKey: ""
+      # -- Use existing secret for API key
+      existingSecret: ""
+      # -- Key in the secret containing the API key
+      existingSecretKey: "api-key"
+      # -- Base URL
+      baseUrl: "https://openrouter.ai/api/v1/"
+      # -- Request timeout in seconds
+      timeoutSecs: 60
+
+    # OpenAI provider
+    openai:
+      # -- Enable OpenAI provider
+      enabled: false
+      # -- OpenAI API key
+      apiKey: ""
+      # -- Use existing secret for API key
+      existingSecret: ""
+      existingSecretKey: "api-key"
+      # -- Base URL (for Azure OpenAI or compatible APIs)
+      baseUrl: "https://api.openai.com/v1/"
+      timeoutSecs: 60
+
+    # Anthropic provider
+    anthropic:
+      # -- Enable Anthropic provider
+      enabled: false
+      # -- Anthropic API key
+      apiKey: ""
+      # -- Use existing secret for API key
+      existingSecret: ""
+      existingSecretKey: "api-key"
+      # -- Base URL
+      baseUrl: "https://api.anthropic.com/"
+      timeoutSecs: 120
+
+    # Test provider (for testing without external API calls)
+    test:
+      # -- Enable test provider
+      enabled: false
+      # -- Model name to return in responses
+      modelName: "test-model"
+      timeoutSecs: 60
+
+  # Feature flags
+  features:
+    # -- Enable file search / RAG
+    fileSearch:
+      enabled: false
+    # -- Enable guardrails
+    guardrails:
+      enabled: false
+    # -- Enable web search tool
+    webSearch:
+      enabled: false
+
+  # Observability configuration
+  observability:
+    logging:
+      # -- Log format: json or pretty
+      format: json
+
+    metrics:
+      # -- Enable Prometheus metrics endpoint
+      enabled: true
+      # -- Metrics endpoint path
+      path: /metrics
+      # -- Prometheus server URL for querying aggregated metrics
+      # When set, provider statistics are fetched via Prometheus PromQL queries.
+      # This enables accurate stats in multi-node deployments where each gateway
+      # instance exposes its own /metrics endpoint to Prometheus.
+      # When not set, stats are derived from the local /metrics endpoint.
+      # Example: "http://prometheus:9090"
+      prometheusQueryUrl: ""
+
+    tracing:
+      # -- Enable OpenTelemetry tracing
+      enabled: false
+      # -- OTLP endpoint
+      otlpEndpoint: ""
+      # -- Service name for tracing
+      serviceName: "hadrian"
+
+# =============================================================================
+# Persistence (for SQLite mode)
+# =============================================================================
+
+persistence:
+  # -- Enable persistence for SQLite database
+  # Required for SQLite data to survive pod restarts
+  enabled: false
+  # -- Storage class (empty uses default, "-" for no storage class)
+  storageClass: ""
+  # -- Access mode (ReadWriteOnce, ReadWriteMany, ReadOnlyMany)
+  # Note: SQLite requires ReadWriteOnce; ReadWriteMany is not supported
+  accessMode: ReadWriteOnce
+  # -- Storage size
+  size: 1Gi
+  # -- Annotations for the PVC
+  annotations: {}
+  # -- Use existing PVC (skips creating a new one)
+  existingClaim: ""
+  # -- Selector for binding to a specific PV
+  # @default -- disabled (bind to any available PV)
+  selector: {}
+    # -- Example: bind to PV with specific labels
+    # matchLabels:
+    #   app: hadrian
+    #   type: sqlite-data
+  # -- Data source for volume cloning or snapshot restore
+  # @default -- disabled
+  dataSource: {}
+    # -- Example: clone from existing PVC
+    # kind: PersistentVolumeClaim
+    # name: hadrian-data-backup
+    #
+    # -- Example: restore from snapshot
+    # kind: VolumeSnapshot
+    # name: hadrian-data-snapshot
+    # apiGroup: snapshot.storage.k8s.io
+
+# =============================================================================
+# File Storage (for filesystem backend)
+# =============================================================================
+
+# File storage persistence for the Files API when using filesystem backend
+# Use this when gateway.storage.files.backend = "filesystem"
+fileStorage:
+  # -- Enable filesystem-based file storage
+  # When enabled, files are stored on a persistent volume instead of the database
+  enabled: false
+  # -- Mount path for file storage inside the container
+  mountPath: "/var/hadrian/files"
+  persistence:
+    # -- Enable persistence for file storage
+    # Required for uploaded files to survive pod restarts
+    enabled: true
+    # -- Storage class (empty uses default, "-" for no storage class)
+    storageClass: ""
+    # -- Access mode (ReadWriteOnce, ReadWriteMany, ReadOnlyMany)
+    # Use ReadWriteMany if running multiple replicas that need shared file access
+    accessMode: ReadWriteOnce
+    # -- Storage size
+    # Size depends on expected file upload volume
+    size: 10Gi
+    # -- Annotations for the PVC
+    annotations: {}
+    # -- Use existing PVC (skips creating a new one)
+    existingClaim: ""
+    # -- Selector for binding to a specific PV
+    selector: {}
+    # -- Data source for volume cloning or snapshot restore
+    dataSource: {}
+  #
+  # ==========================================================================
+  # File Storage Examples
+  # ==========================================================================
+  #
+  # -- Example: Local development with emptyDir (no persistence)
+  # fileStorage:
+  #   enabled: true
+  #   mountPath: "/var/hadrian/files"
+  #   persistence:
+  #     enabled: false
+  #
+  # -- Example: Single node with local storage
+  # fileStorage:
+  #   enabled: true
+  #   mountPath: "/var/hadrian/files"
+  #   persistence:
+  #     enabled: true
+  #     storageClass: "local-path"
+  #     size: 50Gi
+  #
+  # -- Example: Multi-node with shared NFS storage
+  # fileStorage:
+  #   enabled: true
+  #   mountPath: "/var/hadrian/files"
+  #   persistence:
+  #     enabled: true
+  #     storageClass: "nfs-client"
+  #     accessMode: ReadWriteMany
+  #     size: 100Gi
+  #
+  # -- Example: AWS EFS for multi-AZ deployments
+  # fileStorage:
+  #   enabled: true
+  #   mountPath: "/var/hadrian/files"
+  #   persistence:
+  #     enabled: true
+  #     storageClass: "efs-sc"
+  #     accessMode: ReadWriteMany
+  #     size: 100Gi
+  #
+  # -- Example: Use existing PVC
+  # fileStorage:
+  #   enabled: true
+  #   mountPath: "/var/hadrian/files"
+  #   persistence:
+  #     enabled: true
+  #     existingClaim: "my-existing-file-storage"
+
+# =============================================================================
+# External Dependencies (Bitnami Subcharts)
+# =============================================================================
+
+# PostgreSQL subchart configuration (Bitnami)
+# See: https://github.com/bitnami/charts/tree/main/bitnami/postgresql
+postgresql:
+  # -- Enable PostgreSQL subchart (deploys PostgreSQL alongside the gateway)
+  # When enabled, the gateway will automatically use this PostgreSQL instance
+  enabled: false
+  # -- PostgreSQL architecture (standalone or replication)
+  architecture: standalone
+  auth:
+    # -- Name for a custom user to create
+    username: gateway
+    # -- Password for the custom user (auto-generated if empty)
+    password: ""
+    # -- Name for a custom database to create
+    database: gateway
+    # -- Name of existing secret to use for PostgreSQL credentials
+    # Secret must contain keys: postgres-password, password, replication-password
+    existingSecret: ""
+  primary:
+    # -- PostgreSQL primary persistence configuration
+    persistence:
+      enabled: true
+      size: 8Gi
+    # -- Resource requests and limits for PostgreSQL primary
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+  # -- Metrics configuration for Prometheus
+  metrics:
+    enabled: false
+    serviceMonitor:
+      enabled: false
+
+# Redis subchart configuration (Bitnami)
+# See: https://github.com/bitnami/charts/tree/main/bitnami/redis
+redis:
+  # -- Enable Redis subchart (deploys Redis alongside the gateway)
+  # When enabled, the gateway will automatically use this Redis instance for caching
+  enabled: false
+  # -- Redis architecture (standalone or replication)
+  # standalone: single Redis instance
+  # replication: master with read replicas
+  architecture: standalone
+  auth:
+    # -- Enable Redis password authentication
+    enabled: true
+    # -- Redis password (auto-generated if empty)
+    password: ""
+    # -- Name of existing secret to use for Redis credentials
+    # Secret must contain key: redis-password
+    existingSecret: ""
+  master:
+    # -- Redis master persistence configuration
+    persistence:
+      enabled: true
+      size: 8Gi
+    # -- Resource requests and limits for Redis master
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+  replica:
+    # -- Number of Redis replicas (only used with replication architecture)
+    replicaCount: 0
+    # -- Redis replica persistence configuration
+    persistence:
+      enabled: true
+      size: 8Gi
+    # -- Resource requests and limits for Redis replicas
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+  # -- Metrics configuration for Prometheus
+  metrics:
+    enabled: false
+    serviceMonitor:
+      enabled: false
+
+# =============================================================================
+# Monitoring (Phase 5)
+# =============================================================================
+
+# ServiceMonitor for Prometheus Operator
+# Requires prometheus-operator CRDs: https://prometheus-operator.dev/docs/getting-started/installation/
+serviceMonitor:
+  # -- Enable ServiceMonitor for Prometheus Operator
+  # When enabled, creates a ServiceMonitor CR that configures Prometheus to scrape metrics
+  enabled: false
+  # -- Namespace for ServiceMonitor (defaults to release namespace)
+  # Use this when Prometheus is in a different namespace and uses namespaceSelector
+  namespace: ""
+  # -- Annotations for the ServiceMonitor
+  annotations: {}
+  # -- Labels for ServiceMonitor (used by Prometheus to discover ServiceMonitors)
+  # @default -- See values.yaml for examples
+  labels: {}
+    # -- Example: prometheus-operator default label selector
+    # release: prometheus
+    #
+    # -- Example: kube-prometheus-stack label selector
+    # release: kube-prometheus-stack
+  # -- Additional selector labels to match the Service
+  # These are added to the default selector labels (app.kubernetes.io/name, app.kubernetes.io/instance)
+  selector: {}
+  # -- Namespace selector for cross-namespace scraping
+  # @default -- Match release namespace only
+  namespaceSelector: {}
+    # -- Example: scrape from any namespace
+    # any: true
+    #
+    # -- Example: scrape from specific namespaces
+    # matchNames:
+    #   - hadrian
+    #   - monitoring
+  # -- Label to use as the job name in Prometheus
+  jobLabel: ""
+  # -- Scrape interval (e.g., "30s", "1m")
+  interval: 30s
+  # -- Scrape timeout (must be less than interval)
+  scrapeTimeout: 10s
+  # -- HTTP scheme to use for scraping (http or https)
+  scheme: ""
+  # -- TLS configuration for scraping
+  # @default -- disabled
+  tlsConfig: {}
+    # -- Example: skip certificate verification (not recommended for production)
+    # insecureSkipVerify: true
+    #
+    # -- Example: use CA from secret
+    # ca:
+    #   secret:
+    #     name: prometheus-tls
+    #     key: ca.crt
+    # cert:
+    #   secret:
+    #     name: prometheus-tls
+    #     key: tls.crt
+    # keySecret:
+    #   name: prometheus-tls
+    #   key: tls.key
+  # -- Bearer token secret for authentication
+  # @default -- disabled
+  bearerTokenSecret: {}
+    # -- Example: use token from secret
+    # name: prometheus-token
+    # key: token
+  # -- Basic auth credentials for scraping
+  # @default -- disabled
+  basicAuth: {}
+    # -- Example: use credentials from secrets
+    # username:
+    #   name: prometheus-basic-auth
+    #   key: username
+    # password:
+    #   name: prometheus-basic-auth
+    #   key: password
+  # -- Honor labels from the scraped target
+  # If true, label conflicts are resolved by keeping label values from the scraped data
+  honorLabels: false
+  # -- Honor timestamps from the scraped target
+  # If true, Prometheus uses the timestamps from the scraped data instead of scrape time
+  honorTimestamps: true
+  # -- Metric relabeling rules (applied after scraping)
+  # @default -- disabled
+  metricRelabelings: []
+    # -- Example: drop high-cardinality metrics
+    # - sourceLabels: [__name__]
+    #   regex: 'go_gc_.*'
+    #   action: drop
+    #
+    # -- Example: rename a metric
+    # - sourceLabels: [__name__]
+    #   regex: 'hadrian_http_requests_total'
+    #   targetLabel: __name__
+    #   replacement: 'gateway_requests_total'
+    #
+    # -- Example: add a static label to all metrics
+    # - targetLabel: environment
+    #   replacement: production
+  # -- Relabeling rules (applied before scraping)
+  # @default -- disabled
+  relabelings: []
+    # -- Example: add pod labels as metric labels
+    # - sourceLabels: [__meta_kubernetes_pod_label_app]
+    #   targetLabel: app
+    #
+    # -- Example: filter targets by annotation
+    # - sourceLabels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+    #   action: keep
+    #   regex: true
+  # -- Sample limit per scrape (protects against high cardinality)
+  sampleLimit: 0
+  # -- Target limit (maximum number of targets to scrape)
+  targetLimit: 0
+
+# PodMonitor for Prometheus Operator (alternative to ServiceMonitor)
+# Use PodMonitor when you prefer direct pod scraping instead of service-based discovery
+# Requires prometheus-operator CRDs: https://prometheus-operator.dev/docs/getting-started/installation/
+podMonitor:
+  # -- Enable PodMonitor for Prometheus Operator
+  # Alternative to ServiceMonitor - scrapes pods directly instead of via Service
+  # Useful when: pods don't have a Service, metrics port isn't in Service, or direct pod targeting is preferred
+  enabled: false
+  # -- Namespace for PodMonitor (defaults to release namespace)
+  namespace: ""
+  # -- Annotations for the PodMonitor
+  annotations: {}
+  # -- Labels for PodMonitor (used by Prometheus to discover PodMonitors)
+  # @default -- See values.yaml for examples
+  labels: {}
+    # -- Example: prometheus-operator default label selector
+    # release: prometheus
+  # -- Additional selector labels to match Pods
+  # These are added to the default selector labels (app.kubernetes.io/name, app.kubernetes.io/instance)
+  selector: {}
+  # -- Namespace selector for cross-namespace scraping
+  # @default -- Match release namespace only
+  namespaceSelector: {}
+    # -- Example: scrape from any namespace
+    # any: true
+  # -- Label to use as the job name in Prometheus
+  jobLabel: ""
+  # -- Scrape interval (e.g., "30s", "1m")
+  interval: 30s
+  # -- Scrape timeout (must be less than interval)
+  scrapeTimeout: 10s
+  # -- HTTP scheme to use for scraping (http or https)
+  scheme: ""
+  # -- TLS configuration for scraping
+  tlsConfig: {}
+  # -- Bearer token secret for authentication
+  bearerTokenSecret: {}
+  # -- Basic auth credentials for scraping
+  basicAuth: {}
+  # -- Honor labels from the scraped target
+  honorLabels: false
+  # -- Honor timestamps from the scraped target
+  honorTimestamps: true
+  # -- Metric relabeling rules (applied after scraping)
+  metricRelabelings: []
+  # -- Relabeling rules (applied before scraping)
+  relabelings: []
+  # -- Sample limit per scrape (protects against high cardinality)
+  sampleLimit: 0
+  # -- Target limit (maximum number of targets to scrape)
+  targetLimit: 0
+
+# PrometheusRule for alerting rules
+# Requires prometheus-operator CRDs: https://prometheus-operator.dev/docs/getting-started/installation/
+prometheusRule:
+  # -- Enable PrometheusRule for alerting
+  # Creates alerting rules that Prometheus will evaluate
+  enabled: false
+  # -- Namespace for PrometheusRule (defaults to release namespace)
+  namespace: ""
+  # -- Annotations for the PrometheusRule
+  annotations: {}
+  # -- Labels for PrometheusRule (used by Prometheus to discover rules)
+  # @default -- See values.yaml for examples
+  labels: {}
+    # -- Example: prometheus-operator default label selector
+    # release: prometheus
+    #
+    # -- Example: kube-prometheus-stack label selector
+    # release: kube-prometheus-stack
+  # -- Default alerting rules configuration
+  defaultRules:
+    # -- Enable default alerting rules
+    enabled: true
+    # -- Base URL for runbook links (alerts include runbook_url annotation)
+    runbookUrl: "https://github.com/ScriptSmith/hadrian/blob/main/docs/runbooks"
+    # -- Critical alerts (immediate action required)
+    critical:
+      # High HTTP error rate (5xx responses)
+      highErrorRate:
+        enabled: true
+        # -- Error rate threshold (0.05 = 5%)
+        threshold: 0.05
+        # -- Duration before alerting
+        for: 5m
+        # -- Additional labels for this alert
+        labels: {}
+        # -- Additional annotations for this alert
+        annotations: {}
+      # All LLM providers unhealthy
+      allProvidersUnhealthy:
+        enabled: true
+        for: 2m
+        labels: {}
+        annotations: {}
+      # Fallback chain exhausted (all providers failed)
+      fallbackExhausted:
+        enabled: true
+        # -- Rate threshold (events per second)
+        threshold: 0
+        for: 1m
+        labels: {}
+        annotations: {}
+      # High authentication failure rate
+      highAuthFailureRate:
+        enabled: true
+        # -- Failure rate threshold (0.5 = 50%)
+        threshold: 0.5
+        for: 5m
+        labels: {}
+        annotations: {}
+    # -- Warning alerts (needs attention soon)
+    warning:
+      # High HTTP request latency
+      highLatency:
+        enabled: true
+        # -- P95 latency threshold in seconds
+        threshold: 30
+        for: 5m
+        labels: {}
+        annotations: {}
+      # High LLM request latency
+      highLLMLatency:
+        enabled: true
+        # -- P95 latency threshold in seconds
+        threshold: 60
+        for: 5m
+        labels: {}
+        annotations: {}
+      # Circuit breaker is open
+      circuitBreakerOpen:
+        enabled: true
+        for: 1m
+        labels: {}
+        annotations: {}
+      # Single provider unhealthy
+      providerUnhealthy:
+        enabled: true
+        for: 5m
+        labels: {}
+        annotations: {}
+      # High rate limiting
+      highRateLimitRate:
+        enabled: true
+        # -- Rate limit threshold (0.1 = 10%)
+        threshold: 0.1
+        for: 5m
+        labels: {}
+        annotations: {}
+      # Budget warnings elevated
+      budgetWarningsElevated:
+        enabled: true
+        # -- Warnings per hour threshold
+        threshold: 10
+        for: 15m
+        labels: {}
+        annotations: {}
+      # High guardrails block rate
+      highGuardrailsBlockRate:
+        enabled: true
+        # -- Block rate threshold (0.2 = 20%)
+        threshold: 0.2
+        for: 5m
+        labels: {}
+        annotations: {}
+      # High database latency
+      highDatabaseLatency:
+        enabled: true
+        # -- P95 latency threshold in seconds
+        threshold: 1
+        for: 5m
+        labels: {}
+        annotations: {}
+      # High streaming time to first chunk
+      highStreamingTTFC:
+        enabled: true
+        # -- P95 TTFC threshold in seconds
+        threshold: 5
+        for: 5m
+        labels: {}
+        annotations: {}
+    # -- Info alerts (informational)
+    info:
+      # High cache miss rate
+      highCacheMissRate:
+        enabled: true
+        # -- Miss rate threshold (0.8 = 80%)
+        threshold: 0.8
+        for: 15m
+        labels: {}
+        annotations: {}
+      # Dead letter queue growing
+      dlqGrowing:
+        enabled: true
+        # -- Net growth rate threshold (messages per hour)
+        threshold: 10
+        for: 30m
+        labels: {}
+        annotations: {}
+      # High fallback rate
+      highFallbackRate:
+        enabled: true
+        # -- Fallback rate threshold (0.2 = 20%)
+        threshold: 0.2
+        for: 10m
+        labels: {}
+        annotations: {}
+      # RAG document processing errors
+      ragProcessingErrors:
+        enabled: true
+        # -- Errors per hour threshold
+        threshold: 5
+        for: 30m
+        labels: {}
+        annotations: {}
+  # -- Additional custom rule groups
+  # @default -- disabled
+  additionalGroups: []
+    # -- Example: custom recording rules
+    # - name: hadrian.recordings
+    #   rules:
+    #     - record: hadrian:http_requests:rate5m
+    #       expr: sum(rate(http_requests_total[5m])) by (status_class)
+    #
+    # -- Example: custom alerting rules
+    # - name: hadrian.custom
+    #   rules:
+    #     - alert: CustomHighTokenUsage
+    #       expr: sum(rate(llm_output_tokens_total[1h])) > 1000000
+    #       for: 1h
+    #       labels:
+    #         severity: warning
+    #       annotations:
+    #         summary: "High token usage detected"
+    #         description: "Token usage exceeded 1M tokens/hour"
+
+# =============================================================================
+# Network Policies (Phase 6)
+# =============================================================================
+
+# NetworkPolicy restricts pod communication for defense-in-depth security
+# Requires a CNI plugin that supports NetworkPolicies (Calico, Cilium, Weave, etc.)
+networkPolicy:
+  # -- Enable NetworkPolicy
+  # When enabled, only explicitly allowed traffic is permitted
+  enabled: false
+  # -- Annotations for the NetworkPolicy
+  annotations: {}
+  # -- Ingress rules (traffic INTO the gateway pods)
+  ingress:
+    # -- Enable ingress rules
+    # When false, no ingress traffic is allowed
+    enabled: true
+    # -- Allow traffic from pods in the same namespace
+    allowSameNamespace: true
+    # -- Allow traffic from specific namespaces
+    # @default -- disabled
+    allowedNamespaces: []
+      # -- Example: Allow from a specific namespace by name
+      # - name: frontend
+      #
+      # -- Example: Allow from namespace with specific labels
+      # - labels:
+      #     environment: production
+      #
+      # -- Example: Allow only specific pods from a namespace
+      # - name: api-gateway
+      #   podSelector:
+      #     app: nginx
+    # -- Allow traffic from specific pod selectors (in any namespace)
+    # @default -- disabled
+    allowedPodSelectors: []
+      # -- Example: Allow from pods with specific labels
+      # - app: api-client
+      #   tier: frontend
+    # -- Allow traffic from specific CIDR blocks
+    # @default -- disabled
+    allowedCIDRs: []
+      # -- Example: Allow from corporate network
+      # - cidr: 10.0.0.0/8
+      #
+      # -- Example: Allow from specific range with exceptions
+      # - cidr: 192.168.0.0/16
+      #   except:
+      #     - 192.168.1.0/24
+    # -- Ingress controller configuration
+    # Automatically allow traffic from your ingress controller
+    ingressController:
+      # -- Enable ingress controller access
+      enabled: false
+      # -- Namespace where ingress controller runs
+      namespace: ingress-nginx
+      # -- Namespace labels (alternative to name)
+      # Use this when namespace name varies or you want label-based selection
+      namespaceLabels: {}
+        # -- Example: Kubernetes standard namespace label
+        # kubernetes.io/metadata.name: ingress-nginx
+      # -- Pod selector for ingress controller pods (optional)
+      # @default -- Allow all pods in the namespace
+      podSelector: {}
+        # -- Example: nginx-ingress-controller
+        # app.kubernetes.io/name: ingress-nginx
+        # app.kubernetes.io/component: controller
+        #
+        # -- Example: traefik
+        # app.kubernetes.io/name: traefik
+        #
+        # -- Example: AWS ALB controller
+        # app.kubernetes.io/name: aws-load-balancer-controller
+    # -- Prometheus/monitoring access configuration
+    prometheus:
+      # -- Enable Prometheus scraping access
+      enabled: false
+      # -- Namespace where Prometheus runs
+      namespace: monitoring
+      # -- Namespace labels (alternative to name)
+      namespaceLabels: {}
+        # -- Example: prometheus-operator namespace
+        # kubernetes.io/metadata.name: monitoring
+      # -- Pod selector for Prometheus pods (optional)
+      podSelector: {}
+        # -- Example: kube-prometheus-stack
+        # app.kubernetes.io/name: prometheus
+        #
+        # -- Example: prometheus-operator
+        # app: prometheus
+    # -- Custom ingress rules for advanced scenarios
+    # @default -- disabled
+    customRules: []
+      # -- Example: Allow specific port from specific source
+      # - ports:
+      #     - port: 9090
+      #       protocol: TCP
+      #   from:
+      #     - namespaceSelector:
+      #         matchLabels:
+      #           name: custom-namespace
+  # -- Egress rules (traffic OUT FROM the gateway pods)
+  egress:
+    # -- Enable egress rules
+    # When false, no egress traffic is allowed (will break the gateway!)
+    enabled: true
+    # -- DNS egress configuration (required for hostname resolution)
+    dns:
+      # -- Enable DNS egress (strongly recommended)
+      enabled: true
+      # -- Custom namespace selector for DNS
+      # @default -- kube-system namespace
+      namespaceSelector: {}
+        # -- Example: custom DNS namespace
+        # kubernetes.io/metadata.name: kube-dns
+      # -- Custom pod selector for DNS pods
+      podSelector: {}
+        # -- Example: CoreDNS
+        # k8s-app: kube-dns
+    # -- Database egress configuration
+    database:
+      # -- Enable database egress
+      # Automatically enabled when PostgreSQL subchart is used
+      enabled: true
+      # -- Namespace for external database pods (if in-cluster)
+      namespace: ""
+      # -- Namespace labels for external database
+      namespaceLabels: {}
+      # -- Pod selector for external database pods (if in-cluster)
+      podSelector: {}
+        # -- Example: External PostgreSQL in cluster
+        # app: postgresql
+        # release: my-postgres
+      # -- CIDR for external managed database (RDS, Cloud SQL, Azure Database)
+      # Use this when connecting to databases outside the cluster
+      cidr: ""
+        # -- Example: AWS RDS in specific VPC CIDR
+        # cidr: "10.0.0.0/16"
+        #
+        # -- Example: Google Cloud SQL private IP range
+        # cidr: "10.10.0.0/24"
+      # -- CIDRs to exclude from database access
+      except: []
+    # -- Cache (Redis) egress configuration
+    cache:
+      # -- Enable cache egress
+      # Automatically enabled when Redis subchart is used
+      enabled: true
+      # -- Namespace for external Redis pods (if in-cluster)
+      namespace: ""
+      # -- Namespace labels for external Redis
+      namespaceLabels: {}
+      # -- Pod selector for external Redis pods (if in-cluster)
+      podSelector: {}
+        # -- Example: External Redis in cluster
+        # app: redis
+        # release: my-redis
+      # -- CIDR for external managed Redis (ElastiCache, MemoryStore, Azure Cache)
+      cidr: ""
+      # -- CIDRs to exclude from cache access
+      except: []
+      # -- Additional ports (e.g., 6380 for Azure Redis SSL)
+      additionalPorts: []
+        # - 6380
+    # -- HTTPS egress for LLM providers (OpenRouter, OpenAI, Anthropic, etc.)
+    https:
+      # -- Enable HTTPS egress (required for LLM API calls)
+      enabled: true
+      # -- Exclude private IP ranges from HTTPS egress
+      # Recommended for security: prevents accessing internal services via HTTPS
+      excludePrivateRanges: true
+      # -- Specific CIDRs to allow (overrides default 0.0.0.0/0)
+      # Use this to restrict which external IPs the gateway can reach
+      # @default -- Allow all external IPs (excluding private ranges if excludePrivateRanges=true)
+      cidrs: []
+        # -- Example: Only allow specific provider IP ranges
+        # - cidr: 104.18.0.0/16  # Cloudflare (used by many providers)
+        # - cidr: 13.107.0.0/16  # Azure
+    # -- OpenTelemetry/tracing egress configuration
+    tracing:
+      # -- Enable tracing egress
+      # Only applies when gateway.observability.tracing.enabled=true
+      enabled: true
+      # -- Namespace for OTLP collector
+      namespace: ""
+      # -- Namespace labels for OTLP collector
+      namespaceLabels: {}
+      # -- Pod selector for OTLP collector pods
+      podSelector: {}
+        # -- Example: OpenTelemetry Collector
+        # app.kubernetes.io/name: opentelemetry-collector
+        #
+        # -- Example: Jaeger
+        # app: jaeger
+        # component: collector
+      # -- CIDR for external tracing endpoint
+      cidr: ""
+      # -- OTLP gRPC port
+      port: 4317
+      # -- OTLP HTTP port (optional)
+      httpPort: ""
+    # -- Custom egress rules for advanced scenarios
+    # @default -- disabled
+    customRules: []
+      # -- Example: Allow access to external API
+      # - ports:
+      #     - port: 443
+      #       protocol: TCP
+      #   to:
+      #     - ipBlock:
+      #         cidr: 203.0.113.0/24
+      #
+      # -- Example: Allow access to internal service
+      # - ports:
+      #     - port: 8080
+      #       protocol: TCP
+      #   to:
+      #     - namespaceSelector:
+      #         matchLabels:
+      #           name: internal-services
+      #       podSelector:
+      #         matchLabels:
+      #           app: auth-service
+
+# =============================================================================
+# Helm Test Hooks
+# =============================================================================
+
+# Helm tests validate that the chart deployed correctly
+# Run tests with: helm test <RELEASE_NAME>
+tests:
+  # -- Enable Helm test hooks
+  enabled: true
+  # -- Annotations for test pods
+  annotations: {}
+  # -- Container image for test pods
+  image:
+    repository: busybox
+    tag: "1.36"
+    pullPolicy: IfNotPresent
+  # -- Resource requests and limits for test pods
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      cpu: 50m
+      memory: 64Mi
+  # Connection test - validates gateway service is accessible
+  connection:
+    # -- Enable connection test
+    enabled: true
+    # -- Number of retry attempts
+    retries: 3
+    # -- Delay between retries in seconds
+    retryDelay: 5
+  # API test - validates API endpoints respond correctly
+  api:
+    # -- Enable API endpoint tests
+    # Tests: health endpoint, OpenAPI spec, metrics (if enabled)
+    enabled: true

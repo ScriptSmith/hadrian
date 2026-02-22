@@ -1,0 +1,669 @@
+---
+title: Providers
+description: Configure LLM providers for Hadrian Gateway
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Providers define how Hadrian connects to LLM services. Each provider has a unique name and specifies which API protocol to use.
+
+## Provider Types
+
+| Type            | Description                        | Streaming | Embeddings  | Tools |
+| --------------- | ---------------------------------- | --------- | ----------- | ----- |
+| `open_ai`       | OpenAI API and compatible services | Yes       | Yes         | Yes   |
+| `anthropic`     | Anthropic Claude API               | Yes       | No          | Yes   |
+| `bedrock`       | AWS Bedrock                        | Yes       | Yes (Titan) | Yes   |
+| `vertex`        | Google Vertex AI / Gemini          | Yes       | Yes         | Yes   |
+| `azure_open_ai` | Azure OpenAI Service               | Yes       | Yes         | Yes   |
+| `test`          | Mock provider for testing          | Yes       | No          | No    |
+
+## OpenAI
+
+Works with the native OpenAI API and any OpenAI-compatible endpoint.
+
+```toml
+[providers.openai]
+type = "open_ai"
+api_key = "${OPENAI_API_KEY}"
+
+# Optional settings
+organization = "org-xxx"           # OpenAI organization ID
+project = "proj-xxx"               # OpenAI project ID
+timeout_secs = 300                 # Request timeout (default: 300)
+```
+
+### OpenAI-Compatible Providers
+
+Use the `open_ai` type with a custom `base_url` for compatible services:
+
+**OpenRouter** (access 100+ models):
+
+```toml
+[providers.openrouter]
+type = "open_ai"
+api_key = "${OPENROUTER_API_KEY}"
+base_url = "https://openrouter.ai/api/v1"
+
+# OpenRouter-specific headers
+[providers.openrouter.headers]
+HTTP-Referer = "https://myapp.example.com"
+X-Title = "My Application"
+```
+
+**Ollama** (local, no API key needed):
+
+```toml
+[providers.ollama]
+type = "open_ai"
+base_url = "http://localhost:11434/v1"
+```
+
+**Together AI**:
+
+```toml
+[providers.together]
+type = "open_ai"
+api_key = "${TOGETHER_API_KEY}"
+base_url = "https://api.together.xyz/v1"
+```
+
+**Groq**:
+
+```toml
+[providers.groq]
+type = "open_ai"
+api_key = "${GROQ_API_KEY}"
+base_url = "https://api.groq.com/openai/v1"
+```
+
+**vLLM** (self-hosted):
+
+```toml
+[providers.vllm]
+type = "open_ai"
+base_url = "http://localhost:8000/v1"
+```
+
+## Anthropic
+
+Direct access to Anthropic's Claude API.
+
+```toml
+[providers.anthropic]
+type = "anthropic"
+api_key = "${ANTHROPIC_API_KEY}"
+
+# Optional settings
+base_url = "https://api.anthropic.com"  # Custom endpoint
+timeout_secs = 300
+default_model = "claude-sonnet-4-20250514"
+default_max_tokens = 4096
+```
+
+## AWS Bedrock
+
+Access Claude, Titan, Llama, and other models through AWS Bedrock.
+
+```toml
+[providers.bedrock]
+type = "bedrock"
+region = "us-east-1"
+```
+
+### Credential Options
+
+**Default credential chain** (recommended):
+
+Uses environment variables, `~/.aws/credentials`, EC2 instance profile, or ECS task role automatically.
+
+```toml
+[providers.bedrock]
+type = "bedrock"
+region = "us-east-1"
+# credentials.type = "default" is implicit
+```
+
+**Static credentials**:
+
+```toml
+[providers.bedrock]
+type = "bedrock"
+region = "us-east-1"
+
+[providers.bedrock.credentials]
+type = "static"
+access_key_id = "${AWS_ACCESS_KEY_ID}"
+secret_access_key = "${AWS_SECRET_ACCESS_KEY}"
+session_token = "${AWS_SESSION_TOKEN}"  # Optional, for temporary credentials
+```
+
+**Assume role**:
+
+```toml
+[providers.bedrock]
+type = "bedrock"
+region = "us-east-1"
+
+[providers.bedrock.credentials]
+type = "assume_role"
+role_arn = "arn:aws:iam::123456789012:role/BedrockAccess"
+external_id = "my-external-id"     # Optional
+session_name = "hadrian"   # Optional
+```
+
+**Named profile**:
+
+```toml
+[providers.bedrock]
+type = "bedrock"
+region = "us-east-1"
+
+[providers.bedrock.credentials]
+type = "profile"
+name = "bedrock-profile"
+```
+
+### Cross-Region Inference
+
+For multi-region routing with inference profiles:
+
+```toml
+[providers.bedrock]
+type = "bedrock"
+region = "us-east-1"
+inference_profile_arn = "arn:aws:bedrock:us-east-1:123456789012:inference-profile/my-profile"
+```
+
+## Google Vertex AI
+
+Access Gemini and other models through Google Cloud. Supports two authentication modes.
+
+### API Key Mode (Simple)
+
+Best for getting started with Gemini:
+
+```toml
+[providers.gemini]
+type = "vertex"
+api_key = "${GOOGLE_API_KEY}"
+```
+
+### OAuth / ADC Mode (Full Features)
+
+Required for Vertex AI features like Claude on Vertex or custom endpoints:
+
+```toml
+[providers.vertex]
+type = "vertex"
+project = "my-gcp-project"
+region = "us-central1"
+publisher = "google"  # or "anthropic", "meta"
+```
+
+### Credential Options
+
+**Application Default Credentials** (recommended):
+
+Uses `GOOGLE_APPLICATION_CREDENTIALS`, gcloud CLI credentials, or compute metadata automatically.
+
+```toml
+[providers.vertex]
+type = "vertex"
+project = "my-gcp-project"
+region = "us-central1"
+# credentials.type = "default" is implicit
+```
+
+**Service account key file**:
+
+```toml
+[providers.vertex]
+type = "vertex"
+project = "my-gcp-project"
+region = "us-central1"
+
+[providers.vertex.credentials]
+type = "service_account"
+key_path = "/path/to/service-account.json"
+```
+
+**Service account JSON** (from environment variable):
+
+```toml
+[providers.vertex]
+type = "vertex"
+project = "my-gcp-project"
+region = "us-central1"
+
+[providers.vertex.credentials]
+type = "service_account_json"
+json = "${GCP_SERVICE_ACCOUNT_JSON}"
+```
+
+### Claude on Vertex AI
+
+Access Anthropic models through Vertex AI:
+
+```toml
+[providers.vertex-claude]
+type = "vertex"
+project = "my-gcp-project"
+region = "us-east5"  # Claude available in specific regions
+publisher = "anthropic"
+```
+
+## Azure OpenAI
+
+Access OpenAI models through Azure with deployment-based routing.
+
+```toml
+[providers.azure]
+type = "azure_open_ai"
+resource_name = "my-openai-resource"
+api_version = "2024-02-01"
+
+[providers.azure.auth]
+type = "api_key"
+api_key = "${AZURE_OPENAI_API_KEY}"
+
+# Map deployments to model names for routing
+[providers.azure.deployments.gpt4-deployment]
+model = "gpt-4"
+
+[providers.azure.deployments.gpt35-deployment]
+model = "gpt-3.5-turbo"
+
+[providers.azure.deployments.embedding-deployment]
+model = "text-embedding-3-small"
+```
+
+### Authentication Options
+
+**API key**:
+
+```toml
+[providers.azure.auth]
+type = "api_key"
+api_key = "${AZURE_OPENAI_API_KEY}"
+```
+
+**Azure AD / Entra ID**:
+
+```toml
+[providers.azure.auth]
+type = "azure_ad"
+tenant_id = "${AZURE_TENANT_ID}"
+client_id = "${AZURE_CLIENT_ID}"
+client_secret = "${AZURE_CLIENT_SECRET}"
+```
+
+**Managed Identity** (for Azure VMs/containers):
+
+```toml
+[providers.azure.auth]
+type = "managed_identity"
+client_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  # Optional for user-assigned
+```
+
+## Model Aliases
+
+Create shortcuts for long model names:
+
+```toml
+[providers.anthropic]
+type = "anthropic"
+api_key = "${ANTHROPIC_API_KEY}"
+
+[providers.anthropic.model_aliases]
+sonnet = "claude-sonnet-4-20250514"
+haiku = "claude-3-5-haiku-20241022"
+opus = "claude-opus-4-20250514"
+```
+
+Now requests can use the alias:
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: gw_live_..." \
+  -d '{"model": "anthropic/sonnet", "messages": [...]}'
+```
+
+## Fallback Configuration
+
+### Provider Fallbacks
+
+Try alternative providers when the primary fails with 5xx errors, timeouts, or circuit breaker trips:
+
+```toml
+[providers.anthropic]
+type = "anthropic"
+api_key = "${ANTHROPIC_API_KEY}"
+fallback_providers = ["openai", "bedrock"]
+
+[providers.openai]
+type = "open_ai"
+api_key = "${OPENAI_API_KEY}"
+fallback_providers = ["anthropic"]
+
+[providers.bedrock]
+type = "bedrock"
+region = "us-east-1"
+```
+
+### Model Fallbacks
+
+Define alternative models to try before provider-level fallbacks. Useful for graceful degradation:
+
+```toml
+[providers.anthropic]
+type = "anthropic"
+api_key = "${ANTHROPIC_API_KEY}"
+fallback_providers = ["openai"]
+
+# Try cheaper models on the same provider first
+[[providers.anthropic.model_fallbacks."claude-opus-4-20250514"]]
+model = "claude-sonnet-4-20250514"
+
+[[providers.anthropic.model_fallbacks."claude-opus-4-20250514"]]
+model = "claude-3-5-haiku-20241022"
+
+# Fall back to a different provider's model
+[[providers.anthropic.model_fallbacks."claude-sonnet-4-20250514"]]
+model = "gpt-4o"
+provider = "openai"
+```
+
+The fallback order for `claude-opus-4-20250514` would be:
+
+1. `claude-sonnet-4-20250514` (same provider)
+2. `claude-3-5-haiku-20241022` (same provider)
+3. `openai/gpt-4o` (provider fallback via `fallback_providers`)
+
+## Allowed Models
+
+Restrict which models can be used through a provider:
+
+```toml
+[providers.openai]
+type = "open_ai"
+api_key = "${OPENAI_API_KEY}"
+allowed_models = [
+  "gpt-4o",
+  "gpt-4o-mini",
+  "gpt-4-turbo",
+  "text-embedding-3-small",
+  "text-embedding-3-large"
+]
+```
+
+<Callout type="info">When `allowed_models` is empty (default), all models are allowed.</Callout>
+
+## Model Catalog Provider
+
+Override the automatic model catalog provider detection with an explicit `catalog_provider`:
+
+```toml
+[providers.custom_llm]
+type = "open_ai"
+api_key = "${CUSTOM_API_KEY}"
+base_url = "https://my-llm-provider.example.com/v1"
+catalog_provider = "openai"  # Use OpenAI model metadata from models.dev
+```
+
+This field maps your provider to a models.dev provider ID for capability and pricing enrichment. Use it when:
+
+- You have a custom OpenAI-compatible endpoint that serves models from a known provider
+- Auto-detection from the base URL doesn't match the correct provider
+- You want to use a specific provider's metadata for pricing fallback
+
+Common catalog provider IDs: `openai`, `anthropic`, `google`, `mistral`, `deepseek`, `groq`, `together`, `openrouter`, `fireworks-ai`, `cerebras`, `cohere`, `perplexity`.
+
+## Model Configuration
+
+The `models` field provides per-model configuration for pricing, modalities, supported tasks, and metadata. This is essential for models not in the models.dev catalog (image generation, TTS, transcription) and for overriding catalog data.
+
+### Pricing
+
+Pricing fields are specified directly alongside metadata:
+
+```toml
+[providers.openai.models."gpt-4o"]
+input_per_1m_tokens = 2500000    # $2.50/1M input tokens (in microcents)
+output_per_1m_tokens = 10000000  # $10/1M output tokens
+```
+
+### Modalities and Tasks
+
+Modalities describe what a model can accept and produce. Tasks specify which API endpoints the model supports, enabling the Studio UI to categorize models correctly.
+
+| Task               | API Endpoint               | Studio Panel       |
+| ------------------ | -------------------------- | ------------------ |
+| `chat`             | `/v1/chat/completions`     | Chat               |
+| `image_generation` | `/v1/images/generations`   | Images             |
+| `tts`              | `/v1/audio/speech`         | Audio > Speak      |
+| `transcription`    | `/v1/audio/transcriptions` | Audio > Transcribe |
+| `translation`      | `/v1/audio/translations`   | Audio > Translate  |
+| `embedding`        | `/v1/embeddings`           | —                  |
+
+### Image Generation Models
+
+```toml
+[providers.openai.models."dall-e-3"]
+per_image = 40000                                    # $0.04/image (in microcents)
+modalities = { input = ["text"], output = ["image"] }
+tasks = ["image_generation"]
+family = "dall-e"
+
+[providers.openai.models."gpt-image-1"]
+per_image = 11000
+modalities = { input = ["text", "image"], output = ["image"] }
+tasks = ["image_generation"]
+family = "gpt-image"
+```
+
+### Text-to-Speech Models
+
+```toml
+[providers.openai.models."tts-1"]
+per_1m_characters = 15000000                         # $15/1M characters
+modalities = { input = ["text"], output = ["audio"] }
+tasks = ["tts"]
+family = "tts"
+
+[providers.openai.models."gpt-4o-mini-tts"]
+input_per_1m_tokens = 600000
+output_per_1m_tokens = 12000000
+modalities = { input = ["text"], output = ["audio"] }
+tasks = ["tts"]
+family = "gpt-4o-mini-tts"
+```
+
+### Transcription and Translation Models
+
+```toml
+[providers.openai.models."whisper-1"]
+per_second = 100                                     # $0.006/min
+modalities = { input = ["audio"], output = ["text"] }
+tasks = ["transcription", "translation"]
+family = "whisper"
+```
+
+### Additional Metadata
+
+You can also specify context length, max output tokens, capabilities, and open weights status:
+
+```toml
+[providers.openai.models."gpt-4o"]
+input_per_1m_tokens = 2500000
+output_per_1m_tokens = 10000000
+context_length = 128000
+max_output_tokens = 16384
+family = "gpt-4o"
+
+[providers.openai.models."gpt-4o".capabilities]
+vision = true
+reasoning = false
+tool_call = true
+structured_output = true
+temperature = true
+```
+
+<Callout type="info">
+  Config metadata overrides catalog data. If the models.dev catalog has data for a model, config
+  values take precedence for any field that is set.
+</Callout>
+
+## Retry Configuration
+
+Configure automatic retries for transient failures:
+
+```toml
+[providers.anthropic]
+type = "anthropic"
+api_key = "${ANTHROPIC_API_KEY}"
+
+[providers.anthropic.retry]
+max_attempts = 3           # Total attempts (default: 3)
+initial_delay_ms = 1000    # First retry delay (default: 1000)
+max_delay_ms = 30000       # Maximum delay (default: 30000)
+backoff_multiplier = 2.0   # Exponential backoff factor (default: 2.0)
+```
+
+Retries occur on:
+
+- HTTP 429 (rate limited)
+- HTTP 5xx (server errors)
+- Connection timeouts
+- Network errors
+
+## Circuit Breaker
+
+Automatically disable unhealthy providers:
+
+```toml
+[providers.anthropic]
+type = "anthropic"
+api_key = "${ANTHROPIC_API_KEY}"
+
+[providers.anthropic.circuit_breaker]
+enabled = true
+failure_threshold = 5      # Failures before opening (default: 5)
+success_threshold = 2      # Successes before closing (default: 2)
+timeout_secs = 30          # Time in open state (default: 30)
+```
+
+States:
+
+- **Closed**: Normal operation, requests pass through
+- **Open**: Provider disabled, requests fail immediately or use fallback
+- **Half-Open**: Testing if provider recovered
+
+## Health Checks
+
+Proactive monitoring of provider availability:
+
+```toml
+[providers.anthropic]
+type = "anthropic"
+api_key = "${ANTHROPIC_API_KEY}"
+
+[providers.anthropic.health_check]
+enabled = true
+interval_secs = 60         # Check frequency (default: 60)
+timeout_secs = 10          # Health check timeout (default: 10)
+model = "claude-3-5-haiku-20241022"  # Model to use for checks
+```
+
+Health checks complement circuit breakers by detecting issues before user requests fail.
+
+## Default Provider
+
+Set a default provider for requests that don't specify one:
+
+```toml
+[providers]
+default_provider = "anthropic"
+
+[providers.anthropic]
+type = "anthropic"
+api_key = "${ANTHROPIC_API_KEY}"
+
+[providers.openai]
+type = "open_ai"
+api_key = "${OPENAI_API_KEY}"
+```
+
+With this config:
+
+- `{"model": "gpt-4o"}` routes to `openai` (model name implies provider)
+- `{"model": "claude-sonnet-4-20250514"}` routes to `anthropic` (default provider)
+- `{"model": "openai/gpt-4o"}` routes to `openai` (explicit)
+
+## Complete Example
+
+A production configuration with multiple providers:
+
+```toml
+[providers]
+default_provider = "anthropic"
+
+# Primary provider with fallbacks
+[providers.anthropic]
+type = "anthropic"
+api_key = "${ANTHROPIC_API_KEY}"
+timeout_secs = 120
+fallback_providers = ["openai", "bedrock"]
+
+[providers.anthropic.model_aliases]
+sonnet = "claude-sonnet-4-20250514"
+haiku = "claude-3-5-haiku-20241022"
+
+[[providers.anthropic.model_fallbacks."claude-sonnet-4-20250514"]]
+model = "claude-3-5-haiku-20241022"
+
+[providers.anthropic.retry]
+max_attempts = 3
+
+[providers.anthropic.circuit_breaker]
+enabled = true
+failure_threshold = 5
+
+[providers.anthropic.health_check]
+enabled = true
+interval_secs = 60
+model = "claude-3-5-haiku-20241022"
+
+# OpenAI as fallback
+[providers.openai]
+type = "open_ai"
+api_key = "${OPENAI_API_KEY}"
+timeout_secs = 120
+
+[providers.openai.model_aliases]
+gpt4 = "gpt-4o"
+
+[providers.openai.retry]
+max_attempts = 3
+
+[providers.openai.circuit_breaker]
+enabled = true
+
+# Bedrock as secondary fallback
+[providers.bedrock]
+type = "bedrock"
+region = "us-east-1"
+
+[providers.bedrock.retry]
+max_attempts = 2
+
+[providers.bedrock.circuit_breaker]
+enabled = true
+
+# Local Ollama for development
+[providers.ollama]
+type = "open_ai"
+base_url = "http://localhost:11434/v1"
+timeout_secs = 300
+```

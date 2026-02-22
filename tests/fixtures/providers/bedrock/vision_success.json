@@ -1,0 +1,38 @@
+{
+  "id": "bedrock:vision:success",
+  "description": "Bedrock Converse API with base64 image input",
+  "request": {
+    "method": "POST",
+    "path": "/model/us.amazon.nova-2-lite-v1:0/converse",
+    "path_pattern": "/model/.+/converse"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-amzn-requestid": "b7599602-09ee-44b4-b88a-5a6f72830100",
+      "content-type": "application/json"
+    },
+    "body": {
+      "metrics": {
+        "latencyMs": 1072
+      },
+      "output": {
+        "message": {
+          "content": [
+            {
+              "text": "- **Main Subject**: The image features a close-up of a textured surface, likely a wall or fabric, with a subtle pattern or design visible.\n- **Colors**: The dominant colors are muted tones of beige and light brown, creating a warm and neutral palette with soft, earthy hues.\n- **Composition**: The composition is simple and uncluttered, focusing on the texture and pattern of the surface with no additional objects or distractions in the frame."
+            }
+          ],
+          "role": "assistant"
+        }
+      },
+      "stopReason": "end_turn",
+      "usage": {
+        "inputTokens": 83,
+        "outputTokens": 92,
+        "serverToolUsage": {},
+        "totalTokens": 175
+      }
+    }
+  }
+}

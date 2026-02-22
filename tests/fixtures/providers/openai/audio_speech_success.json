@@ -1,0 +1,16 @@
+{
+  "id": "openai:audio_speech:success",
+  "description": "Successful text-to-speech response (binary audio data)",
+  "request": {
+    "method": "POST",
+    "path": "/audio/speech"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "audio/mpeg",
+      "x-request-id": "req_audio_speech_12345"
+    },
+    "body_base64": "VGhpcyBpcyBmYWtlIGF1ZGlvIGRhdGEgZm9yIHRlc3Rpbmc="
+  }
+}

@@ -1,0 +1,194 @@
+---
+title: Authentication
+description: Authenticate API requests using API keys or JWT tokens
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+All API requests require authentication. Hadrian supports multiple authentication methods that can be used individually or combined.
+
+## API Key Authentication
+
+API keys are the simplest way to authenticate programmatic access. Keys are prefixed with `gw_` by default.
+
+### Request Headers
+
+Use either header format:
+
+```bash
+# X-API-Key header (default)
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: gw_live_abc123..." \
+  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'
+
+# Authorization header (OpenAI-compatible)
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer gw_live_abc123..." \
+  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+### Configuration
+
+```toml
+[auth.gateway]
+type = "api_key"
+
+[auth.gateway.api_key]
+header_name = "X-API-Key"  # or "Authorization" for Bearer tokens
+key_prefix = "gw_"         # Required prefix for all keys
+cache_ttl_secs = 300       # Cache key lookups for 5 minutes
+```
+
+### Creating API Keys
+
+Create keys via the Admin API or web UI:
+
+```bash
+# Create an API key for a user
+curl -X POST http://localhost:8080/admin/v1/api_keys \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $ADMIN_KEY" \
+  -d '{
+    "name": "Production API Key",
+    "user_id": "user_abc123",
+    "expires_at": "2025-12-31T23:59:59Z"
+  }'
+```
+
+Response:
+
+```json
+{
+  "id": "key_abc123",
+  "name": "Production API Key",
+  "key": "gw_live_sk_abc123...",
+  "created_at": "2024-01-15T10:00:00Z",
+  "expires_at": "2025-12-31T23:59:59Z"
+}
+```
+
+<Callout type="warn">
+  The full API key is only returned once during creation. Store it securely.
+</Callout>
+
+## JWT Authentication
+
+Use JWT tokens from your identity provider (IdP) for service-to-service authentication or SSO.
+
+### Request Format
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+### Configuration
+
+```toml
+[auth.gateway]
+type = "jwt"
+issuer = "https://auth.example.com"
+audience = "hadrian"
+jwks_url = "https://auth.example.com/.well-known/jwks.json"
+
+# Optional: Map JWT claims to user identity
+[auth.gateway.jwt.claims]
+user_id = "sub"           # Use 'sub' claim as user ID
+email = "email"           # Use 'email' claim
+org_id = "org_id"         # Custom claim for organization
+```
+
+### Supported Algorithms
+
+| Algorithm           | Description                     |
+| ------------------- | ------------------------------- |
+| RS256, RS384, RS512 | RSA signatures (recommended)    |
+| ES256, ES384, ES512 | ECDSA signatures                |
+| HS256, HS384, HS512 | HMAC signatures (shared secret) |
+
+## Multi-Auth Mode
+
+Combine API key and JWT authentication. The gateway tries each method in order.
+
+```toml
+[auth.gateway]
+type = "multi"
+
+[auth.gateway.api_key]
+header_name = "X-API-Key"
+key_prefix = "gw_"
+
+[auth.gateway.jwt]
+issuer = "https://auth.example.com"
+audience = "hadrian"
+jwks_url = "https://auth.example.com/.well-known/jwks.json"
+```
+
+With this configuration:
+
+1. If `X-API-Key` header is present, validate as API key
+2. If `Authorization: Bearer` header is present with JWT format, validate as JWT
+3. If `Authorization: Bearer` header is present with `gw_` prefix, validate as API key
+
+## Error Responses
+
+All authentication errors return HTTP 401 with a consistent error format:
+
+| Error Code          | Description                | Solution                    |
+| ------------------- | -------------------------- | --------------------------- |
+| `invalid_api_key`   | Key not found or malformed | Check key format and prefix |
+| `key_revoked`       | Key has been revoked       | Generate a new key          |
+| `key_expired`       | Key past expiration date   | Generate a new key          |
+| `invalid_token`     | JWT malformed or invalid   | Check token format          |
+| `token_expired`     | JWT past expiration        | Obtain fresh token from IdP |
+| `invalid_issuer`    | JWT issuer doesn't match   | Verify issuer in config     |
+| `invalid_audience`  | JWT audience doesn't match | Verify audience in config   |
+| `jwks_fetch_failed` | Cannot reach JWKS URL      | Check network connectivity  |
+
+### Example Error Response
+
+```json
+{
+  "error": {
+    "message": "Invalid API key",
+    "type": "authentication_error",
+    "code": "invalid_api_key"
+  }
+}
+```
+
+## Rate Limiting Headers
+
+Authenticated requests include rate limit information in response headers:
+
+```
+X-RateLimit-Limit: 1000
+X-RateLimit-Remaining: 995
+X-RateLimit-Reset: 1705320000
+```
+
+| Header                  | Description                       |
+| ----------------------- | --------------------------------- |
+| `X-RateLimit-Limit`     | Maximum requests per window       |
+| `X-RateLimit-Remaining` | Requests remaining in window      |
+| `X-RateLimit-Reset`     | Unix timestamp when window resets |
+
+## Security Best Practices
+
+1. **Never commit API keys** - Use environment variables or secrets managers
+2. **Set expiration dates** - Rotate keys regularly
+3. **Use scoped keys** - Create separate keys for different environments
+4. **Monitor usage** - Check audit logs for unusual activity
+5. **Use HTTPS** - Never send credentials over unencrypted connections
+
+## Related Documentation
+
+<Cards>
+  <Card title="Authentication Configuration" href="/docs/configuration/auth" />
+  <Card title="API Keys Admin API" href="/docs/api/api-keys" />
+  <Card title="Troubleshooting Auth" href="/docs/troubleshooting#authentication-errors" />
+</Cards>

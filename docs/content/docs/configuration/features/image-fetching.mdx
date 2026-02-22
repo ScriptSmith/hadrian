@@ -1,0 +1,122 @@
+---
+title: Image Fetching
+description: Configure HTTP image URL fetching for non-OpenAI providers
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The `[features.image_fetching]` section controls how the gateway handles HTTP image URLs in chat requests. Non-OpenAI providers (Anthropic, Bedrock, Vertex) only accept base64 data URLs, so HTTP URLs must be fetched and converted.
+
+## Configuration Reference
+
+```toml
+[features.image_fetching]
+enabled = true
+max_size_mb = 20
+timeout_secs = 30
+allowed_content_types = ["image/png", "image/jpeg", "image/gif", "image/webp"]
+```
+
+| Key                     | Type    | Default      | Description               |
+| ----------------------- | ------- | ------------ | ------------------------- |
+| `enabled`               | boolean | `true`       | Enable image URL fetching |
+| `max_size_mb`           | integer | `20`         | Maximum image size in MB  |
+| `timeout_secs`          | integer | `30`         | Fetch timeout in seconds  |
+| `allowed_content_types` | array   | common types | Allowed MIME types        |
+
+## Default Allowed Types
+
+```toml
+allowed_content_types = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp"
+]
+```
+
+Set to an empty array `[]` to allow all `image/*` types.
+
+## How It Works
+
+1. Request contains `image_url` with HTTP URL
+2. Gateway detects non-OpenAI provider (Anthropic, Bedrock, Vertex)
+3. Gateway fetches image from URL
+4. Image converted to base64 data URL
+5. Modified request sent to provider
+
+```
+User Request                    Provider Request
+┌─────────────────────┐        ┌─────────────────────┐
+│ image_url:          │   →    │ image_url:          │
+│   http://...        │        │   data:image/png;   │
+│                     │        │   base64,...        │
+└─────────────────────┘        └─────────────────────┘
+```
+
+## Complete Examples
+
+### Standard Configuration
+
+```toml
+[features.image_fetching]
+enabled = true
+max_size_mb = 20
+timeout_secs = 30
+allowed_content_types = ["image/png", "image/jpeg", "image/gif", "image/webp"]
+```
+
+### Permissive (All Image Types)
+
+```toml
+[features.image_fetching]
+enabled = true
+max_size_mb = 50
+timeout_secs = 60
+allowed_content_types = []  # Allow all image/* types
+```
+
+### Restrictive
+
+```toml
+[features.image_fetching]
+enabled = true
+max_size_mb = 5
+timeout_secs = 10
+allowed_content_types = ["image/png", "image/jpeg"]
+```
+
+### Disabled
+
+```toml
+[features.image_fetching]
+enabled = false
+```
+
+<Callout type="warn">
+  When disabled, HTTP image URLs are passed through unchanged. Non-OpenAI providers will reject
+  these requests.
+</Callout>
+
+## Provider Behavior
+
+| Provider     | HTTP URLs     | Data URLs |
+| ------------ | ------------- | --------- |
+| OpenAI       | Supported     | Supported |
+| Anthropic    | Not supported | Supported |
+| Bedrock      | Not supported | Supported |
+| Vertex       | Not supported | Supported |
+| Azure OpenAI | Supported     | Supported |
+
+## Error Handling
+
+The gateway returns errors for:
+
+- Images exceeding `max_size_mb`
+- Fetch timeouts
+- Invalid or disallowed content types
+- Network errors fetching the image
+
+## See Also
+
+- [Provider Features](/docs/features/providers) - Vision/image support details

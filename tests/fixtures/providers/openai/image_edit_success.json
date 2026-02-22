@@ -1,0 +1,23 @@
+{
+  "id": "openai:image_edit:success",
+  "description": "Successful image edit response (DALL-E 2)",
+  "request": {
+    "method": "POST",
+    "path": "/images/edits"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "req_img_edit_67890xyz"
+    },
+    "body": {
+      "created": 1713833700,
+      "data": [
+        {
+          "url": "https://oaidalleapiprodscus.blob.core.windows.net/private/edited-image.png"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "id": "vertex:tool_call:with_result",
+  "description": "Vertex generateContent after function result is provided",
+  "request": {
+    "method": "POST",
+    "path": "/gemini-2.0-flash:generateContent",
+    "path_pattern": "/.+:generateContent"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "x-frame-options": "SAMEORIGIN",
+      "x-xss-protection": "0",
+      "x-content-type-options": "nosniff"
+    },
+    "body": {
+      "candidates": [
+        {
+          "avgLogprobs": -0.00853781070974138,
+          "content": {
+            "parts": [
+              {
+                "text": "The current weather in San Francisco is sunny with a temperature of 72 degrees.\n"
+              }
+            ],
+            "role": "model"
+          },
+          "finishReason": "STOP"
+        }
+      ],
+      "createTime": "2025-12-21T08:54:11.149509Z",
+      "modelVersion": "gemini-2.0-flash",
+      "responseId": "s7VHaYWQCa_I-O4Py5OCqAs",
+      "usageMetadata": {
+        "candidatesTokenCount": 18,
+        "candidatesTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 18
+          }
+        ],
+        "promptTokenCount": 60,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 60
+          }
+        ],
+        "totalTokenCount": 78,
+        "trafficType": "ON_DEMAND"
+      }
+    }
+  }
+}

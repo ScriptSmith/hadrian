@@ -1,0 +1,38 @@
+{
+  "id": "bedrock:responses:success",
+  "description": "Successful non-streaming Bedrock Converse API response for Responses API",
+  "request": {
+    "method": "POST",
+    "path": "/model/us.amazon.nova-2-lite-v1:0/converse",
+    "path_pattern": "/model/.+/converse"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-amzn-requestid": "85fb6706-a891-43f3-8618-1c013bd01c62",
+      "content-type": "application/json"
+    },
+    "body": {
+      "metrics": {
+        "latencyMs": 417
+      },
+      "output": {
+        "message": {
+          "content": [
+            {
+              "text": "2  \n3  \n5  \n7  \n11  \n13  \n17  \n19  \n23  \n29  "
+            }
+          ],
+          "role": "assistant"
+        }
+      },
+      "stopReason": "end_turn",
+      "usage": {
+        "inputTokens": 63,
+        "outputTokens": 21,
+        "serverToolUsage": {},
+        "totalTokens": 84
+      }
+    }
+  }
+}

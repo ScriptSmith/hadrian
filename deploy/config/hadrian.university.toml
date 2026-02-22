@@ -1,0 +1,547 @@
+# Hadrian Gateway Configuration - University Deployment
+# Full E2E test setup with Keycloak OIDC + CEL RBAC policies
+#
+# This configuration demonstrates:
+# - Per-organization OIDC authentication via Keycloak (configured via Admin API)
+# - IdP-agnostic JIT provisioning (organization_id-based, not group path parsing)
+# - SSO group mappings configured via Admin UI (stored in database)
+# - Role-based access control with CEL policies (memberships from database)
+# - Single organization with department teams
+#
+# Key architecture points:
+# - OIDC SSO is configured per-organization via Admin API (not in this config file)
+# - One SSO connection = One organization (all users provisioned into "university" org)
+# - Departments are teams within the university org (cs-faculty, med-research, it-platform, etc.)
+# - subject.org_ids and subject.team_ids come from database memberships, not JWT claims
+# - IdP groups are captured for the group mapping feature (raw paths like /cs/faculty)
+# - Group mappings are configured via Admin API, not parsed from group paths
+
+[ui]
+enabled = true
+
+# ==============================================================================
+# Bootstrap Configuration
+# ==============================================================================
+# Bootstrap API key for initial setup when database is empty.
+# This key provides admin access ONLY when no users exist.
+# Once the first user is created via OIDC login, bootstrap auth is disabled.
+[auth.bootstrap]
+api_key = "gw_test_bootstrap_key_for_e2e"
+# Auto-verify these domains when SSO config is created (skip DNS verification)
+auto_verify_domains = ["university.edu"]
+
+# ==============================================================================
+# Session Configuration (for per-org SSO)
+# ==============================================================================
+# OIDC authentication is configured per-organization via the Admin API.
+# This section only configures session management for authenticated users.
+# The test setup creates the SSO connection with OIDC settings.
+[auth.admin]
+type = "session"
+secure = false  # For local dev over HTTP
+
+# ==============================================================================
+# Gateway Authentication
+# ==============================================================================
+# Use multi-auth to support both API keys and JWT tokens
+# Gateway RBAC policies require JWT tokens (roles come from OIDC claims)
+[auth.gateway]
+type = "multi"
+
+[auth.gateway.api_key]
+header_name = "X-API-Key"
+key_prefix = "gw_"
+cache_ttl_secs = 300
+
+[auth.gateway.jwt]
+issuer = "http://localhost:8080/realms/hadrian"
+jwks_url = "http://keycloak:8080/realms/hadrian/protocol/openid-connect/certs"
+audience = "hadrian-gateway"
+identity_claim = "preferred_username"
+
+# ==============================================================================
+# RBAC Configuration with CEL Policies
+# ==============================================================================
+[auth.rbac]
+enabled = true
+default_effect = "deny"
+
+# JWT claim containing user roles (from Keycloak realm-roles mapper)
+role_claim = "roles"
+
+# Organization and team memberships are loaded from the database
+# The middleware looks up the authenticated user's memberships and populates
+# subject.org_ids and subject.team_ids for CEL policy evaluation
+#
+# Note: We no longer parse org/team IDs from JWT group claims (Keycloak-specific).
+# Instead, group mappings are configured via the Admin UI and stored in the database.
+# Raw IdP groups are captured for the group mapping feature via SSO config.
+
+# Map Keycloak role names to internal names (if needed)
+# These are already consistent, so no mapping required
+[auth.rbac.role_mapping]
+# "Administrator" = "admin"  # Example: map IdP role to internal role
+
+# Audit logging for authorization decisions
+[auth.rbac.audit]
+log_allowed = false
+log_denied = true
+
+# API endpoint authorization (for /v1/* endpoints)
+# Enable policy-based control over model access, token limits, feature gating
+[auth.rbac.gateway]
+enabled = true
+default_effect = "allow"  # Fail-open for backwards compatibility
+
+# ==============================================================================
+# CEL Authorization Policies
+# ==============================================================================
+# Policies are evaluated in priority order (highest first).
+# At the same priority, deny policies are evaluated before allow.
+#
+# Available variables in CEL expressions:
+#   subject.user_id       - Internal user ID
+#   subject.external_id   - IdP user ID (sub claim)
+#   subject.email         - User's email
+#   subject.roles         - List of role names (from role_claim)
+#   subject.org_ids       - List of org IDs (parsed from groups)
+#   subject.team_ids      - List of team IDs (parsed from groups)
+#   subject.project_ids   - List of project IDs
+#   context.resource_type - Resource being accessed
+#   context.action        - Action being performed
+#   context.resource_id   - Specific resource ID
+#   context.org_id        - Target organization ID
+#   context.team_id       - Target team ID
+#   context.project_id    - Target project ID
+
+# ------------------------------------------------------------------------------
+# High Priority Deny Policies (evaluated first)
+# ------------------------------------------------------------------------------
+
+[[auth.rbac.policies]]
+name = "deny-self-delete"
+description = "Users cannot delete themselves"
+resource = "user"
+action = "delete"
+condition = "subject.user_id != null && subject.user_id == context.resource_id"
+effect = "deny"
+priority = 200
+
+# ------------------------------------------------------------------------------
+# Bootstrap: Full Access (priority 110)
+# ------------------------------------------------------------------------------
+# Bootstrap API key gets full access for initial setup.
+# This role is only assigned via bootstrap auth, never from IdPs.
+
+[[auth.rbac.policies]]
+name = "bootstrap-full-access"
+description = "Bootstrap API key has full access for initial setup"
+resource = "*"
+action = "*"
+condition = "'_system_bootstrap' in subject.roles"
+effect = "allow"
+priority = 110
+
+# ------------------------------------------------------------------------------
+# Super Admin: Full Access (priority 100)
+# ------------------------------------------------------------------------------
+
+[[auth.rbac.policies]]
+name = "super-admin-full-access"
+description = "Super admins have unrestricted access to all resources"
+resource = "*"
+action = "*"
+condition = "'super_admin' in subject.roles"
+effect = "allow"
+priority = 100
+
+# ------------------------------------------------------------------------------
+# Org Admin: Manage Their Organization (priority 80)
+# ------------------------------------------------------------------------------
+
+[[auth.rbac.policies]]
+name = "org-admin-manage-org"
+description = "Org admins can manage their own organization"
+resource = "organization"
+action = "*"
+condition = "'org_admin' in subject.roles && context.org_id != null && context.org_id in subject.org_ids"
+effect = "allow"
+priority = 80
+
+[[auth.rbac.policies]]
+name = "org-admin-manage-teams"
+description = "Org admins can manage teams in their organization"
+resource = "team"
+action = "*"
+condition = "'org_admin' in subject.roles && context.org_id != null && context.org_id in subject.org_ids"
+effect = "allow"
+priority = 80
+
+[[auth.rbac.policies]]
+name = "org-admin-manage-users"
+description = "Org admins can manage users in their organization"
+resource = "user"
+action = "*"
+condition = "'org_admin' in subject.roles && context.org_id != null && context.org_id in subject.org_ids"
+effect = "allow"
+priority = 80
+
+[[auth.rbac.policies]]
+name = "org-admin-manage-projects"
+description = "Org admins can manage projects in their organization"
+resource = "project"
+action = "*"
+condition = "'org_admin' in subject.roles && context.org_id != null && context.org_id in subject.org_ids"
+effect = "allow"
+priority = 80
+
+[[auth.rbac.policies]]
+name = "org-admin-manage-api-keys"
+description = "Org admins can manage API keys in their organization"
+resource = "api_key"
+action = "*"
+condition = "'org_admin' in subject.roles && context.org_id != null && context.org_id in subject.org_ids"
+effect = "allow"
+priority = 80
+
+[[auth.rbac.policies]]
+name = "org-admin-manage-providers"
+description = "Org admins can manage providers in their organization"
+resource = "provider"
+action = "*"
+condition = "'org_admin' in subject.roles && context.org_id != null && context.org_id in subject.org_ids"
+effect = "allow"
+priority = 80
+
+# ------------------------------------------------------------------------------
+# Team Admin: Manage Their Team (priority 60)
+# ------------------------------------------------------------------------------
+
+[[auth.rbac.policies]]
+name = "team-admin-manage-team"
+description = "Team admins can manage their own team"
+resource = "team"
+action = "*"
+condition = "'team_admin' in subject.roles && context.team_id != null && context.team_id in subject.team_ids"
+effect = "allow"
+priority = 60
+
+[[auth.rbac.policies]]
+name = "team-admin-manage-team-members"
+description = "Team admins can manage members in their team"
+resource = "user"
+action = "read"
+condition = "'team_admin' in subject.roles && context.team_id != null && context.team_id in subject.team_ids"
+effect = "allow"
+priority = 60
+
+[[auth.rbac.policies]]
+name = "team-admin-manage-team-projects"
+description = "Team admins can manage projects in their team"
+resource = "project"
+action = "*"
+condition = "'team_admin' in subject.roles && context.team_id != null && context.team_id in subject.team_ids"
+effect = "allow"
+priority = 60
+
+[[auth.rbac.policies]]
+name = "team-admin-manage-team-api-keys"
+description = "Team admins can manage API keys for their team"
+resource = "api_key"
+action = "*"
+condition = "'team_admin' in subject.roles && context.team_id != null && context.team_id in subject.team_ids"
+effect = "allow"
+priority = 60
+
+# ------------------------------------------------------------------------------
+# Regular User: Access Own Resources (priority 40)
+# ------------------------------------------------------------------------------
+
+[[auth.rbac.policies]]
+name = "user-read-self"
+description = "Users can read their own profile"
+resource = "user"
+action = "read"
+condition = "subject.user_id != null && subject.user_id == context.resource_id"
+effect = "allow"
+priority = 40
+
+[[auth.rbac.policies]]
+name = "user-update-self"
+description = "Users can update their own profile"
+resource = "user"
+action = "update"
+condition = "subject.user_id != null && subject.user_id == context.resource_id"
+effect = "allow"
+priority = 40
+
+[[auth.rbac.policies]]
+name = "user-manage-own-api-keys"
+description = "Users can manage their own API keys"
+resource = "api_key"
+action = "*"
+condition = "context.resource_id != null && subject.user_id != null"
+effect = "allow"
+priority = 40
+
+[[auth.rbac.policies]]
+name = "user-manage-own-conversations"
+description = "Users can manage their own conversations"
+resource = "conversation"
+action = "*"
+condition = "context.resource_id != null && subject.user_id != null"
+effect = "allow"
+priority = 40
+
+[[auth.rbac.policies]]
+name = "user-manage-own-files"
+description = "Users can manage their own files"
+resource = "file"
+action = "*"
+condition = "context.resource_id != null && subject.user_id != null"
+effect = "allow"
+priority = 40
+
+[[auth.rbac.policies]]
+name = "user-manage-own-vector-stores"
+description = "Users can manage their own vector stores"
+resource = "vector_store"
+action = "*"
+condition = "context.resource_id != null && subject.user_id != null"
+effect = "allow"
+priority = 40
+
+# ------------------------------------------------------------------------------
+# Read Access for Authenticated Users (priority 20)
+# ------------------------------------------------------------------------------
+
+[[auth.rbac.policies]]
+name = "authenticated-list-orgs"
+description = "Authenticated users can list organizations they belong to"
+resource = "organization"
+action = "list"
+condition = "subject.user_id != null"
+effect = "allow"
+priority = 20
+
+[[auth.rbac.policies]]
+name = "authenticated-read-org"
+description = "Users can read organizations they belong to"
+resource = "organization"
+action = "read"
+condition = "subject.user_id != null && context.org_id != null && context.org_id in subject.org_ids"
+effect = "allow"
+priority = 20
+
+[[auth.rbac.policies]]
+name = "authenticated-list-teams"
+description = "Authenticated users can list teams in orgs they belong to"
+resource = "team"
+action = "list"
+condition = "subject.user_id != null && context.org_id != null && context.org_id in subject.org_ids"
+effect = "allow"
+priority = 20
+
+[[auth.rbac.policies]]
+name = "authenticated-read-team"
+description = "Users can read teams they belong to"
+resource = "team"
+action = "read"
+condition = "subject.user_id != null && context.team_id != null && context.team_id in subject.team_ids"
+effect = "allow"
+priority = 20
+
+[[auth.rbac.policies]]
+name = "authenticated-list-projects"
+description = "Authenticated users can list projects"
+resource = "project"
+action = "list"
+condition = "subject.user_id != null"
+effect = "allow"
+priority = 20
+
+[[auth.rbac.policies]]
+name = "authenticated-list-providers"
+description = "Authenticated users can list available providers"
+resource = "provider"
+action = "list"
+condition = "subject.user_id != null"
+effect = "allow"
+priority = 20
+
+[[auth.rbac.policies]]
+name = "authenticated-read-provider"
+description = "Authenticated users can read provider details"
+resource = "provider"
+action = "read"
+condition = "subject.user_id != null"
+effect = "allow"
+priority = 20
+
+# ------------------------------------------------------------------------------
+# API Endpoint Authorization Policies (for /v1/* endpoints)
+# ------------------------------------------------------------------------------
+# These policies control access to LLM API endpoints based on roles and request context.
+# Available context variables:
+#   context.model - Model being requested (e.g., "gpt-4o", "test-model")
+#   context.request.max_tokens - Maximum tokens requested
+#   context.request.messages_count - Number of messages in conversation
+#   context.request.has_tools - Whether request includes tools/functions
+#   context.request.has_file_search - Whether request includes file_search tool
+#   context.request.stream - Whether streaming is requested
+#   context.request.reasoning_effort - Reasoning effort level (none/low/medium/high)
+#   context.now.hour - Current hour (0-23)
+#   context.now.day_of_week - Day of week (1=Monday, 7=Sunday)
+
+# Premium Model Access Control
+# Models matching "premium-*" pattern require the "premium" role
+# Note: context.model contains the original model string (e.g., "test/premium-model" or "premium-model")
+# We check both with and without provider prefix for flexibility
+[[auth.rbac.policies]]
+name = "api-premium-model-access"
+description = "Premium models require premium role"
+resource = "model"
+action = "use"
+condition = "context.model != null && (context.model.startsWith('premium-') || context.model.contains('/premium-')) && !('premium' in subject.roles)"
+effect = "deny"
+priority = 90
+
+# Token Limit Enforcement
+# Users without "premium" role are limited to 1000 max_tokens
+# Note: We check max_tokens != null to handle requests that don't specify max_tokens
+[[auth.rbac.policies]]
+name = "api-token-limit-basic"
+description = "Basic users limited to 1000 tokens"
+resource = "model"
+action = "use"
+condition = "context.request != null && context.request.max_tokens != null && context.request.max_tokens > 1000 && !('premium' in subject.roles)"
+effect = "deny"
+priority = 85
+
+# Tools/Function Calling Feature Gate
+# Users must have "tools_enabled" role to use tools
+[[auth.rbac.policies]]
+name = "api-tools-feature-gate"
+description = "Tools require tools_enabled role"
+resource = "model"
+action = "use"
+condition = "context.request != null && context.request.has_tools && !('tools_enabled' in subject.roles)"
+effect = "deny"
+priority = 85
+
+# File Search (RAG) Feature Gate
+# Users must have "rag_enabled" role to use file_search tool
+[[auth.rbac.policies]]
+name = "api-file-search-feature-gate"
+description = "File search requires rag_enabled role"
+resource = "model"
+action = "use"
+condition = "context.request != null && context.request.has_file_search && !('rag_enabled' in subject.roles)"
+effect = "deny"
+priority = 85
+
+# Extended Thinking/Reasoning Control
+# High reasoning effort requires premium role
+# Note: We check reasoning_effort != null to handle requests without reasoning config
+[[auth.rbac.policies]]
+name = "api-reasoning-premium"
+description = "High reasoning effort requires premium role"
+resource = "model"
+action = "use"
+condition = "context.request != null && context.request.reasoning_effort != null && context.request.reasoning_effort == 'high' && !('premium' in subject.roles)"
+effect = "deny"
+priority = 85
+
+# ==============================================================================
+# Observability
+# ==============================================================================
+[observability.usage.buffer]
+# Fast flush interval for testing (100ms instead of 1s default)
+flush_interval_ms = 100
+max_size = 10
+
+# ==============================================================================
+# Limits Configuration
+# ==============================================================================
+[limits.budgets]
+# Estimated cost per request in cents for budget reservation
+# Set to 1 cent so budget tests can exhaust a 1-cent budget quickly
+estimated_cost_cents = 1
+
+# Higher rate limits for testing (default is 120 RPM)
+[limits.rate_limits.ip_rate_limits]
+requests_per_minute = 600
+
+# ==============================================================================
+# Secrets Management
+# ==============================================================================
+# Required for per-org SSO (stores client secrets securely)
+[secrets]
+type = "vault"
+address = "${VAULT_ADDR}"
+auth = "token"
+token = "${VAULT_TOKEN}"
+mount = "secret"
+path_prefix = "hadrian"
+
+# ==============================================================================
+# Database
+# ==============================================================================
+[database]
+type = "sqlite"
+path = "/app/data/hadrian.db"
+
+# ==============================================================================
+# Cache
+# ==============================================================================
+[cache]
+type = "redis"
+url = "${REDIS_URL}"
+
+# ==============================================================================
+# Providers
+# ==============================================================================
+[providers]
+default_provider = "test"
+
+# Test provider for e2e testing (echoes back requests, includes mock embeddings)
+[providers.test]
+type = "test"
+
+# ==============================================================================
+# Pricing Configuration
+# ==============================================================================
+# Test provider returns 10 input + 10 output tokens per request
+# Configure pricing so each request costs exactly 1 cent for budget testing
+[pricing]
+# 500M microcents per 1M tokens = 0.5 cents per 10 tokens
+# Input (10 tokens) + Output (10 tokens) = 1 cent per request
+[pricing.pricing.test]
+test-model = { input_per_1m_tokens = 500000000, output_per_1m_tokens = 500000000 }
+
+# Production providers (uncomment and configure as needed)
+# [providers.openrouter]
+# type = "open_ai"
+# api_key = "${OPENROUTER_API_KEY}"
+# base_url = "https://openrouter.ai/api/v1/"
+# timeout_secs = 60
+
+# ==============================================================================
+# File Search / RAG Configuration
+# ==============================================================================
+[features.file_search]
+enabled = true
+score_threshold = 0.0  # Low threshold for test embeddings (hash-based, not semantic)
+
+# Use test provider for embeddings (generates deterministic mock vectors)
+[features.file_search.embedding]
+provider = "test"
+model = "test-embedding"
+dimensions = 1536
+
+# Use Qdrant as vector backend
+[features.file_search.vector_backend]
+type = "qdrant"
+url = "${QDRANT_URL}"
+qdrant_collection_name = "rag_chunks"
+

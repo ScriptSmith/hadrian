@@ -1,0 +1,416 @@
+---
+title: MCP Integration
+description: Connect to external tool servers using the Model Context Protocol
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The chat UI supports [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) for connecting to external tool servers. MCP enables LLMs to access tools, resources, and prompts from any compatible server, extending capabilities beyond built-in frontend tools.
+
+## Overview
+
+MCP integration runs entirely in the browser, connecting to external MCP servers via HTTP. When you connect to an MCP server, its tools become available to models during chat sessions.
+
+**Key capabilities:**
+
+- Connect to multiple MCP servers simultaneously
+- Automatic tool discovery from connected servers
+- Per-server and per-tool enable/disable controls
+- Persistent server configuration across sessions
+- Real-time connection status monitoring
+
+## Transport
+
+The implementation uses the **Streamable HTTP transport** (MCP specification 2025-03-26), which provides:
+
+| Feature            | Description                                                |
+| ------------------ | ---------------------------------------------------------- |
+| Single endpoint    | All communication through one HTTP URL                     |
+| Session management | `Mcp-Session-Id` header for stateful connections           |
+| Bidirectional      | POST requests + Server-Sent Events (SSE) for notifications |
+| Resumable          | Event IDs enable reconnection without data loss            |
+| Browser-compatible | Works in web environments (unlike stdio transport)         |
+
+<Callout type="info">
+  Stdio transport is not supported as it requires process-level access unavailable in browsers. Use
+  MCP servers that expose an HTTP endpoint.
+</Callout>
+
+## Adding a Server
+
+### Via the UI
+
+1. Click the **Tools** button in the chat input toolbar
+2. Click **Configure** next to MCP Servers (or the plug icon)
+3. Click **Add Server**
+4. Fill in the server details:
+
+| Field   | Required | Description                                         |
+| ------- | -------- | --------------------------------------------------- |
+| Name    | Yes      | Display name (e.g., "GitHub Tools")                 |
+| URL     | Yes      | HTTP endpoint (e.g., `https://mcp.example.com/api`) |
+| Headers | No       | JSON object for authentication headers              |
+
+### Authentication Headers
+
+For servers requiring authentication, add headers as a JSON object:
+
+```json
+{
+  "Authorization": "Bearer your-api-key",
+  "X-Custom-Header": "value"
+}
+```
+
+Common authentication patterns:
+
+| Provider   | Header Format                               |
+| ---------- | ------------------------------------------- |
+| API Key    | `{"Authorization": "Bearer sk-..."}`        |
+| Basic Auth | `{"Authorization": "Basic base64-encoded"}` |
+| Custom     | `{"X-API-Key": "your-key"}`                 |
+
+## Connecting to Servers
+
+After adding a server, click **Connect** to establish a session. The connection process:
+
+```
+1. Initialize handshake (protocol version, capabilities)
+2. Server returns session ID and available capabilities
+3. Client sends initialized notification
+4. SSE stream opened for server notifications
+5. Tool discovery via tools/list
+6. Status changes to "connected"
+```
+
+### Connection Status
+
+| Status       | Indicator       | Description                           |
+| ------------ | --------------- | ------------------------------------- |
+| Disconnected | Gray            | Not connected                         |
+| Connecting   | Blue (animated) | Handshake in progress                 |
+| Connected    | Green           | Ready to use                          |
+| Error        | Red             | Connection failed (hover for details) |
+
+Servers auto-reconnect if the SSE stream drops. Manual reconnection is available via the **Connect** button.
+
+## Tool Discovery
+
+Once connected, the client automatically discovers available tools:
+
+```typescript
+// Example discovered tools from a GitHub MCP server
+[
+  {
+    name: "search_repos",
+    description: "Search GitHub repositories",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search query" },
+        sort: { type: "string", enum: ["stars", "forks", "updated"] }
+      },
+      required: ["query"]
+    }
+  },
+  {
+    name: "create_issue",
+    description: "Create a GitHub issue",
+    inputSchema: { ... }
+  }
+]
+```
+
+### Managing Tools
+
+Each tool can be individually enabled or disabled:
+
+1. Expand a connected server in the MCP configuration modal
+2. Toggle individual tools on/off
+3. Disabled tools are not sent to the model
+
+Tool preferences persist across sessions in localStorage.
+
+## Using MCP Tools in Chat
+
+### Enabling MCP
+
+1. Click **Tools** in the chat input toolbar
+2. Enable **MCP Servers**
+3. Ensure at least one server is connected with enabled tools
+
+### Tool Registration
+
+When MCP is enabled, tools from connected servers are automatically added to the model's available functions. Tools use namespaced names to prevent conflicts:
+
+```
+Format: mcp_{serverId}_{toolName}
+
+Examples:
+- mcp_github-server_search_repos
+- mcp_github-server_create_issue
+- mcp_slack-server_send_message
+```
+
+The model sees tools with descriptions prefixed by the server name:
+
+```
+[MCP: GitHub Tools] Search GitHub repositories
+```
+
+### Execution Flow
+
+```
+1. User sends message with MCP enabled
+2. Model decides to call an MCP tool
+3. Frontend parses tool name to extract server ID and tool name
+4. Request sent to MCP server via tools/call
+5. Server executes tool and returns result
+6. Result formatted and sent back to model
+7. Model continues with tool result
+```
+
+### Tool Results
+
+MCP tools can return multiple content types:
+
+| Type     | Handling                            |
+| -------- | ----------------------------------- |
+| Text     | Displayed as-is                     |
+| Image    | Shown as `[Image: mime/type]`       |
+| Resource | Text content extracted, blobs noted |
+
+Example tool result:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "Found 50 repositories:\n1. facebook/react (220k stars)..."
+    }
+  ],
+  "isError": false
+}
+```
+
+## Configuration
+
+### Server Configuration
+
+Server configurations are persisted to localStorage:
+
+```typescript
+interface MCPServerConfig {
+  id: string; // Auto-generated unique ID
+  name: string; // Display name
+  url: string; // HTTP endpoint
+  enabled: boolean; // Whether server is active
+  headers?: {
+    // Optional auth headers
+    [key: string]: string;
+  };
+  toolsEnabled: {
+    // Per-tool enable state
+    [toolName: string]: boolean;
+  };
+}
+```
+
+### Client Settings
+
+| Setting          | Default    | Description                    |
+| ---------------- | ---------- | ------------------------------ |
+| Timeout          | 30 seconds | Request timeout for tool calls |
+| Protocol version | 2024-11-05 | MCP protocol version           |
+
+### Persisted vs Ephemeral State
+
+| Persisted (localStorage)        | Ephemeral (session only) |
+| ------------------------------- | ------------------------ |
+| Server configurations           | Connection status        |
+| Tool enable/disable preferences | Discovered tools list    |
+| Authentication headers          | Server capabilities      |
+|                                 | Error messages           |
+
+<Callout type="info">
+  Refreshing the page disconnects all servers. Enabled servers automatically reconnect when you
+  return to the chat.
+</Callout>
+
+## Protocol Support
+
+### Client Capabilities
+
+The client advertises these capabilities to servers:
+
+```json
+{
+  "tools": { "progress": false },
+  "resources": { "subscribe": false }
+}
+```
+
+### Supported Methods
+
+| Category  | Method           | Description                      |
+| --------- | ---------------- | -------------------------------- |
+| Tools     | `tools/list`     | List available tools (paginated) |
+| Tools     | `tools/call`     | Execute a tool                   |
+| Resources | `resources/list` | List available resources         |
+| Resources | `resources/read` | Read resource content            |
+| Prompts   | `prompts/list`   | List available prompts           |
+| Prompts   | `prompts/get`    | Get prompt with arguments        |
+| Utility   | `ping`           | Check server connectivity        |
+
+### Notification Types
+
+The client handles these server notifications via SSE:
+
+| Notification                           | Action                 |
+| -------------------------------------- | ---------------------- |
+| `notifications/tools/list_changed`     | Re-fetch tool list     |
+| `notifications/resources/list_changed` | Re-fetch resource list |
+| `notifications/prompts/list_changed`   | Re-fetch prompt list   |
+
+## Error Handling
+
+### Connection Errors
+
+| Error              | Cause                   | Resolution                              |
+| ------------------ | ----------------------- | --------------------------------------- |
+| Connection refused | Server not running      | Start the MCP server                    |
+| 401 Unauthorized   | Invalid credentials     | Check authentication headers            |
+| Network error      | Firewall/proxy blocking | Verify network access to server URL     |
+| Timeout            | Server unresponsive     | Increase timeout or check server health |
+
+Connection errors are displayed in the UI with the error message visible on hover.
+
+### Tool Execution Errors
+
+When a tool fails, the error is returned to the model:
+
+```json
+{
+  "success": false,
+  "error": "Repository not found",
+  "output": "{\"error\": \"Repository not found\", \"serverId\": \"github\", \"toolName\": \"get_repo\"}"
+}
+```
+
+The model can then handle the error appropriately (retry, ask for clarification, etc.).
+
+## Example Workflow
+
+### 1. Set Up a GitHub MCP Server
+
+```
+Name: GitHub Tools
+URL: https://your-mcp-server.com/github
+Headers: {"Authorization": "Bearer ghp_xxxx"}
+```
+
+### 2. Connect and Discover Tools
+
+After connecting, you see:
+
+- `search_repos` - Search GitHub repositories
+- `get_repo` - Get repository details
+- `create_issue` - Create an issue
+- `list_issues` - List repository issues
+
+### 3. Use in Chat
+
+**User:** Find popular React component libraries on GitHub
+
+**Model:** I'll search GitHub for React component libraries.
+
+_Calls `mcp_github-tools_search_repos` with:_
+
+```json
+{
+  "query": "react components library stars:>1000",
+  "sort": "stars"
+}
+```
+
+**Tool Result:**
+
+```
+Found 25 repositories:
+1. chakra-ui/chakra-ui (35k stars) - Simple, modular component library
+2. shadcn/ui (45k stars) - Beautifully designed components
+3. ant-design/ant-design (88k stars) - Enterprise UI design language
+...
+```
+
+**Model:** Here are the most popular React component libraries on GitHub...
+
+## Comparison with Frontend Tools
+
+| Feature      | Frontend Tools                | MCP Tools                  |
+| ------------ | ----------------------------- | -------------------------- |
+| Execution    | Browser (WASM)                | External server            |
+| Latency      | Very low                      | Network dependent          |
+| Capabilities | Fixed (Python, JS, SQL, etc.) | Unlimited (server-defined) |
+| Setup        | None                          | Server configuration       |
+| Offline      | Yes                           | No                         |
+| Security     | Sandboxed                     | Server-controlled          |
+
+Use frontend tools for general computation and data analysis. Use MCP for external integrations, file system access, database queries, and custom enterprise tools.
+
+## Security Considerations
+
+### Server Trust
+
+MCP servers can execute arbitrary actions. Only connect to trusted servers:
+
+- Verify the server URL is legitimate
+- Use HTTPS for all connections
+- Review available tools before enabling
+
+### Credential Storage
+
+Authentication headers are stored in localStorage:
+
+- Accessible to JavaScript on the same origin
+- Consider using short-lived tokens where possible
+- Clear server configurations when using shared computers
+
+### Network Security
+
+- All requests use the configured URL directly
+- No server-side proxy (requests go from browser to MCP server)
+- CORS must be configured on the MCP server to allow browser requests
+
+<Callout type="warn">
+  MCP servers have full access to execute their defined tools. Only connect to servers you trust and
+  review available tools before use.
+</Callout>
+
+## Troubleshooting
+
+### Server won't connect
+
+1. **Check URL**: Ensure the endpoint is correct and accessible
+2. **Check CORS**: Server must allow requests from your origin
+3. **Check auth**: Verify authentication headers are correct
+4. **Check network**: Try accessing the URL directly in browser
+
+### Tools not appearing
+
+1. **Check connection**: Ensure status shows "Connected"
+2. **Check capabilities**: Server must advertise tool support
+3. **Check tool list**: Server's `tools/list` must return tools
+
+### Tool execution fails
+
+1. **Check arguments**: Ensure model is providing valid inputs
+2. **Check server logs**: Review MCP server for error details
+3. **Check timeout**: Long-running tools may need longer timeouts
+
+### SSE notifications not working
+
+1. **Check browser console**: Look for EventSource errors
+2. **Check server support**: Server must support GET requests for SSE
+3. **Notifications are optional**: Core functionality works without them

@@ -1,0 +1,209 @@
+---
+title: File Search
+description: Configure the file_search tool for RAG in the Responses API
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The `[features.file_search]` section configures server-side file_search tool interception for the Responses API. When enabled, the gateway intercepts `file_search` tool calls from LLMs and executes them against the local vector store.
+
+## Configuration Reference
+
+### Main Settings
+
+| Key                       | Type    | Default | Description                                            |
+| ------------------------- | ------- | ------- | ------------------------------------------------------ |
+| `enabled`                 | boolean | `true`  | Enable file_search tool interception                   |
+| `max_iterations`          | integer | `5`     | Maximum tool call iterations before forcing completion |
+| `max_results_per_search`  | integer | `10`    | Maximum search results per call                        |
+| `timeout_secs`            | integer | `30`    | Timeout per search operation                           |
+| `include_annotations`     | boolean | `true`  | Include file citation annotations in responses         |
+| `score_threshold`         | float   | `0.7`   | Minimum similarity score (0.0-1.0)                     |
+| `max_search_result_chars` | integer | `50000` | Maximum characters for injected results                |
+
+### Vector Backend
+
+Configure where document chunks are stored with `[features.file_search.vector_backend]`.
+
+#### pgvector
+
+Uses PostgreSQL with the pgvector extension:
+
+```toml
+[features.file_search.vector_backend]
+type = "pgvector"
+table_name = "rag_chunks"        # Default: "rag_chunks"
+index_type = "ivf_flat"          # "ivf_flat" or "hnsw"
+distance_metric = "cosine"       # "cosine", "dot_product", "euclidean"
+```
+
+| Key               | Type   | Default        | Description                                                      |
+| ----------------- | ------ | -------------- | ---------------------------------------------------------------- |
+| `table_name`      | string | `"rag_chunks"` | Table for storing chunks                                         |
+| `index_type`      | string | `"ivf_flat"`   | Index type: `ivf_flat` (faster build) or `hnsw` (faster queries) |
+| `distance_metric` | string | `"cosine"`     | Distance metric for similarity                                   |
+
+#### Qdrant
+
+Uses external Qdrant vector database:
+
+```toml
+[features.file_search.vector_backend]
+type = "qdrant"
+url = "http://localhost:6333"
+api_key = "${QDRANT_API_KEY}"    # Optional
+collection_name = "rag_chunks"   # Default: "rag_chunks"
+distance_metric = "cosine"
+```
+
+| Key               | Type   | Default        | Description                   |
+| ----------------- | ------ | -------------- | ----------------------------- |
+| `url`             | string | required       | Qdrant server URL             |
+| `api_key`         | string | none           | API key for authentication    |
+| `collection_name` | string | `"rag_chunks"` | Collection for storing chunks |
+| `distance_metric` | string | `"cosine"`     | Distance metric               |
+
+### Embedding Configuration
+
+Configure the embedding model with `[features.file_search.embedding]`:
+
+```toml
+[features.file_search.embedding]
+provider = "openai"
+model = "text-embedding-3-small"
+dimensions = 1536
+```
+
+| Key          | Type    | Default                    | Description             |
+| ------------ | ------- | -------------------------- | ----------------------- |
+| `provider`   | string  | `"openai"`                 | Embedding provider name |
+| `model`      | string  | `"text-embedding-3-small"` | Embedding model         |
+| `dimensions` | integer | `1536`                     | Embedding dimensions    |
+
+<Callout type="info">
+  If not specified, embedding configuration falls back to semantic caching config, then vector
+  search config.
+</Callout>
+
+### Re-ranking
+
+LLM-based re-ranking improves search precision by re-scoring results:
+
+```toml
+[features.file_search.rerank]
+enabled = true
+model = "gpt-4o-mini"            # Optional, uses default model
+max_results_to_rerank = 20
+batch_size = 10
+timeout_secs = 30
+fallback_on_error = true
+```
+
+| Key                     | Type    | Default | Description                        |
+| ----------------------- | ------- | ------- | ---------------------------------- |
+| `enabled`               | boolean | `false` | Enable LLM re-ranking              |
+| `model`                 | string  | none    | LLM model for re-ranking           |
+| `max_results_to_rerank` | integer | `20`    | Results to pass to re-ranker       |
+| `batch_size`            | integer | `10`    | Results per LLM call               |
+| `timeout_secs`          | integer | `30`    | Re-ranking timeout                 |
+| `fallback_on_error`     | boolean | `true`  | Return original results on failure |
+
+### Retry Configuration
+
+```toml
+[features.file_search.retry]
+enabled = true
+max_retries = 3
+initial_delay_ms = 100
+max_delay_ms = 10000
+backoff_multiplier = 2.0
+jitter = 0.1
+```
+
+| Key                  | Type    | Default | Description                    |
+| -------------------- | ------- | ------- | ------------------------------ |
+| `enabled`            | boolean | `true`  | Enable retries                 |
+| `max_retries`        | integer | `3`     | Maximum retry attempts         |
+| `initial_delay_ms`   | integer | `100`   | Initial retry delay            |
+| `max_delay_ms`       | integer | `10000` | Maximum retry delay            |
+| `backoff_multiplier` | float   | `2.0`   | Exponential backoff multiplier |
+| `jitter`             | float   | `0.1`   | Random jitter factor           |
+
+### Circuit Breaker
+
+```toml
+[features.file_search.circuit_breaker]
+enabled = true
+failure_threshold = 5
+failure_window_secs = 60
+recovery_timeout_secs = 30
+```
+
+| Key                     | Type    | Default | Description                     |
+| ----------------------- | ------- | ------- | ------------------------------- |
+| `enabled`               | boolean | `true`  | Enable circuit breaker          |
+| `failure_threshold`     | integer | `5`     | Failures to open circuit        |
+| `failure_window_secs`   | integer | `60`    | Window for counting failures    |
+| `recovery_timeout_secs` | integer | `30`    | Time before attempting recovery |
+
+## Complete Example
+
+```toml
+[features.file_search]
+enabled = true
+max_iterations = 5
+max_results_per_search = 10
+timeout_secs = 30
+include_annotations = true
+score_threshold = 0.7
+max_search_result_chars = 50000
+
+[features.file_search.vector_backend]
+type = "pgvector"
+table_name = "rag_chunks"
+index_type = "hnsw"
+distance_metric = "cosine"
+
+[features.file_search.embedding]
+provider = "openai"
+model = "text-embedding-3-small"
+dimensions = 1536
+
+[features.file_search.rerank]
+enabled = true
+model = "gpt-4o-mini"
+max_results_to_rerank = 20
+batch_size = 10
+timeout_secs = 30
+fallback_on_error = true
+
+[features.file_search.retry]
+enabled = true
+max_retries = 3
+initial_delay_ms = 100
+max_delay_ms = 10000
+backoff_multiplier = 2.0
+
+[features.file_search.circuit_breaker]
+enabled = true
+failure_threshold = 5
+failure_window_secs = 60
+recovery_timeout_secs = 30
+```
+
+## Distance Metrics
+
+| Metric        | Best For                  | Score Range                          |
+| ------------- | ------------------------- | ------------------------------------ |
+| `cosine`      | Text embeddings (default) | 0.0-1.0 (higher = more similar)      |
+| `dot_product` | Normalized embeddings     | Varies (requires normalized vectors) |
+| `euclidean`   | Metric space embeddings   | 0.0-1.0 (converted from distance)    |
+
+<Callout type="warn">
+  Changing the distance metric after indexing data requires recreating the vector index.
+</Callout>
+
+## See Also
+
+- [Knowledge Bases Guide](/docs/features/knowledge-bases) - Conceptual overview
+- [File Processing Configuration](/docs/configuration/features/file-processing) - Document processing settings

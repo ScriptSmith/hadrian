@@ -1,0 +1,114 @@
+{
+  "id": "anthropic:messages:streaming",
+  "description": "Streaming Anthropic Messages API response with SSE events",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "x-robots-tag": "none",
+      "x-envoy-upstream-service-time": "1582",
+      "transfer-encoding": "chunked"
+    },
+    "streaming": true,
+    "chunks": [
+      {
+        "message": {
+          "content": [],
+          "id": "msg_01XiFejs6jPe7h1KMtTQoYSo",
+          "model": "claude-sonnet-4-20250514",
+          "role": "assistant",
+          "stop_reason": null,
+          "stop_sequence": null,
+          "type": "message",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 26,
+            "output_tokens": 1,
+            "service_tier": "standard"
+          }
+        },
+        "type": "message_start"
+      },
+      {
+        "content_block": {
+          "text": "",
+          "type": "text"
+        },
+        "index": 0,
+        "type": "content_block_start"
+      },
+      {
+        "delta": {
+          "text": "1\n2\n3\n4",
+          "type": "text_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "type": "ping"
+      },
+      {
+        "delta": {
+          "text": "\n5\n6\n7\n8",
+          "type": "text_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "\n9\n10\n11\n12",
+          "type": "text_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "\n13\n14\n15\n16",
+          "type": "text_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "\n17\n18\n19\n20",
+          "type": "text_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "index": 0,
+        "type": "content_block_stop"
+      },
+      {
+        "delta": {
+          "stop_reason": "end_turn",
+          "stop_sequence": null
+        },
+        "type": "message_delta",
+        "usage": {
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "input_tokens": 26,
+          "output_tokens": 43
+        }
+      },
+      {
+        "type": "message_stop"
+      }
+    ]
+  }
+}

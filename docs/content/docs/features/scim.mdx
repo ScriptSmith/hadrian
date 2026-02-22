@@ -1,0 +1,303 @@
+---
+title: SCIM Provisioning
+description: Automatic user and group provisioning with SCIM 2.0 for real-time identity sync
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { StoryEmbed } from "@/components/story-embed";
+
+SCIM (System for Cross-domain Identity Management) enables real-time user provisioning and deprovisioning from your identity provider. When users are added, modified, or removed in your IdP, changes sync to Hadrian immediately.
+
+## Why SCIM?
+
+JIT (Just-in-Time) provisioning creates users when they first log in. This creates a critical security gap:
+
+| Scenario                 | JIT Behavior                                | SCIM Behavior               |
+| ------------------------ | ------------------------------------------- | --------------------------- |
+| User joins company       | Created on first login                      | Created immediately         |
+| User terminated          | **Remains active until next login attempt** | **Deactivated immediately** |
+| Group membership changes | Updated on next login                       | Updated immediately         |
+| API keys on termination  | **Remain valid**                            | **Revoked immediately**     |
+
+<Callout type="error">
+  **Security Risk with JIT:** When an employee is terminated, their API keys remain active until
+  they try to log in. This can be days, weeks, or never. SCIM ensures immediate deprovisioning,
+  meeting SOC 2, HIPAA, and FedRAMP requirements.
+</Callout>
+
+## Supported Identity Providers
+
+SCIM 2.0 is an open standard supported by major identity providers:
+
+| Provider            | SCIM Support | Notes                                      |
+| ------------------- | ------------ | ------------------------------------------ |
+| Okta                | Full         | Native SCIM 2.0 application integration    |
+| Azure AD / Entra ID | Full         | Enterprise Application provisioning        |
+| Google Workspace    | Full         | Requires Cloud Identity or Workspace admin |
+| OneLogin            | Full         | Native SCIM connector                      |
+| Keycloak            | Partial      | Requires SCIM plugin (keycloak-scim)       |
+| Auth0               | Partial      | Via Actions or third-party integration     |
+| JumpCloud           | Full         | Native SCIM 2.0 support                    |
+
+## Prerequisites
+
+Before configuring SCIM:
+
+1. **Organization exists** - Your organization must be created in Hadrian
+2. **Admin access** - You need organization admin role
+3. **IdP SCIM support** - Your identity provider must support SCIM 2.0
+
+## Configuring SCIM
+
+Navigate to **Admin → Organizations → [Your Org] → SCIM** to access the SCIM configuration page.
+
+### Creating a SCIM Configuration
+
+Click **Configure SCIM** to open the configuration form.
+
+<StoryEmbed storyId="admin-scimconfigformmodal--create-mode" height={600} />
+
+#### User Provisioning Settings
+
+| Setting               | Description                                    | Default  |
+| --------------------- | ---------------------------------------------- | -------- |
+| **Enable SCIM**       | Activate SCIM endpoint for this organization   | Off      |
+| **Create Users**      | Create Hadrian users when provisioned via SCIM | On       |
+| **Sync Display Name** | Update user display name from IdP on each sync | On       |
+| **Default Team**      | Team to add new users to                       | None     |
+| **Default Org Role**  | Role in the organization (`member`, `admin`)   | `member` |
+| **Default Team Role** | Role in the default team                       | `member` |
+
+#### Deprovisioning Settings
+
+<StoryEmbed storyId="admin-scimconfigformmodal--aggressive-deprovisioning" height={600} />
+
+| Setting                           | Description                                              | Default |
+| --------------------------------- | -------------------------------------------------------- | ------- |
+| **Revoke API Keys on Deactivate** | Immediately revoke all API keys when user is deactivated | On      |
+| **Delete User on Deactivate**     | Permanently delete user record (vs. deactivate)          | Off     |
+
+<Callout type="warn">
+  **Recommended:** Keep "Revoke API Keys on Deactivate" enabled. This ensures terminated employees
+  lose API access immediately, not just UI access.
+</Callout>
+
+### Bearer Token
+
+After creating the configuration, Hadrian generates a bearer token for authenticating SCIM requests.
+
+<StoryEmbed storyId="admin-scimtokencreatedmodal--default" height={600} />
+
+<Callout type="error">
+  **Copy the token now.** This is the only time it will be displayed. The token is hashed before
+  storage and cannot be retrieved later. If lost, rotate the token to generate a new one.
+</Callout>
+
+The token format is `scim_` followed by random characters. Store it securely in your IdP's SCIM configuration.
+
+### SCIM Endpoint URL
+
+Configure your IdP with this endpoint URL:
+
+```
+https://your-gateway.example.com/scim/v2
+```
+
+The endpoint requires Bearer token authentication:
+
+```
+Authorization: Bearer scim_abc123...
+```
+
+## Identity Provider Setup
+
+### Okta
+
+1. Go to **Applications → Applications → Add Application**
+2. Search for "SCIM 2.0 Test App (OAuth Bearer Token)"
+3. Click **Add** and configure:
+   - **SCIM connector base URL**: `https://your-gateway.example.com/scim/v2`
+   - **Unique identifier field for users**: `userName`
+   - **Authentication Mode**: HTTP Header
+   - **Authorization**: `Bearer <your-scim-token>`
+4. Under **Provisioning → To App**, enable:
+   - Create Users
+   - Update User Attributes
+   - Deactivate Users
+5. Assign users/groups to the application
+
+### Azure AD / Entra ID
+
+1. Go to **Enterprise Applications → New application**
+2. Click **Create your own application** → Non-gallery application
+3. Under **Provisioning**, set:
+   - **Provisioning Mode**: Automatic
+   - **Tenant URL**: `https://your-gateway.example.com/scim/v2`
+   - **Secret Token**: Your SCIM bearer token
+4. Click **Test Connection** to verify
+5. Configure attribute mappings:
+   - `userPrincipalName` → `userName`
+   - `mail` → `emails[type eq "work"].value`
+   - `displayName` → `displayName`
+   - `givenName` → `name.givenName`
+   - `surname` → `name.familyName`
+6. Start provisioning
+
+### Google Workspace
+
+1. Go to **Admin Console → Apps → SAML apps**
+2. Add a custom SAML app or use an existing one
+3. Under **Auto-provisioning**, configure:
+   - **SCIM endpoint**: `https://your-gateway.example.com/scim/v2`
+   - **Authorization header**: `Bearer <your-scim-token>`
+4. Enable user provisioning and deprovisioning
+5. Select organizational units to sync
+
+## User Provisioning Flow
+
+When your IdP provisions a user via SCIM:
+
+1. **POST `/scim/v2/Users`** - IdP sends user data (email, name, attributes)
+2. **User created** - Hadrian creates user with mapped attributes
+3. **Organization added** - User added to the org with default role
+4. **Team added** - If configured, user added to default team
+5. **Response** - SCIM resource returned with Hadrian user ID
+
+### Attribute Mapping
+
+| SCIM Attribute          | Hadrian Attribute             |
+| ----------------------- | ----------------------------- |
+| `userName`              | `email` (primary identifier)  |
+| `emails[primary].value` | `email`                       |
+| `displayName`           | `display_name`                |
+| `name.givenName`        | `first_name`                  |
+| `name.familyName`       | `last_name`                   |
+| `active`                | User active status            |
+| `externalId`            | `external_id` (IdP reference) |
+
+## Group Provisioning
+
+SCIM groups map to Hadrian teams. When you provision groups:
+
+1. **POST `/scim/v2/Groups`** - IdP creates group
+2. **Team created or mapped** - Group links to existing or new team
+3. **Members synced** - Group members added to team with configured role
+
+### Group-to-Team Mapping
+
+| SCIM Attribute | Hadrian Attribute       |
+| -------------- | ----------------------- |
+| `displayName`  | Team name               |
+| `externalId`   | Team external reference |
+| `members`      | Team membership         |
+
+<Callout type="info">
+  Groups provision users as team members with the default team role. For more granular role
+  assignment, use [SSO Group Mappings](/docs/features/sso-admin-guide#sso-group-mappings) in
+  combination with SCIM.
+</Callout>
+
+## Deprovisioning
+
+When a user is deactivated or deleted in your IdP:
+
+1. **PATCH `/scim/v2/Users/{id}`** - IdP sends `active: false`
+2. **User deactivated** - Hadrian marks user as inactive
+3. **API keys revoked** - If enabled, all API keys immediately revoked
+4. **Sessions invalidated** - Active sessions terminated
+5. **Optional deletion** - If configured, user record permanently deleted
+
+### Deprovisioning Timeline
+
+| Event             | JIT                            | SCIM                         |
+| ----------------- | ------------------------------ | ---------------------------- |
+| IdP disables user | No effect                      | User deactivated immediately |
+| API key validity  | Valid indefinitely             | Revoked immediately          |
+| UI access         | Valid until next login attempt | Denied immediately           |
+
+## Token Rotation
+
+Rotate the SCIM bearer token periodically or if compromised:
+
+1. Navigate to **Admin → Organizations → [Your Org] → SCIM**
+2. Click **Rotate Token**
+3. Copy the new token immediately
+4. Update your IdP configuration with the new token
+
+<Callout type="warn">
+  After rotation, the old token is immediately invalidated. Update your IdP configuration promptly
+  to avoid provisioning failures.
+</Callout>
+
+## API Reference
+
+### SCIM Endpoints
+
+| Endpoint                         | Method | Description                              |
+| -------------------------------- | ------ | ---------------------------------------- |
+| `/scim/v2/ServiceProviderConfig` | GET    | SCIM capabilities and configuration      |
+| `/scim/v2/ResourceTypes`         | GET    | Supported resource types (User, Group)   |
+| `/scim/v2/Schemas`               | GET    | SCIM schema definitions                  |
+| `/scim/v2/Users`                 | GET    | List users with filtering and pagination |
+| `/scim/v2/Users`                 | POST   | Create a new user                        |
+| `/scim/v2/Users/{id}`            | GET    | Get user by ID                           |
+| `/scim/v2/Users/{id}`            | PUT    | Replace user                             |
+| `/scim/v2/Users/{id}`            | PATCH  | Update user attributes                   |
+| `/scim/v2/Users/{id}`            | DELETE | Delete user                              |
+| `/scim/v2/Groups`                | GET    | List groups with filtering               |
+| `/scim/v2/Groups`                | POST   | Create a new group                       |
+| `/scim/v2/Groups/{id}`           | GET    | Get group by ID                          |
+| `/scim/v2/Groups/{id}`           | PUT    | Replace group                            |
+| `/scim/v2/Groups/{id}`           | PATCH  | Update group attributes                  |
+| `/scim/v2/Groups/{id}`           | DELETE | Delete group                             |
+
+### Admin API
+
+| Endpoint                                                   | Method | Description               |
+| ---------------------------------------------------------- | ------ | ------------------------- |
+| `/admin/v1/organizations/{slug}/scim-configs`              | GET    | Get SCIM configuration    |
+| `/admin/v1/organizations/{slug}/scim-configs`              | POST   | Create SCIM configuration |
+| `/admin/v1/organizations/{slug}/scim-configs`              | PUT    | Update SCIM configuration |
+| `/admin/v1/organizations/{slug}/scim-configs`              | DELETE | Delete SCIM configuration |
+| `/admin/v1/organizations/{slug}/scim-configs/rotate-token` | POST   | Rotate bearer token       |
+
+## Troubleshooting
+
+### SCIM Requests Failing with 401
+
+- Verify the bearer token is correct and not rotated
+- Check the `Authorization` header format: `Bearer <token>`
+- Ensure the token was copied correctly (no trailing spaces)
+
+### Users Not Being Created
+
+- Verify "Create Users" is enabled in SCIM settings
+- Check that the `userName` attribute is being sent (required)
+- Review IdP attribute mappings
+
+### API Keys Not Revoked on Deactivation
+
+- Ensure "Revoke API Keys on Deactivate" is enabled
+- Verify the IdP is sending `active: false` (not deleting)
+- Check audit logs for deprovisioning events
+
+### Groups Not Syncing
+
+- Verify group provisioning is enabled in your IdP
+- Check that group `displayName` is unique within the org
+- Review IdP group assignment to the SCIM application
+
+### Duplicate User Errors
+
+- Ensure `userName` (email) is unique across your organization
+- Check for existing users with the same email
+- Use SCIM filter to query existing users before creation
+
+## Related Topics
+
+<Cards>
+  <Card title="Authentication Overview" href="/docs/features/authentication" />
+  <Card title="SSO Admin Guide" href="/docs/features/sso-admin-guide" />
+  <Card title="Auth Configuration Reference" href="/docs/configuration/auth" />
+  <Card title="Multi-Tenancy" href="/docs/features/multi-tenancy" />
+</Cards>

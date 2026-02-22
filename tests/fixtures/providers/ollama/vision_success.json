@@ -1,0 +1,36 @@
+{
+  "id": "ollama:vision:success",
+  "description": "Vision request with base64 image via Ollama",
+  "request": {
+    "method": "POST",
+    "path": "/chat/completions"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+            "content": "Here’s a description of the image in three bullet points, focusing on the requested elements:\n\n*   **Main Subject:** The image features a solid, uniform block of bright green color.\n\n*   **Colors:** The dominant color is a vibrant, almost neon, green – specifically a shade of lime or chartreuse. There are no other colors present.\n\n*   **Composition:** The composition is extremely simple and minimalistic, consisting of a single, large, rectangular area filled with the green color. It’s a flat, seamless background with no gradients or textures.",
+            "role": "assistant"
+          }
+        }
+      ],
+      "created": 1766314613,
+      "id": "chatcmpl-378",
+      "model": "gemma3:4b",
+      "object": "chat.completion",
+      "system_fingerprint": "fp_ollama",
+      "usage": {
+        "completion_tokens": 117,
+        "prompt_tokens": 299,
+        "total_tokens": 416
+      }
+    }
+  }
+}

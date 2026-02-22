@@ -1,0 +1,59 @@
+{{- if .Values.ingress.enabled -}}
+{{- $certManagerEnabled := .Values.certManager.enabled -}}
+{{- $certManagerSecretName := .Values.certManager.secretName | default (printf "%s-tls" (include "hadrian.fullname" .)) -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "hadrian.fullname" . }}
+  labels:
+    {{- include "hadrian.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if or .Values.ingress.tls $certManagerEnabled }}
+  tls:
+    {{- if .Values.ingress.tls }}
+    {{- /* Use explicit TLS configuration if provided */}}
+    {{- range .Values.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+    {{- else if $certManagerEnabled }}
+    {{- /* Auto-generate TLS config from cert-manager Certificate */}}
+    - hosts:
+        {{- if .Values.certManager.dnsNames }}
+        {{- range .Values.certManager.dnsNames }}
+        - {{ . | quote }}
+        {{- end }}
+        {{- else }}
+        {{- range .Values.ingress.hosts }}
+        - {{ .host | quote }}
+        {{- end }}
+        {{- end }}
+      secretName: {{ $certManagerSecretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "hadrian.fullname" $ }}
+                port:
+                  name: http
+          {{- end }}
+    {{- end }}
+{{- end }}

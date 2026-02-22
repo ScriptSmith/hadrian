@@ -1,0 +1,402 @@
+---
+title: Budget Enforcement
+description: Prevent cost overruns with atomic budget reservation and real-time enforcement
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Budget enforcement prevents cost overruns by tracking spend in real-time and blocking requests when limits are reached. The system uses an atomic reservation pattern to handle concurrent requests safely.
+
+## Overview
+
+The budget system provides:
+
+- **Atomic reservation** - Reserve estimated cost before request, adjust after completion
+- **Real-time enforcement** - Block or warn when budgets are exceeded
+- **Flexible scopes** - Set budgets per API key (owned by org, team, project, or user)
+- **Warning thresholds** - Get alerts before hitting hard limits
+- **Time-series forecasting** - Predict when budgets will be exhausted
+
+## How It Works
+
+The atomic reservation pattern prevents overspend even with concurrent requests:
+
+```
+1. Request arrives
+   └─ Reserve estimated cost ($0.10 default)
+   └─ Check: current_spend + reservation > limit?
+      ├─ Yes → Reject request (429 or 403)
+      └─ No  → Continue
+
+2. Forward to LLM provider
+   └─ Stream response
+
+3. Request completes
+   └─ Calculate actual cost from token usage
+   └─ Adjust: replace estimate with actual cost
+      (adjustment = actual - estimated)
+
+4. On failure/cancellation
+   └─ Refund: remove reservation entirely
+```
+
+This ensures that even if 100 concurrent requests arrive simultaneously, the budget cannot be exceeded by more than the allowed overage.
+
+## Quick Start
+
+Set a budget on an API key via the Admin API:
+
+```bash
+# Create API key with $100/month budget
+curl -X POST http://localhost:8080/api/admin/api-keys \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Production API Key",
+    "owner_type": "project",
+    "owner_id": "proj_abc123",
+    "budget_amount": 10000,
+    "budget_period": "monthly"
+  }'
+```
+
+<Callout type="info">Budget amounts are specified in **cents**. So `10000` = $100.00.</Callout>
+
+## Budget Configuration
+
+### API Key Level
+
+Budgets are configured per API key. Each key can have:
+
+| Field           | Type    | Description                                |
+| --------------- | ------- | ------------------------------------------ |
+| `budget_amount` | integer | Budget limit in cents (e.g., 10000 = $100) |
+| `budget_period` | string  | `"daily"` or `"monthly"`                   |
+
+API keys inherit their scope from ownership:
+
+- **Organization-owned** - Budget applies to all org usage via this key
+- **Team-owned** - Budget applies to team usage via this key
+- **Project-owned** - Budget applies to project usage via this key
+- **User-owned** - Budget applies to individual user via this key
+
+### Default Limits
+
+Configure default budget behavior in `hadrian.toml`:
+
+```toml
+[limits.budgets]
+# Default monthly budget for new API keys (optional)
+monthly_budget_usd = "100.00"
+
+# Default daily budget for new API keys (optional)
+daily_budget_usd = "10.00"
+
+# Warning threshold (0.0-1.0, default 0.8 = 80%)
+warning_threshold = 0.8
+
+# Action when budget exceeded
+exceeded_action = "block"  # or "warn", "throttle"
+
+# Allow overage percentage (default 0.0 = strict)
+allowed_overage = 0.0
+
+# Estimated cost per request for reservation (cents, default 10)
+estimated_cost_cents = 10
+```
+
+### Exceeded Actions
+
+| Action     | Behavior                                      |
+| ---------- | --------------------------------------------- |
+| `block`    | Reject request with 429 status (default)      |
+| `warn`     | Allow request, add warning headers, log event |
+| `throttle` | Reduce rate limits for remaining requests     |
+
+### Allowed Overage
+
+The `allowed_overage` setting permits exceeding the budget by a percentage:
+
+```toml
+[limits.budgets]
+allowed_overage = 0.1  # Allow 10% overage
+```
+
+With a $100 budget and 10% overage, requests are blocked at $110. This provides a buffer for in-flight requests during high concurrency.
+
+## Warning Thresholds
+
+When spend reaches the warning threshold, the system:
+
+1. Publishes a WebSocket event for real-time dashboards
+2. Logs an audit entry (deduplicated: once per API key per period)
+3. Adds warning headers to responses
+
+```toml
+[limits.budgets]
+warning_threshold = 0.8  # Warn at 80% of budget
+```
+
+### Warning Response Headers
+
+When the threshold is reached, responses include:
+
+| Header                         | Example | Description                   |
+| ------------------------------ | ------- | ----------------------------- |
+| `X-Budget-Warning`             | `true`  | Flag indicating warning state |
+| `X-Budget-Spend-Percentage`    | `0.85`  | Percentage of budget consumed |
+| `X-Budget-Current-Spend-Cents` | `850`   | Current spend in cents        |
+| `X-Budget-Limit-Cents`         | `1000`  | Budget limit in cents         |
+| `X-Budget-Period`              | `daily` | Budget period                 |
+
+## Time-Series Forecasting
+
+The gateway includes time-series forecasting powered by [augurs](https://github.com/grafana/augurs) to predict budget exhaustion.
+
+### Algorithm
+
+| Data Available | Method         | Description                                 |
+| -------------- | -------------- | ------------------------------------------- |
+| 14+ days       | MSTL + AutoETS | Seasonal decomposition with weekly patterns |
+| 7-13 days      | AutoETS        | Exponential smoothing without seasonality   |
+| < 7 days       | None           | Insufficient data for forecasting           |
+
+MSTL (Multiple Seasonal-Trend decomposition using Loess) captures weekly patterns like higher weekday usage vs. weekends.
+
+### Forecast Response
+
+The usage API returns forecasting data:
+
+```json
+{
+  "current_spend_microcents": 5000000,
+  "budget_limit_microcents": 10000000,
+  "budget_period": "monthly",
+  "avg_daily_spend_microcents": 250000,
+  "std_dev_daily_spend_microcents": 50000,
+  "sample_days": 21,
+  "days_until_exhaustion": 20.0,
+  "projected_exhaustion_date": "2025-01-27",
+  "days_until_exhaustion_lower": 16.7,
+  "days_until_exhaustion_upper": 25.0,
+  "budget_utilization_percent": 50.0,
+  "projected_period_spend_microcents": 7750000,
+  "time_series_forecast": {
+    "dates": ["2025-01-08", "2025-01-09", "2025-01-10"],
+    "point_forecasts": [260000, 255000, 180000],
+    "lower_bounds": [200000, 195000, 120000],
+    "upper_bounds": [320000, 315000, 240000],
+    "confidence_level": 0.95,
+    "used_seasonal_decomposition": true
+  }
+}
+```
+
+<Callout type="info">
+  Costs are stored in **microcents** (1/1,000,000 of a dollar) for precision. 1,000,000 microcents =
+  $1.00.
+</Callout>
+
+### Forecast Fields
+
+| Field                               | Description                                    |
+| ----------------------------------- | ---------------------------------------------- |
+| `days_until_exhaustion`             | Estimated days until budget runs out           |
+| `projected_exhaustion_date`         | Calendar date of projected exhaustion          |
+| `days_until_exhaustion_lower`       | 95% confidence lower bound (faster exhaustion) |
+| `days_until_exhaustion_upper`       | 95% confidence upper bound (slower exhaustion) |
+| `budget_utilization_percent`        | Current period utilization                     |
+| `projected_period_spend_microcents` | Projected total spend by period end            |
+| `time_series_forecast`              | Multi-day point forecasts with intervals       |
+
+## Cache Requirements
+
+<Callout type="warn">
+  Budget enforcement requires a cache backend. Without cache, API keys with budgets will return 503
+  Service Unavailable.
+</Callout>
+
+### Single-Node Deployment
+
+In-memory cache is sufficient:
+
+```toml
+[cache]
+type = "memory"
+```
+
+### Multi-Node Deployment
+
+Redis is required for shared budget state across nodes:
+
+```toml
+[cache]
+type = "redis"
+url = "redis://localhost:6379"
+```
+
+The atomic reservation pattern uses:
+
+- **In-memory**: Compare-And-Swap (CAS) loops with `AtomicI64`
+- **Redis**: Lua scripts for atomic check-and-reserve operations
+
+### Cache Key Format
+
+Budget spend is tracked with keys like:
+
+```
+gw:spend:{api_key_id}:{period}:{date}
+```
+
+Example: `gw:spend:550e8400-e29b-41d4-a716-446655440000:daily:2025-01-07`
+
+Keys automatically expire after the period ends.
+
+## Audit Logging
+
+Budget events are logged to the audit log:
+
+| Action            | Trigger                                                   |
+| ----------------- | --------------------------------------------------------- |
+| `budget.warning`  | Spend crosses warning threshold (deduplicated per period) |
+| `budget.exceeded` | Request blocked due to budget limit                       |
+
+Events include:
+
+- `api_key_id`, `org_id`, `project_id`, `user_id`
+- `limit_cents`, `current_spend_cents`
+- `period` (daily/monthly)
+- `request_id`, `request_path`
+
+## WebSocket Events
+
+Real-time budget events are published for dashboards:
+
+```typescript
+interface BudgetThresholdReached {
+  type: "budget_threshold_reached";
+  threshold_percent: number;
+  current_amount_microcents: number;
+  limit_microcents: number;
+  org_id?: string;
+  project_id?: string;
+  api_key_id: string;
+}
+```
+
+## Error Responses
+
+When a budget is exceeded:
+
+```json
+{
+  "error": {
+    "type": "budget_exceeded",
+    "message": "Budget limit exceeded",
+    "code": "budget_exceeded",
+    "param": null,
+    "details": {
+      "limit_cents": 10000,
+      "current_spend_cents": 10050,
+      "period": "monthly"
+    }
+  }
+}
+```
+
+HTTP status: `429 Too Many Requests` (with `Retry-After` header set to period end).
+
+## Complete Configuration Example
+
+```toml
+# Cache is required for budget enforcement
+[cache]
+type = "redis"
+url = "redis://localhost:6379"
+
+# Default budget settings
+[limits.budgets]
+# No default budgets (set per API key)
+monthly_budget_usd = null
+daily_budget_usd = null
+
+# Warn at 80% of budget
+warning_threshold = 0.8
+
+# Block requests when budget exceeded
+exceeded_action = "block"
+
+# No overage allowed (strict enforcement)
+allowed_overage = 0.0
+
+# Reserve $0.10 per request (adjusted after completion)
+estimated_cost_cents = 10
+```
+
+## Usage Tracking
+
+Budget enforcement relies on accurate usage tracking. Ensure pricing is configured:
+
+```toml
+[pricing]
+# Default pricing for unknown models (per 1M tokens)
+default_input_price = "1.00"
+default_output_price = "2.00"
+
+# Model-specific pricing
+[pricing.models]
+"gpt-4o" = { input = "2.50", output = "10.00" }
+"gpt-4o-mini" = { input = "0.15", output = "0.60" }
+"claude-sonnet-4-20250514" = { input = "3.00", output = "15.00" }
+```
+
+<Callout type="info">
+  Pricing is specified per 1 million tokens. The gateway calculates costs from actual token usage in
+  each response.
+</Callout>
+
+## Usage Analytics
+
+The admin panel provides usage dashboards for monitoring spend and token consumption across all levels of the multi-tenancy hierarchy.
+
+### Admin Usage Page
+
+The dedicated Usage page (`/admin/usage`) supports multi-dimensional filtering:
+
+| Filter       | Description                               |
+| ------------ | ----------------------------------------- |
+| Organization | Required; scopes all data to a single org |
+| Team         | Narrow to a specific team within the org  |
+| Project      | Narrow to a specific project              |
+| User         | Narrow to a specific user                 |
+| API Key      | Narrow to a single API key                |
+
+Filters follow a priority order: API Key > User > Project > Team > Organization. The most specific filter wins.
+
+The dashboard displays:
+
+- **Summary cards** - Total cost, total requests, input/output tokens
+- **Cost over time** - Daily spend line chart
+- **Cost by model** - Breakdown pie chart
+- **Model details table** - Per-model token and cost breakdown
+
+### Entity Detail Pages
+
+Each entity detail page in the admin panel includes a **Usage** tab with a scoped dashboard:
+
+- **Organization** (`/admin/organizations/{slug}`) - All usage within the org
+- **Team** (`/admin/organizations/{org}/teams/{slug}`) - Team-scoped usage
+- **Project** (`/admin/organizations/{org}/projects/{slug}`) - Project-scoped usage
+- **User** (`/admin/users/{id}`) - Individual user usage
+
+### Self-Service Usage
+
+Non-admin users can view their own usage at `/usage` in the web UI. This page calls the self-service API endpoints (`/admin/v1/me/usage/*`) which require only standard authentication, not admin privileges.
+
+## Best Practices
+
+1. **Set warning thresholds** - Use 0.7-0.8 to get alerts before hitting limits
+2. **Configure allowed overage** - 5-10% buffer prevents request failures during high concurrency
+3. **Use Redis for production** - Required for multi-node and accurate enforcement
+4. **Monitor forecasts** - Review `days_until_exhaustion` to proactively adjust budgets
+5. **Scope appropriately** - Use project-level keys for isolation, org-level for shared budgets

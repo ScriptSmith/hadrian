@@ -1,0 +1,270 @@
+---
+title: File Processing
+description: Configure document processing for RAG (chunking, OCR, virus scanning)
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The `[features.file_processing]` section controls how uploaded files are processed when added to vector stores. This includes text extraction, chunking, and embedding generation.
+
+## Configuration Reference
+
+### Main Settings
+
+```toml
+[features.file_processing]
+mode = "inline"
+max_file_size_mb = 10
+max_concurrent_tasks = 4
+default_max_chunk_tokens = 800
+default_overlap_tokens = 200
+stale_processing_timeout_secs = 1800
+```
+
+| Key                             | Type    | Default    | Description                                |
+| ------------------------------- | ------- | ---------- | ------------------------------------------ |
+| `mode`                          | string  | `"inline"` | Processing mode: `inline` or `queue`       |
+| `max_file_size_mb`              | integer | `10`       | Maximum file size in MB                    |
+| `max_concurrent_tasks`          | integer | `4`        | Concurrent processing tasks (inline mode)  |
+| `default_max_chunk_tokens`      | integer | `800`      | Default chunk size in tokens               |
+| `default_overlap_tokens`        | integer | `200`      | Token overlap between chunks               |
+| `stale_processing_timeout_secs` | integer | `1800`     | Timeout for detecting stuck files (30 min) |
+| `callback_url`                  | string  | none       | Completion callback URL (queue mode)       |
+
+### Processing Modes
+
+#### Inline Mode
+
+Process files synchronously within the gateway process:
+
+```toml
+[features.file_processing]
+mode = "inline"
+max_concurrent_tasks = 4
+```
+
+Best for: Small deployments, files under 10MB, low volume.
+
+#### Queue Mode
+
+Publish processing jobs to an external queue for worker processes:
+
+```toml
+[features.file_processing]
+mode = "queue"
+callback_url = "http://localhost:8080/api/internal/file-callback"
+
+[features.file_processing.queue]
+backend = "redis"
+url = "redis://localhost:6379"
+queue_name = "hadrian_file_processing"
+consumer_group = "hadrian_workers"
+```
+
+Best for: Production deployments, large files, high volume.
+
+### Queue Configuration
+
+| Key              | Type   | Default                     | Description                             |
+| ---------------- | ------ | --------------------------- | --------------------------------------- |
+| `backend`        | string | required                    | `redis`, `rabbitmq`, `sqs`, or `pubsub` |
+| `url`            | string | required                    | Queue connection URL                    |
+| `queue_name`     | string | `"hadrian_file_processing"` | Queue/topic name                        |
+| `consumer_group` | string | `"hadrian_workers"`         | Consumer group (Redis Streams)          |
+| `region`         | string | none                        | AWS region (SQS only)                   |
+| `project_id`     | string | none                        | GCP project ID (Pub/Sub only)           |
+
+**Backend-specific URL formats:**
+
+```toml
+# Redis
+url = "redis://localhost:6379"
+
+# RabbitMQ
+url = "amqp://guest:guest@localhost:5672"
+
+# AWS SQS
+url = "https://sqs.us-east-1.amazonaws.com/123456789/queue-name"
+region = "us-east-1"
+
+# Google Cloud Pub/Sub
+url = "projects/my-project/topics/file-processing"
+project_id = "my-project"
+```
+
+### Document Extraction
+
+Configure OCR and PDF processing with `[features.file_processing.document_extraction]`:
+
+```toml
+[features.file_processing.document_extraction]
+enable_ocr = true
+ocr_language = "eng"
+force_ocr = false
+pdf_extract_images = true
+pdf_image_dpi = 300
+```
+
+| Key                  | Type    | Default | Description                         |
+| -------------------- | ------- | ------- | ----------------------------------- |
+| `enable_ocr`         | boolean | `false` | Enable OCR for scanned documents    |
+| `force_ocr`          | boolean | `false` | OCR even when text layer exists     |
+| `ocr_language`       | string  | `"eng"` | Tesseract language code (ISO 639-3) |
+| `pdf_extract_images` | boolean | `false` | Extract and OCR images from PDFs    |
+| `pdf_image_dpi`      | integer | `300`   | DPI for PDF image extraction        |
+
+**Common OCR language codes:**
+
+| Code      | Language           |
+| --------- | ------------------ |
+| `eng`     | English            |
+| `fra`     | French             |
+| `deu`     | German             |
+| `spa`     | Spanish            |
+| `chi_sim` | Simplified Chinese |
+| `jpn`     | Japanese           |
+
+<Callout type="info">
+  OCR requires Tesseract installed on the system: - **Linux**: `apt install tesseract-ocr
+  tesseract-ocr-eng` - **macOS**: `brew install tesseract` - **Windows**: Install from
+  [UB-Mannheim/tesseract](https://github.com/UB-Mannheim/tesseract/wiki)
+</Callout>
+
+### Virus Scanning
+
+Configure ClamAV virus scanning with `[features.file_processing.virus_scan]`:
+
+```toml
+[features.file_processing.virus_scan]
+enabled = true
+backend = "clamav"
+
+[features.file_processing.virus_scan.clamav]
+host = "localhost"
+port = 3310
+timeout_ms = 30000
+max_file_size_mb = 25
+# socket_path = "/var/run/clamav/clamd.sock"  # Alternative to TCP
+```
+
+| Key       | Type    | Default    | Description                |
+| --------- | ------- | ---------- | -------------------------- |
+| `enabled` | boolean | `false`    | Enable virus scanning      |
+| `backend` | string  | `"clamav"` | Only `clamav` is supported |
+
+**ClamAV settings:**
+
+| Key                | Type    | Default       | Description                           |
+| ------------------ | ------- | ------------- | ------------------------------------- |
+| `host`             | string  | `"localhost"` | clamd host                            |
+| `port`             | integer | `3310`        | clamd port                            |
+| `timeout_ms`       | integer | `30000`       | Scan timeout in milliseconds          |
+| `max_file_size_mb` | integer | `25`          | Maximum scannable file size           |
+| `socket_path`      | string  | none          | Unix socket path (alternative to TCP) |
+
+### Retry Configuration
+
+```toml
+[features.file_processing.retry]
+enabled = true
+max_retries = 3
+initial_delay_ms = 100
+max_delay_ms = 10000
+backoff_multiplier = 2.0
+jitter = 0.1
+```
+
+### Circuit Breaker
+
+```toml
+[features.file_processing.circuit_breaker]
+enabled = true
+failure_threshold = 5
+failure_window_secs = 60
+recovery_timeout_secs = 30
+```
+
+## Complete Examples
+
+### Development Setup
+
+```toml
+[features.file_processing]
+mode = "inline"
+max_file_size_mb = 10
+max_concurrent_tasks = 2
+default_max_chunk_tokens = 800
+default_overlap_tokens = 200
+```
+
+### Production with OCR
+
+```toml
+[features.file_processing]
+mode = "inline"
+max_file_size_mb = 50
+max_concurrent_tasks = 8
+default_max_chunk_tokens = 800
+default_overlap_tokens = 200
+stale_processing_timeout_secs = 3600
+
+[features.file_processing.document_extraction]
+enable_ocr = true
+ocr_language = "eng"
+force_ocr = false
+pdf_extract_images = true
+pdf_image_dpi = 300
+
+[features.file_processing.virus_scan]
+enabled = true
+backend = "clamav"
+
+[features.file_processing.virus_scan.clamav]
+host = "clamav"
+port = 3310
+timeout_ms = 60000
+max_file_size_mb = 50
+
+[features.file_processing.retry]
+enabled = true
+max_retries = 5
+initial_delay_ms = 200
+max_delay_ms = 30000
+backoff_multiplier = 2.0
+
+[features.file_processing.circuit_breaker]
+enabled = true
+failure_threshold = 10
+failure_window_secs = 120
+recovery_timeout_secs = 60
+```
+
+### Queue-Based Processing (Redis)
+
+```toml
+[features.file_processing]
+mode = "queue"
+max_file_size_mb = 100
+callback_url = "http://gateway:8080/api/internal/file-callback"
+
+[features.file_processing.queue]
+backend = "redis"
+url = "redis://redis:6379"
+queue_name = "hadrian_file_processing"
+consumer_group = "hadrian_workers"
+
+[features.file_processing.document_extraction]
+enable_ocr = true
+ocr_language = "eng"
+```
+
+## Stale File Detection
+
+Files stuck in `in_progress` status longer than `stale_processing_timeout_secs` are considered stale. Re-adding the file to a vector store will reset it for re-processing.
+
+Set to `0` to disable stale detection (not recommended).
+
+## See Also
+
+- [File Search Configuration](/docs/configuration/features/file-search) - Vector search settings
+- [Knowledge Bases Guide](/docs/features/knowledge-bases) - Conceptual overview

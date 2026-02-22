@@ -1,0 +1,12 @@
+# TLS configuration for local development
+# Uses self-signed certificates for *.localhost domains
+
+tls:
+  stores:
+    default:
+      defaultGeneratedCert:
+        resolver: default
+        domain:
+          main: "localhost"
+          sans:
+            - "*.localhost"

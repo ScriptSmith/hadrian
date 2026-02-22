@@ -1,0 +1,460 @@
+# Hadrian Gateway Configuration - SAML E2E Test Deployment
+# Full E2E test setup with Authentik SAML + CEL RBAC policies
+#
+# This configuration demonstrates:
+# - Per-organization SAML authentication via Authentik
+# - SSO config stored in database (created via Admin API, not TOML)
+# - JIT provisioning from SAML assertions
+# - SSO group mappings configured via Admin UI (stored in database)
+# - Role-based access control with CEL policies (memberships from database)
+#
+# Key architecture points:
+# - SAML SSO is configured per-organization via Admin API
+# - One SSO connection = One organization (all users provisioned into "university" org)
+# - Departments are teams within the university org (cs-faculty, med-research, etc.)
+# - subject.org_ids and subject.team_ids come from database memberships
+# - SAML groups are captured for the group mapping feature
+# - Group mappings are configured via Admin API, not parsed from assertion attributes
+
+[ui]
+enabled = true
+
+# ==============================================================================
+# Bootstrap Configuration
+# ==============================================================================
+# Bootstrap API key for initial setup when database is empty.
+# This key provides admin access ONLY when no organizations/users exist.
+# Once the first org is created, bootstrap auth is automatically disabled.
+[auth.bootstrap]
+api_key = "gw_test_bootstrap_key_for_e2e"
+# Auto-verify these domains when SSO config is created (skip DNS verification)
+auto_verify_domains = ["university.edu"]
+
+# ==============================================================================
+# Session Configuration (for per-org SSO)
+# ==============================================================================
+# SAML authentication is configured per-organization via the Admin API.
+# This section configures session management for authenticated users.
+[auth.admin]
+type = "session"
+secure = false  # For local dev over HTTP
+
+# ==============================================================================
+# API Authentication
+# ==============================================================================
+# For SAML E2E tests, we disable API authentication to allow bootstrapping.
+# In production, you would use API keys for programmatic access.
+# The test focuses on SAML SSO flow, not API key management.
+[auth.gateway]
+type = "none"
+
+# ==============================================================================
+# RBAC Configuration
+# ==============================================================================
+# RBAC is enabled. Bootstrap key works until first user is created.
+# After first SAML login, user gets roles from IdP (e.g., super_admin) and
+# RBAC policies grant access based on those roles.
+[auth.rbac]
+enabled = true
+
+# API endpoint authorization
+[auth.rbac.gateway]
+enabled = true
+
+# ==============================================================================
+# CEL Authorization Policies
+# ==============================================================================
+# Policies are evaluated in priority order (highest first).
+# At the same priority, deny policies are evaluated before allow.
+#
+# Available variables in CEL expressions:
+#   subject.user_id       - Internal user ID
+#   subject.external_id   - IdP user ID (from SAML NameID or identity attribute)
+#   subject.email         - User's email
+#   subject.roles         - List of role names (from SAML attributes)
+#   subject.org_ids       - List of org IDs (from database memberships)
+#   subject.team_ids      - List of team IDs (from database memberships)
+#   subject.project_ids   - List of project IDs
+#   context.resource_type - Resource being accessed
+#   context.action        - Action being performed
+#   context.resource_id   - Specific resource ID
+#   context.org_id        - Target organization ID
+#   context.team_id       - Target team ID
+#   context.project_id    - Target project ID
+
+# ------------------------------------------------------------------------------
+# High Priority Deny Policies (evaluated first)
+# ------------------------------------------------------------------------------
+
+[[auth.rbac.policies]]
+name = "deny-self-delete"
+description = "Users cannot delete themselves"
+resource = "user"
+action = "delete"
+condition = "subject.user_id != null && subject.user_id == context.resource_id"
+effect = "deny"
+priority = 200
+
+# ------------------------------------------------------------------------------
+# Bootstrap: Full Access (priority 110)
+# ------------------------------------------------------------------------------
+# Bootstrap API key gets full access for initial setup.
+# This role is only assigned via bootstrap auth, never from IdPs.
+
+[[auth.rbac.policies]]
+name = "bootstrap-full-access"
+description = "Bootstrap API key has full access for initial setup"
+resource = "*"
+action = "*"
+condition = "'_system_bootstrap' in subject.roles"
+effect = "allow"
+priority = 110
+
+# ------------------------------------------------------------------------------
+# Super Admin: Full Access (priority 100)
+# ------------------------------------------------------------------------------
+
+[[auth.rbac.policies]]
+name = "super-admin-full-access"
+description = "Super admins have unrestricted access to all resources"
+resource = "*"
+action = "*"
+condition = "'super_admin' in subject.roles"
+effect = "allow"
+priority = 100
+
+# ------------------------------------------------------------------------------
+# Org Admin: Manage Their Organization (priority 80)
+# ------------------------------------------------------------------------------
+
+[[auth.rbac.policies]]
+name = "org-admin-manage-org"
+description = "Org admins can manage their own organization"
+resource = "organization"
+action = "*"
+condition = "'org_admin' in subject.roles && context.org_id != null && context.org_id in subject.org_ids"
+effect = "allow"
+priority = 80
+
+[[auth.rbac.policies]]
+name = "org-admin-manage-teams"
+description = "Org admins can manage teams in their organization"
+resource = "team"
+action = "*"
+condition = "'org_admin' in subject.roles && context.org_id != null && context.org_id in subject.org_ids"
+effect = "allow"
+priority = 80
+
+[[auth.rbac.policies]]
+name = "org-admin-manage-users"
+description = "Org admins can manage users in their organization"
+resource = "user"
+action = "*"
+condition = "'org_admin' in subject.roles && context.org_id != null && context.org_id in subject.org_ids"
+effect = "allow"
+priority = 80
+
+[[auth.rbac.policies]]
+name = "org-admin-manage-projects"
+description = "Org admins can manage projects in their organization"
+resource = "project"
+action = "*"
+condition = "'org_admin' in subject.roles && context.org_id != null && context.org_id in subject.org_ids"
+effect = "allow"
+priority = 80
+
+[[auth.rbac.policies]]
+name = "org-admin-manage-api-keys"
+description = "Org admins can manage API keys in their organization"
+resource = "api_key"
+action = "*"
+condition = "'org_admin' in subject.roles && context.org_id != null && context.org_id in subject.org_ids"
+effect = "allow"
+priority = 80
+
+[[auth.rbac.policies]]
+name = "org-admin-manage-providers"
+description = "Org admins can manage providers in their organization"
+resource = "provider"
+action = "*"
+condition = "'org_admin' in subject.roles && context.org_id != null && context.org_id in subject.org_ids"
+effect = "allow"
+priority = 80
+
+# ------------------------------------------------------------------------------
+# Team Admin: Manage Their Team (priority 60)
+# ------------------------------------------------------------------------------
+
+[[auth.rbac.policies]]
+name = "team-admin-manage-team"
+description = "Team admins can manage their own team"
+resource = "team"
+action = "*"
+condition = "'team_admin' in subject.roles && context.team_id != null && context.team_id in subject.team_ids"
+effect = "allow"
+priority = 60
+
+[[auth.rbac.policies]]
+name = "team-admin-manage-team-members"
+description = "Team admins can manage members in their team"
+resource = "user"
+action = "read"
+condition = "'team_admin' in subject.roles && context.team_id != null && context.team_id in subject.team_ids"
+effect = "allow"
+priority = 60
+
+[[auth.rbac.policies]]
+name = "team-admin-manage-team-projects"
+description = "Team admins can manage projects in their team"
+resource = "project"
+action = "*"
+condition = "'team_admin' in subject.roles && context.team_id != null && context.team_id in subject.team_ids"
+effect = "allow"
+priority = 60
+
+[[auth.rbac.policies]]
+name = "team-admin-manage-team-api-keys"
+description = "Team admins can manage API keys for their team"
+resource = "api_key"
+action = "*"
+condition = "'team_admin' in subject.roles && context.team_id != null && context.team_id in subject.team_ids"
+effect = "allow"
+priority = 60
+
+# ------------------------------------------------------------------------------
+# Regular User: Access Own Resources (priority 40)
+# ------------------------------------------------------------------------------
+
+[[auth.rbac.policies]]
+name = "user-read-self"
+description = "Users can read their own profile"
+resource = "user"
+action = "read"
+condition = "subject.user_id != null && subject.user_id == context.resource_id"
+effect = "allow"
+priority = 40
+
+[[auth.rbac.policies]]
+name = "user-update-self"
+description = "Users can update their own profile"
+resource = "user"
+action = "update"
+condition = "subject.user_id != null && subject.user_id == context.resource_id"
+effect = "allow"
+priority = 40
+
+[[auth.rbac.policies]]
+name = "user-manage-own-api-keys"
+description = "Users can manage their own API keys"
+resource = "api_key"
+action = "*"
+condition = "context.resource_id != null && subject.user_id != null"
+effect = "allow"
+priority = 40
+
+[[auth.rbac.policies]]
+name = "user-manage-own-conversations"
+description = "Users can manage their own conversations"
+resource = "conversation"
+action = "*"
+condition = "context.resource_id != null && subject.user_id != null"
+effect = "allow"
+priority = 40
+
+[[auth.rbac.policies]]
+name = "user-manage-own-files"
+description = "Users can manage their own files"
+resource = "file"
+action = "*"
+condition = "context.resource_id != null && subject.user_id != null"
+effect = "allow"
+priority = 40
+
+[[auth.rbac.policies]]
+name = "user-manage-own-vector-stores"
+description = "Users can manage their own vector stores"
+resource = "vector_store"
+action = "*"
+condition = "context.resource_id != null && subject.user_id != null"
+effect = "allow"
+priority = 40
+
+# ------------------------------------------------------------------------------
+# Read Access for Authenticated Users (priority 20)
+# ------------------------------------------------------------------------------
+
+[[auth.rbac.policies]]
+name = "authenticated-list-orgs"
+description = "Authenticated users can list organizations they belong to"
+resource = "organization"
+action = "list"
+condition = "subject.user_id != null"
+effect = "allow"
+priority = 20
+
+[[auth.rbac.policies]]
+name = "authenticated-read-org"
+description = "Users can read organizations they belong to"
+resource = "organization"
+action = "read"
+condition = "subject.user_id != null && context.org_id != null && context.org_id in subject.org_ids"
+effect = "allow"
+priority = 20
+
+[[auth.rbac.policies]]
+name = "authenticated-list-teams"
+description = "Authenticated users can list teams in orgs they belong to"
+resource = "team"
+action = "list"
+condition = "subject.user_id != null && context.org_id != null && context.org_id in subject.org_ids"
+effect = "allow"
+priority = 20
+
+[[auth.rbac.policies]]
+name = "authenticated-read-team"
+description = "Users can read teams they belong to"
+resource = "team"
+action = "read"
+condition = "subject.user_id != null && context.team_id != null && context.team_id in subject.team_ids"
+effect = "allow"
+priority = 20
+
+[[auth.rbac.policies]]
+name = "authenticated-list-projects"
+description = "Authenticated users can list projects"
+resource = "project"
+action = "list"
+condition = "subject.user_id != null"
+effect = "allow"
+priority = 20
+
+[[auth.rbac.policies]]
+name = "authenticated-list-providers"
+description = "Authenticated users can list available providers"
+resource = "provider"
+action = "list"
+condition = "subject.user_id != null"
+effect = "allow"
+priority = 20
+
+[[auth.rbac.policies]]
+name = "authenticated-read-provider"
+description = "Authenticated users can read provider details"
+resource = "provider"
+action = "read"
+condition = "subject.user_id != null"
+effect = "allow"
+priority = 20
+
+# ------------------------------------------------------------------------------
+# API Endpoint Authorization Policies (for /v1/* endpoints)
+# ------------------------------------------------------------------------------
+# These policies control access to LLM API endpoints based on roles and request context.
+
+[[auth.rbac.policies]]
+name = "api-premium-model-access"
+description = "Premium models require premium role"
+resource = "model"
+action = "use"
+condition = "context.model != null && context.model.startsWith('premium-') && !('premium' in subject.roles)"
+effect = "deny"
+priority = 90
+
+[[auth.rbac.policies]]
+name = "api-token-limit-basic"
+description = "Basic users limited to 1000 tokens"
+resource = "model"
+action = "use"
+condition = "context.request != null && context.request.max_tokens > 1000 && !('premium' in subject.roles)"
+effect = "deny"
+priority = 85
+
+[[auth.rbac.policies]]
+name = "api-tools-feature-gate"
+description = "Tools require tools_enabled role"
+resource = "model"
+action = "use"
+condition = "context.request != null && context.request.has_tools && !('tools_enabled' in subject.roles)"
+effect = "deny"
+priority = 85
+
+[[auth.rbac.policies]]
+name = "api-file-search-feature-gate"
+description = "File search requires rag_enabled role"
+resource = "model"
+action = "use"
+condition = "context.request != null && context.request.has_file_search && !('rag_enabled' in subject.roles)"
+effect = "deny"
+priority = 85
+
+[[auth.rbac.policies]]
+name = "api-reasoning-premium"
+description = "High reasoning effort requires premium role"
+resource = "model"
+action = "use"
+condition = "context.request != null && context.request.reasoning_effort == 'high' && !('premium' in subject.roles)"
+effect = "deny"
+priority = 85
+
+# ==============================================================================
+# Observability
+# ==============================================================================
+[observability.usage.buffer]
+# Fast flush interval for testing (100ms instead of 1s default)
+flush_interval_ms = 100
+max_size = 10
+
+# ==============================================================================
+# Limits Configuration
+# ==============================================================================
+[limits.budgets]
+# Estimated cost per request in cents for budget reservation
+estimated_cost_cents = 1
+
+# ==============================================================================
+# Database
+# ==============================================================================
+[database]
+type = "sqlite"
+path = "/app/data/hadrian.db"
+
+# ==============================================================================
+# Cache
+# ==============================================================================
+[cache]
+type = "redis"
+url = "${REDIS_URL}"
+
+# ==============================================================================
+# Providers
+# ==============================================================================
+[providers]
+default_provider = "test"
+
+# Test provider for e2e testing (echoes back requests, includes mock embeddings)
+[providers.test]
+type = "test"
+
+# ==============================================================================
+# Pricing Configuration
+# ==============================================================================
+[pricing]
+[pricing.pricing.test]
+test-model = { input_per_1m_tokens = 500000000, output_per_1m_tokens = 500000000 }
+
+# ==============================================================================
+# File Search / RAG Configuration
+# ==============================================================================
+[features.file_search]
+enabled = true
+score_threshold = 0.0
+
+[features.file_search.embedding]
+provider = "test"
+model = "test-embedding"
+dimensions = 1536
+
+[features.file_search.vector_backend]
+type = "qdrant"
+url = "${QDRANT_URL}"
+qdrant_collection_name = "rag_chunks"

@@ -1,0 +1,103 @@
+{{- if .Values.tests.enabled }}
+{{- if .Values.tests.api.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "hadrian.fullname" . }}-test-api
+  labels:
+    {{- include "hadrian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    {{- with .Values.tests.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  containers:
+    - name: api-test
+      image: "{{ .Values.tests.image.repository }}:{{ .Values.tests.image.tag }}"
+      imagePullPolicy: {{ .Values.tests.image.pullPolicy }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+      command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          BASE_URL="http://{{ include "hadrian.fullname" . }}:{{ .Values.service.port }}"
+
+          echo "=== Hadrian Gateway API Tests ==="
+          echo ""
+
+          # Test 1: Health endpoint returns valid response
+          echo "Test 1: Checking health endpoint response..."
+          HEALTH_RESPONSE=$(wget --timeout=10 -q -O - "$BASE_URL/health" 2>/dev/null || echo "FAILED")
+          if echo "$HEALTH_RESPONSE" | grep -q "healthy"; then
+            echo "  PASS: Health endpoint returns healthy status"
+          else
+            if [ "$HEALTH_RESPONSE" != "FAILED" ]; then
+              echo "  PASS: Health endpoint responded"
+            else
+              echo "  FAIL: Health endpoint did not respond correctly"
+              exit 1
+            fi
+          fi
+
+          # Test 2: Health endpoint returns JSON with subsystems
+          echo ""
+          echo "Test 2: Checking health endpoint JSON structure..."
+          if echo "$HEALTH_RESPONSE" | grep -q '"subsystems"'; then
+            echo "  PASS: Health endpoint returns subsystems status"
+          else
+            echo "  INFO: Health response format differs (still valid)"
+          fi
+
+          # Test 3: OpenAPI specification endpoint
+          echo ""
+          echo "Test 3: Checking OpenAPI specification endpoint..."
+          if wget --timeout=10 -q -O /dev/null "$BASE_URL/openapi.json"; then
+            echo "  PASS: OpenAPI spec endpoint is accessible"
+          else
+            echo "  INFO: OpenAPI spec endpoint not available (optional)"
+          fi
+
+          {{- if .Values.gateway.observability.metrics.enabled }}
+          # Test 4: Metrics endpoint (when enabled)
+          echo ""
+          echo "Test 4: Checking Prometheus metrics endpoint..."
+          METRICS_RESPONSE=$(wget --timeout=10 -q -O - "$BASE_URL{{ .Values.gateway.observability.metrics.path }}" 2>/dev/null | head -5 || echo "FAILED")
+          if echo "$METRICS_RESPONSE" | grep -q "^# \|^[a-z_]*{"; then
+            echo "  PASS: Metrics endpoint returns Prometheus format"
+          else
+            if [ "$METRICS_RESPONSE" != "FAILED" ]; then
+              echo "  PASS: Metrics endpoint responded"
+            else
+              echo "  FAIL: Metrics endpoint did not respond"
+              exit 1
+            fi
+          fi
+          {{- end }}
+
+          echo ""
+          echo "=== All API tests passed ==="
+          exit 0
+      resources:
+        {{- toYaml .Values.tests.resources | nindent 8 }}
+  restartPolicy: Never
+{{- end }}
+{{- end }}

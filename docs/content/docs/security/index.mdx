@@ -1,0 +1,551 @@
+---
+title: Security
+description: Security model and best practices for Hadrian Gateway
+---
+
+This document describes Hadrian Gateway's security model, covering authentication, authorization, file upload security, and production deployment best practices.
+
+## Authentication
+
+Hadrian supports multiple authentication methods that can be used independently or combined.
+
+| Method         | Use Case                | Token Location                                |
+| -------------- | ----------------------- | --------------------------------------------- |
+| **API Key**    | Programmatic access     | `X-API-Key` header or `Authorization: Bearer` |
+| **JWT**        | Service-to-service auth | `Authorization: Bearer` header                |
+| **OIDC**       | Browser-based SSO       | Session cookie                                |
+| **Proxy Auth** | Zero-trust networks     | Trusted proxy headers                         |
+| **Multi-Auth** | Flexible access         | Tries multiple methods in order               |
+| **Emergency**  | Break-glass access      | `X-Emergency-Key` header                      |
+
+<Callout type="info">
+  For disaster recovery when SSO is unavailable, see [Emergency
+  Access](/docs/security/emergency-access).
+</Callout>
+
+### API Key Authentication
+
+API keys provide simple, secure authentication for programmatic access.
+
+**Key Features:**
+
+- Keys are hashed before storage (SHA-256 or Argon2)
+- Constant-time prefix comparison prevents timing attacks
+- Support for expiration and revocation
+- Cached lookups with automatic invalidation on revoke
+- Owner scoping (organization, team, project, or user)
+
+**How It Works:**
+
+1. Extract key from `X-API-Key` header (or `Authorization: Bearer`)
+2. Validate key prefix (default: `gw_`)
+3. Hash the key and check cache
+4. On cache miss, query database
+5. Validate expiration and revocation status
+6. Cache result for future requests
+
+**Configuration:**
+
+```toml
+[auth.gateway]
+type = "api_key"
+
+[auth.gateway.api_key]
+header_name = "X-API-Key"         # Header to check (or "Authorization")
+key_prefix = "gw_"                # Required prefix for all keys
+hash_algorithm = "sha256"         # "sha256" or "argon2"
+cache_ttl_secs = 60               # Cache valid keys for 60 seconds
+```
+
+**API Key Properties:**
+
+| Property             | Description                          |
+| -------------------- | ------------------------------------ |
+| `id`                 | Unique identifier (UUID)             |
+| `name`               | Human-readable name                  |
+| `owner`              | Organization, team, project, or user |
+| `budget_limit_cents` | Optional spending cap                |
+| `budget_period`      | `daily` or `monthly`                 |
+| `expires_at`         | Optional expiration date             |
+| `revoked_at`         | Set when key is revoked              |
+
+**Usage Examples:**
+
+```bash
+# Using X-API-Key header
+curl -H "X-API-Key: gw_live_abc123..." https://gateway/v1/chat/completions
+
+# Using Authorization header (OpenAI-compatible)
+curl -H "Authorization: Bearer gw_live_abc123..." https://gateway/v1/chat/completions
+```
+
+**Error Responses:**
+
+| Error             | HTTP Status | Description                     |
+| ----------------- | ----------- | ------------------------------- |
+| `invalid_api_key` | 401         | Key not found or invalid format |
+| `expired_api_key` | 401         | Key has expired                 |
+| `revoked_api_key` | 401         | Key has been revoked            |
+
+<Callout type="info">
+  When a key is revoked, it's immediately invalidated in the cache. No need to wait for cache TTL
+  expiration.
+</Callout>
+
+### JWT Authentication
+
+JWT authentication validates tokens issued by external identity providers for service-to-service communication.
+
+**Security Features:**
+
+- Algorithm allowlist prevents algorithm confusion attacks (rejects `none`, prevents HS256 downgrade)
+- JWKS caching with automatic refresh
+- Issuer and audience validation
+- Expiration checking
+
+**Validation Process:**
+
+1. Decode JWT header to get algorithm (`alg`) and key ID (`kid`)
+2. Validate algorithm against allowlist
+3. Fetch public key from JWKS endpoint (cached for 1 hour)
+4. Validate signature
+5. Validate issuer (`iss`) and audience (`aud`) claims
+6. Check expiration (`exp`)
+7. Extract identity from configurable claim
+
+**Configuration:**
+
+```toml
+[auth.gateway]
+type = "jwt"
+
+[auth.gateway.jwt]
+issuer = "https://auth.example.com"
+audience = ["api", "gateway"]             # Single value or array
+jwks_url = "https://auth.example.com/.well-known/jwks.json"
+jwks_refresh_secs = 3600                  # Refresh JWKS every hour
+identity_claim = "sub"                    # Claim for user identity
+org_claim = "org_ids"                     # Optional: organization membership
+allowed_algorithms = ["RS256", "ES256"]   # Algorithm allowlist
+```
+
+**Supported Algorithms:**
+
+- RSA: `RS256`, `RS384`, `RS512`
+- ECDSA: `ES256`, `ES384`
+
+<Callout type="warn">
+  Never set `allow_expired = true` in production. This option exists only for testing.
+</Callout>
+
+### OIDC Authentication (Browser SSO)
+
+OIDC provides browser-based single sign-on with identity providers like Keycloak, Auth0, Okta, and Azure AD.
+
+**Security Features:**
+
+- PKCE (Proof Key for Code Exchange) prevents authorization code interception
+- State parameter prevents CSRF attacks
+- Secure session cookies with SameSite protection
+
+**Authorization Code Flow:**
+
+1. User visits protected page
+2. Gateway generates state (CSRF token) and PKCE challenge
+3. User redirected to IdP login page
+4. User authenticates and is redirected back with authorization code
+5. Gateway exchanges code for tokens using PKCE verifier
+6. Gateway validates ID token and creates session
+7. Session cookie set for future requests
+
+**Configuration:**
+
+```toml
+[auth.admin]
+type = "oidc"
+
+[auth.admin.oidc]
+issuer = "https://auth.example.com"
+client_id = "hadrian"
+client_secret = "${OIDC_CLIENT_SECRET}"
+redirect_uri = "https://gateway.example.com/auth/callback"
+scopes = ["openid", "email", "profile", "groups"]
+
+# Claim mapping
+identity_claim = "sub"              # User identity
+org_claim = "org_ids"               # Organization membership
+groups_claim = "groups"             # Group membership
+
+# Session settings
+[auth.admin.oidc.session]
+cookie_name = "__gw_session"
+duration_secs = 604800              # 7 days
+secure = true                       # HTTPS only
+same_site = "lax"                   # CSRF protection
+```
+
+**Session Storage:**
+
+- **Memory**: Single-node deployments (default)
+- **Redis**: Multi-node deployments (recommended for production)
+
+```toml
+[auth.admin.oidc.session]
+store = "cache"                     # Use Redis cache for sessions
+```
+
+### Proxy Authentication
+
+Proxy authentication trusts identity headers from an authenticating reverse proxy, enabling integration with zero-trust networks.
+
+**Supported Proxies:**
+
+- Cloudflare Access
+- oauth2-proxy
+- Tailscale
+- Authelia / Authentik
+- Keycloak Gatekeeper
+
+<Callout type="warn">
+  **Critical:** Only trust proxy headers from configured trusted proxy IPs. Without this, attackers
+  can spoof identity headers by connecting directly to the gateway.
+</Callout>
+
+**Configuration:**
+
+```toml
+[server]
+trusted_proxies = ["10.0.0.1", "10.0.0.2", "192.168.1.0/24"]
+
+[auth.admin]
+type = "proxy_auth"
+
+[auth.admin.proxy_auth]
+identity_header = "CF-Access-Authenticated-User-Email"
+email_header = "X-Forwarded-Email"
+name_header = "X-Forwarded-Name"
+groups_header = "X-Forwarded-Groups"    # Comma-separated or JSON array
+require_identity = true
+
+# Optional: Also validate JWT assertion from proxy
+[auth.admin.proxy_auth.jwt_assertion]
+header = "CF-Access-JWT-Assertion"
+jwks_url = "https://your-team.cloudflareaccess.com/cdn-cgi/access/certs"
+issuer = "https://your-team.cloudflareaccess.com"
+audience = "your-application-audience"
+```
+
+### Multi-Auth
+
+Combine multiple authentication methods with configurable priority order.
+
+```toml
+[auth.gateway]
+type = "multi"
+
+[auth.gateway.api_key]
+header_name = "X-API-Key"
+key_prefix = "gw_"
+
+[auth.gateway.jwt]
+issuer = "https://auth.example.com"
+audience = "api"
+jwks_url = "https://auth.example.com/.well-known/jwks.json"
+
+# Try API key first, fall back to JWT
+order = ["api_key", "jwt"]
+```
+
+## Authorization
+
+Hadrian uses CEL (Common Expression Language) for flexible, policy-based authorization.
+
+### RBAC with CEL Policies
+
+**How It Works:**
+
+1. Extract roles from JWT claims (with optional mapping)
+2. Build subject with user info, roles, and memberships
+3. Sort policies by priority (higher first, deny before allow)
+4. Evaluate each matching policy's CEL condition
+5. Return first matching policy's effect
+6. Return default effect if no policies match
+
+**Configuration:**
+
+```toml
+[auth.rbac]
+enabled = true
+default_effect = "deny"           # "allow" or "deny" when no policy matches
+role_claim = "roles"              # JWT claim containing roles
+org_claim = "org_ids"             # Organization membership claim
+team_claim = "team_ids"           # Team membership claim
+project_claim = "project_ids"     # Project membership claim
+
+# Map IdP role names to internal names
+[auth.rbac.role_mapping]
+"Administrator" = "admin"
+"Developer" = "member"
+"Viewer" = "readonly"
+```
+
+### Policy Definition
+
+Policies are evaluated in priority order. Higher priority policies are evaluated first, and deny effects are evaluated before allow effects at the same priority.
+
+```toml
+[[auth.rbac.policies]]
+name = "admin-full-access"
+description = "Admins can do anything"
+resource = "*"                    # Matches all resources
+action = "*"                      # Matches all actions
+effect = "allow"
+priority = 100
+condition = "'admin' in subject.roles"
+
+[[auth.rbac.policies]]
+name = "org-member-read"
+description = "Organization members can read their org's resources"
+resource = "organization"
+action = "read"
+effect = "allow"
+priority = 50
+condition = "context.org_id != null && context.org_id in subject.org_ids"
+
+[[auth.rbac.policies]]
+name = "deny-self-delete"
+description = "Users cannot delete themselves"
+resource = "user"
+action = "delete"
+effect = "deny"
+priority = 200                    # High priority deny
+condition = "subject.user_id == context.resource_id"
+```
+
+### CEL Context Variables
+
+**Subject Variables** (the authenticated user):
+
+| Variable              | Type   | Description                      |
+| --------------------- | ------ | -------------------------------- |
+| `subject.user_id`     | string | Internal user UUID               |
+| `subject.external_id` | string | IdP user identifier              |
+| `subject.email`       | string | User email address               |
+| `subject.roles`       | list   | List of role names               |
+| `subject.org_ids`     | list   | Organization IDs user belongs to |
+| `subject.team_ids`    | list   | Team IDs user belongs to         |
+| `subject.project_ids` | list   | Project IDs user belongs to      |
+
+**Context Variables** (the request):
+
+| Variable                | Type   | Description             |
+| ----------------------- | ------ | ----------------------- |
+| `context.resource_type` | string | Resource being accessed |
+| `context.action`        | string | Action being performed  |
+| `context.resource_id`   | string | Specific resource ID    |
+| `context.org_id`        | string | Organization scope      |
+| `context.team_id`       | string | Team scope              |
+| `context.project_id`    | string | Project scope           |
+
+### CEL Expression Examples
+
+```js
+// Role-based access
+"admin" in subject.roles;
+
+// Multiple roles (OR)
+"super_admin" in subject.roles || "admin" in subject.roles;
+
+// Organization membership
+context.org_id != null && context.org_id in subject.org_ids;
+
+// Cross-org isolation (single org users)
+subject.org_ids.size() == 1 && context.org_id in subject.org_ids;
+
+// Email domain restriction
+subject.email != null && subject.email.endsWith("@company.com");
+
+// Resource ownership
+context.resource_id == subject.user_id;
+
+// Team lead access within team
+context.team_id != null && context.team_id in subject.team_ids && "team_lead" in subject.roles;
+
+// Project member access
+context.project_id != null && context.project_id in subject.project_ids;
+```
+
+### Authorization Audit Logging
+
+```toml
+[auth.rbac.audit]
+log_allowed = false               # Only log denials by default
+log_denied = true                 # Always log authorization failures
+```
+
+Audit logs include:
+
+- User identity and roles
+- Resource and action attempted
+- Policy that matched (or "no matching policy")
+- Request metadata (IP, user agent)
+
+## File Upload Security
+
+The gateway accepts file uploads for RAG/vector store functionality via the `/v1/files` endpoint.
+
+### What IS Validated
+
+#### 1. File Size Limits
+
+```toml
+[features.file_processing]
+max_file_size_mb = 10  # Default: 10 MB
+```
+
+- **When:** At upload time, before storage
+- **Response:** HTTP 413 Payload Too Large
+
+#### 2. Virus Scanning (Optional)
+
+```toml
+[features.file_processing.virus_scan]
+enabled = true
+backend = "clamav"
+
+[features.file_processing.virus_scan.clamav]
+host = "localhost"
+port = 3310
+timeout_ms = 30000
+```
+
+- **When:** After size validation, before storage
+- **Response:** HTTP 422 Unprocessable Entity with `virus_detected`
+
+#### 3. File Type Validation
+
+Unsupported file types are rejected during processing.
+
+**Supported:** `txt`, `md`, `json`, `csv`, `xml`, `html`, `rs`, `py`, `js`, `ts`, `go`, `java`, `yaml`, `toml`, and other text-based formats.
+
+**Unsupported:** `pdf`, `docx`, `xlsx`, `png`, `jpg`, `exe`, `zip`, etc.
+
+#### 4. UTF-8 Validation
+
+Files must contain valid UTF-8 text. Binary files are rejected.
+
+#### 5. Access Control
+
+All file operations enforce ownership-based access control:
+
+- **User-owned:** Only the owning user can access
+- **Organization-owned:** Only organization members can access
+- **Project-owned:** Only project members can access
+
+#### 6. Logging Redaction
+
+File content and chunk text are automatically excluded from logs via `#[instrument(skip(content))]` attributes.
+
+### What is NOT Validated
+
+| Control                    | Status            | Mitigation                           |
+| -------------------------- | ----------------- | ------------------------------------ |
+| MIME type validation       | Not implemented   | Use reverse proxy or WAF             |
+| Prompt injection detection | Not implemented   | Enable guardrails                    |
+| PII/secrets scanning       | Not implemented   | Use DLP solution                     |
+| Encryption at rest         | Storage-dependent | Enable S3 SSE or database encryption |
+
+### Security Configuration Examples
+
+**Production:**
+
+```toml
+[features.file_processing]
+max_file_size_mb = 10
+mode = "queue"
+
+[features.file_processing.virus_scan]
+enabled = true
+backend = "clamav"
+
+[features.file_processing.virus_scan.clamav]
+host = "clamav"
+port = 3310
+
+[features.guardrails]
+enabled = true
+
+[features.guardrails.input]
+enabled = true
+mode = "blocking"
+
+[features.guardrails.input.provider]
+type = "openai_moderation"
+```
+
+## Deployment Best Practices
+
+### Network Security
+
+1. **Run behind a reverse proxy** (nginx, Envoy, Traefik)
+   - TLS termination
+   - Request size limits
+   - Rate limiting at the edge
+
+2. **Network isolation**
+   - Place the gateway in a private subnet
+   - ClamAV and Redis should not be publicly accessible
+   - Use security groups/firewall rules
+
+3. **WAF (Web Application Firewall)**
+   - Block common attack patterns
+   - Additional file upload validation
+
+### Secrets Management
+
+Never hardcode secrets:
+
+```toml
+# Environment variables
+api_key = "${OPENAI_API_KEY}"
+client_secret = "${OIDC_CLIENT_SECRET}"
+
+# Or use HashiCorp Vault
+[secrets.vault]
+address = "https://vault.example.com"
+mount_path = "secret"
+secret_path = "hadrian/gateway"
+```
+
+### Production Checklist
+
+- [ ] Enable gateway authentication (`auth.gateway.type != "none"`)
+- [ ] Configure `server.trusted_proxies` if using proxy auth
+- [ ] Set strong session secrets
+- [ ] Enable RBAC with `default_effect = "deny"`
+- [ ] Configure virus scanning for file uploads
+- [ ] Enable guardrails for content moderation
+- [ ] Set up audit logging
+- [ ] Use Redis for multi-node session storage
+
+## Security Controls Summary
+
+| Control                 | Status   | Default      |
+| ----------------------- | -------- | ------------ |
+| API key hashing         | Enabled  | SHA-256      |
+| JWT algorithm allowlist | Enabled  | RS256, ES256 |
+| PKCE for OIDC           | Enabled  | Always       |
+| Session cookies         | Secure   | SameSite=Lax |
+| CEL authorization       | Optional | Disabled     |
+| File size limits        | Enabled  | 10 MB        |
+| Virus scanning          | Optional | Disabled     |
+| Logging redaction       | Enabled  | Always       |
+
+## Reporting Security Issues
+
+If you discover a security vulnerability:
+
+1. **Do not** open a public GitHub issue
+2. Email security concerns to the maintainers
+3. Include steps to reproduce and potential impact
+4. Allow reasonable time for a fix before public disclosure

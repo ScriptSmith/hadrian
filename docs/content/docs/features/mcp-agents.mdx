@@ -1,0 +1,213 @@
+---
+title: Agents via MCP
+description: Connect AI coding agents like Claude Code to the chat UI using MCP and supergateway
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { StoryEmbed } from "@/components/story-embed";
+
+Connect AI coding agents to Hadrian's chat UI via MCP, giving models direct access to file editing, code execution, and other agent tools during conversations.
+
+## Overview
+
+AI coding agents like [Claude Code](https://docs.anthropic.com/en/docs/claude-code) expose their tools (file editing, terminal commands, code search) over MCP's stdio transport. Since the chat UI uses [Streamable HTTP](/docs/features/mcp#transport), a transport bridge is needed.
+
+[Supergateway](https://github.com/supercorp-ai/supergateway) bridges stdio-based MCP servers to Streamable HTTP with a single command, making any stdio MCP server accessible from the browser.
+
+```
+┌──────────────┐    Streamable HTTP   ┌──────────────┐    stdio    ┌─────────────┐
+│  Hadrian UI  │ ──────────────────── │ Supergateway │ ─────────── │ Claude Code │
+│  (browser)   │    localhost:8000    │   (bridge)   │             │ (MCP serve) │
+└──────────────┘                      └──────────────┘             └─────────────┘
+```
+
+## Setup
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) 18+ (for `npx`)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed (`npm install -g @anthropic-ai/claude-code`)
+
+### Start the Bridge
+
+Run supergateway with Claude Code's MCP server:
+
+```bash
+npx -y supergateway \
+  --cors "*" \
+  --outputTransport streamableHttp \
+  --stdio "claude mcp serve"
+```
+
+This starts a Streamable HTTP endpoint at `http://localhost:8000/mcp`.
+
+| Flag                               | Purpose                                              |
+| ---------------------------------- | ---------------------------------------------------- |
+| `--cors "*"`                       | Allow browser requests from Hadrian's origin         |
+| `--outputTransport streamableHttp` | Expose as Streamable HTTP (required for the chat UI) |
+| `--stdio "claude mcp serve"`       | Launch Claude Code in MCP server mode                |
+
+<Callout type="info">Supergateway defaults to port 8000. Use `--port 9000` to change it.</Callout>
+
+### Connect in the Chat UI
+
+1. Open Hadrian's chat UI
+2. Click **Tools** in the chat input toolbar to see the tools flyout — MCP Servers appears alongside built-in tools
+
+<StoryEmbed
+  storyId="components-toolsbar--mcp-tool"
+  height={650}
+  title="ToolsBar showing MCP Servers option"
+/>
+
+3. Click **Configure** next to MCP Servers to open the configuration modal
+4. Click **Add Server** and enter:
+
+| Field | Value                       |
+| ----- | --------------------------- |
+| Name  | Claude Code                 |
+| URL   | `http://localhost:8000/mcp` |
+
+5. Click **Connect** to establish the session
+
+Once connected, Claude Code's tools appear in the server's tool list. Expand the server to see discovered tools and enable or disable individual ones.
+
+### Available Tools
+
+Claude Code exposes these tools via `mcp serve`:
+
+| Tool         | Description                           |
+| ------------ | ------------------------------------- |
+| **Bash**     | Execute shell commands                |
+| **Read**     | Read file contents                    |
+| **Write**    | Create or overwrite files             |
+| **Edit**     | Make targeted edits to existing files |
+| **LS**       | List directory contents               |
+| **GlobTool** | Find files by pattern                 |
+| **GrepTool** | Search file contents with regex       |
+
+<Callout type="warn">
+  These tools have direct access to the filesystem and can execute arbitrary commands. Only run this
+  on trusted machines and be mindful of the working directory Claude Code operates in.
+</Callout>
+
+## Using Agent Tools in Chat
+
+With MCP enabled and Claude Code connected, the tools bar shows the connected server count and available tools at a glance.
+
+<StoryEmbed
+  storyId="components-toolsbar--mcp-with-connected-servers"
+  height={650}
+  title="ToolsBar with connected MCP servers"
+/>
+
+Models in the chat can now use agent tools to interact with your local environment.
+
+**Example prompts:**
+
+- "Read the file `src/main.rs` and explain the entry point"
+- "Find all TODO comments in the project"
+- "Create a new test file for the auth module"
+- "Run `cargo test` and show me the results"
+
+The model calls the appropriate MCP tool, Claude Code executes it locally, and the result flows back into the conversation.
+
+### Multi-Model with Agent Tools
+
+Hadrian's [chat modes](/docs/features/chat-modes) work with MCP tools. Use modes like **Council** or **Debate** to have multiple models collaborate using the same agent tools, each bringing different perspectives to code review, debugging, or architecture decisions.
+
+## Other MCP Servers
+
+The same pattern works with any stdio-based MCP server. Replace the `--stdio` command to bridge other tools:
+
+```bash
+# GitHub MCP server
+npx -y supergateway \
+  --cors "*" \
+  --outputTransport streamableHttp \
+  --stdio "npx -y @modelcontextprotocol/server-github"
+
+# Filesystem MCP server
+npx -y supergateway \
+  --cors "*" \
+  --outputTransport streamableHttp \
+  --stdio "npx -y @modelcontextprotocol/server-filesystem /path/to/directory"
+
+# PostgreSQL MCP server
+npx -y supergateway \
+  --cors "*" \
+  --outputTransport streamableHttp \
+  --stdio "npx -y @modelcontextprotocol/server-postgres postgresql://user:pass@localhost/db"
+```
+
+<Callout type="info">
+  MCP servers that already expose an HTTP endpoint don't need supergateway. Connect to them directly
+  in the chat UI.
+</Callout>
+
+## Configuration Options
+
+### Supergateway Flags
+
+| Flag                   | Default  | Description                                    |
+| ---------------------- | -------- | ---------------------------------------------- |
+| `--port`               | `8000`   | Listening port                                 |
+| `--cors`               | disabled | CORS origins (use `"*"` for development)       |
+| `--outputTransport`    | `sse`    | Output protocol (`streamableHttp` for Hadrian) |
+| `--streamableHttpPath` | `/mcp`   | HTTP endpoint path                             |
+| `--stateful`           | disabled | Enable stateful sessions                       |
+| `--sessionTimeout`     | `60000`  | Session timeout in ms (with `--stateful`)      |
+| `--logLevel`           | `info`   | Logging verbosity (`debug`, `info`, `none`)    |
+
+### CORS in Production
+
+For production deployments, restrict CORS to your Hadrian instance's origin:
+
+```bash
+npx -y supergateway \
+  --cors "https://hadrian.example.com" \
+  --outputTransport streamableHttp \
+  --stdio "claude mcp serve"
+```
+
+## Troubleshooting
+
+Connection errors are shown directly in the MCP configuration modal with details on hover.
+
+<StoryEmbed
+  storyId="components-mcpconfigmodal--with-connection-error"
+  height={650}
+  title="MCP Config Modal showing a connection error"
+/>
+
+### Connection refused
+
+Verify supergateway is running and the port matches your configuration:
+
+```bash
+curl -s http://localhost:8000/mcp -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"ping","id":1}'
+```
+
+### CORS errors in browser console
+
+Ensure `--cors` is set. For development, use `--cors "*"`. For production, set it to your Hadrian UI origin.
+
+### Tools not appearing after connect
+
+Check that `claude mcp serve` is running correctly by testing it directly:
+
+```bash
+echo '{"jsonrpc":"2.0","method":"tools/list","id":1}' | claude mcp serve
+```
+
+### Tool execution timeouts
+
+Long-running commands (builds, test suites) may exceed the default 30-second timeout. Consider breaking operations into smaller steps or using tools that stream progress.
+
+## Next Steps
+
+- [MCP Integration](/docs/features/mcp) for full MCP protocol details and tool management
+- [Chat Modes](/docs/features/chat-modes) for multi-model collaboration with agent tools
+- [Frontend Tools](/docs/features/frontend-tools) for built-in browser-side execution (Python, JS, SQL)

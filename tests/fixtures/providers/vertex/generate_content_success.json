@@ -1,0 +1,55 @@
+{
+  "id": "vertex:generate_content:success",
+  "description": "Successful non-streaming Vertex generateContent response",
+  "request": {
+    "method": "POST",
+    "path": "/gemini-2.0-flash:generateContent",
+    "path_pattern": "/.+:generateContent"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-frame-options": "SAMEORIGIN",
+      "x-xss-protection": "0",
+      "content-type": "application/json; charset=UTF-8",
+      "x-content-type-options": "nosniff"
+    },
+    "body": {
+      "candidates": [
+        {
+          "avgLogprobs": -0.000025319078793892495,
+          "content": {
+            "parts": [
+              {
+                "text": "2\n3\n5\n7\n11\n13\n17\n19\n23\n29\n"
+              }
+            ],
+            "role": "model"
+          },
+          "finishReason": "STOP"
+        }
+      ],
+      "createTime": "2025-12-21T08:54:05.936875Z",
+      "modelVersion": "gemini-2.0-flash",
+      "responseId": "rbVHaauXOd_sidsPsMPxuAc",
+      "usageMetadata": {
+        "candidatesTokenCount": 26,
+        "candidatesTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 26
+          }
+        ],
+        "promptTokenCount": 18,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 18
+          }
+        ],
+        "totalTokenCount": 44,
+        "trafficType": "ON_DEMAND"
+      }
+    }
+  }
+}

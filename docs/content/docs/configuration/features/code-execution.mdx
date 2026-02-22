@@ -1,0 +1,142 @@
+---
+title: Code Execution
+description: Configure server-side code execution capabilities
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The `[features.code_execution]` section configures server-side code execution. By default, code execution happens client-side via WebAssembly in the browser (Pyodide for Python, QuickJS for JavaScript).
+
+<Callout type="info">
+  Client-side WASM execution requires no server configuration. This section is only needed for
+  server-side sandboxed execution.
+</Callout>
+
+## Configuration Reference
+
+### Main Settings
+
+```toml
+[features.code_execution]
+enabled = true
+mode = "wasm"
+allowed_languages = ["python", "javascript"]
+timeout_secs = 30
+max_memory_mb = 256
+```
+
+| Key                 | Type    | Default                    | Description                  |
+| ------------------- | ------- | -------------------------- | ---------------------------- |
+| `enabled`           | boolean | `true`                     | Enable code execution        |
+| `mode`              | string  | `"wasm"`                   | Execution mode               |
+| `allowed_languages` | array   | `["python", "javascript"]` | Allowed languages            |
+| `timeout_secs`      | integer | `30`                       | Execution timeout            |
+| `max_memory_mb`     | integer | `256`                      | Maximum memory per execution |
+
+## Execution Modes
+
+### WASM (Default)
+
+Client-side execution in the browser:
+
+```toml
+[features.code_execution]
+enabled = true
+mode = "wasm"
+```
+
+No server-side configuration needed. Runs via:
+
+- **Python**: Pyodide (numpy, pandas, matplotlib available)
+- **JavaScript**: QuickJS (sandboxed)
+
+### Sandboxed
+
+Server-side execution in containers:
+
+```toml
+[features.code_execution]
+enabled = true
+allowed_languages = ["python", "javascript", "bash"]
+timeout_secs = 60
+max_memory_mb = 512
+
+[features.code_execution.mode]
+sandboxed = { runtime = "docker" }
+```
+
+| Runtime       | Description                 |
+| ------------- | --------------------------- |
+| `docker`      | Docker containers           |
+| `firecracker` | Firecracker microVMs        |
+| `gvisor`      | gVisor sandboxed containers |
+
+### External Service
+
+Delegate to an external code execution service:
+
+```toml
+[features.code_execution]
+enabled = true
+allowed_languages = ["python", "javascript", "r", "julia"]
+timeout_secs = 120
+max_memory_mb = 1024
+
+[features.code_execution.mode]
+external = { url = "https://code-exec.example.com", api_key = "${CODE_EXEC_API_KEY}" }
+```
+
+| Key       | Type   | Description                |
+| --------- | ------ | -------------------------- |
+| `url`     | string | External service URL       |
+| `api_key` | string | API key for authentication |
+
+## Complete Examples
+
+### Client-Side Only (Default)
+
+```toml
+[features.code_execution]
+enabled = true
+mode = "wasm"
+allowed_languages = ["python", "javascript"]
+timeout_secs = 30
+max_memory_mb = 256
+```
+
+### Docker Sandboxed
+
+```toml
+[features.code_execution]
+enabled = true
+allowed_languages = ["python", "javascript", "bash", "ruby"]
+timeout_secs = 60
+max_memory_mb = 512
+
+[features.code_execution.mode]
+sandboxed = { runtime = "docker" }
+```
+
+### External Service
+
+```toml
+[features.code_execution]
+enabled = true
+allowed_languages = ["python", "javascript", "r", "julia", "sql"]
+timeout_secs = 120
+max_memory_mb = 2048
+
+[features.code_execution.mode]
+external = { url = "https://code-exec.internal.company.com", api_key = "${CODE_EXEC_API_KEY}" }
+```
+
+## Security Considerations
+
+<Callout type="warn">
+  Server-side code execution requires careful security configuration. Consider: - Network isolation
+  for containers - Resource limits (CPU, memory, disk) - Execution timeouts - Language restrictions
+</Callout>
+
+## See Also
+
+- [Frontend Tools Guide](/docs/features/frontend-tools) - Client-side WASM execution

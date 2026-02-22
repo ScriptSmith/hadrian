@@ -1,0 +1,97 @@
+{
+  "id": "openai:responses_reasoning:success",
+  "description": "Responses API with o3-mini reasoning model (reasoning_tokens in usage)",
+  "request": {
+    "method": "POST",
+    "path": "/responses"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-ratelimit-remaining-tokens": "199577",
+      "x-request-id": "req_7b871b35289c4deb8d0d11924123bd38",
+      "x-ratelimit-reset-requests": "120ms",
+      "x-ratelimit-remaining-requests": "499",
+      "x-ratelimit-reset-tokens": "126ms",
+      "content-type": "application/json",
+      "x-envoy-upstream-service-time": "5264",
+      "x-content-type-options": "nosniff",
+      "x-ratelimit-limit-requests": "500",
+      "x-ratelimit-limit-tokens": "200000"
+    },
+    "body": {
+      "background": false,
+      "billing": {
+        "payer": "developer"
+      },
+      "completed_at": 1766147522,
+      "created_at": 1766147517,
+      "error": null,
+      "id": "resp_07cabd3f98f96bf800694545bd07c0819798f1775454987048",
+      "incomplete_details": null,
+      "instructions": null,
+      "max_output_tokens": null,
+      "max_tool_calls": null,
+      "metadata": {},
+      "model": "o3-mini-2025-01-31",
+      "object": "response",
+      "output": [
+        {
+          "id": "rs_07cabd3f98f96bf800694545c09e688197b7fb51027ce49aee",
+          "summary": [],
+          "type": "reasoning"
+        },
+        {
+          "content": [
+            {
+              "annotations": [],
+              "logprobs": [],
+              "text": "Let's list the prime numbers in order:\n\n1st prime: 2  \n2nd prime: 3  \n3rd prime: 5  \n4th prime: 7  \n5th prime: 11  \n6th prime: 13  \n7th prime: 17  \n8th prime: 19  \n9th prime: 23  \n10th prime: 29  \n11th prime: 31  \n12th prime: 37  \n13th prime: 41  \n14th prime: 43  \n15th prime: 47\n\nThus, the 15th prime number is 47.",
+              "type": "output_text"
+            }
+          ],
+          "id": "msg_07cabd3f98f96bf800694545c130f08197b82b92e1b1b029ea",
+          "role": "assistant",
+          "status": "completed",
+          "type": "message"
+        }
+      ],
+      "parallel_tool_calls": true,
+      "previous_response_id": null,
+      "prompt_cache_key": null,
+      "prompt_cache_retention": null,
+      "reasoning": {
+        "effort": "medium",
+        "summary": null
+      },
+      "safety_identifier": null,
+      "service_tier": "default",
+      "status": "completed",
+      "store": true,
+      "temperature": 1.0,
+      "text": {
+        "format": {
+          "type": "text"
+        },
+        "verbosity": "medium"
+      },
+      "tool_choice": "auto",
+      "tools": [],
+      "top_logprobs": 0,
+      "top_p": 1.0,
+      "truncation": "disabled",
+      "usage": {
+        "input_tokens": 22,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 446,
+        "output_tokens_details": {
+          "reasoning_tokens": 320
+        },
+        "total_tokens": 468
+      },
+      "user": null
+    }
+  }
+}

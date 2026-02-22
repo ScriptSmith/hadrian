@@ -1,0 +1,242 @@
+---
+title: Response Caching
+description: Configure exact-match and semantic response caching
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The `[features.response_caching]` section configures gateway-level response caching. Hadrian supports both exact-match caching (SHA-256 hash) and semantic caching (embedding similarity).
+
+## Configuration Reference
+
+### Main Settings
+
+```toml
+[features.response_caching]
+enabled = true
+ttl_secs = 3600
+only_deterministic = true
+max_size_bytes = 1048576
+```
+
+| Key                  | Type    | Default   | Description                           |
+| -------------------- | ------- | --------- | ------------------------------------- |
+| `enabled`            | boolean | `true`    | Enable response caching               |
+| `ttl_secs`           | integer | `3600`    | Cache TTL in seconds (1 hour)         |
+| `only_deterministic` | boolean | `true`    | Only cache when temperature = 0       |
+| `max_size_bytes`     | integer | `1048576` | Maximum response size to cache (1 MB) |
+
+### Cache Key Components
+
+Control what's included in the cache key with `[features.response_caching.key_components]`:
+
+```toml
+[features.response_caching.key_components]
+model = true
+temperature = true
+system_prompt = true
+tools = true
+```
+
+| Key             | Type    | Default | Description                        |
+| --------------- | ------- | ------- | ---------------------------------- |
+| `model`         | boolean | `true`  | Include model name in cache key    |
+| `temperature`   | boolean | `true`  | Include temperature in cache key   |
+| `system_prompt` | boolean | `true`  | Include system prompt in cache key |
+| `tools`         | boolean | `true`  | Include tools in cache key         |
+
+### Semantic Caching
+
+Enable similarity-based cache matching with `[features.response_caching.semantic]`:
+
+```toml
+[features.response_caching.semantic]
+enabled = true
+similarity_threshold = 0.95
+top_k = 1
+
+[features.response_caching.semantic.embedding]
+provider = "openai"
+model = "text-embedding-3-small"
+dimensions = 1536
+
+[features.response_caching.semantic.vector_backend]
+type = "pgvector"
+table_name = "semantic_cache_embeddings"
+index_type = "ivf_flat"
+distance_metric = "cosine"
+```
+
+| Key                    | Type    | Default | Description                             |
+| ---------------------- | ------- | ------- | --------------------------------------- |
+| `enabled`              | boolean | `false` | Enable semantic caching                 |
+| `similarity_threshold` | float   | `0.95`  | Minimum cosine similarity for cache hit |
+| `top_k`                | integer | `1`     | Number of similar results to consider   |
+
+### Embedding Configuration
+
+```toml
+[features.response_caching.semantic.embedding]
+provider = "openai"
+model = "text-embedding-3-small"
+dimensions = 1536
+```
+
+| Key          | Type    | Default                    | Description          |
+| ------------ | ------- | -------------------------- | -------------------- |
+| `provider`   | string  | `"openai"`                 | Embedding provider   |
+| `model`      | string  | `"text-embedding-3-small"` | Embedding model      |
+| `dimensions` | integer | `1536`                     | Embedding dimensions |
+
+### Vector Backend
+
+#### pgvector
+
+```toml
+[features.response_caching.semantic.vector_backend]
+type = "pgvector"
+table_name = "semantic_cache_embeddings"
+index_type = "ivf_flat"
+distance_metric = "cosine"
+```
+
+| Key               | Type   | Default                       | Description                |
+| ----------------- | ------ | ----------------------------- | -------------------------- |
+| `table_name`      | string | `"semantic_cache_embeddings"` | Table for cache embeddings |
+| `index_type`      | string | `"ivf_flat"`                  | `ivf_flat` or `hnsw`       |
+| `distance_metric` | string | `"cosine"`                    | Distance metric            |
+
+#### Qdrant
+
+```toml
+[features.response_caching.semantic.vector_backend]
+type = "qdrant"
+url = "http://localhost:6333"
+api_key = "${QDRANT_API_KEY}"
+collection_name = "semantic_cache"
+distance_metric = "cosine"
+```
+
+| Key               | Type   | Default            | Description                |
+| ----------------- | ------ | ------------------ | -------------------------- |
+| `url`             | string | required           | Qdrant server URL          |
+| `api_key`         | string | none               | API key for authentication |
+| `collection_name` | string | `"semantic_cache"` | Collection name            |
+| `distance_metric` | string | `"cosine"`         | Distance metric            |
+
+## Prompt Caching
+
+Provider-level prompt caching (Anthropic) is configured separately:
+
+```toml
+[features.prompt_caching]
+enabled = true
+min_tokens = 1024
+```
+
+| Key          | Type    | Default | Description                    |
+| ------------ | ------- | ------- | ------------------------------ |
+| `enabled`    | boolean | `true`  | Enable prompt caching          |
+| `min_tokens` | integer | `1024`  | Minimum prompt length to cache |
+
+<Callout type="info">
+  Prompt caching is provider-side (Anthropic handles it). Response caching is gateway-side (Hadrian
+  handles it). Both can be enabled simultaneously.
+</Callout>
+
+## Complete Examples
+
+### Exact-Match Only
+
+```toml
+[features.response_caching]
+enabled = true
+ttl_secs = 3600
+only_deterministic = true
+max_size_bytes = 1048576
+
+[features.response_caching.key_components]
+model = true
+temperature = true
+system_prompt = true
+tools = true
+```
+
+### With Semantic Caching (pgvector)
+
+```toml
+[features.response_caching]
+enabled = true
+ttl_secs = 7200
+only_deterministic = true
+max_size_bytes = 2097152
+
+[features.response_caching.semantic]
+enabled = true
+similarity_threshold = 0.95
+top_k = 1
+
+[features.response_caching.semantic.embedding]
+provider = "openai"
+model = "text-embedding-3-small"
+dimensions = 1536
+
+[features.response_caching.semantic.vector_backend]
+type = "pgvector"
+table_name = "semantic_cache_embeddings"
+index_type = "hnsw"
+distance_metric = "cosine"
+```
+
+### With Semantic Caching (Qdrant)
+
+```toml
+[features.response_caching]
+enabled = true
+ttl_secs = 3600
+only_deterministic = true
+
+[features.response_caching.semantic]
+enabled = true
+similarity_threshold = 0.92
+top_k = 3
+
+[features.response_caching.semantic.embedding]
+provider = "openai"
+model = "text-embedding-3-large"
+dimensions = 3072
+
+[features.response_caching.semantic.vector_backend]
+type = "qdrant"
+url = "http://qdrant:6333"
+api_key = "${QDRANT_API_KEY}"
+collection_name = "semantic_cache"
+distance_metric = "cosine"
+```
+
+## Similarity Threshold Guidelines
+
+| Threshold | Use Case                                   |
+| --------- | ------------------------------------------ |
+| 0.98-1.0  | Very strict, nearly identical queries      |
+| 0.95-0.97 | Recommended for most use cases             |
+| 0.92-0.94 | More permissive, catches rephrased queries |
+| < 0.92    | May return semantically different results  |
+
+<Callout type="warn">
+  Lower thresholds increase cache hit rates but may return cached responses for semantically
+  different queries. Start with 0.95 and adjust based on your use case.
+</Callout>
+
+## Cache Behavior
+
+1. **Exact match**: Request hash checked first (fastest)
+2. **Semantic match**: If no exact match, embedding similarity search (if enabled)
+3. **Cache miss**: Forward to LLM, store response with hash and embedding
+
+**Force refresh**: Clients can bypass cache with `Cache-Control: no-cache` header.
+
+## See Also
+
+- [Caching Guide](/docs/features/caching) - Conceptual overview
+- [Database Configuration](/docs/configuration/database) - PostgreSQL setup for pgvector

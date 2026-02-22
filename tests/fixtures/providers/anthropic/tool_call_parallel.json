@@ -1,0 +1,57 @@
+{
+  "id": "anthropic:tool_call:parallel",
+  "description": "Anthropic Messages API with parallel tool_use responses",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-robots-tag": "none",
+      "x-envoy-upstream-service-time": "2721"
+    },
+    "body": {
+      "content": [
+        {
+          "text": "I'll get the current weather for both Tokyo and London for you.",
+          "type": "text"
+        },
+        {
+          "id": "toolu_01U3SVHZLy3QFMi3HjRmozCT",
+          "input": {
+            "location": "Tokyo, Japan"
+          },
+          "name": "get_weather",
+          "type": "tool_use"
+        },
+        {
+          "id": "toolu_015fc5LqTq57SQuTv3H5n5Hy",
+          "input": {
+            "location": "London, UK"
+          },
+          "name": "get_weather",
+          "type": "tool_use"
+        }
+      ],
+      "id": "msg_012jvRcv7YazNiPuTNKXaVcC",
+      "model": "claude-sonnet-4-20250514",
+      "role": "assistant",
+      "stop_reason": "tool_use",
+      "stop_sequence": null,
+      "type": "message",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "input_tokens": 430,
+        "output_tokens": 108,
+        "service_tier": "standard"
+      }
+    }
+  }
+}

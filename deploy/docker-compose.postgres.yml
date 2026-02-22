@@ -1,0 +1,83 @@
+# Docker Compose for PostgreSQL + Redis
+# Use for staging/testing with real PostgreSQL and Redis
+#
+# Default password is "gateway" for testing. Override with POSTGRES_PASSWORD in .env file.
+# For production, use docker-compose.production.yml instead.
+#
+# Port configuration (override via environment variables for parallel testing):
+#   GATEWAY_PORT - Gateway HTTP port (default: 8080)
+#   POSTGRES_PORT - PostgreSQL port (default: 5432)
+#   REDIS_PORT - Redis port (default: 6379)
+
+services:
+  gateway:
+    image: hadrian:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    volumes:
+      # Mount config file
+      - ./config/hadrian.postgres.toml:/app/config/hadrian.toml:ro
+    environment:
+      # Provider API keys (override in .env file)
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # Database connection (default password for testing)
+      - DATABASE_URL=postgres://gateway:${POSTGRES_PASSWORD:-gateway}@postgres:5432/gateway
+      # Redis connection
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Initialize with migrations (optional)
+      - ./migrations/postgres:/docker-entrypoint-initdb.d:ro
+    environment:
+      - POSTGRES_DB=gateway
+      - POSTGRES_USER=gateway
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-gateway}
+      - POSTGRES_INITDB_ARGS=--encoding=UTF8 --locale=C
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local

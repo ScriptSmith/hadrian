@@ -1,0 +1,48 @@
+{
+  "id": "ollama:tool_call:success",
+  "description": "Chat completion with single tool call via Ollama",
+  "request": {
+    "method": "POST",
+    "path": "/chat/completions"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "choices": [
+        {
+          "finish_reason": "tool_calls",
+          "index": 0,
+          "message": {
+            "content": "",
+            "reasoning": "Okay, the user is asking for the current weather in San Francisco. Let me check the tools provided. There's a function called get_weather that takes a location and a unit. The location needs to be a city and country, like \"San Francisco, USA\". The user didn't specify the unit, but the function has an enum for \"celsius\" or \"fahrenheit\". Since the user didn't mention the unit, maybe I should default to a common one. In the US, people usually use Fahrenheit, so I'll go with that. Let me structure the tool call. The required parameter is location, so I'll set it to \"San Francisco, USA\" and unit to \"fahrenheit\". Wait, the function's parameters say \"unit\" is optional? Wait, looking back: the required fields are [\"location\"], and unit is a property with enum. So the user didn't specify unit, but the function allows it. Since the user is in San Francisco, which is in the US, using Fahrenheit makes sense. So I'll call get_weather with location \"San Francisco, USA\" and unit \"fahrenheit\". Let me make sure the JSON is correctly formatted. The tool call should be a JSON object with name and arguments. So the arguments would be {\"location\": \"San Francisco, USA\", \"unit\": \"fahrenheit\"}. Wait, but maybe the user expects just the city without country? Wait, the description says \"The city and country, e.g. San Francisco, USA\". So the example includes the country. So I should include \"San Francisco, USA\" as the location. Alright, that's the correct format. So the tool call is get_weather with those parameters.\n",
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"location\":\"San Francisco, USA\",\"unit\":\"fahrenheit\"}",
+                  "name": "get_weather"
+                },
+                "id": "call_vhs6xz91",
+                "index": 0,
+                "type": "function"
+              }
+            ]
+          }
+        }
+      ],
+      "created": 1766312954,
+      "id": "chatcmpl-464",
+      "model": "qwen3:4b",
+      "object": "chat.completion",
+      "system_fingerprint": "fp_ollama",
+      "usage": {
+        "completion_tokens": 378,
+        "prompt_tokens": 181,
+        "total_tokens": 559
+      }
+    }
+  }
+}

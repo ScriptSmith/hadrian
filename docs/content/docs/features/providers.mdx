@@ -1,0 +1,391 @@
+---
+title: Provider Features
+description: Provider-specific features including thinking/reasoning, prompt caching, and vision support
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Hadrian Gateway supports advanced features that vary by provider. This page documents provider-specific capabilities and how to use them through the unified OpenAI-compatible API.
+
+## Thinking & Reasoning
+
+Enable models to "think" before responding, improving accuracy on complex tasks. The gateway translates the unified `reasoning` parameter to each provider's native format.
+
+### Feature Support
+
+| Provider         | Models                 | Parameter                | Notes                             |
+| ---------------- | ---------------------- | ------------------------ | --------------------------------- |
+| OpenAI           | o1, o3, o4-mini        | `reasoning_effort`       | Native support                    |
+| Anthropic        | Claude 3.5+, Claude 4  | `thinking.budget_tokens` | Extended thinking                 |
+| Bedrock (Claude) | Claude 3.5+, Claude 4  | `reasoning_config`       | Via additionalModelRequestFields  |
+| Bedrock (Nova)   | Nova Pro, Nova Premier | `reasoningConfig`        | maxReasoningEffort                |
+| Vertex (Gemini)  | Gemini 2.5, 3+         | `thinking_config`        | thinking_budget or thinking_level |
+
+### Using the Reasoning Parameter
+
+Use the `reasoning` parameter in your Chat Completion or Responses API request:
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{
+    "model": "anthropic/claude-sonnet-4-20250514",
+    "messages": [
+      {"role": "user", "content": "Solve this step by step: If a train travels 120 miles in 2 hours, then stops for 30 minutes, then travels 90 miles in 1.5 hours, what is its average speed for the entire journey?"}
+    ],
+    "reasoning": {
+      "effort": "high"
+    }
+  }'
+```
+
+### Effort Levels
+
+The `effort` parameter controls how much computational budget to allocate for reasoning:
+
+| Effort    | Description           | Use Case                          |
+| --------- | --------------------- | --------------------------------- |
+| `none`    | Disable reasoning     | Fast responses, simple queries    |
+| `minimal` | Light reasoning       | Basic logic, simple math          |
+| `low`     | Moderate reasoning    | Multi-step problems               |
+| `medium`  | Substantial reasoning | Complex analysis                  |
+| `high`    | Maximum reasoning     | Mathematical proofs, complex code |
+
+### Provider Translation
+
+The gateway automatically translates effort levels to provider-native formats:
+
+**Anthropic Claude** (budget_tokens):
+
+- `none` → disabled
+- `minimal` → 2,048 tokens
+- `low` → 8,000 tokens
+- `medium` → 16,000 tokens
+- `high` → 32,000 tokens
+
+**Bedrock Nova** (maxReasoningEffort):
+
+- Maps directly to `"minimal"`, `"low"`, `"medium"`, `"high"`
+
+**Vertex Gemini 3+** (thinking_level):
+
+- Maps to `MINIMAL`, `LOW`, `MEDIUM`, `HIGH`
+
+**Vertex Gemini 2.5** (thinking_budget):
+
+- `none` → 0
+- `minimal` → 1,024
+- `low` → 4,096
+- `medium` → 8,192
+- `high` → -1 (dynamic)
+
+### Reasoning in Responses
+
+When reasoning is enabled, the model's thinking process appears in the response:
+
+```json
+{
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "The average speed is 52.5 mph.",
+        "reasoning": "Let me break this down step by step:\n1. First leg: 120 miles in 2 hours\n2. Stop: 30 minutes = 0.5 hours\n3. Second leg: 90 miles in 1.5 hours\n\nTotal distance = 120 + 90 = 210 miles\nTotal time = 2 + 0.5 + 1.5 = 4 hours\nAverage speed = 210 / 4 = 52.5 mph"
+      }
+    }
+  ]
+}
+```
+
+<Callout type="info">
+  When thinking is enabled for Anthropic models, temperature is automatically set to 1.0 as required
+  by the Anthropic API.
+</Callout>
+
+## Prompt Caching
+
+Reduce costs and latency by caching frequently-used prompt content. Currently supported by Anthropic Claude models.
+
+### How It Works
+
+1. Mark content blocks with `cache_control: {"type": "ephemeral"}`
+2. First request caches the content (cache creation tokens charged)
+3. Subsequent requests read from cache (cache read tokens, ~90% cheaper)
+
+### Enabling Prompt Caching
+
+Add `cache_control` to system messages, user messages, or tools:
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{
+    "model": "anthropic/claude-sonnet-4-20250514",
+    "messages": [
+      {
+        "role": "system",
+        "content": [
+          {
+            "type": "text",
+            "text": "You are an expert assistant with access to the following documentation:\n\n[... large documentation block ...]",
+            "cache_control": {"type": "ephemeral"}
+          }
+        ]
+      },
+      {"role": "user", "content": "How do I configure authentication?"}
+    ]
+  }'
+```
+
+### Caching Tools
+
+Cache tool definitions for function calling:
+
+```json
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "search_docs",
+        "description": "Search the documentation",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": { "type": "string" }
+          }
+        }
+      },
+      "cache_control": { "type": "ephemeral" }
+    }
+  ]
+}
+```
+
+### Cache Usage in Response
+
+The response includes cache statistics in the usage object:
+
+```json
+{
+  "usage": {
+    "prompt_tokens": 1500,
+    "completion_tokens": 250,
+    "total_tokens": 1750,
+    "prompt_tokens_details": {
+      "cached_tokens": 1200
+    }
+  }
+}
+```
+
+<Callout type="info">
+  Prompt caching requires the content to be identical across requests. Even small changes will
+  result in a cache miss.
+</Callout>
+
+### Best Practices
+
+1. **Cache stable content first** - Put cacheable content (system prompts, documentation, tool definitions) at the beginning of your messages
+2. **Use for repetitive workloads** - Best ROI when the same context is used across many requests
+3. **Monitor cache hit rates** - Track `cached_tokens` vs `prompt_tokens` to measure effectiveness
+4. **Minimum size** - Anthropic requires cached content to be at least 1,024 tokens
+
+## Vision & Image Support
+
+Send images to vision-capable models through the unified API. The gateway handles format differences between providers.
+
+### Image Input Methods
+
+| Method    | Format                          | Provider Support                           |
+| --------- | ------------------------------- | ------------------------------------------ |
+| Base64    | `data:image/png;base64,...`     | All providers                              |
+| HTTPS URL | `https://example.com/image.png` | Anthropic (native), others (with fetching) |
+| HTTP URL  | `http://example.com/image.png`  | Requires image fetching                    |
+
+### Sending Images
+
+**Base64 (works everywhere):**
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{
+    "model": "anthropic/claude-sonnet-4-20250514",
+    "messages": [{
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "What is in this image?"},
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/png;base64,iVBORw0KGgo..."
+          }
+        }
+      ]
+    }]
+  }'
+```
+
+**HTTPS URL (Anthropic native):**
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{
+    "model": "anthropic/claude-sonnet-4-20250514",
+    "messages": [{
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "Describe this diagram"},
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "https://example.com/diagram.png"
+          }
+        }
+      ]
+    }]
+  }'
+```
+
+### Image Fetching
+
+For providers that don't support URL references natively, enable image fetching:
+
+```toml
+[features.image_fetching]
+enabled = true
+timeout_secs = 30
+max_size_bytes = 20971520  # 20 MB
+allowed_domains = ["example.com", "cdn.example.com"]  # Optional allowlist
+```
+
+When enabled, the gateway:
+
+1. Detects image URLs in requests
+2. Fetches the image content
+3. Converts to base64 for providers that require it
+4. Caches fetched images to reduce latency
+
+### Provider-Specific Notes
+
+**Anthropic:**
+
+- Supports HTTPS URLs natively (passed through directly)
+- HTTP URLs are rejected (HTTPS only)
+- Supports caching images with `cache_control`
+
+**OpenAI:**
+
+- Supports both URLs and base64
+- Gateway passes through without modification
+
+**Bedrock/Vertex:**
+
+- Require base64 format
+- Enable `image_fetching` for URL support
+
+### Supported Image Formats
+
+| Format | MIME Type  | Max Size (typical) |
+| ------ | ---------- | ------------------ |
+| PNG    | image/png  | 20 MB              |
+| JPEG   | image/jpeg | 20 MB              |
+| GIF    | image/gif  | 20 MB              |
+| WebP   | image/webp | 20 MB              |
+
+## Audio Support
+
+Generate speech and transcribe audio through supported providers.
+
+### Text-to-Speech
+
+```bash
+curl http://localhost:8080/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{
+    "model": "openai/tts-1",
+    "input": "Hello, welcome to Hadrian Gateway!",
+    "voice": "alloy"
+  }' \
+  --output speech.mp3
+```
+
+### Transcription
+
+```bash
+curl http://localhost:8080/v1/audio/transcriptions \
+  -H "X-API-Key: $API_KEY" \
+  -F "file=@audio.mp3" \
+  -F "model=openai/whisper-1"
+```
+
+### Translation
+
+```bash
+curl http://localhost:8080/v1/audio/translations \
+  -H "X-API-Key: $API_KEY" \
+  -F "file=@french_audio.mp3" \
+  -F "model=openai/whisper-1"
+```
+
+<Callout type="info">
+  Audio endpoints are currently supported through OpenAI and OpenAI-compatible providers.
+</Callout>
+
+## Streaming Buffer Configuration
+
+For providers that require stream transformation (Anthropic, Bedrock, Vertex), configure buffer limits to protect against DoS attacks:
+
+```toml
+[providers.anthropic]
+type = "anthropic"
+api_key = "${ANTHROPIC_API_KEY}"
+
+[providers.anthropic.streaming_buffer]
+max_input_buffer_bytes = 4194304   # 4 MB (default)
+max_output_buffer_chunks = 1000    # Max buffered chunks (default)
+```
+
+### When Buffers Apply
+
+| Provider     | Stream Transformation  | Buffer Config  |
+| ------------ | ---------------------- | -------------- |
+| OpenAI       | Pass-through           | Not applicable |
+| Azure OpenAI | Pass-through           | Not applicable |
+| Anthropic    | SSE → OpenAI format    | Configurable   |
+| Bedrock      | Binary → OpenAI format | Configurable   |
+| Vertex       | JSON → OpenAI format   | Configurable   |
+
+<Callout type="info">
+  OpenAI and Azure OpenAI streams are passed through directly without transformation, so buffer
+  configuration doesn't apply.
+</Callout>
+
+## Feature Comparison Matrix
+
+| Feature            | OpenAI   | Anthropic   | Bedrock      | Vertex       | Azure |
+| ------------------ | -------- | ----------- | ------------ | ------------ | ----- |
+| Streaming          | Yes      | Yes         | Yes          | Yes          | Yes   |
+| Function Calling   | Yes      | Yes         | Yes          | Yes          | Yes   |
+| Thinking/Reasoning | o1/o3/o4 | Claude 3.5+ | Claude, Nova | Gemini 2.5+  | o1/o3 |
+| Prompt Caching     | No       | Yes         | No           | No           | No    |
+| Vision             | Yes      | Yes         | Yes          | Yes          | Yes   |
+| Image URLs         | Yes      | HTTPS only  | Via fetching | Via fetching | Yes   |
+| Embeddings         | Yes      | No          | Titan        | Yes          | Yes   |
+| TTS                | Yes      | No          | No           | No           | Yes   |
+| Transcription      | Yes      | No          | No           | No           | Yes   |
+
+## Related Documentation
+
+<Cards>
+  <Card title="Provider Configuration" href="/docs/configuration/providers" />
+  <Card title="API Reference" href="/docs/api" />
+  <Card title="Troubleshooting" href="/docs/troubleshooting" />
+</Cards>

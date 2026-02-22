@@ -1,0 +1,36 @@
+{
+  "id": "vertex:unauthorized",
+  "description": "Unauthorized error response (401) - invalid API key",
+  "request": {
+    "method": "POST",
+    "path": "/gemini-2.0-flash:generateContent",
+    "path_pattern": "/.+:generateContent"
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "x-frame-options": "SAMEORIGIN",
+      "x-xss-protection": "0",
+      "x-content-type-options": "nosniff"
+    },
+    "body": {
+      "error": {
+        "code": 401,
+        "details": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "domain": "googleapis.com",
+            "metadata": {
+              "method": "google.cloud.aiplatform.v1.PredictionService.GenerateContent",
+              "service": "aiplatform.googleapis.com"
+            },
+            "reason": "CREDENTIALS_MISSING"
+          }
+        ],
+        "message": "API keys are not supported by this API. Expected OAuth2 access token or other authentication credentials that assert a principal. See https://cloud.google.com/docs/authentication",
+        "status": "UNAUTHENTICATED"
+      }
+    }
+  }
+}

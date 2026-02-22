@@ -1,0 +1,25 @@
+{
+  "id": "openai:chat_completion:rate_limit",
+  "description": "Rate limit exceeded (429) error response",
+  "request": {
+    "method": "POST",
+    "path": "/chat/completions"
+  },
+  "response": {
+    "status": 429,
+    "headers": {
+      "content-type": "application/json",
+      "retry-after": "1",
+      "x-ratelimit-limit-requests": "10000",
+      "x-ratelimit-remaining-requests": "0",
+      "x-ratelimit-reset-requests": "1s"
+    },
+    "body": {
+      "error": {
+        "type": "rate_limit_error",
+        "message": "Rate limit exceeded. Please retry after 1 second.",
+        "code": "rate_limit_exceeded"
+      }
+    }
+  }
+}

@@ -1,0 +1,125 @@
+---
+title: WebSocket
+description: Configure real-time event subscriptions via WebSocket
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The `[features.websocket]` section configures real-time event subscriptions. Clients can connect to `/ws/events` to receive server events like audit logs, usage updates, and budget alerts.
+
+## Configuration Reference
+
+```toml
+[features.websocket]
+enabled = true
+require_auth = true
+ping_interval_secs = 30
+pong_timeout_secs = 60
+max_connections = 1000
+channel_capacity = 1024
+```
+
+| Key                  | Type    | Default | Description                    |
+| -------------------- | ------- | ------- | ------------------------------ |
+| `enabled`            | boolean | `true`  | Enable WebSocket endpoint      |
+| `require_auth`       | boolean | `false` | Require authentication         |
+| `ping_interval_secs` | integer | `30`    | Keepalive ping interval        |
+| `pong_timeout_secs`  | integer | `60`    | Pong response timeout          |
+| `max_connections`    | integer | `1000`  | Maximum concurrent connections |
+| `channel_capacity`   | integer | `1024`  | Event buffer size              |
+
+## Authentication
+
+WebSocket connections can be authenticated via:
+
+### Query Parameter Token
+
+```
+ws://gateway:8080/ws/events?token=gw_live_abc123...
+```
+
+### Session Cookie
+
+Browser connections with an active OIDC session are authenticated automatically.
+
+<Callout type="warn">
+  Set `require_auth = true` in production to prevent unauthorized access to real-time events.
+</Callout>
+
+## Event Types
+
+Clients can subscribe to:
+
+- **Audit logs** - Request/response events, guardrails violations
+- **Usage updates** - Token counts, cost tracking
+- **Budget alerts** - Threshold warnings, budget exceeded
+- **Circuit breaker** - Provider health state changes
+- **System events** - Configuration changes, startup/shutdown
+
+## Complete Examples
+
+### Development
+
+```toml
+[features.websocket]
+enabled = true
+require_auth = false
+ping_interval_secs = 30
+pong_timeout_secs = 60
+max_connections = 100
+channel_capacity = 256
+```
+
+### Production
+
+```toml
+[features.websocket]
+enabled = true
+require_auth = true
+ping_interval_secs = 30
+pong_timeout_secs = 60
+max_connections = 5000
+channel_capacity = 4096
+```
+
+### Disabled
+
+```toml
+[features.websocket]
+enabled = false
+```
+
+## Connection Handling
+
+### Keepalive
+
+The server sends ping frames at `ping_interval_secs`. If no pong is received within `pong_timeout_secs`, the connection is terminated.
+
+### Backpressure
+
+When the event buffer (`channel_capacity`) fills up, slow subscribers start missing events (lagging). Increase `channel_capacity` for high-volume deployments.
+
+### Connection Limits
+
+When `max_connections` is reached, new connections are rejected. Set to `0` for unlimited (not recommended).
+
+## Client Example
+
+```javascript
+const ws = new WebSocket("ws://gateway:8080/ws/events?token=gw_live_...");
+
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  console.log("Event:", data.type, data.payload);
+};
+
+ws.onclose = () => {
+  console.log("Connection closed, reconnecting...");
+  // Implement reconnection logic
+};
+```
+
+## See Also
+
+- [Observability Configuration](/docs/configuration/observability) - Logging and metrics
+- [Budget Configuration](/docs/features/budgets) - Budget alerts

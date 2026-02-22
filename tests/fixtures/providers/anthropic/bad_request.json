@@ -1,0 +1,25 @@
+{
+  "id": "anthropic:bad:request",
+  "description": "Bad request error response (400) - invalid model",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages"
+  },
+  "response": {
+    "status": 404,
+    "headers": {
+      "content-type": "application/json",
+      "x-robots-tag": "none",
+      "x-envoy-upstream-service-time": "52",
+      "x-should-retry": "false"
+    },
+    "body": {
+      "error": {
+        "message": "model: invalid-model-that-does-not-exist",
+        "type": "not_found_error"
+      },
+      "request_id": "req_011CWGxi7NyY3DHhK1Zggot5",
+      "type": "error"
+    }
+  }
+}

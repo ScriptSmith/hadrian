@@ -1,0 +1,295 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (build artifacts but don't create a release)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Build frontend assets once, share with all build jobs
+  build-frontend:
+    name: Build Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate API client
+        working-directory: ui
+        run: pnpm run generate-api
+
+      - name: Build UI
+        working-directory: ui
+        run: pnpm build
+
+      - name: Build Storybook
+        working-directory: ui
+        run: pnpm storybook:build
+
+      - name: Install docs dependencies
+        working-directory: docs
+        run: pnpm install --frozen-lockfile
+
+      - name: Build docs
+        working-directory: docs
+        run: pnpm build
+
+      - name: Upload frontend assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-assets
+          path: |
+            ui/dist/
+            docs/out/
+          retention-days: 1
+
+  # Build release binaries for each target (all feature profiles per target)
+  build:
+    name: Build (${{ matrix.target }})
+    needs: build-frontend
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            features: "full standard minimal tiny"
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            features: "standard minimal tiny"
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            features: "standard minimal tiny"
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            features: "full standard minimal tiny"
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            features: "standard minimal tiny"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install dependencies (Linux full/standard)
+        if: runner.os == 'Linux' && (contains(matrix.features, 'full') || contains(matrix.features, 'standard'))
+        run: sudo apt-get update && sudo apt-get install -y libxml2-dev libxslt1-dev libxmlsec1-dev libclang-dev libssl-dev pkg-config
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libxml2 libxslt libxmlsec1 llvm
+
+      - name: Install musl toolchain
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install aarch64 cross toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+
+      - name: Download frontend assets
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-assets
+
+      - name: Fetch model catalog
+        shell: bash
+        run: mkdir -p data && curl -sSL https://models.dev/api.json -o data/models-dev-catalog.json
+
+      - name: Build and package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: |
+          TARGET="${{ matrix.target }}"
+          mkdir -p staging artifacts
+
+          for feature in ${{ matrix.features }}; do
+            echo "::group::Building $feature for $TARGET"
+            cargo build --release --target "$TARGET" --no-default-features --features "$feature"
+            echo "::endgroup::"
+
+            cp "target/$TARGET/release/hadrian" staging/hadrian
+            ARCHIVE="hadrian-${TARGET}-${feature}.tar.gz"
+            tar czf "artifacts/$ARCHIVE" -C staging hadrian
+            rm staging/hadrian
+
+            (cd artifacts && sha256sum "$ARCHIVE") >> "artifacts/checksums.txt"
+            echo "Built $ARCHIVE"
+          done
+
+      - name: Build and package (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p staging artifacts
+
+          for feature in ${{ matrix.features }}; do
+            echo "::group::Building $feature for $TARGET"
+            cargo build --release --target "$TARGET" --no-default-features --features "$feature"
+            echo "::endgroup::"
+
+            cp "target/$TARGET/release/hadrian.exe" staging/hadrian.exe
+            ARCHIVE="hadrian-${TARGET}-${feature}.zip"
+            cd staging && 7z a -tzip "../artifacts/$ARCHIVE" hadrian.exe && cd ..
+            rm staging/hadrian.exe
+
+            (cd artifacts && sha256sum "$ARCHIVE") >> "artifacts/checksums.txt"
+            echo "Built $ARCHIVE"
+          done
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.target }}
+          path: artifacts/
+          retention-days: 3
+
+  # Create GitHub Release (only on tag push, not dry-run)
+  release:
+    name: Create Release
+    needs: build
+    if: github.ref_type == 'tag' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: build-*
+          path: all-artifacts
+          merge-multiple: false
+
+      - name: Collect release assets
+        run: |
+          mkdir -p release
+
+          # Move all archives to release dir and merge checksums
+          for dir in all-artifacts/build-*/; do
+            if [ -d "$dir" ]; then
+              mv "$dir"/*.tar.gz release/ 2>/dev/null || true
+              mv "$dir"/*.zip release/ 2>/dev/null || true
+              cat "$dir/checksums.txt" >> release/hadrian-checksums-sha256.txt 2>/dev/null || true
+            fi
+          done
+
+          echo "Release assets:"
+          ls -lh release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release/*
+
+  # Publish to crates.io (only on tag push, not dry-run)
+  publish-crate:
+    name: Publish to crates.io
+    needs: build-frontend
+    if: github.ref_type == 'tag' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: publish
+
+      - name: Download frontend assets
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-assets
+
+      - name: Fetch model catalog
+        run: mkdir -p data && curl -sSL https://models.dev/api.json -o data/models-dev-catalog.json
+
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+
+      - name: Publish to crates.io
+        run: cargo publish --no-default-features --features tiny
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # Dry-run summary (manual dispatch with dry_run=true)
+  dry-run-summary:
+    name: Dry Run Summary
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: build-*
+          path: all-artifacts
+          merge-multiple: false
+
+      - name: Print summary
+        run: |
+          echo "## Dry Run Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Artifact | Size | SHA256 |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|------|--------|" >> "$GITHUB_STEP_SUMMARY"
+
+          for dir in all-artifacts/build-*/; do
+            if [ -f "$dir/checksums.txt" ]; then
+              while read -r line; do
+                hash="${line%% *}"
+                name="${line##* }"
+                size=$(stat --printf="%s" "$dir/$name" 2>/dev/null || echo "?")
+                if [ "$size" != "?" ]; then
+                  human_size=$(numfmt --to=iec-i --suffix=B "$size")
+                else
+                  human_size="?"
+                fi
+                echo "| \`$name\` | $human_size | \`${hash:0:16}...\` |" >> "$GITHUB_STEP_SUMMARY"
+              done < "$dir/checksums.txt"
+            fi
+          done
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "No release was created (dry run mode)." >> "$GITHUB_STEP_SUMMARY"

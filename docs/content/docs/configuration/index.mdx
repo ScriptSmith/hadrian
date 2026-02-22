@@ -1,0 +1,33 @@
+---
+title: Configuration
+description: Complete configuration reference for Hadrian Gateway
+---
+
+Hadrian Gateway is configured using a TOML file (`hadrian.toml`).
+
+## Configuration File Location
+
+The gateway looks for configuration in the following locations:
+
+1. Path specified by `--config` flag
+2. `./hadrian.toml` in the current directory
+
+## Environment Variable Interpolation
+
+You can use environment variables in your configuration:
+
+```toml
+[providers.openai]
+api_key = "${OPENAI_API_KEY}"
+```
+
+## Configuration Sections
+
+<Cards>
+  <Card title="Server" href="/docs/configuration/server" />
+  <Card title="Database" href="/docs/configuration/database" />
+  <Card title="Providers" href="/docs/configuration/providers" />
+  <Card title="Authentication" href="/docs/configuration/auth" />
+  <Card title="Features" href="/docs/configuration/features" />
+  <Card title="Observability" href="/docs/configuration/observability" />
+</Cards>

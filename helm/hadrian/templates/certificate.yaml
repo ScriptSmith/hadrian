@@ -1,0 +1,98 @@
+{{- if .Values.certManager.enabled -}}
+{{- if not (.Capabilities.APIVersions.Has "cert-manager.io/v1") }}
+  {{- fail "cert-manager CRDs are not installed in the cluster. Install cert-manager first: https://cert-manager.io/docs/installation/" }}
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "hadrian.fullname" . }}
+  labels:
+    {{- include "hadrian.labels" . | nindent 4 }}
+  {{- with .Values.certManager.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  secretName: {{ .Values.certManager.secretName | default (printf "%s-tls" (include "hadrian.fullname" .)) }}
+  issuerRef:
+    name: {{ required "certManager.issuer.name is required when certManager is enabled" .Values.certManager.issuer.name }}
+    kind: {{ .Values.certManager.issuer.kind | default "ClusterIssuer" }}
+    {{- if .Values.certManager.issuer.group }}
+    group: {{ .Values.certManager.issuer.group }}
+    {{- end }}
+  {{- if .Values.certManager.commonName }}
+  commonName: {{ .Values.certManager.commonName | quote }}
+  {{- end }}
+  dnsNames:
+    {{- if .Values.certManager.dnsNames }}
+    {{- range .Values.certManager.dnsNames }}
+    - {{ . | quote }}
+    {{- end }}
+    {{- else }}
+    {{- /* Default to ingress hosts if no explicit dnsNames */}}
+    {{- range .Values.ingress.hosts }}
+    - {{ .host | quote }}
+    {{- end }}
+    {{- end }}
+  {{- if .Values.certManager.duration }}
+  duration: {{ .Values.certManager.duration }}
+  {{- end }}
+  {{- if .Values.certManager.renewBefore }}
+  renewBefore: {{ .Values.certManager.renewBefore }}
+  {{- end }}
+  {{- if or .Values.certManager.privateKey.algorithm .Values.certManager.privateKey.size .Values.certManager.privateKey.encoding .Values.certManager.privateKey.rotationPolicy }}
+  privateKey:
+    {{- if .Values.certManager.privateKey.algorithm }}
+    algorithm: {{ .Values.certManager.privateKey.algorithm }}
+    {{- end }}
+    {{- if .Values.certManager.privateKey.size }}
+    size: {{ .Values.certManager.privateKey.size }}
+    {{- end }}
+    {{- if .Values.certManager.privateKey.encoding }}
+    encoding: {{ .Values.certManager.privateKey.encoding }}
+    {{- end }}
+    {{- if .Values.certManager.privateKey.rotationPolicy }}
+    rotationPolicy: {{ .Values.certManager.privateKey.rotationPolicy }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.certManager.usages }}
+  usages:
+    {{- range .Values.certManager.usages }}
+    - {{ . }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.certManager.subject }}
+  subject:
+    {{- with .Values.certManager.subject.organizations }}
+    organizations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.certManager.subject.countries }}
+    countries:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.certManager.subject.organizationalUnits }}
+    organizationalUnits:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.certManager.subject.localities }}
+    localities:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.certManager.subject.provinces }}
+    provinces:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.certManager.secretTemplate }}
+  secretTemplate:
+    {{- with .Values.certManager.secretTemplate.annotations }}
+    annotations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.certManager.secretTemplate.labels }}
+    labels:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  {{- end }}
+{{- end }}

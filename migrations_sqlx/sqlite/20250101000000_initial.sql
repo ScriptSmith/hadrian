@@ -1,0 +1,869 @@
+-- Initial schema for Hadrian Gateway (SQLite)
+
+-- Organizations
+CREATE TABLE IF NOT EXISTS organizations (
+    id TEXT PRIMARY KEY NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    deleted_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_organizations_slug ON organizations(slug);
+-- Partial index for non-deleted organizations (most queries filter by deleted_at IS NULL)
+CREATE INDEX IF NOT EXISTS idx_organizations_slug_active ON organizations(slug) WHERE deleted_at IS NULL;
+
+-- Teams (groups within organizations)
+CREATE TABLE IF NOT EXISTS teams (
+    id TEXT PRIMARY KEY NOT NULL,
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    slug TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    deleted_at TEXT,
+    UNIQUE(org_id, slug)
+);
+
+CREATE INDEX IF NOT EXISTS idx_teams_org_id ON teams(org_id);
+CREATE INDEX IF NOT EXISTS idx_teams_slug ON teams(slug);
+-- Partial indexes for non-deleted teams (most queries filter by deleted_at IS NULL)
+CREATE INDEX IF NOT EXISTS idx_teams_org_active ON teams(org_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_teams_org_slug_active ON teams(org_id, slug) WHERE deleted_at IS NULL;
+
+-- Projects (belong to organizations, optionally to teams)
+CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY NOT NULL,
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    team_id TEXT REFERENCES teams(id) ON DELETE SET NULL,
+    slug TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    deleted_at TEXT,
+    UNIQUE(org_id, slug)
+);
+
+CREATE INDEX IF NOT EXISTS idx_projects_org_id ON projects(org_id);
+CREATE INDEX IF NOT EXISTS idx_projects_slug ON projects(slug);
+CREATE INDEX IF NOT EXISTS idx_projects_team_id ON projects(team_id) WHERE team_id IS NOT NULL;
+-- Partial indexes for non-deleted projects (most queries filter by deleted_at IS NULL)
+CREATE INDEX IF NOT EXISTS idx_projects_org_active ON projects(org_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_projects_org_slug_active ON projects(org_id, slug) WHERE deleted_at IS NULL;
+
+-- Users (external identity, linked via external_id)
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY NOT NULL,
+    external_id TEXT NOT NULL UNIQUE,
+    email TEXT UNIQUE,
+    name TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_external_id ON users(external_id);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+
+-- Organization memberships (users belong to organizations)
+-- source: 'manual' (admin/API), 'jit' (SSO login), 'scim' (IdP push)
+CREATE TABLE IF NOT EXISTS org_memberships (
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'member',
+    source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'jit', 'scim')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (org_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_org_members_user_id ON org_memberships(user_id);
+-- Index for querying memberships by source (used by sync_memberships_on_login)
+CREATE INDEX IF NOT EXISTS idx_org_members_source ON org_memberships(user_id, source);
+-- Unique index enforcing single-org membership: each user can belong to at most one organization.
+-- This prevents race conditions in add_to_org and provides database-level enforcement.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_org_memberships_single_org ON org_memberships(user_id);
+
+-- Project memberships (users belong to projects)
+-- source: 'manual' (admin/API), 'jit' (SSO login), 'scim' (IdP push)
+CREATE TABLE IF NOT EXISTS project_memberships (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'member',
+    source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'jit', 'scim')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (project_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_members_user_id ON project_memberships(user_id);
+-- Index for querying memberships by source
+CREATE INDEX IF NOT EXISTS idx_project_members_source ON project_memberships(user_id, source);
+
+-- Team memberships (users belong to teams)
+-- source: 'manual' (admin/API), 'jit' (SSO login), 'scim' (IdP push)
+CREATE TABLE IF NOT EXISTS team_memberships (
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'member',
+    source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'jit', 'scim')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (team_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_team_members_user_id ON team_memberships(user_id);
+CREATE INDEX IF NOT EXISTS idx_team_members_team_id ON team_memberships(team_id);
+-- Index for querying memberships by source (used by sync_memberships_on_login)
+CREATE INDEX IF NOT EXISTS idx_team_members_source ON team_memberships(user_id, source);
+
+-- SSO Group Mappings (maps IdP groups to Hadrian teams/roles)
+-- Used for JIT provisioning: when a user logs in via SSO, their IdP groups
+-- are looked up in this table to determine which teams they should be added to.
+-- sso_connection_name: identifies the SSO connection from config (defaults to 'default')
+-- idp_group: the exact group name as it appears in the IdP's groups claim
+-- Multiple mappings per IdP group are allowed (e.g., one group -> multiple teams)
+CREATE TABLE IF NOT EXISTS sso_group_mappings (
+    id TEXT PRIMARY KEY NOT NULL,
+    -- Which SSO connection this mapping applies to (from config)
+    sso_connection_name TEXT NOT NULL DEFAULT 'default',
+    -- The IdP group name (exactly as it appears in the groups claim)
+    idp_group TEXT NOT NULL,
+    -- Organization context (required - mappings are org-scoped)
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    -- Optional: Team to add user to when they have this IdP group
+    team_id TEXT REFERENCES teams(id) ON DELETE CASCADE,
+    -- Optional: Role to assign (within the team if team_id set, otherwise org role)
+    role TEXT,
+    -- Priority for role precedence (higher = wins when multiple mappings target same team)
+    priority INTEGER NOT NULL DEFAULT 0,
+    -- Timestamps
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Index for looking up mappings by SSO connection and org
+CREATE INDEX IF NOT EXISTS idx_sso_group_mappings_connection_org ON sso_group_mappings(sso_connection_name, org_id);
+-- Index for looking up mappings by IdP group (for resolving user's groups)
+CREATE INDEX IF NOT EXISTS idx_sso_group_mappings_idp_group ON sso_group_mappings(idp_group);
+-- Index for org-scoped queries
+CREATE INDEX IF NOT EXISTS idx_sso_group_mappings_org_id ON sso_group_mappings(org_id);
+-- Unique constraint: prevent duplicate mappings (same connection + group + org + team combination)
+-- team_id can be NULL, so we need partial indexes for uniqueness
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sso_group_mappings_unique_with_team
+    ON sso_group_mappings(sso_connection_name, idp_group, org_id, team_id) WHERE team_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sso_group_mappings_unique_without_team
+    ON sso_group_mappings(sso_connection_name, idp_group, org_id) WHERE team_id IS NULL;
+
+-- Organization SSO Configurations (per-org OIDC/SAML settings)
+-- Each organization can have its own IdP configuration for multi-tenant SSO.
+-- When a user logs in, the system can route to the correct IdP based on email domain.
+CREATE TABLE IF NOT EXISTS org_sso_configs (
+    id TEXT PRIMARY KEY NOT NULL,
+    -- Organization this SSO config belongs to (one SSO config per org)
+    org_id TEXT NOT NULL UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
+    -- Provider type: 'oidc' or 'saml'
+    provider_type TEXT NOT NULL DEFAULT 'oidc' CHECK (provider_type IN ('oidc', 'saml')),
+
+    -- ==========================================================================
+    -- OIDC Configuration (used when provider_type = 'oidc')
+    -- ==========================================================================
+    -- OIDC issuer URL (e.g., "https://accounts.google.com")
+    -- Required for OIDC, NULL for SAML
+    issuer TEXT,
+    -- OIDC discovery URL (defaults to issuer/.well-known/openid-configuration)
+    discovery_url TEXT,
+    -- OAuth2 client ID (required for OIDC, NULL for SAML)
+    client_id TEXT,
+    -- Client secret stored in secret manager, this is the key reference
+    -- Required for OIDC, NULL for SAML
+    client_secret_key TEXT,
+    -- Redirect URI (optional - can use global default)
+    redirect_uri TEXT,
+    -- Scopes as space-separated string (e.g., 'openid email profile groups')
+    scopes TEXT NOT NULL DEFAULT 'openid email profile',
+    -- Claims configuration (OIDC-specific)
+    identity_claim TEXT,
+    org_claim TEXT,
+    groups_claim TEXT,
+
+    -- ==========================================================================
+    -- SAML 2.0 Configuration (used when provider_type = 'saml')
+    -- ==========================================================================
+    -- IdP metadata URL for auto-configuration (alternative to manual config)
+    saml_metadata_url TEXT,
+    -- IdP entity identifier (e.g., "https://idp.example.com/metadata")
+    saml_idp_entity_id TEXT,
+    -- IdP Single Sign-On service URL (HTTP-Redirect or HTTP-POST binding)
+    saml_idp_sso_url TEXT,
+    -- IdP Single Logout service URL (optional)
+    saml_idp_slo_url TEXT,
+    -- IdP X.509 certificate for signature validation (PEM format)
+    saml_idp_certificate TEXT,
+    -- Service Provider entity ID (Hadrian's identifier to the IdP)
+    saml_sp_entity_id TEXT,
+    -- NameID format to request (e.g., 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress')
+    saml_name_id_format TEXT,
+    -- Whether to sign AuthnRequests
+    saml_sign_requests INTEGER NOT NULL DEFAULT 0,
+    -- SP private key reference in secret manager (used for signing requests)
+    saml_sp_private_key_ref TEXT,
+    -- SP X.509 certificate for metadata (PEM format, not a secret) (SAML fix 2024)
+    saml_sp_certificate TEXT,
+    -- Whether to force re-authentication at IdP
+    saml_force_authn INTEGER NOT NULL DEFAULT 0,
+    -- Requested authentication context class (e.g., 'urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport')
+    saml_authn_context_class_ref TEXT,
+    -- SAML attribute name for user identity (like identity_claim for OIDC)
+    saml_identity_attribute TEXT,
+    -- SAML attribute name for email
+    saml_email_attribute TEXT,
+    -- SAML attribute name for display name
+    saml_name_attribute TEXT,
+    -- SAML attribute name for groups
+    saml_groups_attribute TEXT,
+    -- JIT provisioning settings (mirrors ProvisioningConfig)
+    provisioning_enabled INTEGER NOT NULL DEFAULT 1,
+    create_users INTEGER NOT NULL DEFAULT 1,
+    default_team_id TEXT REFERENCES teams(id) ON DELETE SET NULL,
+    default_org_role TEXT NOT NULL DEFAULT 'member',
+    default_team_role TEXT NOT NULL DEFAULT 'member',
+    -- JSON array of allowed email domains (e.g., '["acme.com", "acme.io"]')
+    allowed_email_domains TEXT,
+    sync_attributes_on_login INTEGER NOT NULL DEFAULT 0,
+    sync_memberships_on_login INTEGER NOT NULL DEFAULT 1,
+    -- SSO enforcement mode: 'optional' (allow other auth), 'required' (SSO only), 'test' (shadow mode)
+    enforcement_mode TEXT NOT NULL DEFAULT 'optional' CHECK (enforcement_mode IN ('optional', 'required', 'test')),
+    -- Whether this SSO config is active
+    enabled INTEGER NOT NULL DEFAULT 1,
+    -- Timestamps
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Index for looking up SSO config by org_id (also covered by UNIQUE constraint)
+CREATE INDEX IF NOT EXISTS idx_org_sso_configs_org_id ON org_sso_configs(org_id);
+-- Index for enabled SSO configs (for IdP discovery)
+CREATE INDEX IF NOT EXISTS idx_org_sso_configs_enabled ON org_sso_configs(enabled) WHERE enabled = 1;
+
+-- Domain Verifications for SSO (verify ownership of email domains)
+-- status: 'pending', 'verified', 'failed'
+CREATE TABLE IF NOT EXISTS domain_verifications (
+    id TEXT PRIMARY KEY NOT NULL,
+    -- SSO config this verification belongs to
+    org_sso_config_id TEXT NOT NULL REFERENCES org_sso_configs(id) ON DELETE CASCADE,
+    -- The domain being verified (e.g., "acme.com")
+    domain TEXT NOT NULL,
+    -- Random token for DNS TXT record verification
+    verification_token TEXT NOT NULL,
+    -- Verification status
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'verified', 'failed')),
+    -- The actual DNS TXT record found during verification (for audit)
+    dns_txt_record TEXT,
+    -- Number of verification attempts
+    verification_attempts INTEGER NOT NULL DEFAULT 0,
+    -- Last verification attempt timestamp
+    last_attempt_at TEXT,
+    -- When the domain was successfully verified
+    verified_at TEXT,
+    -- Optional: require re-verification after this date
+    expires_at TEXT,
+    -- Timestamps
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Each domain can only be verified once per SSO config
+    UNIQUE(org_sso_config_id, domain)
+);
+
+-- Index for looking up verifications by SSO config
+CREATE INDEX IF NOT EXISTS idx_domain_verifications_config_id ON domain_verifications(org_sso_config_id);
+-- Index for looking up verifications by domain (for discovery)
+CREATE INDEX IF NOT EXISTS idx_domain_verifications_domain ON domain_verifications(domain);
+-- Index for verified domains (for SSO discovery)
+CREATE INDEX IF NOT EXISTS idx_domain_verifications_verified ON domain_verifications(domain, status) WHERE status = 'verified';
+-- Index for config+status queries (list_verified_by_config, has_verified_domain)
+CREATE INDEX IF NOT EXISTS idx_domain_verifications_config_status ON domain_verifications(org_sso_config_id, status);
+
+-- =============================================================================
+-- SCIM 2.0 Provisioning Tables
+-- =============================================================================
+
+-- Per-organization SCIM configuration
+-- Enables automatic user provisioning/deprovisioning from IdPs (Okta, Azure AD, etc.)
+CREATE TABLE IF NOT EXISTS org_scim_configs (
+    id TEXT PRIMARY KEY NOT NULL,
+    -- Organization this SCIM config belongs to (one SCIM config per org)
+    org_id TEXT NOT NULL UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
+    -- Whether SCIM provisioning is enabled
+    enabled INTEGER NOT NULL DEFAULT 1,
+    -- Bearer token hash for SCIM API authentication
+    token_hash TEXT NOT NULL,
+    -- Token prefix for identification (first 8 chars, like 'scim_xxxx')
+    token_prefix TEXT NOT NULL,
+    -- Last time the SCIM token was used
+    token_last_used_at TEXT,
+    -- Provisioning settings
+    create_users INTEGER NOT NULL DEFAULT 1,
+    default_team_id TEXT REFERENCES teams(id) ON DELETE SET NULL,
+    default_org_role TEXT NOT NULL DEFAULT 'member',
+    default_team_role TEXT NOT NULL DEFAULT 'member',
+    -- Whether to sync display name from SCIM
+    sync_display_name INTEGER NOT NULL DEFAULT 1,
+    -- Deprovisioning behavior: delete user entirely (false = just deactivate)
+    deactivate_deletes_user INTEGER NOT NULL DEFAULT 0,
+    -- Whether to revoke all API keys when user is deactivated via SCIM
+    revoke_api_keys_on_deactivate INTEGER NOT NULL DEFAULT 1,
+    -- Timestamps
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_org_scim_configs_org_id ON org_scim_configs(org_id);
+CREATE INDEX IF NOT EXISTS idx_org_scim_configs_enabled ON org_scim_configs(enabled) WHERE enabled = 1;
+-- Index for token authentication lookups
+CREATE INDEX IF NOT EXISTS idx_org_scim_configs_token_prefix ON org_scim_configs(token_prefix);
+
+-- Map SCIM external IDs to Hadrian user IDs (per-org)
+-- This allows the same user to have different SCIM IDs in different orgs
+-- and tracks the SCIM-specific "active" state separately from user deletion
+CREATE TABLE IF NOT EXISTS scim_user_mappings (
+    id TEXT PRIMARY KEY NOT NULL,
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    -- SCIM external ID from IdP (e.g., Okta user ID like '00u1a2b3c4d5e6f7g8h9')
+    scim_external_id TEXT NOT NULL,
+    -- Hadrian user this maps to
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    -- SCIM "active" status (separate from user existence)
+    active INTEGER NOT NULL DEFAULT 1,
+    -- Timestamps
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Each SCIM external ID can only map to one user per org
+    UNIQUE(org_id, scim_external_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_scim_user_mappings_org_id ON scim_user_mappings(org_id);
+CREATE INDEX IF NOT EXISTS idx_scim_user_mappings_user_id ON scim_user_mappings(user_id);
+CREATE INDEX IF NOT EXISTS idx_scim_user_mappings_scim_external_id ON scim_user_mappings(org_id, scim_external_id);
+
+-- Map SCIM groups to Hadrian teams (per-org)
+-- When a SCIM group is pushed from the IdP, it maps to a Hadrian team
+CREATE TABLE IF NOT EXISTS scim_group_mappings (
+    id TEXT PRIMARY KEY NOT NULL,
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    -- SCIM group ID from IdP
+    scim_group_id TEXT NOT NULL,
+    -- Hadrian team this maps to
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    -- Display name from SCIM (for reference)
+    display_name TEXT,
+    -- Timestamps
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Each SCIM group can only map to one team per org
+    UNIQUE(org_id, scim_group_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_scim_group_mappings_org_id ON scim_group_mappings(org_id);
+CREATE INDEX IF NOT EXISTS idx_scim_group_mappings_team_id ON scim_group_mappings(team_id);
+CREATE INDEX IF NOT EXISTS idx_scim_group_mappings_scim_group_id ON scim_group_mappings(org_id, scim_group_id);
+
+-- =============================================================================
+-- Per-organization RBAC policies
+-- =============================================================================
+
+-- Per-organization RBAC policies for runtime policy management
+-- Organizations can define their own CEL-based authorization policies
+-- effect: 'allow' or 'deny' (explicit allow/deny semantic)
+-- priority: Higher priority policies are evaluated first (descending order)
+CREATE TABLE IF NOT EXISTS org_rbac_policies (
+    id TEXT PRIMARY KEY NOT NULL,
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT,
+    -- Resource pattern (e.g., 'projects/*', 'teams/engineering/*', '*')
+    resource TEXT NOT NULL DEFAULT '*',
+    -- Action pattern (e.g., 'read', 'write', 'delete', '*')
+    action TEXT NOT NULL DEFAULT '*',
+    -- CEL expression for additional conditions
+    condition TEXT NOT NULL,
+    -- Policy effect: 'allow' or 'deny'
+    effect TEXT NOT NULL DEFAULT 'deny' CHECK (effect IN ('allow', 'deny')),
+    -- Higher priority = evaluated first (descending order)
+    priority INTEGER NOT NULL DEFAULT 0,
+    -- Whether this policy is active
+    enabled INTEGER NOT NULL DEFAULT 1,
+    -- Version number (incremented on each update for optimistic locking)
+    version INTEGER NOT NULL DEFAULT 1,
+    -- Timestamps
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Soft delete timestamp (NULL = active, set = deleted)
+    deleted_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_org_rbac_policies_org_id ON org_rbac_policies(org_id);
+-- Partial index for enabled policies (most queries filter by enabled = 1 and not deleted)
+CREATE INDEX IF NOT EXISTS idx_org_rbac_policies_enabled ON org_rbac_policies(org_id, enabled) WHERE enabled = 1 AND deleted_at IS NULL;
+-- Index for priority-ordered evaluation
+CREATE INDEX IF NOT EXISTS idx_org_rbac_policies_priority ON org_rbac_policies(org_id, priority DESC);
+-- Partial unique index: policy names must be unique within an org among non-deleted policies
+CREATE UNIQUE INDEX IF NOT EXISTS idx_org_rbac_policies_org_name_active ON org_rbac_policies(org_id, name) WHERE deleted_at IS NULL;
+-- Partial index for non-deleted policies (query optimization)
+CREATE INDEX IF NOT EXISTS idx_org_rbac_policies_org_active ON org_rbac_policies(org_id) WHERE deleted_at IS NULL;
+
+-- Version history for org RBAC policies (for audit and rollback)
+-- Every update to a policy creates a new version record
+CREATE TABLE IF NOT EXISTS org_rbac_policy_versions (
+    id TEXT PRIMARY KEY NOT NULL,
+    policy_id TEXT NOT NULL REFERENCES org_rbac_policies(id) ON DELETE CASCADE,
+    -- Version number (matches the policy's version at time of creation)
+    version INTEGER NOT NULL,
+    -- Snapshot of policy fields at this version
+    name TEXT NOT NULL,
+    description TEXT,
+    resource TEXT NOT NULL,
+    action TEXT NOT NULL,
+    condition TEXT NOT NULL,
+    effect TEXT NOT NULL,
+    priority INTEGER NOT NULL,
+    enabled INTEGER NOT NULL,
+    -- Who created this version (null if system/migration)
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    -- Reason for the change (e.g., "Updated condition to include new team")
+    reason TEXT,
+    -- When this version was created
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Each version number must be unique per policy
+    UNIQUE(policy_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_org_rbac_policy_versions_policy_id ON org_rbac_policy_versions(policy_id);
+CREATE INDEX IF NOT EXISTS idx_org_rbac_policy_versions_created_by ON org_rbac_policy_versions(created_by);
+-- Index for fetching latest version efficiently
+CREATE INDEX IF NOT EXISTS idx_org_rbac_policy_versions_latest ON org_rbac_policy_versions(policy_id, version DESC);
+-- Index for cleanup jobs finding old versions by creation date
+CREATE INDEX IF NOT EXISTS idx_org_rbac_policy_versions_cleanup ON org_rbac_policy_versions(policy_id, created_at);
+
+-- =============================================================================
+
+-- API Keys (can belong to org, team, project, user, or service_account)
+-- owner_type: 'organization', 'team', 'project', 'user', 'service_account'
+-- budget_period: 'daily', 'monthly'
+CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    key_hash TEXT NOT NULL UNIQUE,
+    key_prefix TEXT NOT NULL,
+    owner_type TEXT NOT NULL CHECK (owner_type IN ('organization', 'team', 'project', 'user', 'service_account')),
+    owner_id TEXT NOT NULL,
+    -- Budget limit in cents (INTEGER for precision, matching PostgreSQL DECIMAL)
+    budget_amount INTEGER,
+    budget_period TEXT CHECK (budget_period IN ('daily', 'monthly')),
+    revoked_at TEXT,
+    expires_at TEXT,
+    last_used_at TEXT,
+    -- API Key scoping fields (Phase 1 of API Key Scoping and Lifecycle)
+    -- JSON arrays stored as TEXT, null = no restriction
+    scopes TEXT,                  -- Permission scopes (e.g., ["chat", "embeddings"])
+    allowed_models TEXT,          -- Model patterns (e.g., ["gpt-4*", "claude-3-opus"])
+    ip_allowlist TEXT,            -- CIDR blocks (e.g., ["10.0.0.0/8"])
+    -- Per-key rate limit overrides (null = use global defaults)
+    rate_limit_rpm INTEGER,       -- Requests per minute
+    rate_limit_tpm INTEGER,       -- Tokens per minute
+    -- Key rotation tracking
+    rotated_from_key_id TEXT REFERENCES api_keys(id) ON DELETE SET NULL,
+    rotation_grace_until TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash);
+CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys(owner_type, owner_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(key_prefix);
+-- Partial index for active (non-revoked) keys - used in authentication hot path
+CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys(key_hash) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_api_keys_owner_active ON api_keys(owner_type, owner_id) WHERE revoked_at IS NULL;
+-- Partial index for service account-owned API keys (used when deleting service accounts)
+CREATE INDEX IF NOT EXISTS idx_api_keys_service_account_owner ON api_keys(owner_type, owner_id) WHERE owner_type = 'service_account';
+
+-- Dynamic Providers (org, project, or user can define custom providers)
+-- owner_type: 'organization', 'team', 'project', 'user'
+CREATE TABLE IF NOT EXISTS dynamic_providers (
+    id TEXT PRIMARY KEY NOT NULL,
+    owner_type TEXT NOT NULL CHECK (owner_type IN ('organization', 'team', 'project', 'user')),
+    owner_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    provider_type TEXT NOT NULL,
+    base_url TEXT NOT NULL DEFAULT '',
+    api_key_secret_ref TEXT,
+    config TEXT,
+    models TEXT NOT NULL DEFAULT '[]',
+    is_enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(owner_type, owner_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dynamic_providers_owner ON dynamic_providers(owner_type, owner_id);
+
+-- Usage records (for tracking request usage with principal-based attribution)
+CREATE TABLE IF NOT EXISTS usage_records (
+    id TEXT PRIMARY KEY NOT NULL,
+    -- Unique request identifier for idempotency (prevents duplicate charges)
+    request_id TEXT NOT NULL UNIQUE,
+    -- Attribution context: nullable to support session-based users without API keys
+    api_key_id TEXT REFERENCES api_keys(id) ON DELETE SET NULL,
+    -- Principal-based attribution fields
+    user_id TEXT,
+    org_id TEXT,
+    project_id TEXT,
+    team_id TEXT,
+    service_account_id TEXT,
+    model TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    -- Cost in microcents (1/1,000,000 of a dollar) for sub-cent precision
+    cost_microcents INTEGER NOT NULL DEFAULT 0,
+    http_referer TEXT,
+    recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Additional request metadata
+    streamed INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+    finish_reason TEXT,
+    latency_ms INTEGER,
+    cancelled INTEGER NOT NULL DEFAULT 0,
+    status_code INTEGER,
+    pricing_source TEXT NOT NULL DEFAULT 'none',
+    image_count INTEGER,
+    audio_seconds INTEGER,
+    character_count INTEGER,
+    provider_source TEXT
+);
+
+-- SQLite doesn't support partial indexes; use regular indexes
+CREATE INDEX IF NOT EXISTS idx_usage_records_api_key_id ON usage_records(api_key_id);
+CREATE INDEX IF NOT EXISTS idx_usage_records_api_key_date ON usage_records(api_key_id, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_usage_records_api_key_model ON usage_records(api_key_id, model);
+CREATE INDEX IF NOT EXISTS idx_usage_records_api_key_date_desc ON usage_records(api_key_id, recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_records_org_date ON usage_records(org_id, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_usage_records_user_date ON usage_records(user_id, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_usage_records_project_date ON usage_records(project_id, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_usage_records_team_date ON usage_records(team_id, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_usage_records_recorded_at ON usage_records(recorded_at);
+CREATE INDEX IF NOT EXISTS idx_usage_records_model ON usage_records(model);
+CREATE INDEX IF NOT EXISTS idx_usage_records_request_id ON usage_records(request_id);
+
+-- Daily spend aggregates (materialized from usage_records periodically)
+CREATE TABLE IF NOT EXISTS daily_spend (
+    id TEXT PRIMARY KEY NOT NULL,
+    api_key_id TEXT REFERENCES api_keys(id) ON DELETE SET NULL,
+    -- Principal-based attribution (mirrors usage_records)
+    user_id TEXT,
+    org_id TEXT,
+    project_id TEXT,
+    team_id TEXT,
+    service_account_id TEXT,
+    date TEXT NOT NULL,
+    model TEXT NOT NULL,
+    -- Total cost in microcents (1/1,000,000 of a dollar) for sub-cent precision
+    total_cost_microcents INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    request_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_spend_date ON daily_spend(date);
+CREATE INDEX IF NOT EXISTS idx_daily_spend_api_key_date ON daily_spend(api_key_id, date);
+CREATE INDEX IF NOT EXISTS idx_daily_spend_org_date ON daily_spend(org_id, date);
+CREATE INDEX IF NOT EXISTS idx_daily_spend_user_date ON daily_spend(user_id, date);
+CREATE INDEX IF NOT EXISTS idx_daily_spend_project_date ON daily_spend(project_id, date);
+CREATE INDEX IF NOT EXISTS idx_daily_spend_team_date ON daily_spend(team_id, date);
+
+-- Model pricing configuration
+-- Allows users to configure pricing for models at different scopes
+-- Pricing is looked up in order: user -> project -> organization -> static config -> defaults
+-- owner_type: 'organization', 'team', 'project', 'user', or NULL for static/global pricing
+CREATE TABLE IF NOT EXISTS model_pricing (
+    id TEXT PRIMARY KEY NOT NULL,
+    owner_type TEXT CHECK (owner_type IN ('organization', 'team', 'project', 'user') OR owner_type IS NULL),
+    owner_id TEXT,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    -- All costs in microcents per 1M tokens (divide by 10000 for cents)
+    input_per_1m_tokens INTEGER NOT NULL DEFAULT 0,
+    output_per_1m_tokens INTEGER NOT NULL DEFAULT 0,
+    per_image INTEGER,
+    per_request INTEGER,
+    cached_input_per_1m_tokens INTEGER,
+    cache_write_per_1m_tokens INTEGER,
+    reasoning_per_1m_tokens INTEGER,
+    -- Per-second pricing for audio transcription/translation (microcents/sec)
+    per_second INTEGER,
+    -- Per-character pricing for TTS (microcents per 1M characters)
+    per_1m_characters INTEGER,
+    -- Source of this pricing: 'manual', 'provider_api', 'default'
+    source TEXT NOT NULL DEFAULT 'manual',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    -- Note: Uniqueness is enforced via partial indexes below (not table-level UNIQUE)
+    -- because SQLite treats NULL as distinct in UNIQUE constraints
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_pricing_owner ON model_pricing(owner_type, owner_id);
+CREATE INDEX IF NOT EXISTS idx_model_pricing_provider_model ON model_pricing(provider, model);
+CREATE INDEX IF NOT EXISTS idx_model_pricing_owner_provider ON model_pricing(owner_type, owner_id, provider);
+-- Global pricing: unique on (provider, model) when owner is NULL
+-- This handles SQLite's NULL distinctness in UNIQUE constraints
+CREATE UNIQUE INDEX IF NOT EXISTS idx_model_pricing_unique_global
+    ON model_pricing(provider, model) WHERE owner_type IS NULL;
+-- Scoped pricing: unique on (owner_type, owner_id, provider, model) when owner is set
+CREATE UNIQUE INDEX IF NOT EXISTS idx_model_pricing_unique_scoped
+    ON model_pricing(owner_type, owner_id, provider, model) WHERE owner_type IS NOT NULL;
+
+-- Dead-letter queue for failed operations
+-- Stores failed operations (e.g., usage logging) for later recovery or inspection
+CREATE TABLE IF NOT EXISTS dead_letter_queue (
+    id TEXT PRIMARY KEY NOT NULL,
+    entry_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    error TEXT NOT NULL,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_retry_at TEXT,
+    metadata TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_dlq_entry_type ON dead_letter_queue(entry_type);
+CREATE INDEX IF NOT EXISTS idx_dlq_created_at ON dead_letter_queue(created_at);
+CREATE INDEX IF NOT EXISTS idx_dlq_retry_count ON dead_letter_queue(retry_count);
+
+-- Conversations (for storing chat message history)
+-- owner_type: 'project' or 'user'
+-- pin_order: NULL = not pinned, 0-N = pinned with order (lower = higher in list)
+CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY NOT NULL,
+    owner_type TEXT NOT NULL CHECK (owner_type IN ('project', 'user')),
+    owner_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    models TEXT NOT NULL DEFAULT '[]',
+    messages TEXT NOT NULL DEFAULT '[]',
+    pin_order INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    deleted_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_owner ON conversations(owner_type, owner_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_created_at ON conversations(created_at);
+-- Partial index for non-deleted conversations (most queries filter by deleted_at IS NULL)
+CREATE INDEX IF NOT EXISTS idx_conversations_owner_active ON conversations(owner_type, owner_id) WHERE deleted_at IS NULL;
+-- Index for pinned conversations (for efficient pinned queries per owner)
+CREATE INDEX IF NOT EXISTS idx_conversations_owner_pinned ON conversations(owner_type, owner_id, pin_order) WHERE pin_order IS NOT NULL AND deleted_at IS NULL;
+
+-- Audit logs for tracking admin operations
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id TEXT PRIMARY KEY NOT NULL,
+    -- When the action occurred
+    timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Who performed the action: 'user', 'api_key', 'system'
+    actor_type TEXT NOT NULL CHECK (actor_type IN ('user', 'api_key', 'system')),
+    -- ID of the actor (user_id or api_key_id, NULL for system)
+    actor_id TEXT,
+    -- The action performed (e.g., 'api_key.create', 'user.update')
+    action TEXT NOT NULL,
+    -- Type of resource affected (e.g., 'api_key', 'user', 'organization')
+    resource_type TEXT NOT NULL,
+    -- ID of the affected resource
+    resource_id TEXT NOT NULL,
+    -- Optional organization context
+    org_id TEXT REFERENCES organizations(id) ON DELETE SET NULL,
+    -- Optional project context
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    -- JSON with additional details (request info, before/after values, etc.)
+    details TEXT NOT NULL DEFAULT '{}',
+    -- Client IP address
+    ip_address TEXT,
+    -- Client user agent
+    user_agent TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor_type, actor_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_resource ON audit_logs(resource_type, resource_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_org_id ON audit_logs(org_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_project_id ON audit_logs(project_id);
+-- Composite index for common filter pattern: action + resource_type
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action_resource ON audit_logs(action, resource_type);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_org_action_time ON audit_logs(org_id, action, timestamp DESC);
+
+-- ============================================================================
+-- Collections (RAG/Vector Search)
+-- ============================================================================
+
+-- OpenAI Files API - stores uploaded files before they're added to vector stores
+-- purpose: 'assistants', 'batch', 'fine-tune', 'vision'
+-- status: 'uploaded', 'processed', 'error'
+CREATE TABLE IF NOT EXISTS files (
+    id TEXT PRIMARY KEY NOT NULL,
+    -- Ownership (who can access this file)
+    owner_type TEXT NOT NULL CHECK (owner_type IN ('organization', 'team', 'project', 'user')),
+    owner_id TEXT NOT NULL,
+    -- File metadata
+    filename TEXT NOT NULL,
+    purpose TEXT NOT NULL DEFAULT 'assistants' CHECK (purpose IN ('assistants', 'batch', 'fine-tune', 'vision')),
+    content_type TEXT,
+    size_bytes INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'uploaded' CHECK (status IN ('uploaded', 'processed', 'error')),
+    status_details TEXT,
+    -- SHA-256 hash of file content for deduplication (64 hex characters)
+    content_hash TEXT,
+    -- Storage
+    storage_backend TEXT NOT NULL DEFAULT 'database' CHECK (storage_backend IN ('database', 'filesystem', 's3')),
+    file_data BLOB,
+    storage_path TEXT,
+    -- Timestamps
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_files_owner ON files(owner_type, owner_id);
+CREATE INDEX IF NOT EXISTS idx_files_purpose ON files(purpose);
+CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
+-- Index for content hash lookups (deduplication queries)
+CREATE INDEX IF NOT EXISTS idx_files_content_hash ON files(content_hash) WHERE content_hash IS NOT NULL;
+
+-- Vector Stores table (vector stores for RAG)
+-- Follows OpenAI VectorStore schema with multi-tenant ownership
+-- owner_type: 'organization', 'team', 'project', 'user'
+-- status: 'in_progress', 'completed', 'expired'
+CREATE TABLE IF NOT EXISTS vector_stores (
+    id TEXT PRIMARY KEY NOT NULL,
+    -- Ownership (who can access this vector store)
+    owner_type TEXT NOT NULL CHECK (owner_type IN ('organization', 'team', 'project', 'user')),
+    owner_id TEXT NOT NULL,
+    -- Vector store metadata
+    name TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'completed' CHECK (status IN ('in_progress', 'completed', 'expired')),
+    -- Embedding configuration (set at creation, immutable)
+    embedding_model TEXT NOT NULL DEFAULT 'text-embedding-3-small',
+    embedding_dimensions INTEGER NOT NULL DEFAULT 1536,
+    -- Usage statistics
+    usage_bytes INTEGER NOT NULL DEFAULT 0,
+    -- File counts as JSON: {"cancelled":0, "completed":0, "failed":0, "in_progress":0, "total":0}
+    file_counts TEXT NOT NULL DEFAULT '{"cancelled":0,"completed":0,"failed":0,"in_progress":0,"total":0}',
+    -- Custom metadata (up to 16 key-value pairs, OpenAI-compatible)
+    metadata TEXT,
+    -- Expiration policy: {"anchor": "last_active_at", "days": N}
+    expires_after TEXT,
+    expires_at TEXT,
+    last_active_at TEXT,
+    -- Timestamps
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    deleted_at TEXT,
+    -- Unique name per owner
+    UNIQUE(owner_type, owner_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vector_stores_owner ON vector_stores(owner_type, owner_id);
+-- Partial index for non-deleted vector_stores (most queries filter by deleted_at IS NULL)
+CREATE INDEX IF NOT EXISTS idx_vector_stores_owner_active ON vector_stores(owner_type, owner_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_vector_stores_status ON vector_stores(status);
+CREATE INDEX IF NOT EXISTS idx_vector_stores_expires_at ON vector_stores(expires_at) WHERE expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_vector_stores_embedding_model ON vector_stores(embedding_model);
+
+-- Vector store files table (links files to vector stores)
+-- Follows OpenAI VectorStoreFile schema
+-- status: 'in_progress', 'completed', 'cancelled', 'failed'
+CREATE TABLE IF NOT EXISTS vector_store_files (
+    id TEXT PRIMARY KEY NOT NULL,
+    vector_store_id TEXT NOT NULL REFERENCES vector_stores(id) ON DELETE CASCADE,
+    file_id TEXT NOT NULL REFERENCES files(id),
+    -- Processing status
+    status TEXT NOT NULL DEFAULT 'in_progress' CHECK (status IN ('in_progress', 'completed', 'cancelled', 'failed')),
+    -- Processing statistics
+    usage_bytes INTEGER NOT NULL DEFAULT 0,
+    -- Error information (if status = failed): {"code": "string", "message": "string"}
+    last_error TEXT,
+    -- Chunking strategy: {"type": "auto"|"static", "static": {"max_chunk_size_tokens": N, "chunk_overlap_tokens": N}}
+    chunking_strategy TEXT,
+    -- Custom attributes for filtering (up to 16 key-value pairs)
+    attributes TEXT,
+    -- Timestamps
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Soft delete timestamp (NULL = not deleted)
+    deleted_at TEXT,
+    -- A file can only be in a vector store once (among non-deleted entries)
+    UNIQUE(vector_store_id, file_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vector_store_files_vector_store ON vector_store_files(vector_store_id);
+CREATE INDEX IF NOT EXISTS idx_vector_store_files_file ON vector_store_files(file_id);
+CREATE INDEX IF NOT EXISTS idx_vector_store_files_status ON vector_store_files(status);
+CREATE INDEX IF NOT EXISTS idx_vector_store_files_deleted_at ON vector_store_files(deleted_at) WHERE deleted_at IS NOT NULL;
+
+-- Note: Document chunks are stored in the vector database (pgvector or Qdrant),
+-- not in the relational database. This enables efficient similarity search
+-- without cross-database joins. See VectorStore trait for chunk operations.
+
+-- ============================================================================
+-- Prompts (reusable system prompt templates)
+-- ============================================================================
+
+-- Prompts table for saving and reusing system prompts
+-- owner_type: 'organization', 'team', 'project', 'user'
+CREATE TABLE IF NOT EXISTS prompts (
+    id TEXT PRIMARY KEY NOT NULL,
+    -- Ownership (who can access this prompt)
+    owner_type TEXT NOT NULL CHECK (owner_type IN ('organization', 'team', 'project', 'user')),
+    owner_id TEXT NOT NULL,
+    -- Prompt metadata
+    name TEXT NOT NULL,
+    description TEXT,
+    -- The actual prompt content (system message template)
+    content TEXT NOT NULL,
+    -- Optional metadata (temperature, max_tokens, etc.)
+    metadata TEXT,
+    -- Timestamps
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    deleted_at TEXT,
+    -- Unique name per owner
+    UNIQUE(owner_type, owner_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_prompts_owner ON prompts(owner_type, owner_id);
+-- Partial index for non-deleted prompts (most queries filter by deleted_at IS NULL)
+CREATE INDEX IF NOT EXISTS idx_prompts_owner_active ON prompts(owner_type, owner_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_prompts_name ON prompts(name);
+
+-- ============================================================================
+-- Service Accounts (machine identities for API key authentication with roles)
+-- ============================================================================
+
+-- Service accounts are first-class machine identities that can own API keys
+-- and carry roles for RBAC evaluation. This enables unified authorization
+-- across human users and machine identities.
+CREATE TABLE IF NOT EXISTS service_accounts (
+    id TEXT PRIMARY KEY NOT NULL,
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    slug TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    -- JSON array of role strings (e.g., '["admin", "developer"]')
+    -- These roles flow into the RBAC Subject when authenticating via API key
+    roles TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    deleted_at TEXT,
+    UNIQUE(org_id, slug)
+);
+
+CREATE INDEX IF NOT EXISTS idx_service_accounts_org_id ON service_accounts(org_id);
+CREATE INDEX IF NOT EXISTS idx_service_accounts_slug ON service_accounts(slug);
+-- Partial indexes for non-deleted service accounts (most queries filter by deleted_at IS NULL)
+CREATE INDEX IF NOT EXISTS idx_service_accounts_org_active ON service_accounts(org_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_service_accounts_org_slug_active ON service_accounts(org_id, slug) WHERE deleted_at IS NULL;

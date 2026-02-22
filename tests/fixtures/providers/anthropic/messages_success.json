@@ -1,0 +1,41 @@
+{
+  "id": "anthropic:messages:success",
+  "description": "Successful non-streaming Anthropic Messages API response",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-envoy-upstream-service-time": "2125",
+      "x-robots-tag": "none"
+    },
+    "body": {
+      "content": [
+        {
+          "text": "2\n3\n5\n7\n11\n13\n17\n19\n23\n29",
+          "type": "text"
+        }
+      ],
+      "id": "msg_016Pz7UZRFUZh4cqQN5Lefox",
+      "model": "claude-sonnet-4-20250514",
+      "role": "assistant",
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "type": "message",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "input_tokens": 25,
+        "output_tokens": 23,
+        "service_tier": "standard"
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "id": "openai:image_generation:success",
+  "description": "Successful image generation response (DALL-E 3)",
+  "request": {
+    "method": "POST",
+    "path": "/images/generations"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "req_img_12345abcdef"
+    },
+    "body": {
+      "created": 1713833628,
+      "data": [
+        {
+          "url": "https://oaidalleapiprodscus.blob.core.windows.net/private/test-image.png",
+          "revised_prompt": "A cute baby sea otter floating on its back in calm blue water, looking directly at the viewer with expressive eyes"
+        }
+      ]
+    }
+  }
+}

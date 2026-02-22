@@ -1,0 +1,141 @@
+---
+title: Load Balancing
+description: Configure provider selection strategies and health checks
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The `[features.load_balancing]` section configures how requests are distributed across providers when multiple providers support the same model.
+
+## Configuration Reference
+
+### Main Settings
+
+```toml
+[features.load_balancing]
+strategy = "round_robin"
+```
+
+| Key        | Type   | Default         | Description             |
+| ---------- | ------ | --------------- | ----------------------- |
+| `strategy` | string | `"round_robin"` | Load balancing strategy |
+
+### Strategies
+
+| Strategy            | Description                                   |
+| ------------------- | --------------------------------------------- |
+| `round_robin`       | Cycle through providers sequentially          |
+| `least_connections` | Route to provider with fewest active requests |
+| `random`            | Random provider selection                     |
+| `weighted`          | Distribute based on configured weights        |
+| `latency_based`     | Route to lowest-latency provider              |
+| `cost_based`        | Route to lowest-cost provider                 |
+
+```toml
+# Round Robin (default)
+[features.load_balancing]
+strategy = "round_robin"
+
+# Latency-based
+[features.load_balancing]
+strategy = "latency_based"
+
+# Cost-based
+[features.load_balancing]
+strategy = "cost_based"
+```
+
+### Health Checks
+
+Configure provider health monitoring:
+
+```toml
+[features.load_balancing.health_check]
+enabled = true
+interval_secs = 30
+unhealthy_threshold = 3
+healthy_threshold = 2
+```
+
+| Key                   | Type    | Default | Description                            |
+| --------------------- | ------- | ------- | -------------------------------------- |
+| `enabled`             | boolean | `true`  | Enable health checks                   |
+| `interval_secs`       | integer | `30`    | Check interval in seconds              |
+| `unhealthy_threshold` | integer | `3`     | Consecutive failures to mark unhealthy |
+| `healthy_threshold`   | integer | `2`     | Consecutive successes to mark healthy  |
+
+## Complete Examples
+
+### Round Robin with Health Checks
+
+```toml
+[features.load_balancing]
+strategy = "round_robin"
+
+[features.load_balancing.health_check]
+enabled = true
+interval_secs = 30
+unhealthy_threshold = 3
+healthy_threshold = 2
+```
+
+### Latency-Based
+
+```toml
+[features.load_balancing]
+strategy = "latency_based"
+
+[features.load_balancing.health_check]
+enabled = true
+interval_secs = 15
+unhealthy_threshold = 2
+healthy_threshold = 1
+```
+
+### Cost-Based
+
+```toml
+[features.load_balancing]
+strategy = "cost_based"
+
+[features.load_balancing.health_check]
+enabled = true
+interval_secs = 60
+unhealthy_threshold = 5
+healthy_threshold = 2
+```
+
+### Disabled Health Checks
+
+```toml
+[features.load_balancing]
+strategy = "random"
+
+[features.load_balancing.health_check]
+enabled = false
+```
+
+## Strategy Selection
+
+| Use Case          | Recommended Strategy |
+| ----------------- | -------------------- |
+| General workloads | `round_robin`        |
+| Latency-sensitive | `latency_based`      |
+| Cost optimization | `cost_based`         |
+| Variable load     | `least_connections`  |
+| Testing/debugging | `random`             |
+
+## Health Check Behavior
+
+```
+Provider A: ● ● ● ✗ ✗ ✗ → Unhealthy (3 consecutive failures)
+Provider B: ● ● ● ● ● ● → Healthy
+Provider C: ✗ ✗ ● ● ● ● → Healthy (2 consecutive successes)
+```
+
+Unhealthy providers are excluded from load balancing until they pass `healthy_threshold` consecutive checks.
+
+## See Also
+
+- [Fallback Configuration](/docs/configuration/features/fallback) - Retry and fallback settings
+- [Provider Configuration](/docs/configuration/providers) - Provider setup

@@ -1,0 +1,68 @@
+{
+  "id": "vertex:tool_call:parallel",
+  "description": "Vertex generateContent with parallel function calls",
+  "request": {
+    "method": "POST",
+    "path": "/gemini-2.0-flash:generateContent",
+    "path_pattern": "/.+:generateContent"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-content-type-options": "nosniff",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "content-type": "application/json; charset=UTF-8"
+    },
+    "body": {
+      "candidates": [
+        {
+          "avgLogprobs": -0.0013747839257121086,
+          "content": {
+            "parts": [
+              {
+                "functionCall": {
+                  "args": {
+                    "location": "Tokyo, Japan"
+                  },
+                  "name": "get_weather"
+                }
+              },
+              {
+                "functionCall": {
+                  "args": {
+                    "location": "London, UK"
+                  },
+                  "name": "get_weather"
+                }
+              }
+            ],
+            "role": "model"
+          },
+          "finishReason": "STOP"
+        }
+      ],
+      "createTime": "2025-12-21T08:54:10.527061Z",
+      "modelVersion": "gemini-2.0-flash",
+      "responseId": "srVHadWVIK_I-O4Py5OCqAs",
+      "usageMetadata": {
+        "candidatesTokenCount": 14,
+        "candidatesTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 14
+          }
+        ],
+        "promptTokenCount": 45,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 45
+          }
+        ],
+        "totalTokenCount": 59,
+        "trafficType": "ON_DEMAND"
+      }
+    }
+  }
+}

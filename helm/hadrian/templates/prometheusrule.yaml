@@ -1,0 +1,415 @@
+{{- if .Values.prometheusRule.enabled }}
+{{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+  {{- fail "PrometheusRule requires prometheus-operator CRDs. Install with: kubectl apply -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/main/bundle.yaml" }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "hadrian.fullname" . }}
+  namespace: {{ .Values.prometheusRule.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "hadrian.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.prometheusRule.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  groups:
+    {{- if .Values.prometheusRule.defaultRules.enabled }}
+    # =========================================================================
+    # Critical Alerts - Immediate action required
+    # =========================================================================
+    - name: {{ include "hadrian.fullname" . }}.critical
+      rules:
+        {{- if .Values.prometheusRule.defaultRules.critical.highErrorRate.enabled }}
+        # High HTTP error rate (5xx responses)
+        - alert: HadrianHighErrorRate
+          expr: |
+            (
+              sum(rate(http_requests_total{status_class="5xx", job="{{ include "hadrian.fullname" . }}"}[5m]))
+              /
+              sum(rate(http_requests_total{job="{{ include "hadrian.fullname" . }}"}[5m]))
+            ) > {{ .Values.prometheusRule.defaultRules.critical.highErrorRate.threshold }}
+          for: {{ .Values.prometheusRule.defaultRules.critical.highErrorRate.for }}
+          labels:
+            severity: critical
+            {{- with .Values.prometheusRule.defaultRules.critical.highErrorRate.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Hadrian gateway has high error rate"
+            description: "More than {{ mulf .Values.prometheusRule.defaultRules.critical.highErrorRate.threshold 100 | int }}% of requests are returning 5xx errors for the last {{ .Values.prometheusRule.defaultRules.critical.highErrorRate.for }}."
+            runbook_url: "{{ .Values.prometheusRule.defaultRules.runbookUrl }}/HadrianHighErrorRate"
+            {{- with .Values.prometheusRule.defaultRules.critical.highErrorRate.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+
+        {{- if .Values.prometheusRule.defaultRules.critical.allProvidersUnhealthy.enabled }}
+        # All LLM providers are unhealthy
+        - alert: HadrianAllProvidersUnhealthy
+          expr: |
+            sum(provider_health{job="{{ include "hadrian.fullname" . }}"}) == 0
+            and
+            count(provider_health{job="{{ include "hadrian.fullname" . }}"}) > 0
+          for: {{ .Values.prometheusRule.defaultRules.critical.allProvidersUnhealthy.for }}
+          labels:
+            severity: critical
+            {{- with .Values.prometheusRule.defaultRules.critical.allProvidersUnhealthy.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "All Hadrian LLM providers are unhealthy"
+            description: "No LLM providers are responding to health checks. All API requests will fail."
+            runbook_url: "{{ .Values.prometheusRule.defaultRules.runbookUrl }}/HadrianAllProvidersUnhealthy"
+            {{- with .Values.prometheusRule.defaultRules.critical.allProvidersUnhealthy.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+
+        {{- if .Values.prometheusRule.defaultRules.critical.fallbackExhausted.enabled }}
+        # Fallback chain exhausted (all providers failed)
+        - alert: HadrianFallbackExhausted
+          expr: |
+            sum(rate(provider_fallback_exhausted_total{job="{{ include "hadrian.fullname" . }}"}[5m])) > {{ .Values.prometheusRule.defaultRules.critical.fallbackExhausted.threshold }}
+          for: {{ .Values.prometheusRule.defaultRules.critical.fallbackExhausted.for }}
+          labels:
+            severity: critical
+            {{- with .Values.prometheusRule.defaultRules.critical.fallbackExhausted.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Hadrian fallback chain exhausted"
+            description: "All providers in the fallback chain are failing. Requests cannot be completed."
+            runbook_url: "{{ .Values.prometheusRule.defaultRules.runbookUrl }}/HadrianFallbackExhausted"
+            {{- with .Values.prometheusRule.defaultRules.critical.fallbackExhausted.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+
+        {{- if .Values.prometheusRule.defaultRules.critical.highAuthFailureRate.enabled }}
+        # High authentication failure rate
+        - alert: HadrianHighAuthFailureRate
+          expr: |
+            (
+              sum(rate(auth_attempts_total{status="failure", job="{{ include "hadrian.fullname" . }}"}[5m]))
+              /
+              sum(rate(auth_attempts_total{job="{{ include "hadrian.fullname" . }}"}[5m]))
+            ) > {{ .Values.prometheusRule.defaultRules.critical.highAuthFailureRate.threshold }}
+          for: {{ .Values.prometheusRule.defaultRules.critical.highAuthFailureRate.for }}
+          labels:
+            severity: critical
+            {{- with .Values.prometheusRule.defaultRules.critical.highAuthFailureRate.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Hadrian has high authentication failure rate"
+            description: "More than {{ mulf .Values.prometheusRule.defaultRules.critical.highAuthFailureRate.threshold 100 | int }}% of authentication attempts are failing. Possible credential issues or attack."
+            runbook_url: "{{ .Values.prometheusRule.defaultRules.runbookUrl }}/HadrianHighAuthFailureRate"
+            {{- with .Values.prometheusRule.defaultRules.critical.highAuthFailureRate.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+
+    # =========================================================================
+    # Warning Alerts - Needs attention soon
+    # =========================================================================
+    - name: {{ include "hadrian.fullname" . }}.warning
+      rules:
+        {{- if .Values.prometheusRule.defaultRules.warning.highLatency.enabled }}
+        # High request latency (p95)
+        - alert: HadrianHighLatency
+          expr: |
+            histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job="{{ include "hadrian.fullname" . }}"}[5m])) by (le))
+            > {{ .Values.prometheusRule.defaultRules.warning.highLatency.threshold }}
+          for: {{ .Values.prometheusRule.defaultRules.warning.highLatency.for }}
+          labels:
+            severity: warning
+            {{- with .Values.prometheusRule.defaultRules.warning.highLatency.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Hadrian gateway has high latency"
+            description: "P95 latency is above {{ .Values.prometheusRule.defaultRules.warning.highLatency.threshold }}s for the last {{ .Values.prometheusRule.defaultRules.warning.highLatency.for }}."
+            runbook_url: "{{ .Values.prometheusRule.defaultRules.runbookUrl }}/HadrianHighLatency"
+            {{- with .Values.prometheusRule.defaultRules.warning.highLatency.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+
+        {{- if .Values.prometheusRule.defaultRules.warning.highLLMLatency.enabled }}
+        # High LLM request latency (p95)
+        - alert: HadrianHighLLMLatency
+          expr: |
+            histogram_quantile(0.95, sum(rate(llm_request_duration_seconds_bucket{job="{{ include "hadrian.fullname" . }}"}[5m])) by (le, provider))
+            > {{ .Values.prometheusRule.defaultRules.warning.highLLMLatency.threshold }}
+          for: {{ .Values.prometheusRule.defaultRules.warning.highLLMLatency.for }}
+          labels:
+            severity: warning
+            {{- with .Values.prometheusRule.defaultRules.warning.highLLMLatency.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Hadrian LLM requests have high latency"
+            description: "P95 LLM request latency is above {{ .Values.prometheusRule.defaultRules.warning.highLLMLatency.threshold }}s. Provider: {{`{{ $labels.provider }}`}}"
+            runbook_url: "{{ .Values.prometheusRule.defaultRules.runbookUrl }}/HadrianHighLLMLatency"
+            {{- with .Values.prometheusRule.defaultRules.warning.highLLMLatency.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+
+        {{- if .Values.prometheusRule.defaultRules.warning.circuitBreakerOpen.enabled }}
+        # Provider circuit breaker is open
+        - alert: HadrianCircuitBreakerOpen
+          expr: |
+            provider_circuit_breaker_state{job="{{ include "hadrian.fullname" . }}"} == 1
+          for: {{ .Values.prometheusRule.defaultRules.warning.circuitBreakerOpen.for }}
+          labels:
+            severity: warning
+            {{- with .Values.prometheusRule.defaultRules.warning.circuitBreakerOpen.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Hadrian circuit breaker is open for provider"
+            description: "Circuit breaker is open for provider {{`{{ $labels.provider }}`}}. Requests will be rejected until the provider recovers."
+            runbook_url: "{{ .Values.prometheusRule.defaultRules.runbookUrl }}/HadrianCircuitBreakerOpen"
+            {{- with .Values.prometheusRule.defaultRules.warning.circuitBreakerOpen.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+
+        {{- if .Values.prometheusRule.defaultRules.warning.providerUnhealthy.enabled }}
+        # Single provider unhealthy
+        - alert: HadrianProviderUnhealthy
+          expr: |
+            provider_health{job="{{ include "hadrian.fullname" . }}"} == 0
+          for: {{ .Values.prometheusRule.defaultRules.warning.providerUnhealthy.for }}
+          labels:
+            severity: warning
+            {{- with .Values.prometheusRule.defaultRules.warning.providerUnhealthy.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Hadrian LLM provider is unhealthy"
+            description: "Provider {{`{{ $labels.provider }}`}} is not responding to health checks."
+            runbook_url: "{{ .Values.prometheusRule.defaultRules.runbookUrl }}/HadrianProviderUnhealthy"
+            {{- with .Values.prometheusRule.defaultRules.warning.providerUnhealthy.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+
+        {{- if .Values.prometheusRule.defaultRules.warning.highRateLimitRate.enabled }}
+        # High rate limiting
+        - alert: HadrianHighRateLimitRate
+          expr: |
+            (
+              sum(rate(rate_limit_checks_total{result="limited", job="{{ include "hadrian.fullname" . }}"}[5m]))
+              /
+              sum(rate(rate_limit_checks_total{job="{{ include "hadrian.fullname" . }}"}[5m]))
+            ) > {{ .Values.prometheusRule.defaultRules.warning.highRateLimitRate.threshold }}
+          for: {{ .Values.prometheusRule.defaultRules.warning.highRateLimitRate.for }}
+          labels:
+            severity: warning
+            {{- with .Values.prometheusRule.defaultRules.warning.highRateLimitRate.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Hadrian has high rate limiting"
+            description: "More than {{ mulf .Values.prometheusRule.defaultRules.warning.highRateLimitRate.threshold 100 | int }}% of requests are being rate limited."
+            runbook_url: "{{ .Values.prometheusRule.defaultRules.runbookUrl }}/HadrianHighRateLimitRate"
+            {{- with .Values.prometheusRule.defaultRules.warning.highRateLimitRate.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+
+        {{- if .Values.prometheusRule.defaultRules.warning.budgetWarningsElevated.enabled }}
+        # Budget warnings elevated
+        - alert: HadrianBudgetWarningsElevated
+          expr: |
+            sum(rate(budget_warnings_total{job="{{ include "hadrian.fullname" . }}"}[1h])) > {{ .Values.prometheusRule.defaultRules.warning.budgetWarningsElevated.threshold }}
+          for: {{ .Values.prometheusRule.defaultRules.warning.budgetWarningsElevated.for }}
+          labels:
+            severity: warning
+            {{- with .Values.prometheusRule.defaultRules.warning.budgetWarningsElevated.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Hadrian budget warnings are elevated"
+            description: "Multiple API keys are approaching their budget limits."
+            runbook_url: "{{ .Values.prometheusRule.defaultRules.runbookUrl }}/HadrianBudgetWarningsElevated"
+            {{- with .Values.prometheusRule.defaultRules.warning.budgetWarningsElevated.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+
+        {{- if .Values.prometheusRule.defaultRules.warning.highGuardrailsBlockRate.enabled }}
+        # High guardrails block rate
+        - alert: HadrianHighGuardrailsBlockRate
+          expr: |
+            (
+              sum(rate(guardrails_evaluations_total{result="blocked", job="{{ include "hadrian.fullname" . }}"}[5m]))
+              /
+              sum(rate(guardrails_evaluations_total{job="{{ include "hadrian.fullname" . }}"}[5m]))
+            ) > {{ .Values.prometheusRule.defaultRules.warning.highGuardrailsBlockRate.threshold }}
+          for: {{ .Values.prometheusRule.defaultRules.warning.highGuardrailsBlockRate.for }}
+          labels:
+            severity: warning
+            {{- with .Values.prometheusRule.defaultRules.warning.highGuardrailsBlockRate.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Hadrian guardrails are blocking many requests"
+            description: "More than {{ mulf .Values.prometheusRule.defaultRules.warning.highGuardrailsBlockRate.threshold 100 | int }}% of requests are being blocked by guardrails."
+            runbook_url: "{{ .Values.prometheusRule.defaultRules.runbookUrl }}/HadrianHighGuardrailsBlockRate"
+            {{- with .Values.prometheusRule.defaultRules.warning.highGuardrailsBlockRate.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+
+        {{- if .Values.prometheusRule.defaultRules.warning.highDatabaseLatency.enabled }}
+        # High database latency
+        - alert: HadrianHighDatabaseLatency
+          expr: |
+            histogram_quantile(0.95, sum(rate(db_operation_duration_seconds_bucket{job="{{ include "hadrian.fullname" . }}"}[5m])) by (le))
+            > {{ .Values.prometheusRule.defaultRules.warning.highDatabaseLatency.threshold }}
+          for: {{ .Values.prometheusRule.defaultRules.warning.highDatabaseLatency.for }}
+          labels:
+            severity: warning
+            {{- with .Values.prometheusRule.defaultRules.warning.highDatabaseLatency.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Hadrian database operations have high latency"
+            description: "P95 database operation latency is above {{ .Values.prometheusRule.defaultRules.warning.highDatabaseLatency.threshold }}s."
+            runbook_url: "{{ .Values.prometheusRule.defaultRules.runbookUrl }}/HadrianHighDatabaseLatency"
+            {{- with .Values.prometheusRule.defaultRules.warning.highDatabaseLatency.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+
+        {{- if .Values.prometheusRule.defaultRules.warning.highStreamingTTFC.enabled }}
+        # High time to first chunk (streaming latency)
+        - alert: HadrianHighStreamingTTFC
+          expr: |
+            histogram_quantile(0.95, sum(rate(llm_streaming_time_to_first_chunk_seconds_bucket{job="{{ include "hadrian.fullname" . }}"}[5m])) by (le, provider))
+            > {{ .Values.prometheusRule.defaultRules.warning.highStreamingTTFC.threshold }}
+          for: {{ .Values.prometheusRule.defaultRules.warning.highStreamingTTFC.for }}
+          labels:
+            severity: warning
+            {{- with .Values.prometheusRule.defaultRules.warning.highStreamingTTFC.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Hadrian streaming has high time to first chunk"
+            description: "P95 time to first chunk is above {{ .Values.prometheusRule.defaultRules.warning.highStreamingTTFC.threshold }}s for provider {{`{{ $labels.provider }}`}}."
+            runbook_url: "{{ .Values.prometheusRule.defaultRules.runbookUrl }}/HadrianHighStreamingTTFC"
+            {{- with .Values.prometheusRule.defaultRules.warning.highStreamingTTFC.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+
+    # =========================================================================
+    # Info Alerts - Informational
+    # =========================================================================
+    - name: {{ include "hadrian.fullname" . }}.info
+      rules:
+        {{- if .Values.prometheusRule.defaultRules.info.highCacheMissRate.enabled }}
+        # High cache miss rate
+        - alert: HadrianHighCacheMissRate
+          expr: |
+            (
+              sum(rate(cache_operations_total{result="miss", job="{{ include "hadrian.fullname" . }}"}[5m]))
+              /
+              sum(rate(cache_operations_total{operation="get", job="{{ include "hadrian.fullname" . }}"}[5m]))
+            ) > {{ .Values.prometheusRule.defaultRules.info.highCacheMissRate.threshold }}
+          for: {{ .Values.prometheusRule.defaultRules.info.highCacheMissRate.for }}
+          labels:
+            severity: info
+            {{- with .Values.prometheusRule.defaultRules.info.highCacheMissRate.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Hadrian cache miss rate is elevated"
+            description: "Cache miss rate is above {{ mulf .Values.prometheusRule.defaultRules.info.highCacheMissRate.threshold 100 | int }}%. Consider cache sizing or TTL adjustments."
+            runbook_url: "{{ .Values.prometheusRule.defaultRules.runbookUrl }}/HadrianHighCacheMissRate"
+            {{- with .Values.prometheusRule.defaultRules.info.highCacheMissRate.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+
+        {{- if .Values.prometheusRule.defaultRules.info.dlqGrowing.enabled }}
+        # Dead letter queue growing
+        - alert: HadrianDLQGrowing
+          expr: |
+            sum(rate(dlq_operations_total{operation="enqueue", job="{{ include "hadrian.fullname" . }}"}[1h]))
+            -
+            sum(rate(dlq_operations_total{operation="dequeue", job="{{ include "hadrian.fullname" . }}"}[1h]))
+            > {{ .Values.prometheusRule.defaultRules.info.dlqGrowing.threshold }}
+          for: {{ .Values.prometheusRule.defaultRules.info.dlqGrowing.for }}
+          labels:
+            severity: info
+            {{- with .Values.prometheusRule.defaultRules.info.dlqGrowing.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Hadrian dead letter queue is growing"
+            description: "More messages are being added to the DLQ than processed. Check for processing errors."
+            runbook_url: "{{ .Values.prometheusRule.defaultRules.runbookUrl }}/HadrianDLQGrowing"
+            {{- with .Values.prometheusRule.defaultRules.info.dlqGrowing.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+
+        {{- if .Values.prometheusRule.defaultRules.info.highFallbackRate.enabled }}
+        # High fallback rate (not critical, but indicates primary provider issues)
+        - alert: HadrianHighFallbackRate
+          expr: |
+            (
+              sum(rate(provider_fallback_attempts_total{job="{{ include "hadrian.fullname" . }}"}[5m]))
+              /
+              sum(rate(llm_requests_total{job="{{ include "hadrian.fullname" . }}"}[5m]))
+            ) > {{ .Values.prometheusRule.defaultRules.info.highFallbackRate.threshold }}
+          for: {{ .Values.prometheusRule.defaultRules.info.highFallbackRate.for }}
+          labels:
+            severity: info
+            {{- with .Values.prometheusRule.defaultRules.info.highFallbackRate.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Hadrian is using fallback providers frequently"
+            description: "More than {{ mulf .Values.prometheusRule.defaultRules.info.highFallbackRate.threshold 100 | int }}% of requests are falling back to secondary providers."
+            runbook_url: "{{ .Values.prometheusRule.defaultRules.runbookUrl }}/HadrianHighFallbackRate"
+            {{- with .Values.prometheusRule.defaultRules.info.highFallbackRate.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+
+        {{- if .Values.prometheusRule.defaultRules.info.ragProcessingErrors.enabled }}
+        # RAG document processing errors
+        - alert: HadrianRAGProcessingErrors
+          expr: |
+            sum(rate(rag_document_processing_total{status="error", job="{{ include "hadrian.fullname" . }}"}[1h])) > {{ .Values.prometheusRule.defaultRules.info.ragProcessingErrors.threshold }}
+          for: {{ .Values.prometheusRule.defaultRules.info.ragProcessingErrors.for }}
+          labels:
+            severity: info
+            {{- with .Values.prometheusRule.defaultRules.info.ragProcessingErrors.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Hadrian RAG document processing has errors"
+            description: "Document processing is failing. Check file formats and processing configuration."
+            runbook_url: "{{ .Values.prometheusRule.defaultRules.runbookUrl }}/HadrianRAGProcessingErrors"
+            {{- with .Values.prometheusRule.defaultRules.info.ragProcessingErrors.annotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+    {{- end }}
+
+    {{- /* Custom rule groups */}}
+    {{- with .Values.prometheusRule.additionalGroups }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

@@ -1,0 +1,43 @@
+{
+  "id": "openai:completion:success",
+  "description": "Successful non-streaming text completion response",
+  "request": {
+    "method": "POST",
+    "path": "/completions"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-ratelimit-remaining-tokens": "89971",
+      "x-content-type-options": "nosniff",
+      "x-ratelimit-limit-requests": "3500",
+      "x-ratelimit-remaining-requests": "3498",
+      "content-type": "application/json",
+      "x-ratelimit-reset-requests": "17ms",
+      "x-ratelimit-reset-tokens": "19ms",
+      "x-request-id": "req_3100a280f9624025b746daaea65c5637",
+      "x-openai-proxy-wasm": "v0.1",
+      "x-envoy-upstream-service-time": "1725",
+      "x-ratelimit-limit-tokens": "90000"
+    },
+    "body": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "logprobs": null,
+          "text": " 4, 5, 6, 7, 8, 9, 10."
+        }
+      ],
+      "created": 1766147490,
+      "id": "cmpl-CoTvm2j9EmsHVzSCgh8dlHQgbdpZG",
+      "model": "gpt-3.5-turbo-instruct:20230824-v2",
+      "object": "text_completion",
+      "usage": {
+        "completion_tokens": 21,
+        "prompt_tokens": 47,
+        "total_tokens": 68
+      }
+    }
+  }
+}

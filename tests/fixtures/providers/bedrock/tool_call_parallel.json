@@ -1,0 +1,62 @@
+{
+  "id": "bedrock:tool_call:parallel",
+  "description": "Bedrock Converse API with parallel tool use responses",
+  "request": {
+    "method": "POST",
+    "path": "/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+    "path_pattern": "/model/.+/converse"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-amzn-requestid": "e1fcac94-26a6-4a7a-aa7f-6c2dae4244b0"
+    },
+    "body": {
+      "metrics": {
+        "latencyMs": 1893
+      },
+      "output": {
+        "message": {
+          "content": [
+            {
+              "text": "I'll check the weather in both Tokyo and London for you."
+            },
+            {
+              "toolUse": {
+                "input": {
+                  "location": "Tokyo, Japan"
+                },
+                "name": "get_weather",
+                "toolUseId": "tooluse_NAjL91AlTGqFF-LzVeeW-Q",
+                "type": "tool_use"
+              }
+            },
+            {
+              "toolUse": {
+                "input": {
+                  "location": "London, UK"
+                },
+                "name": "get_weather",
+                "toolUseId": "tooluse_Ff7vL0azQAaUBylOBOESpA",
+                "type": "tool_use"
+              }
+            }
+          ],
+          "role": "assistant"
+        }
+      },
+      "stopReason": "tool_use",
+      "usage": {
+        "cacheReadInputTokenCount": 0,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokenCount": 0,
+        "cacheWriteInputTokens": 0,
+        "inputTokens": 596,
+        "outputTokens": 107,
+        "serverToolUsage": {},
+        "totalTokens": 703
+      }
+    }
+  }
+}

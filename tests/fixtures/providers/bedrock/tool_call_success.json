@@ -1,0 +1,49 @@
+{
+  "id": "bedrock:tool_call:success",
+  "description": "Bedrock Converse API with single tool use response",
+  "request": {
+    "method": "POST",
+    "path": "/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+    "path_pattern": "/model/.+/converse"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-amzn-requestid": "14279676-f22d-4294-8ec3-bf7369ae3cd6"
+    },
+    "body": {
+      "metrics": {
+        "latencyMs": 2227
+      },
+      "output": {
+        "message": {
+          "content": [
+            {
+              "toolUse": {
+                "input": {
+                  "location": "San Francisco, USA"
+                },
+                "name": "get_weather",
+                "toolUseId": "tooluse_8IcDV3fsQsqfAKjk-wsTCw",
+                "type": "tool_use"
+              }
+            }
+          ],
+          "role": "assistant"
+        }
+      },
+      "stopReason": "tool_use",
+      "usage": {
+        "cacheReadInputTokenCount": 0,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokenCount": 0,
+        "cacheWriteInputTokens": 0,
+        "inputTokens": 596,
+        "outputTokens": 56,
+        "serverToolUsage": {},
+        "totalTokens": 652
+      }
+    }
+  }
+}

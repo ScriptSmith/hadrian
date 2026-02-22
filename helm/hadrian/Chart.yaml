@@ -1,0 +1,42 @@
+apiVersion: v2
+name: hadrian
+description: A Helm chart for Hadrian AI Gateway - unified OpenAI-compatible API for multiple LLM providers
+type: application
+
+# Chart version - follows SemVer
+version: 0.1.0
+
+# Application version - matches the gateway release
+appVersion: "0.1.0"
+
+home: https://github.com/ScriptSmith/hadrian
+sources:
+  - https://github.com/ScriptSmith/hadrian
+
+maintainers:
+  - name: Hadrian Team
+    url: https://github.com/hadrian-project
+
+keywords:
+  - ai
+  - llm
+  - gateway
+  - openai
+  - anthropic
+  - api
+  - proxy
+
+annotations:
+  artifacthub.io/license: Apache-2.0 OR MIT
+  artifacthub.io/category: ai-machine-learning
+
+# Dependencies
+dependencies:
+  - name: postgresql
+    version: "~18"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  - name: redis
+    version: "~20"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled

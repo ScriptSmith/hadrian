@@ -1,0 +1,137 @@
+# Prometheus Alerting Rules for Hadrian Gateway
+
+groups:
+  - name: hadrian-gateway
+    interval: 30s
+    rules:
+      # Gateway availability
+      - alert: GatewayDown
+        expr: up{job="hadrian-gateway"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gateway instance {{ $labels.instance }} is down"
+          description: "Gateway instance has been unreachable for more than 1 minute."
+
+      # High error rate
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{job="hadrian-gateway",status=~"5.."}[5m]))
+          / sum(rate(http_requests_total{job="hadrian-gateway"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is above 5% for the last 5 minutes."
+
+      # High latency
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="hadrian-gateway"}[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High latency detected"
+          description: "95th percentile latency is above 2 seconds."
+
+      # Budget exceeded
+      - alert: BudgetExceeded
+        expr: hadrian_budget_exceeded_total > 0
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: "Budget exceeded for organization"
+          description: "An organization has exceeded their budget limit."
+
+  - name: infrastructure
+    interval: 30s
+    rules:
+      # PostgreSQL
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is down"
+
+      - alert: PostgresReplicationLag
+        expr: pg_replication_lag > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL replication lag is high"
+          description: "Replication lag is {{ $value }} seconds."
+
+      # Redis
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis node is down"
+
+      - alert: RedisHighMemory
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis memory usage is high"
+          description: "Redis is using {{ $value | humanizePercentage }} of available memory."
+
+      # RabbitMQ
+      - alert: RabbitMQDown
+        expr: rabbitmq_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "RabbitMQ is down"
+
+      - alert: RabbitMQDLQBacklog
+        expr: rabbitmq_queue_messages{queue=~".*dlq.*"} > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dead letter queue has backlog"
+          description: "DLQ {{ $labels.queue }} has {{ $value }} messages."
+
+  - name: capacity
+    interval: 1m
+    rules:
+      - alert: HighCPUUsage
+        expr: |
+          100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+
+      - alert: HighMemoryUsage
+        expr: |
+          (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes)
+          / node_memory_MemTotal_bytes * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+
+      - alert: DiskSpaceLow
+        expr: |
+          (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}
+          / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}) * 100 < 15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }}"

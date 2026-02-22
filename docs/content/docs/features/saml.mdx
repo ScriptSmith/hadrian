@@ -1,0 +1,427 @@
+---
+title: SAML 2.0 Authentication
+description: Configure SAML 2.0 single sign-on for enterprise identity providers
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Cards, Card } from "fumadocs-ui/components/card";
+import { StoryEmbed } from "@/components/story-embed";
+
+SAML 2.0 enables single sign-on with enterprise identity providers that use the Security Assertion Markup Language protocol. Configure per-organization SAML through the Admin UI for seamless integration with corporate IdPs.
+
+## Why SAML?
+
+While OIDC is the modern standard, many enterprises require SAML 2.0:
+
+| Scenario                        | OIDC                     | SAML 2.0                   |
+| ------------------------------- | ------------------------ | -------------------------- |
+| Modern cloud IdPs               | Native support           | Supported                  |
+| Legacy enterprise IdPs (AD FS)  | Sometimes available      | **Required**               |
+| Regulatory compliance (FedRAMP) | Accepted                 | Often **required**         |
+| Signed assertions               | JWT signatures           | **XML digital signatures** |
+| Existing corporate integrations | May need new setup       | **Reuse existing config**  |
+| Air-gapped environments         | Requires HTTPS discovery | **Works offline**          |
+
+<Callout type="info">
+  Hadrian supports both OIDC and SAML 2.0 per organization. You can use OIDC for some organizations
+  and SAML for others based on their requirements.
+</Callout>
+
+## Supported Identity Providers
+
+SAML 2.0 is supported by all major enterprise identity providers:
+
+| Provider               | SAML Support | Notes                                 |
+| ---------------------- | ------------ | ------------------------------------- |
+| Okta                   | Full         | Native SAML application templates     |
+| Azure AD / Entra ID    | Full         | Enterprise application SAML SSO       |
+| AD FS                  | Full         | Windows Server Active Directory       |
+| OneLogin               | Full         | SAML connector with attribute mapping |
+| Keycloak               | Full         | Open source, self-hosted              |
+| Google Workspace       | Full         | Custom SAML app configuration         |
+| PingOne / PingFederate | Full         | Enterprise identity platform          |
+| Shibboleth             | Full         | Academic/research federation support  |
+| Authentik              | Full         | Open source, self-hosted              |
+
+## Prerequisites
+
+Before configuring SAML:
+
+1. **Organization exists** - Your organization must be created in Hadrian
+2. **Admin access** - You need organization admin role (or bootstrap API key for initial setup)
+3. **IdP access** - Admin access to your identity provider to create SAML applications
+
+## Initial Setup with Bootstrap Mode
+
+When deploying Hadrian for the first time, you face a chicken-and-egg problem: you need admin access to create the SSO configuration, but no users exist yet to authenticate. Bootstrap mode solves this by providing a pre-shared API key that works only when the database has no users.
+
+### Configuring Bootstrap
+
+Add bootstrap configuration to your `hadrian.toml`:
+
+```toml
+[auth.bootstrap]
+# Pre-shared API key for initial setup (use a strong, random value)
+api_key = "${HADRIAN_BOOTSTRAP_KEY}"
+
+# Domains to auto-verify when SSO config is created (skips DNS verification)
+auto_verify_domains = ["acme.com", "acme.io"]
+```
+
+| Setting               | Type     | Description                                               |
+| --------------------- | -------- | --------------------------------------------------------- |
+| `api_key`             | string   | Pre-shared key for admin access before users exist        |
+| `auto_verify_domains` | string[] | Domains automatically verified when SSO config is created |
+
+<Callout type="info">
+  The bootstrap API key only works when the database has **no users**. Organizations can exist
+  during bootstrap - the key remains active until the first user is provisioned via IdP login.
+</Callout>
+
+### Setup Flow
+
+1. **Start Hadrian** with bootstrap configuration
+
+2. **Create organization** using the bootstrap API key:
+
+   ```bash
+   curl -X POST https://gateway.example.com/admin/v1/organizations \
+     -H "Authorization: Bearer $HADRIAN_BOOTSTRAP_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"slug": "acme", "name": "Acme Corporation"}'
+   ```
+
+3. **Create SSO configuration** (domains in `auto_verify_domains` are automatically verified):
+
+   ```bash
+   curl -X POST https://gateway.example.com/admin/v1/organizations/acme/sso-config \
+     -H "Authorization: Bearer $HADRIAN_BOOTSTRAP_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "provider_type": "saml",
+       "enabled": true,
+       "saml_idp_entity_id": "https://idp.example.com/saml",
+       "saml_idp_sso_url": "https://idp.example.com/saml/sso",
+       "saml_idp_certificate": "-----BEGIN CERTIFICATE-----\n...",
+       "saml_sp_entity_id": "https://gateway.example.com/saml",
+       "allowed_email_domains": ["acme.com"],
+       "provisioning_enabled": true,
+       "provisioning_create_users": true
+     }'
+   ```
+
+4. **Create teams and group mappings** as needed using the bootstrap key
+
+5. **First IdP login** provisions a user → bootstrap auth is automatically disabled
+
+6. **User authenticates normally** via SAML with roles from IdP
+
+<Callout type="warn">
+  **Security:** Use a strong, random value for the bootstrap API key. Store it securely and rotate
+  after initial setup is complete. The key becomes inactive once the first user exists, but should
+  still be removed from configuration in production.
+</Callout>
+
+### RBAC Policy for Bootstrap
+
+If RBAC is enabled, add a policy to grant the bootstrap role full access:
+
+```toml
+[[auth.rbac.policies]]
+name = "bootstrap-full-access"
+description = "Bootstrap API key has full access for initial setup"
+resource = "*"
+action = "*"
+condition = "'_system_bootstrap' in subject.roles"
+effect = "allow"
+priority = 110
+```
+
+The `_system_bootstrap` role is automatically assigned to bootstrap API key requests. Roles starting with `_` are reserved and cannot be assigned by identity providers.
+
+## Configuring SAML
+
+Navigate to **Admin → Organizations → [Your Org] → SSO** and click **Configure SSO** or edit an existing configuration.
+
+### Choosing SAML Provider Type
+
+Select **SAML** as the provider type to see SAML-specific configuration fields.
+
+<StoryEmbed storyId="admin-orgssoconfigformmodal--samleditmode" height={700} />
+
+### IdP Configuration
+
+Configure your identity provider connection using one of two methods:
+
+#### Option 1: Metadata URL (Recommended)
+
+Enter your IdP's metadata URL and Hadrian will automatically fetch:
+
+- IdP Entity ID
+- SSO Service URL
+- Single Logout URL (if available)
+- X.509 signing certificate
+
+```
+https://your-idp.example.com/saml/metadata
+```
+
+#### Option 2: Manual Configuration
+
+<StoryEmbed storyId="admin-orgssoconfigformmodal--samlmanualconfig" height={700} />
+
+If your IdP doesn't expose a metadata URL, configure manually:
+
+| Field               | Description                                | Example                                  |
+| ------------------- | ------------------------------------------ | ---------------------------------------- |
+| **IdP Entity ID**   | Unique identifier for your IdP             | `https://idp.example.com/saml`           |
+| **SSO URL**         | IdP's Single Sign-On service endpoint      | `https://idp.example.com/saml/sso`       |
+| **SLO URL**         | Single Logout endpoint (optional)          | `https://idp.example.com/saml/slo`       |
+| **IdP Certificate** | X.509 certificate for signature validation | PEM format (-----BEGIN CERTIFICATE-----) |
+
+### SP Configuration
+
+Configure Hadrian as a SAML Service Provider:
+
+| Field             | Description                     | Example                                |
+| ----------------- | ------------------------------- | -------------------------------------- |
+| **SP Entity ID**  | Hadrian's unique identifier     | `https://gateway.example.com/saml`     |
+| **NameID Format** | User identifier format from IdP | Email Address, Persistent, Unspecified |
+| **Sign Requests** | Digitally sign AuthnRequests    | Enable for strict IdPs                 |
+| **Force Authn**   | Force re-authentication at IdP  | Enable for sensitive operations        |
+
+### Attribute Mappings
+
+Map SAML assertion attributes to Hadrian user fields:
+
+| Hadrian Field    | Common SAML Attributes                       | Default                                    |
+| ---------------- | -------------------------------------------- | ------------------------------------------ |
+| **Identity**     | `uid`, `sAMAccountName`, `userPrincipalName` | `urn:oid:0.9.2342.19200300.100.1.1` (uid)  |
+| **Email**        | `mail`, `emailAddress`                       | `urn:oid:0.9.2342.19200300.100.1.3` (mail) |
+| **Display Name** | `displayName`, `cn`                          | `urn:oid:2.16.840.1.113730.3.1.241`        |
+| **Groups**       | `memberOf`, `groups`, `roles`                | (none)                                     |
+
+<Callout type="info">
+  SAML attributes can be specified as URN OIDs (e.g., `urn:oid:0.9.2342.19200300.100.1.3`) or
+  friendly names (e.g., `mail`). Check your IdP's attribute mapping configuration for the exact
+  attribute names in assertions.
+</Callout>
+
+## SP Metadata Endpoint
+
+Hadrian provides an SP metadata endpoint for automatic IdP configuration:
+
+```
+GET /auth/saml/metadata?org={org_id_or_slug}
+```
+
+This endpoint returns XML metadata containing:
+
+- SP Entity ID
+- Assertion Consumer Service (ACS) URL
+- Single Logout Service URL (if configured)
+- SP signing certificate (if request signing is enabled)
+
+Many IdPs can import this metadata directly to auto-configure the SAML trust relationship.
+
+## Identity Provider Setup
+
+### Okta
+
+1. Go to **Applications → Applications → Create App Integration**
+2. Select **SAML 2.0** and click **Next**
+3. Configure general settings:
+   - **App name**: Hadrian Gateway
+   - **App logo**: (optional)
+4. Configure SAML settings:
+   - **Single Sign-On URL**: `https://your-gateway.example.com/auth/saml/acs`
+   - **Audience URI (SP Entity ID)**: `https://your-gateway.example.com/saml`
+   - **Name ID format**: EmailAddress
+   - **Application username**: Email
+5. Add attribute statements:
+   - `email` → `user.email`
+   - `displayName` → `user.displayName`
+   - `groups` → Filter by group membership (optional)
+6. Click **Finish** and copy the metadata URL from **Sign On** tab
+
+### Azure AD / Entra ID
+
+1. Go to **Enterprise Applications → New application**
+2. Click **Create your own application** → Non-gallery application
+3. Under **Single sign-on**, select **SAML**
+4. Configure basic SAML settings:
+   - **Identifier (Entity ID)**: `https://your-gateway.example.com/saml`
+   - **Reply URL (ACS URL)**: `https://your-gateway.example.com/auth/saml/acs`
+   - **Sign on URL**: `https://your-gateway.example.com/auth/saml/login?org={org_slug}`
+5. Configure attributes and claims:
+   - **Unique User Identifier**: `user.userprincipalname` or `user.mail`
+   - Add claims for `email`, `displayName`, `groups`
+6. Download **Federation Metadata XML** or copy the metadata URL
+
+### AD FS
+
+1. Open **AD FS Management Console**
+2. Right-click **Relying Party Trusts → Add Relying Party Trust**
+3. Select **Claims aware** → **Start**
+4. Choose data source:
+   - **Import data from URL**: Enter Hadrian's SP metadata URL, or
+   - **Enter data manually**: Configure manually
+5. Configure identifiers:
+   - **Relying party identifier**: `https://your-gateway.example.com/saml`
+6. Configure endpoint:
+   - **SAML Assertion Consumer Endpoint**: `https://your-gateway.example.com/auth/saml/acs`
+   - **Binding**: POST
+7. Configure claim issuance rules:
+   - Add rule: **Send LDAP Attributes as Claims**
+   - Attribute store: Active Directory
+   - Map: `E-Mail-Addresses → E-Mail Address`, `Display-Name → Name`
+
+### Keycloak
+
+1. Go to **Clients → Create client**
+2. Configure general settings:
+   - **Client type**: SAML
+   - **Client ID**: `https://your-gateway.example.com/saml`
+3. Configure login settings:
+   - **Valid redirect URIs**: `https://your-gateway.example.com/auth/saml/acs`
+   - **Master SAML Processing URL**: `https://your-gateway.example.com/auth/saml/acs`
+4. Configure SAML capabilities:
+   - **Name ID format**: email
+   - **Sign assertions**: On
+5. Add mappers for email, displayName, and groups
+6. Export realm metadata or copy the IdP metadata URL:
+   ```
+   https://keycloak.example.com/realms/{realm}/protocol/saml/descriptor
+   ```
+
+## Testing SAML
+
+### Test Mode
+
+Before enforcing SAML, use **Test** enforcement mode:
+
+1. Configure SAML with enforcement mode **Test**
+2. Verify domain ownership (see [Domain Verification](/docs/features/sso-admin-guide#domain-verification))
+3. Attempt login and check logs for SAML assertions
+4. Validate attribute mapping is correct
+5. Switch to **Required** once validated
+
+### SAML Debugging
+
+Common debugging steps:
+
+1. **Check SP metadata**: Visit `/auth/saml/metadata?org={org_slug}` and verify:
+   - Entity ID matches IdP configuration
+   - ACS URL is correct
+   - Certificate is present (if signing enabled)
+
+2. **Review IdP logs**: Most IdPs log SAML assertion details and errors
+
+3. **Browser developer tools**: Check the SAML response posted to `/auth/saml/acs`:
+   - Base64 decode the `SAMLResponse` form field
+   - Verify assertion contains expected attributes
+
+## Single Logout (SLO)
+
+Hadrian supports SP-initiated SAML Single Logout. When a user logs out:
+
+1. **Local session is cleared** - The user's session cookie is removed immediately
+2. **LogoutRequest sent to IdP** - If SLO URL is configured, Hadrian redirects the user to the IdP with a SAML LogoutRequest
+3. **IdP processes logout** - The IdP terminates the SSO session
+
+### Configuring SLO
+
+Add the IdP's Single Logout URL in the SAML configuration:
+
+| Field       | Description                  | Example                            |
+| ----------- | ---------------------------- | ---------------------------------- |
+| **SLO URL** | IdP's Single Logout endpoint | `https://idp.example.com/saml/slo` |
+
+If no SLO URL is configured, logout only clears the local session without notifying the IdP.
+
+### SLO Behavior
+
+| Scenario                | Behavior                            |
+| ----------------------- | ----------------------------------- |
+| SLO URL configured      | Redirects to IdP with LogoutRequest |
+| SLO URL not configured  | Local logout only, redirects to `/` |
+| Request signing enabled | LogoutRequest is signed             |
+| Session not found       | Local logout only, redirects to `/` |
+
+<Callout type="info">
+  **IdP-initiated SLO** (where the IdP sends a LogoutRequest to Hadrian) is not currently supported.
+  Only SP-initiated logout is implemented.
+</Callout>
+
+## Troubleshooting
+
+### Signature Validation Failed
+
+- **Certificate mismatch**: Ensure the IdP certificate in Hadrian matches the one signing assertions
+- **Certificate expiration**: IdP certificates expire; download fresh certificate from IdP
+- **Multiple certificates**: Some IdPs rotate certificates; import the active signing certificate
+
+### User Not Found / Identity Attribute Missing
+
+- **Wrong attribute name**: Check the exact attribute name in SAML assertions
+- **URN vs friendly name**: Try both formats (e.g., `mail` vs `urn:oid:0.9.2342.19200300.100.1.3`)
+- **Empty attribute**: Verify IdP is configured to include the attribute in assertions
+
+### ACS URL Mismatch
+
+- **Trailing slash**: Ensure URLs match exactly (with or without trailing slash)
+- **HTTP vs HTTPS**: Use HTTPS in production; ensure IdP matches protocol
+- **Port numbers**: Include port if non-standard (e.g., `:8443`)
+
+### Clock Skew
+
+- **Assertion expired**: SAML assertions have short validity windows (typically 5 minutes)
+- **Server time**: Ensure Hadrian server and IdP have synchronized clocks (NTP)
+
+### Groups Not Mapping
+
+- **Attribute name**: Verify the groups attribute name matches IdP configuration
+- **Group format**: Groups may be sent as multi-value attributes or semicolon-separated
+- **Filter rules**: IdP may filter which groups are sent based on application assignment
+
+## API Reference
+
+### Auth Endpoints
+
+| Endpoint              | Method   | Description                               |
+| --------------------- | -------- | ----------------------------------------- |
+| `/auth/saml/login`    | GET      | Initiate SAML flow (redirects to IdP)     |
+| `/auth/saml/acs`      | POST     | Assertion Consumer Service (IdP callback) |
+| `/auth/saml/slo`      | GET/POST | Single Logout (SP-initiated)              |
+| `/auth/saml/metadata` | GET      | SP metadata for IdP auto-configuration    |
+
+### Query Parameters
+
+**`/auth/saml/login`**:
+
+- `org` - Organization ID or slug (required)
+- `return_to` - URL to redirect after successful login (optional, relative paths only)
+
+**`/auth/saml/metadata`**:
+
+- `org` - Organization ID or slug (required)
+
+### Admin API
+
+| Endpoint                                                        | Method | Description              |
+| --------------------------------------------------------------- | ------ | ------------------------ |
+| `/admin/v1/organizations/{slug}/sso-config`                     | GET    | Get SSO configuration    |
+| `/admin/v1/organizations/{slug}/sso-config`                     | POST   | Create SSO configuration |
+| `/admin/v1/organizations/{slug}/sso-config`                     | PUT    | Update SSO configuration |
+| `/admin/v1/organizations/{slug}/sso-config`                     | DELETE | Delete SSO configuration |
+| `/admin/v1/organizations/{slug}/sso-config/saml/parse-metadata` | POST   | Parse IdP metadata URL   |
+| `/admin/v1/organizations/{slug}/sso-config/saml/sp-metadata`    | GET    | Get SP metadata XML      |
+
+## Related Topics
+
+<Cards>
+  <Card title="SSO Admin Guide" href="/docs/features/sso-admin-guide" />
+  <Card title="Authentication Overview" href="/docs/features/authentication" />
+  <Card title="SCIM Provisioning" href="/docs/features/scim" />
+  <Card title="Auth Configuration Reference" href="/docs/configuration/auth" />
+</Cards>

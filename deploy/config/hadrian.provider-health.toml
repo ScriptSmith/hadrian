@@ -1,0 +1,42 @@
+# Hadrian Gateway Configuration - Provider Health Tests
+# Configuration for testing provider health, circuit breaker, and Prometheus integration
+
+[database]
+type = "sqlite"
+path = "/app/data/hadrian.db"
+
+[cache]
+type = "memory"
+
+[auth.gateway]
+type = "api_key"
+header_name = "X-API-Key"
+key_prefix = "gw_"
+
+[providers]
+default_provider = "test"
+
+# Test provider with health checks and circuit breaker enabled
+[providers.test]
+type = "test"
+
+[providers.test.health_check]
+enabled = true
+interval_secs = 2
+timeout_secs = 1
+
+[providers.test.circuit_breaker]
+enabled = true
+failure_threshold = 3
+open_timeout_secs = 3
+success_threshold = 1
+
+[observability.metrics]
+enabled = true
+prometheus_query_url = "${PROMETHEUS_URL}"
+
+[features.websocket]
+enabled = true
+require_auth = false
+ping_interval_secs = 30
+pong_timeout_secs = 60

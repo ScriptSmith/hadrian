@@ -1,0 +1,246 @@
+# Docker Compose with PostgreSQL High Availability (Primary + Read Replicas)
+# Uses streaming replication for read scaling and failover capability
+#
+# Default passwords are "gateway" and "replication" for testing.
+# Override with POSTGRES_PASSWORD and POSTGRES_REPL_PASSWORD in .env file.
+# For production, use docker-compose.production.yml instead.
+#
+# Port configuration (override via environment variables for parallel testing):
+#   GATEWAY_PORT - Gateway HTTP port (default: 8080)
+#   PGBOUNCER_PRIMARY_PORT - PgBouncer primary port (default: 6432)
+#   PGBOUNCER_REPLICA_PORT - PgBouncer replica port (default: 6433)
+#   HAPROXY_POSTGRES_PORT - HAProxy PostgreSQL port (default: 5433)
+#   HAPROXY_STATS_PORT - HAProxy stats port (default: 8404)
+#
+# Architecture:
+# - Primary: Handles all writes
+# - Replica 1 & 2: Handle read queries (configurable in app)
+# - PgBouncer: Connection pooling for all instances
+#
+# The gateway should be configured to:
+# - Write to primary via pgbouncer-primary:6432
+# - Read from replicas via pgbouncer-replica:6432
+
+services:
+  gateway:
+    image: hadrian:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    volumes:
+      - ./config/hadrian.postgres-ha.toml:/app/config/hadrian.toml:ro
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # Primary for writes (default password for testing)
+      - DATABASE_URL=postgres://gateway:${POSTGRES_PASSWORD:-gateway}@pgbouncer-primary:6432/gateway
+      # Read replica pool for reads
+      - DATABASE_READ_URL=postgres://gateway:${POSTGRES_PASSWORD:-gateway}@pgbouncer-replica:6432/gateway
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      pgbouncer-primary:
+        condition: service_healthy
+      pgbouncer-replica:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # Primary PostgreSQL instance
+  postgres-primary:
+    image: postgres:16-alpine
+    volumes:
+      - postgres-primary-data:/var/lib/postgresql/data
+      - ./scripts/postgres-primary-init.sh:/docker-entrypoint-initdb.d/99-replication.sh:ro
+    environment:
+      - POSTGRES_USER=gateway
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-gateway}
+      - POSTGRES_DB=gateway
+      - REPLICATION_USER=repl_user
+      - REPLICATION_PASSWORD=${POSTGRES_REPL_PASSWORD:-replication}
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=5
+      - -c
+      - wal_keep_size=128MB
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway -d gateway"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Read Replica 1
+  postgres-replica-1:
+    image: postgres:16-alpine
+    volumes:
+      - postgres-replica-1-data:/var/lib/postgresql/data
+      - ./scripts/postgres-replica-entrypoint.sh:/usr/local/bin/replica-entrypoint.sh:ro
+    environment:
+      - POSTGRES_USER=gateway
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-gateway}
+      - PRIMARY_HOST=postgres-primary
+      - REPLICATION_USER=repl_user
+      - REPLICATION_PASSWORD=${POSTGRES_REPL_PASSWORD:-replication}
+      - PGDATA=/var/lib/postgresql/data
+    entrypoint: ["/usr/local/bin/replica-entrypoint.sh"]
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - hot_standby=on
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway -d gateway"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Read Replica 2
+  postgres-replica-2:
+    image: postgres:16-alpine
+    volumes:
+      - postgres-replica-2-data:/var/lib/postgresql/data
+      - ./scripts/postgres-replica-entrypoint.sh:/usr/local/bin/replica-entrypoint.sh:ro
+    environment:
+      - POSTGRES_USER=gateway
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-gateway}
+      - PRIMARY_HOST=postgres-primary
+      - REPLICATION_USER=repl_user
+      - REPLICATION_PASSWORD=${POSTGRES_REPL_PASSWORD:-replication}
+      - PGDATA=/var/lib/postgresql/data
+    entrypoint: ["/usr/local/bin/replica-entrypoint.sh"]
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - hot_standby=on
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway -d gateway"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # PgBouncer for Primary (writes)
+  pgbouncer-primary:
+    image: edoburu/pgbouncer:v1.24.1-p1
+    ports:
+      - "${PGBOUNCER_PRIMARY_PORT:-6432}:6432"
+    environment:
+      - DATABASE_URL=postgres://gateway:${POSTGRES_PASSWORD:-gateway}@postgres-primary:5432/gateway
+      - LISTEN_PORT=6432
+      - POOL_MODE=transaction
+      - MAX_CLIENT_CONN=500
+      - DEFAULT_POOL_SIZE=50
+      - MIN_POOL_SIZE=10
+      - RESERVE_POOL_SIZE=10
+      - AUTH_TYPE=scram-sha-256
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # PgBouncer for Replicas (reads) - connects to replica 1 only for simplicity
+  # For true load balancing, use HAProxy in front of multiple replicas
+  pgbouncer-replica:
+    image: edoburu/pgbouncer:v1.24.1-p1
+    ports:
+      - "${PGBOUNCER_REPLICA_PORT:-6433}:6432"
+    environment:
+      - DATABASE_URL=postgres://gateway:${POSTGRES_PASSWORD:-gateway}@postgres-replica-1:5432/gateway
+      - LISTEN_PORT=6432
+      - POOL_MODE=transaction
+      - MAX_CLIENT_CONN=500
+      - DEFAULT_POOL_SIZE=50
+      - AUTH_TYPE=scram-sha-256
+    depends_on:
+      postgres-replica-1:
+        condition: service_healthy
+      postgres-replica-2:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # HAProxy for read replica load balancing (alternative to multi-host PgBouncer)
+  haproxy-postgres:
+    image: haproxy:2.9-alpine
+    ports:
+      - "${HAPROXY_POSTGRES_PORT:-5433}:5433"
+      - "${HAPROXY_STATS_PORT:-8404}:8404"  # Stats
+    volumes:
+      - ./config/haproxy-postgres.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      postgres-replica-1:
+        condition: service_healthy
+      postgres-replica-2:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "haproxy", "-c", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    profiles:
+      - haproxy
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  postgres-primary-data:
+    driver: local
+  postgres-replica-1-data:
+    driver: local
+  postgres-replica-2-data:
+    driver: local
+  redis-data:
+    driver: local

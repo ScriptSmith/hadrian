@@ -1,0 +1,49 @@
+{
+  "id": "anthropic:tool_call:success",
+  "description": "Anthropic Messages API with single tool_use response",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-envoy-upstream-service-time": "2502",
+      "x-robots-tag": "none",
+      "content-type": "application/json"
+    },
+    "body": {
+      "content": [
+        {
+          "text": "I'll get the current weather information for San Francisco for you.",
+          "type": "text"
+        },
+        {
+          "id": "toolu_01G8tqBVUi6LwtiuWHMpN9PU",
+          "input": {
+            "location": "San Francisco, USA"
+          },
+          "name": "get_weather",
+          "type": "tool_use"
+        }
+      ],
+      "id": "msg_01Lf15fXTQ1gB5tPZr77SAWr",
+      "model": "claude-sonnet-4-20250514",
+      "role": "assistant",
+      "stop_reason": "tool_use",
+      "stop_sequence": null,
+      "type": "message",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "input_tokens": 430,
+        "output_tokens": 70,
+        "service_tier": "standard"
+      }
+    }
+  }
+}

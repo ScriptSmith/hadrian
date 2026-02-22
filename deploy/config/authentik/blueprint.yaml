@@ -1,0 +1,672 @@
+# Authentik Blueprint for Hadrian SAML E2E Tests
+# This blueprint configures users, groups, and SAML provider for testing
+#
+# Blueprint Format Reference: https://docs.goauthentik.io/docs/customize/blueprints/
+#
+# To match Keycloak university test setup:
+# - Same users with same passwords
+# - Same group hierarchy (/cs/faculty, /med/research, etc.)
+# - Same roles (super_admin, org_admin, team_admin, user, premium, tools_enabled, rag_enabled)
+
+version: 1
+metadata:
+  name: Hadrian SAML Test Setup
+  labels:
+    blueprints.goauthentik.io/description: "SAML provider and test users for Hadrian gateway E2E tests"
+
+# ==============================================================================
+# Groups - Same hierarchy as Keycloak realm
+# ==============================================================================
+entries:
+  # Top-level department groups
+  - model: authentik_core.group
+    id: group-cs
+    identifiers:
+      name: cs
+    attrs:
+      attributes:
+        org_id:
+          - cs
+
+  - model: authentik_core.group
+    id: group-med
+    identifiers:
+      name: med
+    attrs:
+      attributes:
+        org_id:
+          - med
+
+  - model: authentik_core.group
+    id: group-it
+    identifiers:
+      name: it
+    attrs:
+      attributes:
+        org_id:
+          - it
+
+  # CS department sub-groups
+  - model: authentik_core.group
+    id: group-cs-faculty
+    identifiers:
+      name: cs-faculty
+    attrs:
+      parent: !Find [authentik_core.group, [name, cs]]
+      attributes:
+        team_id:
+          - cs-faculty
+
+  - model: authentik_core.group
+    id: group-cs-phd-students
+    identifiers:
+      name: cs-phd-students
+    attrs:
+      parent: !Find [authentik_core.group, [name, cs]]
+      attributes:
+        team_id:
+          - cs-phd-students
+
+  - model: authentik_core.group
+    id: group-cs-undergrad-tas
+    identifiers:
+      name: cs-undergrad-tas
+    attrs:
+      parent: !Find [authentik_core.group, [name, cs]]
+      attributes:
+        team_id:
+          - cs-undergrad-tas
+
+  # Med department sub-groups
+  - model: authentik_core.group
+    id: group-med-research
+    identifiers:
+      name: med-research
+    attrs:
+      parent: !Find [authentik_core.group, [name, med]]
+      attributes:
+        team_id:
+          - med-research
+
+  - model: authentik_core.group
+    id: group-med-administration
+    identifiers:
+      name: med-administration
+    attrs:
+      parent: !Find [authentik_core.group, [name, med]]
+      attributes:
+        team_id:
+          - med-administration
+
+  # IT department sub-groups
+  - model: authentik_core.group
+    id: group-it-platform
+    identifiers:
+      name: it-platform
+    attrs:
+      parent: !Find [authentik_core.group, [name, it]]
+      attributes:
+        team_id:
+          - it-platform
+
+  # ==============================================================================
+  # Roles as Groups (Authentik uses groups for roles)
+  # ==============================================================================
+  - model: authentik_core.group
+    id: role-super-admin
+    identifiers:
+      name: super_admin
+    attrs:
+      attributes:
+        is_role: true
+
+  - model: authentik_core.group
+    id: role-org-admin
+    identifiers:
+      name: org_admin
+    attrs:
+      attributes:
+        is_role: true
+
+  - model: authentik_core.group
+    id: role-team-admin
+    identifiers:
+      name: team_admin
+    attrs:
+      attributes:
+        is_role: true
+
+  - model: authentik_core.group
+    id: role-user
+    identifiers:
+      name: user
+    attrs:
+      attributes:
+        is_role: true
+
+  - model: authentik_core.group
+    id: role-premium
+    identifiers:
+      name: premium
+    attrs:
+      attributes:
+        is_role: true
+
+  - model: authentik_core.group
+    id: role-tools-enabled
+    identifiers:
+      name: tools_enabled
+    attrs:
+      attributes:
+        is_role: true
+
+  - model: authentik_core.group
+    id: role-rag-enabled
+    identifiers:
+      name: rag_enabled
+    attrs:
+      attributes:
+        is_role: true
+
+  # ==============================================================================
+  # Users - Same as Keycloak realm for test parity
+  # ==============================================================================
+
+  # Super Admin
+  - model: authentik_core.user
+    id: user-admin-super
+    identifiers:
+      username: admin_super
+    attrs:
+      name: Super Admin
+      email: admin.super@university.edu
+      password: admin123
+      is_active: true
+      path: users
+      attributes:
+        roles:
+          - super_admin
+          - user
+          - premium
+          - tools_enabled
+          - rag_enabled
+      groups:
+        - !Find [authentik_core.group, [name, it-platform]]
+        - !Find [authentik_core.group, [name, super_admin]]
+        - !Find [authentik_core.group, [name, user]]
+        - !Find [authentik_core.group, [name, premium]]
+        - !Find [authentik_core.group, [name, tools_enabled]]
+        - !Find [authentik_core.group, [name, rag_enabled]]
+
+  - model: authentik_core.user
+    id: user-admin-backup
+    identifiers:
+      username: admin_backup
+    attrs:
+      name: Backup Admin
+      email: admin.backup@university.edu
+      password: admin123
+      is_active: true
+      path: users
+      attributes:
+        roles:
+          - super_admin
+          - user
+      groups:
+        - !Find [authentik_core.group, [name, it-platform]]
+        - !Find [authentik_core.group, [name, super_admin]]
+        - !Find [authentik_core.group, [name, user]]
+
+  # Org Admins
+  - model: authentik_core.user
+    id: user-cs-admin
+    identifiers:
+      username: cs_admin
+    attrs:
+      name: CS Administrator
+      email: cs.admin@university.edu
+      password: orgadmin123
+      is_active: true
+      path: users
+      attributes:
+        roles:
+          - org_admin
+          - user
+      groups:
+        - !Find [authentik_core.group, [name, cs]]
+        - !Find [authentik_core.group, [name, org_admin]]
+        - !Find [authentik_core.group, [name, user]]
+
+  - model: authentik_core.user
+    id: user-med-admin
+    identifiers:
+      username: med_admin
+    attrs:
+      name: Medical Administrator
+      email: med.admin@university.edu
+      password: orgadmin123
+      is_active: true
+      path: users
+      attributes:
+        roles:
+          - org_admin
+          - user
+      groups:
+        - !Find [authentik_core.group, [name, med]]
+        - !Find [authentik_core.group, [name, org_admin]]
+        - !Find [authentik_core.group, [name, user]]
+
+  - model: authentik_core.user
+    id: user-it-admin
+    identifiers:
+      username: it_admin
+    attrs:
+      name: IT Administrator
+      email: it.admin@university.edu
+      password: orgadmin123
+      is_active: true
+      path: users
+      attributes:
+        roles:
+          - org_admin
+          - user
+      groups:
+        - !Find [authentik_core.group, [name, it]]
+        - !Find [authentik_core.group, [name, org_admin]]
+        - !Find [authentik_core.group, [name, user]]
+
+  # Team Admins and Users
+  - model: authentik_core.user
+    id: user-prof-smith
+    identifiers:
+      username: prof_smith
+    attrs:
+      name: John Smith
+      email: prof.smith@university.edu
+      password: teamadmin123
+      is_active: true
+      path: users
+      attributes:
+        roles:
+          - team_admin
+          - user
+          - premium
+          - tools_enabled
+          - rag_enabled
+      groups:
+        - !Find [authentik_core.group, [name, cs-faculty]]
+        - !Find [authentik_core.group, [name, team_admin]]
+        - !Find [authentik_core.group, [name, user]]
+        - !Find [authentik_core.group, [name, premium]]
+        - !Find [authentik_core.group, [name, tools_enabled]]
+        - !Find [authentik_core.group, [name, rag_enabled]]
+
+  - model: authentik_core.user
+    id: user-prof-jones
+    identifiers:
+      username: prof_jones
+    attrs:
+      name: Sarah Jones
+      email: prof.jones@university.edu
+      password: user123
+      is_active: true
+      path: users
+      attributes:
+        roles:
+          - user
+      groups:
+        - !Find [authentik_core.group, [name, cs-faculty]]
+        - !Find [authentik_core.group, [name, user]]
+
+  - model: authentik_core.user
+    id: user-phd-alice
+    identifiers:
+      username: phd_alice
+    attrs:
+      name: Alice Chen
+      email: phd.alice@university.edu
+      password: teamadmin123
+      is_active: true
+      path: users
+      attributes:
+        roles:
+          - team_admin
+          - user
+      groups:
+        - !Find [authentik_core.group, [name, cs-phd-students]]
+        - !Find [authentik_core.group, [name, team_admin]]
+        - !Find [authentik_core.group, [name, user]]
+
+  - model: authentik_core.user
+    id: user-phd-bob
+    identifiers:
+      username: phd_bob
+    attrs:
+      name: Bob Martinez
+      email: phd.bob@university.edu
+      password: user123
+      is_active: true
+      path: users
+      attributes:
+        roles:
+          - user
+      groups:
+        - !Find [authentik_core.group, [name, cs-phd-students]]
+        - !Find [authentik_core.group, [name, user]]
+
+  - model: authentik_core.user
+    id: user-ta-dave
+    identifiers:
+      username: ta_dave
+    attrs:
+      name: Dave Wilson
+      email: ta.dave@university.edu
+      password: user123
+      is_active: true
+      path: users
+      attributes:
+        roles:
+          - user
+      groups:
+        - !Find [authentik_core.group, [name, cs-undergrad-tas]]
+        - !Find [authentik_core.group, [name, user]]
+
+  - model: authentik_core.user
+    id: user-dr-wilson
+    identifiers:
+      username: dr_wilson
+    attrs:
+      name: Emily Wilson
+      email: dr.wilson@university.edu
+      password: teamadmin123
+      is_active: true
+      path: users
+      attributes:
+        roles:
+          - team_admin
+          - user
+      groups:
+        - !Find [authentik_core.group, [name, med-research]]
+        - !Find [authentik_core.group, [name, team_admin]]
+        - !Find [authentik_core.group, [name, user]]
+
+  - model: authentik_core.user
+    id: user-dr-chen
+    identifiers:
+      username: dr_chen
+    attrs:
+      name: Michael Chen
+      email: dr.chen@university.edu
+      password: user123
+      is_active: true
+      path: users
+      attributes:
+        roles:
+          - user
+      groups:
+        - !Find [authentik_core.group, [name, med-research]]
+        - !Find [authentik_core.group, [name, user]]
+
+  - model: authentik_core.user
+    id: user-nurse-taylor
+    identifiers:
+      username: nurse_taylor
+    attrs:
+      name: Jennifer Taylor
+      email: nurse.taylor@university.edu
+      password: user123
+      is_active: true
+      path: users
+      attributes:
+        roles:
+          - user
+      groups:
+        - !Find [authentik_core.group, [name, med-administration]]
+        - !Find [authentik_core.group, [name, user]]
+
+  - model: authentik_core.user
+    id: user-sysadmin-kim
+    identifiers:
+      username: sysadmin_kim
+    attrs:
+      name: David Kim
+      email: sysadmin.kim@university.edu
+      password: teamadmin123
+      is_active: true
+      path: users
+      attributes:
+        roles:
+          - team_admin
+          - user
+      groups:
+        - !Find [authentik_core.group, [name, it-platform]]
+        - !Find [authentik_core.group, [name, team_admin]]
+        - !Find [authentik_core.group, [name, user]]
+
+  # ==============================================================================
+  # Simple Authentication Flow for E2E Testing
+  # ==============================================================================
+  # This flow has only username and password stages - no MFA, consent, or extras.
+  # It uses a two-step login (username then password) matching Authentik's default UI.
+
+  - model: authentik_flows.flow
+    id: flow-simple-auth
+    identifiers:
+      slug: simple-authentication-flow
+    attrs:
+      name: Simple Authentication Flow
+      title: Sign in
+      designation: authentication
+
+  # Stage 1: Username identification (no inline password - separate step)
+  - model: authentik_stages_identification.identificationstage
+    id: stage-identification
+    identifiers:
+      name: simple-identification
+    attrs:
+      user_fields:
+        - username
+        - email
+      case_insensitive_matching: true
+      show_matched_user: true
+      # Don't set password_stage - this creates a two-step flow
+
+  # Stage 2: Password authentication
+  - model: authentik_stages_password.passwordstage
+    id: stage-password
+    identifiers:
+      name: simple-password
+    attrs:
+      backends:
+        - authentik.core.auth.InbuiltBackend
+
+  # Stage 3: User login (creates session)
+  - model: authentik_stages_user_login.userloginstage
+    id: stage-user-login
+    identifiers:
+      name: simple-user-login
+    attrs:
+      session_duration: hours=24
+
+  # Bind stages to flow in order
+  - model: authentik_flows.flowstagebinding
+    id: binding-identification
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, simple-authentication-flow]]
+      stage: !Find [authentik_stages_identification.identificationstage, [name, simple-identification]]
+      order: 10
+    attrs:
+      evaluate_on_plan: true
+      re_evaluate_policies: false
+
+  - model: authentik_flows.flowstagebinding
+    id: binding-password
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, simple-authentication-flow]]
+      stage: !Find [authentik_stages_password.passwordstage, [name, simple-password]]
+      order: 20
+    attrs:
+      evaluate_on_plan: true
+      re_evaluate_policies: false
+
+  - model: authentik_flows.flowstagebinding
+    id: binding-user-login
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, simple-authentication-flow]]
+      stage: !Find [authentik_stages_user_login.userloginstage, [name, simple-user-login]]
+      order: 30
+    attrs:
+      evaluate_on_plan: true
+      re_evaluate_policies: false
+
+  # ==============================================================================
+  # SAML Property Mappings
+  # ==============================================================================
+
+  # Email mapping
+  - model: authentik_providers_saml.samlpropertymapping
+    id: saml-mapping-email
+    identifiers:
+      managed: goauthentik.io/providers/saml/hadrian-email
+    attrs:
+      name: "Hadrian SAML Email"
+      saml_name: email
+      expression: |
+        return request.user.email
+
+  # Display name mapping
+  - model: authentik_providers_saml.samlpropertymapping
+    id: saml-mapping-name
+    identifiers:
+      managed: goauthentik.io/providers/saml/hadrian-name
+    attrs:
+      name: "Hadrian SAML Name"
+      saml_name: displayName
+      expression: |
+        return request.user.name
+
+  # Groups mapping - returns group paths for SSO group mapping AND role names for CEL policies
+  - model: authentik_providers_saml.samlpropertymapping
+    id: saml-mapping-groups
+    identifiers:
+      managed: goauthentik.io/providers/saml/hadrian-groups
+    attrs:
+      name: "Hadrian SAML Groups"
+      saml_name: groups
+      expression: |
+        # Build group paths similar to Keycloak format
+        # e.g., /cs/faculty, /med/research
+        groups = []
+        for group in request.user.ak_groups.all():
+            # Build path from group hierarchy
+            path_parts = []
+            current = group
+            while current:
+                path_parts.insert(0, current.name)
+                current = current.parent
+            if path_parts:
+                groups.append("/" + "/".join(path_parts))
+        # Also add flat role names for CEL policy matching
+        # (Gateway uses groups as fallback for roles in SAML sessions)
+        roles = request.user.attributes.get('roles', [])
+        groups.extend(roles)
+        return groups
+
+  # Roles mapping - returns role names from user attributes
+  - model: authentik_providers_saml.samlpropertymapping
+    id: saml-mapping-roles
+    identifiers:
+      managed: goauthentik.io/providers/saml/hadrian-roles
+    attrs:
+      name: "Hadrian SAML Roles"
+      saml_name: roles
+      expression: |
+        # Get roles from user attributes
+        return request.user.attributes.get('roles', [])
+
+  # Username mapping (for identity)
+  - model: authentik_providers_saml.samlpropertymapping
+    id: saml-mapping-username
+    identifiers:
+      managed: goauthentik.io/providers/saml/hadrian-username
+    attrs:
+      name: "Hadrian SAML Username"
+      saml_name: username
+      expression: |
+        return request.user.username
+
+  # ==============================================================================
+  # SAML Provider
+  # ==============================================================================
+  - model: authentik_providers_saml.samlprovider
+    id: saml-provider-hadrian
+    identifiers:
+      name: hadrian-gateway
+    attrs:
+      # Required flows for SAML provider (default Authentik flows)
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      # ACS URL where Hadrian receives SAML responses
+      acs_url: http://localhost:3000/auth/saml/acs
+      # IdP Entity ID (Issuer in SAML responses) - MUST match what's expected by the SP
+      # This is Authentik's identity as the IdP, not the SP's entity ID
+      issuer: http://localhost:9000
+      # Audience restriction (SP Entity ID that must appear in AuthnRequest)
+      audience: http://localhost:3000/saml
+      # CRITICAL: Use HTTP-POST binding for SAML responses (default is REDIRECT which doesn't work)
+      sp_binding: post
+      # Use emailAddress as NameID format
+      name_id_mapping: !Find [authentik_providers_saml.samlpropertymapping, [managed, "goauthentik.io/providers/saml/hadrian-email"]]
+      # Sign assertions (required when signing_kp is set)
+      signing_kp: !Find [authentik_crypto.certificatekeypair, [name, "authentik Self-signed Certificate"]]
+      sign_assertion: true
+      sign_response: true
+      # Property mappings for SAML attributes
+      property_mappings:
+        - !Find [authentik_providers_saml.samlpropertymapping, [managed, "goauthentik.io/providers/saml/hadrian-email"]]
+        - !Find [authentik_providers_saml.samlpropertymapping, [managed, "goauthentik.io/providers/saml/hadrian-name"]]
+        - !Find [authentik_providers_saml.samlpropertymapping, [managed, "goauthentik.io/providers/saml/hadrian-groups"]]
+        - !Find [authentik_providers_saml.samlpropertymapping, [managed, "goauthentik.io/providers/saml/hadrian-roles"]]
+        - !Find [authentik_providers_saml.samlpropertymapping, [managed, "goauthentik.io/providers/saml/hadrian-username"]]
+      # Default relay state (return URL after auth)
+      default_relay_state: http://localhost:3000/
+      # Session validity
+      session_valid_not_on_or_after: minutes=60
+      # Assertion validity
+      assertion_valid_not_on_or_after: minutes=5
+
+  # ==============================================================================
+  # Application
+  # ==============================================================================
+  - model: authentik_core.application
+    id: app-hadrian
+    identifiers:
+      slug: hadrian-gateway
+    attrs:
+      name: Hadrian Gateway
+      provider: !Find [authentik_providers_saml.samlprovider, [name, hadrian-gateway]]
+      # Policy engine mode - allow all by default for testing
+      policy_engine_mode: all
+      # Backchannel providers (none for basic SAML)
+      backchannel_providers: []
+
+  # ==============================================================================
+  # Override Default Brand to Use Simple Authentication Flow
+  # ==============================================================================
+  # In Authentik, the Brand controls which authentication flow is used.
+  # We override the default brand to use our simple flow for E2E testing.
+  - model: authentik_brands.brand
+    id: brand-default
+    identifiers:
+      domain: authentik-default
+    attrs:
+      branding_title: authentik
+      branding_logo: /static/dist/assets/icons/icon_left_brand.svg
+      branding_favicon: /static/dist/assets/icons/icon.png
+      flow_authentication: !Find [authentik_flows.flow, [slug, simple-authentication-flow]]
+      flow_invalidation: !Find [authentik_flows.flow, [slug, default-invalidation-flow]]
+      flow_user_settings: !Find [authentik_flows.flow, [slug, default-user-settings-flow]]
+      default: true
+
+  # Note: API token for E2E tests is created via shell command in test-e2e.sh
+  # because blueprint token creation with custom keys doesn't work reliably

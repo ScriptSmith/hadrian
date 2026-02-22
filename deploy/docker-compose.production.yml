@@ -1,0 +1,475 @@
+# Docker Compose - Production Reference Architecture
+# Combines: Traefik, PostgreSQL HA, Redis Cluster, Vault, Keycloak, Observability
+#
+# This is a reference architecture - adapt based on your needs.
+# For real production, consider:
+# - Kubernetes/ECS for orchestration
+# - Managed databases (RDS, Cloud SQL)
+# - Managed Redis (ElastiCache, Memorystore)
+# - Cloud secret managers (AWS Secrets Manager, GCP Secret Manager)
+#
+# Quick Start:
+# 1. Copy .env.example to .env and configure secrets
+# 2. docker compose -f docker-compose.production.yml up -d
+#
+# Endpoints:
+# - Gateway: https://gateway.example.com (via Traefik)
+# - Keycloak: https://auth.example.com
+# - Grafana: https://grafana.example.com
+# - Traefik Dashboard: https://traefik.example.com (protected)
+
+x-gateway-common: &gateway-common
+  image: hadrian:local
+  build:
+    context: ..
+    dockerfile: Dockerfile
+  volumes:
+    - ./config/hadrian.production.toml:/app/config/hadrian.toml:ro
+  environment:
+    - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+    - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    - DATABASE_URL=postgres://gateway:${POSTGRES_PASSWORD}@pgbouncer:6432/gateway
+    - DATABASE_READ_URL=postgres://gateway:${POSTGRES_PASSWORD}@pgbouncer-replica:6432/gateway
+    - REDIS_CLUSTER_NODES=redis-1:6379,redis-2:6379,redis-3:6379
+    - AMQP_URL=amqp://gateway:${RABBITMQ_PASSWORD}@rabbitmq:5672/hadrian
+    # OIDC
+    - OIDC_ISSUER_URL=http://keycloak:8080/realms/hadrian
+    - OIDC_CLIENT_ID=hadrian-gateway
+    - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
+    # OpenTelemetry
+    - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+    - OTEL_SERVICE_NAME=hadrian-gateway
+    - OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production
+    # Sentry
+    - SENTRY_DSN=${SENTRY_DSN:-}
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+    interval: 30s
+    timeout: 3s
+    retries: 3
+    start_period: 10s
+  networks:
+    - frontend
+    - backend
+  depends_on:
+    pgbouncer:
+      condition: service_healthy
+    redis-1:
+      condition: service_healthy
+    rabbitmq:
+      condition: service_healthy
+    keycloak:
+      condition: service_healthy
+    otel-collector:
+      condition: service_healthy
+
+services:
+  # =============================================================================
+  # REVERSE PROXY & LOAD BALANCER
+  # =============================================================================
+  traefik:
+    image: traefik:v3.0
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./config/traefik:/etc/traefik:ro
+      - traefik-certs:/letsencrypt
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=hadrian-frontend
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entryPoint.to=websecure
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --log.level=WARN
+      - --accesslog=true
+      - --metrics.prometheus=true
+    networks:
+      - frontend
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+
+  # =============================================================================
+  # GATEWAY INSTANCES (Load Balanced)
+  # =============================================================================
+  gateway-1:
+    <<: *gateway-common
+    environment:
+      - INSTANCE_ID=gateway-1
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gateway.rule=Host(`gateway.${DOMAIN}`)"
+      - "traefik.http.routers.gateway.entrypoints=websecure"
+      - "traefik.http.routers.gateway.tls.certresolver=letsencrypt"
+      - "traefik.http.services.gateway.loadbalancer.server.port=8080"
+      - "traefik.http.services.gateway.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.routers.gateway.middlewares=gateway-ratelimit,gateway-headers"
+      - "traefik.http.middlewares.gateway-ratelimit.ratelimit.average=100"
+      - "traefik.http.middlewares.gateway-ratelimit.ratelimit.burst=50"
+      - "traefik.http.middlewares.gateway-headers.headers.stsSeconds=31536000"
+
+  gateway-2:
+    <<: *gateway-common
+    environment:
+      - INSTANCE_ID=gateway-2
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gateway.rule=Host(`gateway.${DOMAIN}`)"
+      - "traefik.http.services.gateway.loadbalancer.server.port=8080"
+
+  gateway-3:
+    <<: *gateway-common
+    environment:
+      - INSTANCE_ID=gateway-3
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gateway.rule=Host(`gateway.${DOMAIN}`)"
+      - "traefik.http.services.gateway.loadbalancer.server.port=8080"
+
+  # =============================================================================
+  # IDENTITY & ACCESS MANAGEMENT
+  # =============================================================================
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0
+    volumes:
+      - ./config/keycloak/realm-export.json:/opt/keycloak/data/import/realm.json:ro
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://keycloak-db:5432/keycloak
+      - KC_DB_USERNAME=keycloak
+      - KC_DB_PASSWORD=${KEYCLOAK_DB_PASSWORD}
+      - KC_HOSTNAME=auth.${DOMAIN}
+      - KC_HTTP_ENABLED=true
+      - KC_PROXY=edge
+      - KC_HEALTH_ENABLED=true
+    command: start --import-realm
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.keycloak.rule=Host(`auth.${DOMAIN}`)"
+      - "traefik.http.routers.keycloak.entrypoints=websecure"
+      - "traefik.http.routers.keycloak.tls.certresolver=letsencrypt"
+      - "traefik.http.services.keycloak.loadbalancer.server.port=8080"
+
+  keycloak-db:
+    image: postgres:16-alpine
+    volumes:
+      - keycloak-db-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=keycloak
+      - POSTGRES_USER=keycloak
+      - POSTGRES_PASSWORD=${KEYCLOAK_DB_PASSWORD}
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # =============================================================================
+  # DATABASE (PostgreSQL HA)
+  # =============================================================================
+  postgres-primary:
+    image: postgres:16-alpine
+    volumes:
+      - postgres-primary-data:/var/lib/postgresql/data
+      - ./scripts/postgres-primary-init.sh:/docker-entrypoint-initdb.d/99-replication.sh:ro
+    environment:
+      - POSTGRES_USER=gateway
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=gateway
+      - REPLICATION_USER=repl_user
+      - REPLICATION_PASSWORD=${POSTGRES_REPL_PASSWORD}
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=5
+      - -c
+      - wal_keep_size=128MB
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway -d gateway"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  postgres-replica:
+    image: postgres:16-alpine
+    volumes:
+      - postgres-replica-data:/var/lib/postgresql/data
+      - ./scripts/postgres-replica-entrypoint.sh:/usr/local/bin/replica-entrypoint.sh:ro
+    environment:
+      - POSTGRES_USER=gateway
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - PRIMARY_HOST=postgres-primary
+      - REPLICATION_USER=repl_user
+      - REPLICATION_PASSWORD=${POSTGRES_REPL_PASSWORD}
+      - PGDATA=/var/lib/postgresql/data
+    entrypoint: ["/usr/local/bin/replica-entrypoint.sh"]
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - hot_standby=on
+    networks:
+      - backend
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway -d gateway"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.24.1-p1
+    environment:
+      - DATABASE_URL=postgres://gateway:${POSTGRES_PASSWORD}@postgres-primary:5432/gateway
+      - LISTEN_PORT=6432
+      - POOL_MODE=transaction
+      - MAX_CLIENT_CONN=500
+      - DEFAULT_POOL_SIZE=50
+      - AUTH_TYPE=scram-sha-256
+    networks:
+      - backend
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  pgbouncer-replica:
+    image: edoburu/pgbouncer:v1.24.1-p1
+    environment:
+      - DATABASE_URL=postgres://gateway:${POSTGRES_PASSWORD}@postgres-replica:5432/gateway
+      - LISTEN_PORT=6432
+      - POOL_MODE=transaction
+      - MAX_CLIENT_CONN=500
+      - AUTH_TYPE=scram-sha-256
+    networks:
+      - backend
+    depends_on:
+      postgres-replica:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # =============================================================================
+  # CACHE (Redis Cluster)
+  # =============================================================================
+  redis-1:
+    image: redis:7-alpine
+    volumes:
+      - redis-1-data:/data
+      - ./config/redis-cluster.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf --cluster-announce-ip redis-1
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  redis-2:
+    image: redis:7-alpine
+    volumes:
+      - redis-2-data:/data
+      - ./config/redis-cluster.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf --cluster-announce-ip redis-2
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  redis-3:
+    image: redis:7-alpine
+    volumes:
+      - redis-3-data:/data
+      - ./config/redis-cluster.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf --cluster-announce-ip redis-3
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # =============================================================================
+  # MESSAGE QUEUE (RabbitMQ)
+  # =============================================================================
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+      - ./config/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+    environment:
+      - RABBITMQ_DEFAULT_USER=gateway
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD}
+      - RABBITMQ_DEFAULT_VHOST=hadrian
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # =============================================================================
+  # OBSERVABILITY
+  # =============================================================================
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.91.0
+    volumes:
+      - ./config/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:13133/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+    networks:
+      - backend
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.2.2
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_SERVER_ROOT_URL=https://grafana.${DOMAIN}
+    networks:
+      - frontend
+      - backend
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.${DOMAIN}`)"
+      - "traefik.http.routers.grafana.entrypoints=websecure"
+      - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.52
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - SPAN_STORAGE_TYPE=badger
+      - BADGER_EPHEMERAL=false
+      - BADGER_DIRECTORY_VALUE=/badger/data
+      - BADGER_DIRECTORY_KEY=/badger/key
+    volumes:
+      - jaeger-data:/badger
+    networks:
+      - backend
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:2.9.2
+    volumes:
+      - ./config/loki.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - backend
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:2.9.2
+    volumes:
+      - ./config/promtail.yaml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - backend
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+networks:
+  frontend:
+    name: hadrian-frontend
+    driver: bridge
+  backend:
+    name: hadrian-backend
+    driver: bridge
+    internal: true
+
+volumes:
+  traefik-certs:
+  keycloak-db-data:
+  postgres-primary-data:
+  postgres-replica-data:
+  redis-1-data:
+  redis-2-data:
+  redis-3-data:
+  rabbitmq-data:
+  prometheus-data:
+  grafana-data:
+  jaeger-data:
+  loki-data:

@@ -1,0 +1,404 @@
+---
+title: Response Caching
+description: Cache LLM responses to reduce costs and latency with exact match, semantic, and prompt caching
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Hadrian Gateway provides three caching mechanisms to reduce costs and improve response latency:
+
+| Cache Type      | Matching Method         | Use Case                                     |
+| --------------- | ----------------------- | -------------------------------------------- |
+| **Exact Match** | SHA-256 hash of request | Identical requests (deterministic workloads) |
+| **Semantic**    | Embedding similarity    | Similar questions (natural language queries) |
+| **Prompt**      | Provider-side caching   | Long system prompts (Anthropic only)         |
+
+## Exact Match Caching
+
+Cache responses based on a SHA-256 hash of configurable request components. This is the fastest caching method with O(1) lookup time.
+
+### How It Works
+
+```
+1. Request arrives → Generate SHA-256 hash from key components
+2. Check cache for hash → If hit, return cached response
+3. If miss → Forward to LLM provider
+4. Response received → Store in cache with TTL
+```
+
+### Configuration
+
+```toml
+[features.response_caching]
+enabled = true
+ttl_secs = 3600                # Cache TTL (default: 1 hour)
+only_deterministic = true      # Only cache temperature=0 responses
+max_size_bytes = 1048576       # Max response size to cache (default: 1MB)
+
+[features.response_caching.key_components]
+model = true                   # Include model in cache key
+temperature = true             # Include temperature in cache key
+system_prompt = true           # Include system prompt in cache key
+tools = true                   # Include tools in cache key
+```
+
+### Key Components
+
+The cache key is generated from configurable request components:
+
+| Component       | Default | Description                       |
+| --------------- | ------- | --------------------------------- |
+| `model`         | `true`  | Model identifier (e.g., `gpt-4o`) |
+| `temperature`   | `true`  | Sampling temperature              |
+| `system_prompt` | `true`  | System message content            |
+| `tools`         | `true`  | Function/tool definitions         |
+
+<Callout type="info">
+  Only requests with `temperature=0` are cached by default. Set `only_deterministic = false` to
+  cache non-deterministic responses (not recommended for most use cases).
+</Callout>
+
+### Limitations
+
+- **Streaming responses are not cached** - Caching would require buffering the entire stream, defeating the purpose of streaming
+- **Size limits apply** - Responses larger than `max_size_bytes` are not cached
+- **Embeddings are always cached** - Embedding requests are deterministic and excellent candidates for caching
+
+### Force Refresh
+
+Bypass the cache for a specific request using headers:
+
+```bash
+# Skip cache lookup, fetch fresh response
+curl http://localhost:8080/v1/chat/completions \
+  -H "Cache-Control: no-cache" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{"model": "gpt-4o", "messages": [...]}'
+
+# Alternative header
+curl http://localhost:8080/v1/chat/completions \
+  -H "X-Cache-Force-Refresh: true" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{"model": "gpt-4o", "messages": [...]}'
+```
+
+## Semantic Caching
+
+Cache responses based on semantic similarity, returning cached answers for questions that are similar but not identical.
+
+### How It Works
+
+```
+1. Request arrives → Check exact match cache first (fastest)
+2. If exact miss → Generate embedding of request messages
+3. Search vector store for similar cached requests
+4. If similarity >= threshold → Return cached response
+5. If miss → Forward to LLM, cache response + embedding
+```
+
+The embedding generation happens asynchronously in a background worker to avoid blocking response delivery.
+
+### Configuration
+
+```toml
+[features.response_caching]
+enabled = true
+ttl_secs = 3600
+
+[features.response_caching.semantic]
+enabled = true
+similarity_threshold = 0.95    # Minimum cosine similarity (0.0-1.0)
+top_k = 1                      # Number of similar results to consider
+
+[features.response_caching.semantic.embedding]
+provider = "openai"
+model = "text-embedding-3-small"
+dimensions = 1536
+
+[features.response_caching.semantic.vector_backend]
+type = "pgvector"              # or "qdrant"
+```
+
+### Similarity Threshold
+
+The `similarity_threshold` controls how similar a query must be to return a cached result:
+
+| Threshold   | Behavior        | Use Case                             |
+| ----------- | --------------- | ------------------------------------ |
+| `0.98+`     | Very strict     | Only near-identical phrasings        |
+| `0.95`      | Default         | Good balance of precision and recall |
+| `0.90-0.94` | Lenient         | Broader matching, more cache hits    |
+| `< 0.90`    | Not recommended | Too many false positives             |
+
+<Callout type="warn">
+  Lower thresholds increase cache hit rates but may return irrelevant cached responses. Start with
+  `0.95` and adjust based on your use case.
+</Callout>
+
+### Vector Backends
+
+#### pgvector (PostgreSQL)
+
+Uses your existing PostgreSQL database with the pgvector extension:
+
+```toml
+[features.response_caching.semantic.vector_backend]
+type = "pgvector"
+table_name = "semantic_cache_embeddings"
+index_type = "hnsw"            # or "ivf_flat"
+distance_metric = "cosine"     # or "dot_product", "euclidean"
+```
+
+Index types:
+
+- **HNSW** - Better query performance, slower to build (recommended for production)
+- **IVF Flat** - Faster to build, good for moderate datasets
+
+#### Qdrant
+
+Standalone vector database for high-performance deployments:
+
+```toml
+[features.response_caching.semantic.vector_backend]
+type = "qdrant"
+url = "http://localhost:6333"
+collection_name = "semantic_cache"
+api_key = "${QDRANT_API_KEY}"  # Optional
+```
+
+### Embedding Providers
+
+Generate embeddings using any supported provider:
+
+| Provider     | Model                        | Dimensions |
+| ------------ | ---------------------------- | ---------- |
+| OpenAI       | `text-embedding-3-small`     | 1536       |
+| OpenAI       | `text-embedding-3-large`     | 3072       |
+| Azure OpenAI | `text-embedding-3-small`     | 1536       |
+| Bedrock      | `amazon.titan-embed-text-v2` | 1024       |
+| Vertex       | `text-embedding-004`         | 768        |
+
+```toml
+# OpenAI embeddings
+[features.response_caching.semantic.embedding]
+provider = "openai"
+model = "text-embedding-3-small"
+dimensions = 1536
+
+# Bedrock Titan embeddings
+[features.response_caching.semantic.embedding]
+provider = "bedrock"
+model = "amazon.titan-embed-text-v2:0"
+dimensions = 1024
+```
+
+### Multi-Tenancy
+
+Semantic cache respects multi-tenancy boundaries. Cached responses are isolated by:
+
+- Organization ID
+- Project ID (optional)
+
+This ensures users only receive cached responses from their own scope.
+
+## Prompt Caching (Anthropic)
+
+Provider-side caching for long system prompts and tool definitions. This is handled by Anthropic's infrastructure, not the gateway.
+
+<Callout type="info">
+  For detailed prompt caching documentation, see [Provider Features: Prompt
+  Caching](/docs/features/providers#prompt-caching).
+</Callout>
+
+### Quick Reference
+
+Mark content for caching with `cache_control`:
+
+```json
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "text",
+          "text": "Long system prompt with documentation...",
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    }
+  ]
+}
+```
+
+Cache usage appears in the response:
+
+```json
+{
+  "usage": {
+    "prompt_tokens": 1500,
+    "prompt_tokens_details": {
+      "cached_tokens": 1200
+    }
+  }
+}
+```
+
+### Provider Support
+
+| Provider         | Support   | Notes                                     |
+| ---------------- | --------- | ----------------------------------------- |
+| Anthropic        | Native    | `cache_control` passed through            |
+| Bedrock (Claude) | Converted | Transformed to `cachePoint` blocks        |
+| Vertex (Claude)  | Converted | Transformed to provider format            |
+| OpenAI           | Automatic | Uses automatic caching (no markup needed) |
+
+## Cache Backends
+
+The gateway supports two cache backends for storing cached responses:
+
+### In-Memory (Single-Node)
+
+Best for development and single-instance deployments:
+
+```toml
+[cache]
+type = "memory"
+max_entries = 100000           # Maximum cache entries
+eviction_batch_size = 100      # Entries to evict when full
+default_ttl_secs = 3600        # Default TTL (1 hour)
+```
+
+### Redis (Multi-Node)
+
+Required for distributed deployments to ensure cache consistency:
+
+```toml
+[cache]
+type = "redis"
+url = "redis://localhost:6379"
+pool_size = 10
+connect_timeout_secs = 5
+key_prefix = "gw:"             # Prefix for all keys
+tls = false
+
+[cache.cluster]
+read_from_replicas = false
+retries = 3
+retry_delay_ms = 100
+```
+
+<Callout type="warn">
+  In-memory cache is not shared across instances. For multi-node deployments, use Redis to ensure
+  all nodes see the same cached responses.
+</Callout>
+
+### TTL Configuration
+
+Configure TTLs for different cache types:
+
+```toml
+[cache.ttl]
+api_key_secs = 300             # API key cache (5 min)
+rate_limit_secs = 60           # Rate limit counters (1 min)
+provider_secs = 300            # Dynamic provider cache (5 min)
+daily_spend_secs = 86400       # Daily spend cache (24 hours)
+monthly_spend_secs = 2678400   # Monthly spend cache (31 days)
+```
+
+## Observability
+
+### Metrics
+
+Cache operations emit Prometheus metrics:
+
+```
+# Exact match cache
+cache_operation_total{type="response", operation="get", status="hit"}
+cache_operation_total{type="response", operation="get", status="miss"}
+cache_operation_total{type="response", operation="set", status="success"}
+
+# Semantic cache
+cache_operation_total{type="semantic", operation="get", status="exact_hit"}
+cache_operation_total{type="semantic", operation="get", status="semantic_hit"}
+cache_operation_total{type="semantic", operation="get", status="miss"}
+cache_operation_total{type="semantic", operation="embed", status="success"}
+```
+
+### Logging
+
+Enable debug logging for cache operations:
+
+```toml
+[observability.logging]
+level = "debug"
+```
+
+Cache logs include:
+
+- Cache key
+- Provider and model
+- Similarity score (for semantic hits)
+- Response size
+
+## Complete Configuration Example
+
+```toml
+# Cache backend (Redis for production)
+[cache]
+type = "redis"
+url = "redis://localhost:6379"
+pool_size = 10
+key_prefix = "gw:"
+
+# Response caching with semantic matching
+[features.response_caching]
+enabled = true
+ttl_secs = 3600
+only_deterministic = true
+max_size_bytes = 1048576
+
+[features.response_caching.key_components]
+model = true
+temperature = true
+system_prompt = true
+tools = true
+
+[features.response_caching.semantic]
+enabled = true
+similarity_threshold = 0.95
+top_k = 1
+
+[features.response_caching.semantic.embedding]
+provider = "openai"
+model = "text-embedding-3-small"
+dimensions = 1536
+
+[features.response_caching.semantic.vector_backend]
+type = "pgvector"
+table_name = "semantic_cache_embeddings"
+index_type = "hnsw"
+distance_metric = "cosine"
+
+# Prompt caching (Anthropic)
+[features.prompt_caching]
+enabled = true
+min_tokens = 1024
+```
+
+## Best Practices
+
+1. **Start with exact match caching** - Lowest latency, most predictable behavior
+2. **Use semantic caching for natural language** - Best for user-facing chat applications with varied phrasings
+3. **Set appropriate TTLs** - Balance freshness vs. cache hit rates for your use case
+4. **Monitor cache metrics** - Track hit rates to tune similarity thresholds
+5. **Use Redis in production** - Required for multi-node deployments
+6. **Enable prompt caching for Anthropic** - Significant cost savings for long system prompts
+
+## Related Documentation
+
+<Cards>
+  <Card title="Provider Features" href="/docs/features/providers" />
+  <Card title="Provider Configuration" href="/docs/configuration/providers" />
+  <Card title="Deployment Guide" href="/docs/deployment" />
+</Cards>

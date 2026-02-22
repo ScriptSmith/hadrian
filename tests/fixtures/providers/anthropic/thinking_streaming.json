@@ -1,0 +1,2591 @@
+{
+  "id": "anthropic:thinking:streaming",
+  "description": "Streaming Anthropic Messages API with extended thinking",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "transfer-encoding": "chunked",
+      "x-envoy-upstream-service-time": "1441",
+      "x-robots-tag": "none",
+      "content-type": "text/event-stream"
+    },
+    "streaming": true,
+    "chunks": [
+      {
+        "message": {
+          "content": [],
+          "id": "msg_014KpKtQyr4En4tnTMjvU7Cm",
+          "model": "claude-sonnet-4-20250514",
+          "role": "assistant",
+          "stop_reason": null,
+          "stop_sequence": null,
+          "type": "message",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 52,
+            "output_tokens": 8,
+            "service_tier": "standard"
+          }
+        },
+        "type": "message_start"
+      },
+      {
+        "content_block": {
+          "signature": "",
+          "thinking": "",
+          "type": "thinking"
+        },
+        "index": 0,
+        "type": "content_block_start"
+      },
+      {
+        "delta": {
+          "thinking": "I need to find the 15th",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "type": "ping"
+      },
+      {
+        "delta": {
+          "thinking": " prime number. Let me work",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " through this systematically by",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " listing",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " out prime",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " numbers in",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " order.",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "\n\nA prime number is a natural number greater than",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " 1 that has no positive divis",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "ors other than 1 and itself",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ".\n\nLet me start from",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " 2 and work my way up",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ":\n\n1",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ".",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " 2 ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "-",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " This",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " is prime (",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "only",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " divisible by 1 and ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "2)\n2. 3 ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "- This is prime (only divisible",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " by 1 and 3)",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "\n3. 4",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " - This is not prime (divis",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "ible by 1, 2,",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " and 4)\n4. ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "5 - This is prime (only",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " divisible by 1 and ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "5)\n5. 6 ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "- This is not prime (divisible",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " by 1, 2, ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "3, and 6)\n6",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ". 7 - This is prime",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " (only divisible by 1 ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "and 7)\n7. ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "8 - This is not prime (",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "divisible by 1, 2",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ", 4, and 8)",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "\n8. 9 - This",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " is not prime (divisible by ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "1, 3, and 9",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ")\n9. 10 -",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " This is not prime (divisible by",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " 1, 2, 5",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ", and 10)\n10.",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " 11 - This is prime (",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "only divisible by 1 an",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "d 11)\n11. 12",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " - This is not prime (divis",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "ible by 1, 2,",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " 3, 4, 6",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ", and 12)\n12.",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " 13 - This is prime (",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "only divisible by 1 an",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "d 13)\n13. 14",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " - This is not prime (divis",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "ible by 1, 2,",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " 7, and 14)",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "\n14. 15 - This is",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " not prime (divisible by 1",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ", 3, 5, an",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "d 15)",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "\n15. 16 - This is",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " not prime (divisible by 1",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ", 2, 4, ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "8, an",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "d 16)\n",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "\n\n16. 17 ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "- This is prime (",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "only divisible by ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "1 and 17",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ")\n17. ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "18 - This is",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " not prime (divisible",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " by 1, ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "2, 3,",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " 6, 9",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ", and 18)",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "\n18. 19",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " - This is prime",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " (only divisible by",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " 1 and ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "19)\n19.",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " 20 - This",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " is not prime (divis",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "ible by 1,",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " 2, 4",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ", 5, ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "10, and 20",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ")\n20. ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "21 - This is",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " not prime (divisible",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " by 1, ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "3, 7,",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " and 21)",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "\n\nI",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " continue",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " identifying",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " prime numbers,",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " tracking",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " their",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " divisibility carefully",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ". So",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " far,",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " I've",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " found several",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " prime numbers: 2",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ", 3, ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "5, 7,",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " 11, 13",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ", 17, an",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "d 19.",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " I",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "'ll",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " keep checking",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " subsequent",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " numbers",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " systemat",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "ically.",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "\n\n22",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "is",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " not",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " a",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " prime number, having",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " factors",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " beyon",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "d 1 and itself",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ". 23 stands",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " out as another",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " prime,",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " maintaining",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " the",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " pattern of occasional",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " prime",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " discoveries",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ".",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " Numbers",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " like",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " 24",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ", 25, an",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "d 26 quickly",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " reveal",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " themselves as",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " composite",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ",",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " with",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " multiple",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " divis",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "ors breaking",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " their",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " potential",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " primality.",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "\n\nI notice",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " a consistent",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " pattern:",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " most",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " numbers",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " are not",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " prime, with",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " occasional",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " pure",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " prime",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " numbers emerging. ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "29",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " an",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "d 31 are confirme",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "d primes, while ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "33",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ",",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " 34, and ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "35 demonstrate",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " clear",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " composite",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " characteristics",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ". The",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " systematic",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " examination",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " continues",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": ", revealing",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " the",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " intr",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "icate landscape",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " of number",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " theory.",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "\n\nThe",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " sequence",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " of primes grows",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " metho",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "dically.",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " From",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " 2 to ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "47, fifteen",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " distinct prime",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " numbers have been identified,",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " each a",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " unique mathematical",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " gem",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " standing",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " apart from the more",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " numerous",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " composite numbers. ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "47",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " represents",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " the latest",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " milestone",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " in this numerical",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " exploration,",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " marking",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": " the ",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "15th prime number discovere",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "thinking": "d.",
+          "type": "thinking_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "signature": "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",
+          "type": "signature_delta"
+        },
+        "index": 0,
+        "type": "content_block_delta"
+      },
+      {
+        "index": 0,
+        "type": "content_block_stop"
+      },
+      {
+        "content_block": {
+          "text": "",
+          "type": "text"
+        },
+        "index": 1,
+        "type": "content_block_start"
+      },
+      {
+        "delta": {
+          "text": "I",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "'ll",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " fin",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "d the 15th prime number by systemat",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "ically checking each number starting from 2",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": ".\n\nLet",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " me list",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " the",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " prime",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " numbers in order:\n\n**1",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "st prime: 2**",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " (only divisible by 1 ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "and 2)",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "\n**2nd prime: 3**",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " (only divisible by 1 ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "and 3)",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "\n-",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 4",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "is",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " not prime (divisible by 2",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": ")",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "\n**",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "3rd prime: 5** (",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "only divisible by 1 an",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "d 5)\n- 6 ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "is not prime (divisible by ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "2, 3)",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "\n**4th prime: 7",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "** (only divisible by 1",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " and 7)\n- ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "8,",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 9, 10 ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "are not prime",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "\n**5th prime: 11**",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " (only divisible by 1 ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "and 11)\n- 12",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " is not prime (divisible by",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 2, 3, 4",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": ",",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 6)\n**6th prime",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": ": 13** (only divisible",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " by 1 and 13)",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "\n- 14,",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 15, 16 are not",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " prime",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "\n**7th prime: 17**",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " (only divisible by 1 ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "and 17)\n- 18",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " is not prime (divisible by",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 2, 3, 6",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": ",",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 9)\n**8th prime",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": ": 19** (only divisible",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " by 1 and 19)",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "\n- 20,",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 21, 22 are not",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " prime\n**9th prime: ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "23** (only divisible by ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "1 and 23)\n-",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 24,",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 25, 26,",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 27,",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 28 are not prime\n**",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "10th prime: 29** (",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "only divisible by 1 an",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "d 29)\n- 30 ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "is not prime (divisible by ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "2, 3, 5,",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 6,",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 10,",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 15)\n**11th prime",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": ": 31** (only divisible",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " by 1 and 31)",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "\n- 32, 33,",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 34, 35, 36",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "are not prime\n**12th prime",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": ": 37** (only divisible",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " by 1 and 37)",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "\n- 38, 39,",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 40 ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "are not prime\n**13th prime",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": ": 41** (only divisible",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " by 1 and 41)",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "\n- 42 is not prime",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " (divisible by 2, ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "3, 6, 7,",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " 14, 21)",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "\n**14th prime: 43",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "** (only divisible by 1",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " and 43)\n- ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "44, 45, 46 ",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "are not prime\n**15th prime",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": ": 47** (only divisible",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " by 1 and 47)",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": "\n\nTherefore",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": ", the 15th prime number is",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "delta": {
+          "text": " **47**.",
+          "type": "text_delta"
+        },
+        "index": 1,
+        "type": "content_block_delta"
+      },
+      {
+        "index": 1,
+        "type": "content_block_stop"
+      },
+      {
+        "delta": {
+          "stop_reason": "end_turn",
+          "stop_sequence": null
+        },
+        "type": "message_delta",
+        "usage": {
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "input_tokens": 52,
+          "output_tokens": 1919
+        }
+      },
+      {
+        "type": "message_stop"
+      }
+    ]
+  }
+}

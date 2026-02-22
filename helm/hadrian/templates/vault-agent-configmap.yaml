@@ -1,0 +1,57 @@
+{{- if .Values.sidecars.vaultAgent.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hadrian.fullname" . }}-vault-agent
+  labels:
+    {{- include "hadrian.labels" . | nindent 4 }}
+data:
+  agent.hcl: |
+    exit_after_auth = false
+    pid_file = "/home/vault/.pid"
+
+    vault {
+      address = {{ .Values.sidecars.vaultAgent.vaultAddr | quote }}
+    }
+
+    auto_auth {
+      method {
+        type = {{ .Values.sidecars.vaultAgent.authMethod | quote }}
+        {{- if eq .Values.sidecars.vaultAgent.authMethod "kubernetes" }}
+        mount_path = {{ .Values.sidecars.vaultAgent.authPath | quote }}
+        config = {
+          role = {{ .Values.sidecars.vaultAgent.role | quote }}
+        }
+        {{- end }}
+      }
+
+      sink {
+        type = "file"
+        config = {
+          path = "/home/vault/.vault-token"
+        }
+      }
+    }
+
+    cache {
+      use_auto_auth_token = true
+    }
+
+    listener "tcp" {
+      address = "127.0.0.1:8200"
+      tls_disable = true
+    }
+
+    {{- range .Values.sidecars.vaultAgent.templates }}
+    template {
+      destination = {{ .destination | quote }}
+      contents = <<EOT
+{{ .contents | indent 6 }}
+EOT
+    }
+    {{- end }}
+
+    {{- with .Values.sidecars.vaultAgent.extraConfig }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

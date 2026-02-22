@@ -1,0 +1,77 @@
+# Prometheus Configuration
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: hadrian
+    env: production
+
+# Alerting configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+# Load rules
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Gateway instances
+  - job_name: 'hadrian-gateway'
+    static_configs:
+      - targets:
+          - 'gateway-1:8080'
+          - 'gateway-2:8080'
+          - 'gateway-3:8080'
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '([^:]+):.*'
+        target_label: instance
+        replacement: '${1}'
+
+  # OpenTelemetry Collector metrics
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector:8888']
+
+  # Gateway metrics via OTEL
+  - job_name: 'otel-gateway-metrics'
+    static_configs:
+      - targets: ['otel-collector:8889']
+
+  # Redis
+  - job_name: 'redis'
+    static_configs:
+      - targets:
+          - 'redis-1:6379'
+          - 'redis-2:6379'
+          - 'redis-3:6379'
+
+  # PostgreSQL (via postgres_exporter if deployed)
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+
+  # RabbitMQ
+  - job_name: 'rabbitmq'
+    static_configs:
+      - targets: ['rabbitmq:15692']
+
+  # Traefik
+  - job_name: 'traefik'
+    static_configs:
+      - targets: ['traefik:9100']
+
+  # Keycloak
+  - job_name: 'keycloak'
+    static_configs:
+      - targets: ['keycloak:8080']
+    metrics_path: /metrics

@@ -1,0 +1,258 @@
+---
+title: Emergency Access
+description: Break-glass admin access for disaster recovery when SSO is unavailable
+---
+
+Break-glass emergency access provides designated administrators a way to access Hadrian when SSO is unavailable due to IdP outages, misconfigurations, or network issues.
+
+## Overview
+
+Emergency access is designed for disaster recovery scenarios:
+
+- **IdP Outage**: Your identity provider (Okta, Azure AD, Keycloak, etc.) is down
+- **SSO Misconfiguration**: OIDC/SAML settings are broken and users can't authenticate
+- **Network Issues**: IdP is unreachable from the gateway
+- **Database Corruption**: Config-only approach works even if the database is unavailable
+
+<Callout type="warn">
+  Emergency access should only be used in true emergencies. All access attempts are logged at WARN
+  level for security auditing.
+</Callout>
+
+## Configuration
+
+Add the `[auth.emergency]` section to your `hadrian.toml`:
+
+```toml
+[auth.emergency]
+enabled = true
+allowed_ips = ["10.0.0.0/8", "192.168.1.0/24"]  # Optional: restrict to admin network
+
+[[auth.emergency.accounts]]
+id = "emergency-admin-1"
+name = "Primary Emergency Admin"
+key = "${EMERGENCY_KEY_1}"            # Use environment variable
+email = "admin@company.com"
+roles = ["_emergency_admin", "super_admin"]
+
+[[auth.emergency.accounts]]
+id = "emergency-admin-2"
+name = "Backup Emergency Admin"
+key = "${EMERGENCY_KEY_2}"
+email = "backup-admin@company.com"
+roles = ["_emergency_admin", "super_admin"]
+allowed_ips = ["203.0.113.0/24"]      # Per-account IP restriction
+
+[auth.emergency.rate_limit]
+max_attempts = 5        # Failed attempts before lockout
+window_secs = 900       # 15 minute window
+lockout_secs = 3600     # 1 hour lockout
+```
+
+### Configuration Options
+
+| Option                    | Type     | Default | Description                                  |
+| ------------------------- | -------- | ------- | -------------------------------------------- |
+| `enabled`                 | bool     | `false` | Enable emergency access                      |
+| `allowed_ips`             | string[] | `[]`    | Global IP allowlist (CIDR notation)          |
+| `accounts`                | array    | `[]`    | Emergency admin accounts                     |
+| `rate_limit.max_attempts` | u32      | `5`     | Failed attempts before lockout               |
+| `rate_limit.window_secs`  | u64      | `900`   | Time window for counting attempts (15 min)   |
+| `rate_limit.lockout_secs` | u64      | `3600`  | Lockout duration after max attempts (1 hour) |
+
+### Account Options
+
+| Option        | Type     | Required | Description                        |
+| ------------- | -------- | -------- | ---------------------------------- |
+| `id`          | string   | Yes      | Unique identifier for audit logs   |
+| `name`        | string   | Yes      | Human-readable name                |
+| `key`         | string   | Yes      | Emergency access key (secret)      |
+| `email`       | string   | No       | Email for audit logging            |
+| `roles`       | string[] | No       | Roles granted on authentication    |
+| `allowed_ips` | string[] | No       | Per-account IP restrictions (CIDR) |
+
+## Usage
+
+Authenticate using the `X-Emergency-Key` header:
+
+```bash
+curl -H "X-Emergency-Key: your-emergency-key" \
+  https://gateway.example.com/admin/v1/organizations
+```
+
+Or use the `Authorization` header with the `EmergencyKey` scheme:
+
+```bash
+curl -H "Authorization: EmergencyKey your-emergency-key" \
+  https://gateway.example.com/admin/v1/organizations
+```
+
+## Security Features
+
+### Reserved Role Prefix
+
+Emergency accounts use the `_emergency_admin` role. Roles prefixed with `_` are reserved for internal use and cannot be assigned by IdPs. This prevents attackers from spoofing emergency access through compromised IdP claims.
+
+### Constant-Time Key Comparison
+
+Keys are compared using constant-time algorithms to prevent timing attacks that could reveal key length or partial matches.
+
+### IP Restrictions
+
+Configure IP allowlists at two levels:
+
+1. **Global** (`allowed_ips` at config level): Applies to all emergency accounts
+2. **Per-Account** (`allowed_ips` on individual accounts): Additional restrictions for specific accounts
+
+If global IP restrictions are configured and the request doesn't come from an allowed IP, the emergency key header is ignored entirely (no error is returned, and auth falls through to other methods).
+
+### Rate Limiting with Lockout
+
+Failed authentication attempts are rate-limited by IP address:
+
+1. Each failed attempt increments a counter
+2. After `max_attempts` failures within `window_secs`, the IP is locked out
+3. During lockout, all emergency access attempts from that IP return HTTP 403
+4. Lockout expires after `lockout_secs`
+
+### Audit Logging
+
+All emergency access attempts are logged at WARN level:
+
+```
+WARN emergency_access.success account_id="emergency-admin-1" ip="10.0.0.5"
+WARN emergency_access.invalid_key ip="192.168.1.100"
+WARN emergency_access.ip_rejected ip="203.0.113.50"
+WARN emergency_access.locked_out ip="192.168.1.100"
+WARN emergency_access.lockout_triggered ip="192.168.1.100" attempts=5
+```
+
+## IdP Outage Runbook
+
+Follow this procedure when your IdP is unavailable:
+
+### 1. Verify the Outage
+
+```bash
+# Check if IdP is reachable
+curl -I https://your-idp.example.com/health
+
+# Check Hadrian logs for OIDC errors
+grep "OIDC" /var/log/hadrian/gateway.log | tail -20
+```
+
+### 2. Prepare Emergency Access
+
+Ensure you have:
+
+- Emergency key stored securely (password manager, physical vault)
+- Access from an allowed IP range
+- The gateway admin endpoint URL
+
+### 3. Authenticate with Emergency Key
+
+```bash
+# Test authentication
+curl -H "X-Emergency-Key: $EMERGENCY_KEY" \
+  https://gateway.example.com/admin/v1/organizations
+
+# Should return list of organizations
+```
+
+### 4. Perform Necessary Actions
+
+Common emergency tasks:
+
+```bash
+# Check system status
+curl -H "X-Emergency-Key: $EMERGENCY_KEY" \
+  https://gateway.example.com/health
+
+# List users
+curl -H "X-Emergency-Key: $EMERGENCY_KEY" \
+  https://gateway.example.com/admin/v1/users
+
+# Update SSO configuration (if misconfigured)
+curl -X PATCH -H "X-Emergency-Key: $EMERGENCY_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": false}' \
+  https://gateway.example.com/admin/v1/organizations/{org}/sso
+```
+
+### 5. Document and Restore
+
+1. Document all actions taken during emergency access
+2. Monitor for IdP recovery
+3. Test normal authentication once IdP is available
+4. Review audit logs for the emergency access period
+
+## Key Generation Best Practices
+
+Generate strong emergency keys:
+
+```bash
+# Generate a 32-byte random key (base64-encoded)
+openssl rand -base64 32
+
+# Or generate a URL-safe random string
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Store keys securely:
+
+- Use environment variables with secrets management (Vault, AWS Secrets Manager)
+- Store backup keys in a physical safe or password manager vault
+- Distribute keys to multiple trusted administrators
+- Rotate keys periodically and after any suspected compromise
+
+## Authentication Flow Order
+
+Emergency access is checked early in the authentication flow:
+
+1. **Bootstrap API Key** - Initial setup only (disabled after first user)
+2. **Emergency Access** - Break-glass access (always available when configured)
+3. **Bearer Token (JWT)** - Service accounts
+4. **Proxy Auth Headers** - Reverse proxy authentication
+5. **OIDC Session** - Browser SSO
+6. **SAML Session** - Browser SAML
+
+This placement ensures emergency access works even when other authentication methods are completely broken.
+
+## Comparison with Bootstrap
+
+| Feature           | Bootstrap                     | Emergency Access      |
+| ----------------- | ----------------------------- | --------------------- |
+| When available    | Only when no users exist      | Always (when enabled) |
+| Auto-disables     | Yes, after first user created | No                    |
+| Multiple accounts | No                            | Yes                   |
+| IP restrictions   | No                            | Yes                   |
+| Rate limiting     | No                            | Yes                   |
+| Use case          | Initial setup                 | Disaster recovery     |
+
+## Troubleshooting
+
+### Emergency Key Not Working
+
+1. **Check if enabled**: Verify `auth.emergency.enabled = true`
+2. **Check IP restrictions**: Your IP must be in `allowed_ips`
+3. **Check lockout**: You may be locked out from too many failed attempts
+4. **Check key**: Ensure no trailing whitespace or encoding issues
+5. **Check header name**: Use `X-Emergency-Key` or `Authorization: EmergencyKey <key>`
+
+### Locked Out
+
+Wait for the lockout period to expire (default: 1 hour), or:
+
+1. Access from a different IP address
+2. Clear the lockout from the cache (requires server access):
+   ```bash
+   redis-cli DEL "gw:emergency:lockout:YOUR_IP"
+   ```
+
+### No Response or Connection Error
+
+Emergency access requires the gateway to be running. If the gateway itself is down, you'll need to:
+
+1. Check gateway logs for startup errors
+2. Verify database connectivity
+3. Restart the gateway service

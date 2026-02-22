@@ -1,0 +1,277 @@
+---
+title: Server Configuration
+description: HTTP server settings, TLS, CORS, security headers, and HTTP client configuration
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The `[server]` section configures the HTTP server, including binding, timeouts, TLS, CORS, security headers, and the outbound HTTP client for provider requests.
+
+## Basic Settings
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 8080
+api_base_path = "/api/v1"
+body_limit_bytes = 10485760       # 10 MB
+max_response_body_bytes = 104857600  # 100 MB
+timeout_secs = 300                # 5 minutes
+streaming_idle_timeout_secs = 120 # 2 minutes
+http2 = false
+```
+
+| Setting                       | Type       | Default              | Description                                                                                                                                        |
+| ----------------------------- | ---------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `host`                        | IP address | `0.0.0.0`            | Address to bind to. Use `127.0.0.1` to restrict to localhost.                                                                                      |
+| `port`                        | integer    | `8080`               | Port to listen on.                                                                                                                                 |
+| `api_base_path`               | string     | None                 | Optional base path for all API routes (e.g., `/api/v1`). The UI is always served from `/`.                                                         |
+| `body_limit_bytes`            | integer    | `10485760` (10 MB)   | Maximum request body size. Increase for large file uploads.                                                                                        |
+| `max_response_body_bytes`     | integer    | `104857600` (100 MB) | Maximum response body size for buffering. Protects against OOM from malformed provider responses.                                                  |
+| `timeout_secs`                | integer    | `300` (5 min)        | Request timeout. Set high for long-running completions.                                                                                            |
+| `streaming_idle_timeout_secs` | integer    | `120` (2 min)        | Maximum time between streaming chunks. Protects against stalled providers and connection pool exhaustion. Set to `0` to disable (not recommended). |
+| `http2`                       | boolean    | `false`              | Enable HTTP/2. Requires TLS or h2c support.                                                                                                        |
+
+## TLS Configuration
+
+For production deployments, TLS is typically terminated at a load balancer. If you need the gateway to handle TLS directly:
+
+```toml
+[server.tls]
+cert_path = "/etc/ssl/certs/gateway.crt"
+key_path = "/etc/ssl/private/gateway.key"
+```
+
+| Setting     | Type   | Required | Description                                |
+| ----------- | ------ | -------- | ------------------------------------------ |
+| `cert_path` | string | Yes      | Path to the certificate file (PEM format). |
+| `key_path`  | string | Yes      | Path to the private key file (PEM format). |
+
+## Trusted Proxies
+
+Configure trusted reverse proxies for extracting real client IPs from headers like `X-Forwarded-For`.
+
+<Callout type="warn">
+  **Security Warning:** Proxy header spoofing is a serious vulnerability. Only trust proxy headers
+  from known proxy IPs. If attackers can connect directly to the gateway, they can spoof any IP and
+  bypass IP-based rate limiting.
+</Callout>
+
+```toml
+[server.trusted_proxies]
+# Option 1: Trust specific CIDR ranges (recommended)
+cidrs = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+real_ip_header = "X-Forwarded-For"
+
+# Option 2: Trust all proxies (DANGEROUS - only in isolated environments)
+# dangerously_trust_all = true
+```
+
+| Setting                 | Type     | Default           | Description                                                                                                                        |
+| ----------------------- | -------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `dangerously_trust_all` | boolean  | `false`           | **DANGEROUS:** Trust proxy headers from any source. Only use if the gateway is completely isolated behind a trusted load balancer. |
+| `cidrs`                 | string[] | `[]`              | List of trusted proxy CIDR ranges. Headers are only trusted when the connecting IP is within these ranges.                         |
+| `real_ip_header`        | string   | `X-Forwarded-For` | Header to use for the real client IP. Common values: `X-Forwarded-For`, `X-Real-IP`, `CF-Connecting-IP`.                           |
+
+### How X-Forwarded-For Parsing Works
+
+When a request arrives from a trusted proxy IP, the `X-Forwarded-For` header is parsed right-to-left, skipping IPs within trusted CIDRs, to find the first untrusted (client) IP.
+
+Example with `cidrs = ["10.0.0.0/8"]`:
+
+- Header: `X-Forwarded-For: 203.0.113.50, 10.0.0.5, 10.0.0.1`
+- Connecting IP: `10.0.0.1` (trusted)
+- Parsed IPs (right-to-left): `10.0.0.1` (skip, trusted), `10.0.0.5` (skip, trusted), `203.0.113.50` (use)
+- Result: Client IP = `203.0.113.50`
+
+## CORS Configuration
+
+Cross-Origin Resource Sharing (CORS) controls which domains can make requests to the API.
+
+```toml
+[server.cors]
+enabled = true
+allowed_origins = ["https://app.example.com", "https://admin.example.com"]
+allowed_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+allowed_headers = ["Content-Type", "Authorization", "X-API-Key"]
+allow_credentials = false
+max_age_secs = 86400  # 24 hours
+```
+
+| Setting             | Type     | Default                                          | Description                                                                                               |
+| ------------------- | -------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `enabled`           | boolean  | `true`                                           | Enable CORS handling.                                                                                     |
+| `allowed_origins`   | string[] | `[]`                                             | Allowed origins. Empty = no cross-origin requests. `["*"]` = any origin (not recommended for production). |
+| `allowed_methods`   | string[] | `["GET", "POST", "PUT", "DELETE", "OPTIONS"]`    | Allowed HTTP methods.                                                                                     |
+| `allowed_headers`   | string[] | `["Content-Type", "Authorization", "X-API-Key"]` | Allowed request headers.                                                                                  |
+| `allow_credentials` | boolean  | `false`                                          | Allow credentials (cookies, auth headers) in cross-origin requests.                                       |
+| `max_age_secs`      | integer  | `86400` (24 hours)                               | How long browsers cache preflight responses.                                                              |
+
+### CORS Behavior
+
+- **Empty `allowed_origins`**: No cross-origin requests allowed (most restrictive)
+- **`allowed_origins = ["*"]`**: Any origin allowed (logs a warning, not recommended for production)
+- **Specific origins**: Only listed origins can make cross-origin requests
+
+## Security Headers
+
+Security headers protect against common web vulnerabilities. All headers are enabled by default.
+
+```toml
+[server.security_headers]
+enabled = true
+content_type_options = "nosniff"
+frame_options = "DENY"
+xss_protection = "1; mode=block"
+referrer_policy = "strict-origin-when-cross-origin"
+content_security_policy = "default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'"
+permissions_policy = "geolocation=(), microphone=()"
+```
+
+| Setting                   | Type    | Default                                       | Description                                                                        |
+| ------------------------- | ------- | --------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `enabled`                 | boolean | `true`                                        | Enable security headers.                                                           |
+| `content_type_options`    | string  | `nosniff`                                     | `X-Content-Type-Options` - prevents MIME-sniffing attacks.                         |
+| `frame_options`           | string  | `DENY`                                        | `X-Frame-Options` - prevents clickjacking. Options: `DENY`, `SAMEORIGIN`, or omit. |
+| `xss_protection`          | string  | `1; mode=block`                               | `X-XSS-Protection` - legacy XSS protection for older browsers.                     |
+| `referrer_policy`         | string  | `strict-origin-when-cross-origin`             | `Referrer-Policy` - controls referrer information in requests.                     |
+| `content_security_policy` | string  | See [below](#default-content-security-policy) | `Content-Security-Policy` - controls resource loading.                             |
+| `permissions_policy`      | string  | None                                          | `Permissions-Policy` - controls browser features available to the page.            |
+
+### Default Content Security Policy
+
+Hadrian ships a default CSP tailored for the web UI's frontend tools (Python, JavaScript, SQL, and chart execution via WASM):
+
+```
+default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline';
+img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self';
+worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'
+```
+
+| Directive    | Value                    | Reason                                                           |
+| ------------ | ------------------------ | ---------------------------------------------------------------- |
+| `script-src` | `'self' blob:`           | WASM workers (Pyodide, QuickJS, DuckDB) are loaded as blob URLs. |
+| `style-src`  | `'self' 'unsafe-inline'` | Tailwind CSS injects styles dynamically.                         |
+| `worker-src` | `'self' blob:`           | Web Workers run sandboxed code execution.                        |
+| `frame-src`  | `'self' blob:`           | HTML artifact previews render in sandboxed iframes.              |
+| `img-src`    | `'self' data: blob:`     | Generated charts and inline images use data/blob URIs.           |
+| `object-src` | `'none'`                 | Blocks plugin-based content (Flash, Java applets).               |
+| `base-uri`   | `'self'`                 | Prevents `<base>` tag injection attacks.                         |
+
+Override this by setting `content_security_policy` explicitly. Set to an empty string to disable the CSP header entirely.
+
+### HSTS (HTTP Strict Transport Security)
+
+HSTS forces browsers to use HTTPS for all future connections.
+
+```toml
+[server.security_headers.hsts]
+enabled = true
+max_age_secs = 31536000  # 1 year
+include_subdomains = true
+preload = false
+```
+
+| Setting              | Type    | Default             | Description                                                                                          |
+| -------------------- | ------- | ------------------- | ---------------------------------------------------------------------------------------------------- |
+| `enabled`            | boolean | `true`              | Enable HSTS header. Only sent over HTTPS connections.                                                |
+| `max_age_secs`       | integer | `31536000` (1 year) | How long browsers remember to use HTTPS only.                                                        |
+| `include_subdomains` | boolean | `true`              | Apply HSTS to all subdomains.                                                                        |
+| `preload`            | boolean | `false`             | Allow inclusion in browser HSTS preload lists. Only enable if you're committed to HTTPS permanently. |
+
+<Callout type="info">
+  HSTS with `preload = true` is a permanent commitment. Once your domain is in browser preload
+  lists, it's difficult to remove and HTTP will never work for that domain.
+</Callout>
+
+## HTTP Client Configuration
+
+The HTTP client is used for outbound requests to LLM providers. These settings affect connection pooling, timeouts, and protocol behavior.
+
+```toml
+[server.http_client]
+timeout_secs = 300
+connect_timeout_secs = 10
+pool_max_idle_per_host = 32
+pool_idle_timeout_secs = 90
+http2_prior_knowledge = false
+http2_adaptive_window = true
+tcp_keepalive_secs = 60
+tcp_nodelay = true
+user_agent = "hadrian/0.1.0"
+verbose = false
+```
+
+| Setting                  | Type    | Default             | Description                                                                                     |
+| ------------------------ | ------- | ------------------- | ----------------------------------------------------------------------------------------------- |
+| `timeout_secs`           | integer | `300` (5 min)       | Total request timeout including connection and response. Set high for long-running completions. |
+| `connect_timeout_secs`   | integer | `10`                | Time allowed to establish a connection.                                                         |
+| `pool_max_idle_per_host` | integer | `32`                | Idle connections per host. Higher values reduce latency for frequently-used providers.          |
+| `pool_idle_timeout_secs` | integer | `90`                | Close idle connections after this time.                                                         |
+| `http2_prior_knowledge`  | boolean | `false`             | Force HTTP/2 without ALPN negotiation. Only enable if you know providers support HTTP/2.        |
+| `http2_adaptive_window`  | boolean | `true`              | Allow HTTP/2 receive window to grow dynamically for better throughput.                          |
+| `tcp_keepalive_secs`     | integer | `60`                | TCP keepalive interval. Set to `0` to disable.                                                  |
+| `tcp_nodelay`            | boolean | `true`              | Disable Nagle's algorithm for lower latency.                                                    |
+| `user_agent`             | string  | `hadrian/{version}` | User-Agent header sent to providers.                                                            |
+| `verbose`                | boolean | `false`             | Enable verbose connection logging for debugging.                                                |
+
+### Connection Pool Tuning
+
+For high-throughput deployments with multiple providers:
+
+```toml
+[server.http_client]
+# More connections for frequently-used providers
+pool_max_idle_per_host = 64
+
+# Shorter idle timeout to free resources faster
+pool_idle_timeout_secs = 60
+
+# Faster failure detection
+tcp_keepalive_secs = 30
+```
+
+For low-resource environments (Raspberry Pi, small VMs):
+
+```toml
+[server.http_client]
+# Fewer idle connections to save memory
+pool_max_idle_per_host = 8
+
+# Close idle connections quickly
+pool_idle_timeout_secs = 30
+```
+
+## Complete Example
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 8080
+body_limit_bytes = 52428800  # 50 MB for file uploads
+timeout_secs = 600           # 10 minutes for long completions
+streaming_idle_timeout_secs = 180
+
+[server.trusted_proxies]
+cidrs = ["10.0.0.0/8"]
+real_ip_header = "X-Forwarded-For"
+
+[server.cors]
+enabled = true
+allowed_origins = ["https://app.example.com"]
+allow_credentials = true
+
+[server.security_headers]
+enabled = true
+content_security_policy = "default-src 'self'; connect-src 'self' https://api.example.com"
+
+[server.security_headers.hsts]
+enabled = true
+max_age_secs = 31536000
+include_subdomains = true
+
+[server.http_client]
+timeout_secs = 600
+pool_max_idle_per_host = 64
+tcp_keepalive_secs = 30
+```

@@ -1,0 +1,264 @@
+---
+title: Database Configuration
+description: SQLite and PostgreSQL configuration for persistent storage
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The `[database]` section configures persistent storage for API keys, usage logs, budgets, organizations, projects, and dynamic provider credentials.
+
+## Database Types
+
+Hadrian supports three database modes:
+
+| Mode       | Use Case                       | Multi-Node | Features                      |
+| ---------- | ------------------------------ | ---------- | ----------------------------- |
+| `none`     | Local development, zero-config | No         | Static providers only         |
+| `sqlite`   | Single-node production         | No         | Full features                 |
+| `postgres` | Multi-node, high-availability  | Yes        | Full features + read replicas |
+
+<Callout type="info">
+  Without a database, the gateway runs in stateless mode: no authentication, no usage tracking, no
+  UI, and only static providers from the config file are available.
+</Callout>
+
+## SQLite Configuration
+
+SQLite is ideal for single-node deployments. It requires no external dependencies and stores everything in a single file.
+
+```toml
+[database]
+type = "sqlite"
+path = "/var/lib/hadrian/hadrian.db"
+create_if_missing = true
+run_migrations = true
+wal_mode = true
+busy_timeout_ms = 5000
+max_connections = 5
+```
+
+| Setting             | Type    | Default | Description                                                             |
+| ------------------- | ------- | ------- | ----------------------------------------------------------------------- |
+| `path`              | string  | —       | Path to the database file. Use `:memory:` for in-memory (testing only). |
+| `create_if_missing` | boolean | `true`  | Create the database file if it doesn't exist.                           |
+| `run_migrations`    | boolean | `true`  | Run schema migrations on startup.                                       |
+| `wal_mode`          | boolean | `true`  | Enable WAL mode for better concurrency.                                 |
+| `busy_timeout_ms`   | integer | `5000`  | Time to wait when the database is locked (milliseconds).                |
+| `max_connections`   | integer | `5`     | Maximum connections in the pool.                                        |
+
+### WAL Mode
+
+Write-Ahead Logging (WAL) mode is enabled by default and provides:
+
+- **Better concurrency**: Readers don't block writers, writers don't block readers
+- **Faster writes**: Changes are appended to a log file instead of modifying the main database
+- **Crash recovery**: The WAL file ensures durability even after unexpected shutdowns
+
+<Callout type="warn">
+  WAL mode creates additional files (`hadrian.db-wal` and `hadrian.db-shm`) alongside your database.
+  Ensure your backup strategy includes these files, or run `PRAGMA wal_checkpoint(TRUNCATE)` before
+  backing up.
+</Callout>
+
+### SQLite Tuning
+
+For higher concurrency on a busy single-node deployment:
+
+```toml
+[database]
+type = "sqlite"
+path = "/var/lib/hadrian/hadrian.db"
+max_connections = 10
+busy_timeout_ms = 10000  # 10 seconds
+```
+
+For resource-constrained environments (Raspberry Pi, small VMs):
+
+```toml
+[database]
+type = "sqlite"
+path = "/var/lib/hadrian/hadrian.db"
+max_connections = 2
+busy_timeout_ms = 3000
+```
+
+## PostgreSQL Configuration
+
+PostgreSQL is required for multi-node deployments and provides advanced features like read replicas.
+
+```toml
+[database]
+type = "postgres"
+url = "postgres://hadrian:${DB_PASSWORD}@localhost:5432/hadrian"
+min_connections = 1
+max_connections = 10
+connect_timeout_secs = 10
+idle_timeout_secs = 300
+run_migrations = true
+ssl_mode = "prefer"
+```
+
+| Setting                | Type    | Default  | Description                                                 |
+| ---------------------- | ------- | -------- | ----------------------------------------------------------- |
+| `url`                  | string  | —        | PostgreSQL connection URL for the primary (write) database. |
+| `read_url`             | string  | None     | Optional read replica URL for read-heavy queries.           |
+| `min_connections`      | integer | `1`      | Minimum connections maintained in the pool.                 |
+| `max_connections`      | integer | `10`     | Maximum connections in the pool.                            |
+| `connect_timeout_secs` | integer | `10`     | Timeout for establishing new connections.                   |
+| `idle_timeout_secs`    | integer | `300`    | Close idle connections after this time (seconds).           |
+| `run_migrations`       | boolean | `true`   | Run schema migrations on startup.                           |
+| `ssl_mode`             | string  | `prefer` | SSL connection mode (see below).                            |
+
+### Connection URL Format
+
+The PostgreSQL connection URL follows this format:
+
+```
+postgres://username:password@host:port/database?options
+```
+
+Examples:
+
+```toml
+# Local development
+url = "postgres://hadrian:password@localhost:5432/hadrian"
+
+# With environment variable for password
+url = "postgres://hadrian:${DB_PASSWORD}@db.example.com:5432/hadrian"
+
+# Unix socket connection
+url = "postgres://hadrian@/hadrian?host=/var/run/postgresql"
+
+# With connection options
+url = "postgres://hadrian:password@localhost:5432/hadrian?application_name=hadrian"
+```
+
+### SSL Modes
+
+| Mode          | Description                                                               |
+| ------------- | ------------------------------------------------------------------------- |
+| `disable`     | No SSL. Only use for local development or fully trusted networks.         |
+| `prefer`      | Try SSL first, fall back to non-SSL if unavailable. Default.              |
+| `require`     | Require SSL, but don't verify the server certificate.                     |
+| `verify_ca`   | Require SSL and verify the server certificate against a CA.               |
+| `verify_full` | Require SSL, verify certificate, and verify hostname matches certificate. |
+
+<Callout type="warn">
+  For production deployments, use `verify_ca` or `verify_full` to prevent man-in-the-middle attacks.
+  The `require` mode encrypts traffic but doesn't verify the server's identity.
+</Callout>
+
+### Read Replicas
+
+Configure a read replica to offload read-heavy queries from the primary database:
+
+```toml
+[database]
+type = "postgres"
+url = "postgres://hadrian:${DB_PASSWORD}@primary.db.example.com:5432/hadrian"
+read_url = "postgres://hadrian:${DB_PASSWORD}@replica.db.example.com:5432/hadrian"
+```
+
+The `read_url` can point to:
+
+- A single read replica
+- A load balancer (e.g., PgBouncer, HAProxy) distributing across multiple replicas
+- A managed database read endpoint (e.g., AWS RDS read replica endpoint)
+
+Read operations are automatically routed to the read pool when configured.
+
+### Connection Pool Tuning
+
+For high-throughput deployments:
+
+```toml
+[database]
+type = "postgres"
+url = "postgres://hadrian:${DB_PASSWORD}@localhost:5432/hadrian"
+min_connections = 5       # Keep connections warm
+max_connections = 50      # Handle burst traffic
+connect_timeout_secs = 5  # Fail fast on connection issues
+idle_timeout_secs = 120   # Free resources faster
+```
+
+For moderate traffic with resource constraints:
+
+```toml
+[database]
+type = "postgres"
+url = "postgres://hadrian:${DB_PASSWORD}@localhost:5432/hadrian"
+min_connections = 1
+max_connections = 20
+idle_timeout_secs = 300
+```
+
+<Callout type="info">
+  Set `max_connections` based on your PostgreSQL server's `max_connections` setting. Leave headroom
+  for other applications and administrative connections. A good rule of thumb: gateway connections
+  should be at most 50% of the server's total capacity.
+</Callout>
+
+## Migrations
+
+Both SQLite and PostgreSQL run migrations automatically on startup when `run_migrations = true` (the default).
+
+To disable automatic migrations (useful for managed deployments where migrations are run separately):
+
+```toml
+[database]
+type = "postgres"
+url = "postgres://hadrian:${DB_PASSWORD}@localhost:5432/hadrian"
+run_migrations = false
+```
+
+<Callout type="warn">
+  If you disable automatic migrations, you must run them manually before starting the gateway.
+  Schema mismatches will cause startup failures or runtime errors.
+</Callout>
+
+## Complete Examples
+
+### Development (SQLite)
+
+```toml
+[database]
+type = "sqlite"
+path = "./hadrian.db"
+```
+
+### Production Single-Node (SQLite)
+
+```toml
+[database]
+type = "sqlite"
+path = "/var/lib/hadrian/hadrian.db"
+create_if_missing = true
+wal_mode = true
+max_connections = 10
+busy_timeout_ms = 10000
+```
+
+### Production Multi-Node (PostgreSQL)
+
+```toml
+[database]
+type = "postgres"
+url = "postgres://hadrian:${DB_PASSWORD}@primary.db.internal:5432/hadrian"
+read_url = "postgres://hadrian:${DB_PASSWORD}@replica.db.internal:5432/hadrian"
+min_connections = 5
+max_connections = 30
+connect_timeout_secs = 5
+idle_timeout_secs = 120
+ssl_mode = "verify_full"
+```
+
+### Cloud Managed Database (AWS RDS)
+
+```toml
+[database]
+type = "postgres"
+url = "postgres://hadrian:${DB_PASSWORD}@mydb.abc123.us-east-1.rds.amazonaws.com:5432/hadrian"
+read_url = "postgres://hadrian:${DB_PASSWORD}@mydb-ro.abc123.us-east-1.rds.amazonaws.com:5432/hadrian"
+max_connections = 20
+ssl_mode = "require"
+```

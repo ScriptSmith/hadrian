@@ -1,0 +1,15 @@
+# Grafana Dashboard Provisioning
+
+apiVersion: 1
+
+providers:
+  - name: 'Hadrian Dashboards'
+    orgId: 1
+    folder: 'Hadrian'
+    folderUid: 'hadrian'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

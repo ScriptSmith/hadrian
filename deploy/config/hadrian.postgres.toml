@@ -1,0 +1,58 @@
+# Hadrian Gateway Configuration - PostgreSQL + Redis (Production)
+# Full production configuration with PostgreSQL and Redis
+
+[database]
+type = "postgres"
+url = "${DATABASE_URL}"
+
+[cache]
+type = "redis"
+url = "${REDIS_URL}"
+
+[auth.gateway]
+type = "api_key"
+header_name = "X-API-Key"
+key_prefix = "gw_"
+cache_ttl_secs = 300  # 5 minutes with Redis
+
+# Optional: Reverse proxy authentication for UI
+# Trusts identity headers from an authenticating proxy (Cloudflare Access, oauth2-proxy, etc.)
+# IMPORTANT: Configure [server.trusted_proxies] to prevent header spoofing
+# [auth.admin]
+# type = "proxy_auth"
+# identity_header = "Cf-Access-Authenticated-User-Email"
+# email_header = "Cf-Access-Authenticated-User-Email"
+# name_header = "X-Forwarded-User"
+
+# Optional: Vault/OpenBao secrets manager for dynamic provider API keys
+# See deploy/docker-compose.vault.yml for example setup
+# [secrets]
+# type = "vault"
+# address = "https://vault.example.com:8200"
+# auth = "token"
+# token = "your-vault-token"  # Use VAULT_TOKEN env var in production
+# mount = "secret"
+# path_prefix = "gateway"
+
+[providers]
+default_provider = "test"
+
+# Test provider for e2e testing (echoes back requests)
+[providers.test]
+type = "test"
+
+# Production providers (uncomment and configure as needed)
+# [providers.openrouter]
+# type = "open_ai"
+# api_key = "${OPENROUTER_API_KEY}"
+# base_url = "https://openrouter.ai/api/v1/"
+# timeout_secs = 60
+
+# [providers.anthropic]
+# type = "anthropic"
+# api_key = "${ANTHROPIC_API_KEY}"
+
+# [providers.openai]
+# type = "open_ai"
+# api_key = "${OPENAI_API_KEY}"
+# base_url = "https://api.openai.com/v1/"

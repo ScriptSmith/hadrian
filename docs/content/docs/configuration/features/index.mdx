@@ -1,0 +1,194 @@
+---
+title: Features Configuration
+description: Configure optional gateway capabilities and feature flags
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The `[features]` section enables and configures optional gateway capabilities. All features are disabled by default unless explicitly configured.
+
+## Feature Overview
+
+| Feature                                                           | Section                       | Purpose                                           |
+| ----------------------------------------------------------------- | ----------------------------- | ------------------------------------------------- |
+| [File Search](/docs/configuration/features/file-search)           | `[features.file_search]`      | RAG file_search tool for Responses API            |
+| [File Processing](/docs/configuration/features/file-processing)   | `[features.file_processing]`  | Document chunking, OCR, virus scanning            |
+| [Response Caching](/docs/configuration/features/response-caching) | `[features.response_caching]` | Exact and semantic response caching               |
+| [Guardrails](/docs/configuration/features/guardrails)             | `[features.guardrails]`       | Content filtering, PII detection, safety          |
+| [Web Search](/docs/configuration/features/web-search)             | `[features.web_search]`       | Web search tool providers                         |
+| [Code Execution](/docs/configuration/features/code-execution)     | `[features.code_execution]`   | Server-side code execution                        |
+| [Image Fetching](/docs/configuration/features/image-fetching)     | `[features.image_fetching]`   | URL-to-base64 conversion for non-OpenAI providers |
+| [WebSocket](/docs/configuration/features/websocket)               | `[features.websocket]`        | Real-time event subscriptions                     |
+| [Load Balancing](/docs/configuration/features/load-balancing)     | `[features.load_balancing]`   | Provider selection strategies                     |
+| [Fallback](/docs/configuration/features/fallback)                 | `[features.fallback]`         | Retry and provider fallback                       |
+| Model Catalog                                                     | `[features.model_catalog]`    | Enrich models with capabilities and pricing       |
+
+## Minimal Configuration
+
+Most features work with sensible defaults. A minimal RAG setup:
+
+```toml
+[features.file_search]
+enabled = true
+
+[features.file_search.vector_backend]
+type = "pgvector"
+
+[features.file_processing]
+mode = "inline"
+```
+
+## Complete Example
+
+```toml
+[features]
+
+# RAG / File Search
+[features.file_search]
+enabled = true
+max_iterations = 5
+max_results_per_search = 10
+score_threshold = 0.7
+
+[features.file_search.vector_backend]
+type = "pgvector"
+table_name = "rag_chunks"
+distance_metric = "cosine"
+
+[features.file_search.embedding]
+provider = "openai"
+model = "text-embedding-3-small"
+dimensions = 1536
+
+# Document Processing
+[features.file_processing]
+mode = "inline"
+max_file_size_mb = 10
+max_concurrent_tasks = 4
+default_max_chunk_tokens = 800
+default_overlap_tokens = 200
+
+[features.file_processing.document_extraction]
+enable_ocr = true
+ocr_language = "eng"
+
+# Response Caching
+[features.response_caching]
+enabled = true
+ttl_secs = 3600
+only_deterministic = true
+
+[features.response_caching.semantic]
+enabled = true
+similarity_threshold = 0.95
+
+[features.response_caching.semantic.vector_backend]
+type = "pgvector"
+
+# Guardrails
+[features.guardrails]
+enabled = true
+
+[features.guardrails.input]
+enabled = true
+mode = "blocking"
+
+[features.guardrails.input.provider]
+type = "openai_moderation"
+
+# Image Fetching (for Anthropic/Bedrock/Vertex)
+[features.image_fetching]
+enabled = true
+max_size_mb = 20
+timeout_secs = 30
+
+# WebSocket Events
+[features.websocket]
+enabled = true
+require_auth = true
+
+# Load Balancing
+[features.load_balancing]
+strategy = "round_robin"
+
+[features.load_balancing.health_check]
+enabled = true
+interval_secs = 30
+
+# Fallback & Retry
+[features.fallback]
+retries_enabled = true
+max_retries = 3
+fallback_enabled = true
+fallback_order = ["anthropic", "openai"]
+
+# Model Catalog
+[features.model_catalog]
+enabled = true
+sync_interval_secs = 1800
+api_url = "https://models.dev/api.json"
+```
+
+## Model Catalog
+
+The model catalog enriches the `/api/v1/models` endpoint with per-model metadata from [models.dev](https://models.dev), including:
+
+- **Capabilities**: vision, reasoning, tool calling, structured output, temperature support
+- **Limits**: context length, max output tokens
+- **Pricing**: input/output costs per 1M tokens
+- **Modalities**: supported input/output types (text, image, audio, etc.)
+- **Metadata**: model family, release date, open weights status
+
+### Configuration
+
+```toml
+[features.model_catalog]
+enabled = true                              # Enable runtime sync (default: true)
+sync_interval_secs = 1800                   # Sync every 30 minutes (default)
+api_url = "https://models.dev/api.json"     # Catalog source URL
+```
+
+### How It Works
+
+1. **Embedded fallback**: The catalog is embedded at build time, ensuring models are enriched even without network access
+2. **Runtime sync**: When enabled, a background job periodically fetches the latest catalog
+3. **Pricing fallback**: Catalog pricing is used as a fallback when explicit pricing isn't configured
+
+### Disabling Runtime Sync
+
+To use only the embedded catalog without runtime updates:
+
+```toml
+[features.model_catalog]
+enabled = false
+```
+
+### Provider Mapping
+
+The gateway automatically maps Hadrian provider types to models.dev provider IDs:
+
+| Hadrian Provider | Catalog Provider ID         |
+| ---------------- | --------------------------- |
+| `anthropic`      | `anthropic`                 |
+| `bedrock`        | `amazon-bedrock`            |
+| `vertex`         | `google-vertex`             |
+| `azure_open_ai`  | `azure`                     |
+| `open_ai`        | Auto-detected from base URL |
+
+For OpenAI-compatible providers, the catalog ID is detected from the base URL (e.g., `openrouter.ai` → `openrouter`, `groq.com` → `groq`). Use the `catalog_provider` field on providers to override auto-detection.
+
+## Feature Dependencies
+
+Some features have dependencies on other configuration:
+
+| Feature              | Requires                                                  |
+| -------------------- | --------------------------------------------------------- |
+| File Search          | Database (PostgreSQL for pgvector, or external vector DB) |
+| File Processing      | File Search configuration                                 |
+| Semantic Caching     | Vector backend (pgvector or Qdrant)                       |
+| Guardrails (Bedrock) | AWS credentials                                           |
+| WebSocket auth       | Authentication configuration                              |
+
+<Callout type="info">
+  For conceptual documentation on how each feature works, see the [Features Guide](/docs/features).
+</Callout>

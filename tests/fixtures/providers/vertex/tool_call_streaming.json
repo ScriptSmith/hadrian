@@ -1,0 +1,63 @@
+{
+  "id": "vertex:tool_call:streaming",
+  "description": "Streaming Vertex generateContent with function call response",
+  "request": {
+    "method": "POST",
+    "path": "/gemini-2.0-flash:streamGenerateContent",
+    "path_pattern": "/.+:streamGenerateContent"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "transfer-encoding": "chunked",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff"
+    },
+    "streaming": true,
+    "chunks": [
+      {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "functionCall": {
+                    "args": {
+                      "location": "San Francisco, USA"
+                    },
+                    "name": "get_weather"
+                  }
+                }
+              ],
+              "role": "model"
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "createTime": "2025-12-21T08:54:09.730123Z",
+        "modelVersion": "gemini-2.0-flash",
+        "responseId": "sbVHaYvILOK1xMwPjoCtgQg",
+        "usageMetadata": {
+          "candidatesTokenCount": 8,
+          "candidatesTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 8
+            }
+          ],
+          "promptTokenCount": 45,
+          "promptTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 45
+            }
+          ],
+          "totalTokenCount": 53,
+          "trafficType": "ON_DEMAND"
+        }
+      }
+    ]
+  }
+}

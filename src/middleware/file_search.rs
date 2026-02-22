@@ -1,0 +1,4352 @@
+//! File search middleware for server-side tool interception in the Responses API.
+//!
+//! This middleware intercepts `file_search` tool calls from the LLM and executes
+//! them against the local vector store, feeding results back into the conversation
+//! without exposing the search process to the client.
+//!
+//! # Architecture
+//!
+//! ```text
+//! Client → Gateway → Provider
+//!                      │ file_search tool call
+//!                      ▼
+//!                   ┌─────────────┐
+//!                   │ Gateway     │ ← intercepts
+//!                   │ (executes   │
+//!                   │  search)    │
+//!                   └─────────────┘
+//!                      │ tool result
+//!                      ▼
+//!                   Provider → final response → Client
+//! ```
+//!
+//! # Usage
+//!
+//! The middleware is applied to streaming responses from the Responses API.
+//! When a `file_search` tool call is detected, the middleware:
+//!
+//! 1. Pauses the stream to the client
+//! 2. Executes the search against configured vector stores
+//! 3. Formats results as a tool response
+//! 4. Continues the conversation with the provider
+//! 5. Streams the final response to the client
+
+use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Instant};
+
+use axum::body::Body;
+use bytes::{Bytes, BytesMut};
+use futures_util::StreamExt;
+use http::Response;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use thiserror::Error;
+use tokio::sync::mpsc;
+use tracing::{Instrument, debug, error, info, info_span, instrument, warn};
+use uuid::Uuid;
+
+use crate::{
+    api_types::responses::{
+        CreateResponsesPayload, FileSearchCallOutput, FileSearchCallOutputType,
+        FileSearchComparisonFilter, FileSearchCompoundFilter, FileSearchFilter,
+        FileSearchFilterComparison, FileSearchFilterLogicalType, FileSearchResultContent,
+        FileSearchResultItem, FileSearchTool, FunctionCallOutput, FunctionCallOutputType,
+        ResponsesAnnotation, ResponsesIncludable, ResponsesInput, ResponsesInputItem,
+        ResponsesToolDefinition, WebSearchStatus,
+    },
+    auth::AuthenticatedRequest,
+    config::FileSearchConfig,
+    models::{
+        AttributeFilter, ComparisonFilter, ComparisonOperator, CompoundFilter, FilterValue,
+        LogicalOperator,
+    },
+    observability::{
+        metrics::{record_file_search, record_file_search_iteration},
+        otel_span_error, otel_span_ok,
+    },
+    providers::ProviderError,
+    services::{FileSearchRequest, FileSearchResponse, FileSearchService},
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// File Search Tool Arguments Schema
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Arguments schema for the `file_search` function tool.
+///
+/// When Hadrian converts a `file_search` tool into a function callable by the LLM,
+/// this schema defines the expected arguments. The model generates these arguments
+/// as a JSON string, which Hadrian parses to execute the search.
+///
+/// # OpenAI Compatibility
+///
+/// This schema is designed to be compatible with OpenAI's file_search tool behavior:
+/// - `query`: The natural language search query (required)
+/// - `max_num_results`: Limit results returned (optional, 1-50)
+/// - `filters`: Attribute filters matching the tool definition format (optional)
+/// - `score_threshold`: Minimum relevance score for results (optional, 0.0-1.0)
+///
+/// # Example
+///
+/// ```json
+/// {
+///   "query": "What is the return policy?",
+///   "max_num_results": 5,
+///   "score_threshold": 0.7,
+///   "filters": {
+///     "type": "eq",
+///     "key": "category",
+///     "value": "policy"
+///   }
+/// }
+/// ```
+///
+/// # JSON Schema Generation
+///
+/// Use [`FileSearchToolArguments::function_parameters_schema()`] to get the schema
+/// for injection into tool definitions. This produces a clean schema optimized for
+/// LLM function calling compatibility.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileSearchToolArguments {
+    /// The natural language search query to find relevant content.
+    ///
+    /// This should be a clear, descriptive query that captures what information
+    /// the user is looking for. The query will be used for semantic search
+    /// across the configured vector stores.
+    pub query: String,
+
+    /// Maximum number of results to return.
+    ///
+    /// Must be between 1 and 50 inclusive. If not specified, defaults to the
+    /// value configured in the file_search tool definition or server config.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_num_results: Option<u32>,
+
+    /// Minimum relevance score threshold for results.
+    ///
+    /// Results with scores below this threshold will be excluded.
+    /// Must be between 0.0 and 1.0 inclusive, where 1.0 is a perfect match.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score_threshold: Option<f64>,
+
+    /// Attribute filters to narrow down search results.
+    ///
+    /// Filters are applied before semantic search to limit which files/chunks
+    /// are considered. The filter structure matches the OpenAI file_search
+    /// filter format (comparison filters and compound filters with and/or).
+    ///
+    /// If specified in both the tool definition and the function call arguments,
+    /// the function call filters take precedence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<FileSearchFilter>,
+
+    /// Ranking options to control result scoring and reranking.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ranking_options: Option<crate::models::FileSearchRankingOptions>,
+}
+
+impl FileSearchToolArguments {
+    /// Generate a simplified JSON Schema suitable for LLM function calling.
+    ///
+    /// This produces a cleaner schema without the extra metadata that schemars
+    /// includes (like `$schema`, `title`, `definitions`), making it more
+    /// compatible with various LLM providers.
+    pub fn function_parameters_schema() -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The natural language search query to find relevant content in the knowledge base"
+                },
+                "max_num_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (1-50)",
+                    "minimum": 1,
+                    "maximum": 50
+                },
+                "score_threshold": {
+                    "type": "number",
+                    "description": "Minimum relevance score threshold (0.0-1.0). Results below this score are excluded.",
+                    "minimum": 0.0,
+                    "maximum": 1.0
+                },
+                "filters": {
+                    "type": "object",
+                    "description": "Attribute filters to narrow search results. Use comparison filters (eq, ne, gt, gte, lt, lte) or compound filters (and, or)."
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": false
+        })
+    }
+
+    /// Parse arguments from a JSON string (as received from model output).
+    ///
+    /// Returns `None` if parsing fails or if required fields are missing.
+    pub fn parse(arguments_json: &str) -> Option<Self> {
+        serde_json::from_str(arguments_json).ok()
+    }
+
+    /// Generate a complete OpenAI-compatible function tool definition.
+    ///
+    /// This is the full tool definition that should be injected into the tools array
+    /// when sending requests to LLM providers. It tells the model that a `file_search`
+    /// function is available and what arguments it accepts.
+    ///
+    /// # Example Output
+    ///
+    /// ```json
+    /// {
+    ///   "type": "function",
+    ///   "name": "file_search",
+    ///   "description": "Search for relevant information...",
+    ///   "parameters": { ... }
+    /// }
+    /// ```
+    pub fn function_tool_definition() -> Value {
+        serde_json::json!({
+            "type": "function",
+            "name": "file_search",
+            "description": "Search for relevant information in the configured knowledge base. Use this tool when you need to find specific information, answer questions about documents, or look up facts from the available files.",
+            "parameters": Self::function_parameters_schema()
+        })
+    }
+
+    /// Get the function name used for file_search tool calls.
+    pub const FUNCTION_NAME: &'static str = "file_search";
+
+    /// Get the function description for file_search.
+    pub fn function_description() -> &'static str {
+        "Search for relevant information in the configured knowledge base. Use this tool when you need to find specific information, answer questions about documents, or look up facts from the available files."
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Payload Preprocessing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Preprocess a Responses API payload to convert `file_search` tools to function tools.
+///
+/// This is necessary for providers that don't natively understand the `file_search` tool type
+/// (like OpenAI-compatible APIs, Bedrock, etc.). The function converts `file_search` tools
+/// to standard function tools with the appropriate schema, so the model knows what arguments
+/// to generate when calling the tool.
+///
+/// The middleware will intercept the resulting `file_search` function calls and execute
+/// them locally.
+///
+/// # Example
+///
+/// ```ignore
+/// let mut payload = CreateResponsesPayload { ... };
+/// preprocess_file_search_tools(&mut payload);
+/// // payload.tools now contains function tools instead of file_search tools
+/// ```
+pub fn preprocess_file_search_tools(payload: &mut CreateResponsesPayload) {
+    let Some(tools) = payload.tools.as_mut() else {
+        return;
+    };
+
+    for tool in tools.iter_mut() {
+        if matches!(tool, ResponsesToolDefinition::FileSearch(_)) {
+            // Convert file_search to a function tool
+            let function_def = FileSearchToolArguments::function_tool_definition();
+            *tool = ResponsesToolDefinition::Function(function_def);
+            debug!(
+                stage = "tool_preprocessed",
+                "Preprocessed file_search tool to function definition for OpenAI-compatible provider"
+            );
+        }
+    }
+}
+
+/// Check if a payload contains any file_search tools.
+#[allow(dead_code)] // Utility for future use
+pub fn has_file_search_tools(payload: &CreateResponsesPayload) -> bool {
+    payload
+        .tools
+        .as_ref()
+        .map(|tools| tools.iter().any(|t| t.is_file_search()))
+        .unwrap_or(false)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Filter Conversion (API types → Service types)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Convert a `FileSearchFilter` (API type) to an `AttributeFilter` (service type).
+///
+/// This conversion is needed because the API uses OpenAI-compatible filter types
+/// from `api_types::responses`, while the service layer uses internal filter types
+/// from `models::attribute_filter`.
+///
+/// # Example
+///
+/// ```ignore
+/// let api_filter = FileSearchFilter::Comparison(FileSearchComparisonFilter {
+///     type_: FileSearchFilterComparison::Eq,
+///     key: "author".to_string(),
+///     value: json!("John"),
+/// });
+///
+/// let service_filter = convert_file_search_filter(&api_filter);
+/// // service_filter is now AttributeFilter::Comparison(...)
+/// ```
+pub fn convert_file_search_filter(filter: &FileSearchFilter) -> AttributeFilter {
+    match filter {
+        FileSearchFilter::Comparison(c) => {
+            AttributeFilter::Comparison(convert_comparison_filter(c))
+        }
+        FileSearchFilter::Compound(c) => AttributeFilter::Compound(convert_compound_filter(c)),
+    }
+}
+
+/// Convert a `FileSearchComparisonFilter` to a `ComparisonFilter`.
+fn convert_comparison_filter(filter: &FileSearchComparisonFilter) -> ComparisonFilter {
+    ComparisonFilter {
+        operator: convert_comparison_operator(filter.type_),
+        key: filter.key.clone(),
+        value: convert_json_value_to_filter_value(&filter.value),
+    }
+}
+
+/// Convert a `FileSearchCompoundFilter` to a `CompoundFilter`.
+fn convert_compound_filter(filter: &FileSearchCompoundFilter) -> CompoundFilter {
+    CompoundFilter {
+        operator: convert_logical_operator(filter.type_),
+        filters: filter
+            .filters
+            .iter()
+            .map(convert_file_search_filter)
+            .collect(),
+    }
+}
+
+/// Convert `FileSearchFilterComparison` to `ComparisonOperator`.
+fn convert_comparison_operator(op: FileSearchFilterComparison) -> ComparisonOperator {
+    match op {
+        FileSearchFilterComparison::Eq => ComparisonOperator::Eq,
+        FileSearchFilterComparison::Ne => ComparisonOperator::Ne,
+        FileSearchFilterComparison::Gt => ComparisonOperator::Gt,
+        FileSearchFilterComparison::Gte => ComparisonOperator::Gte,
+        FileSearchFilterComparison::Lt => ComparisonOperator::Lt,
+        FileSearchFilterComparison::Lte => ComparisonOperator::Lte,
+    }
+}
+
+/// Convert `FileSearchFilterLogicalType` to `LogicalOperator`.
+fn convert_logical_operator(op: FileSearchFilterLogicalType) -> LogicalOperator {
+    match op {
+        FileSearchFilterLogicalType::And => LogicalOperator::And,
+        FileSearchFilterLogicalType::Or => LogicalOperator::Or,
+    }
+}
+
+/// Convert a `serde_json::Value` to a `FilterValue`.
+///
+/// Handles string, number, boolean, and array values. Objects and null
+/// are converted to their JSON string representation as a fallback.
+fn convert_json_value_to_filter_value(value: &serde_json::Value) -> FilterValue {
+    match value {
+        serde_json::Value::String(s) => FilterValue::String(s.clone()),
+        serde_json::Value::Number(n) => FilterValue::Number(n.as_f64().unwrap_or_default()),
+        serde_json::Value::Bool(b) => FilterValue::Boolean(*b),
+        serde_json::Value::Array(arr) => {
+            FilterValue::Array(
+                arr.iter()
+                    .filter_map(|v| match v {
+                        serde_json::Value::String(s) => {
+                            Some(crate::models::FilterValueItem::String(s.clone()))
+                        }
+                        serde_json::Value::Number(n) => Some(
+                            crate::models::FilterValueItem::Number(n.as_f64().unwrap_or_default()),
+                        ),
+                        _ => None, // Skip non-string/number items
+                    })
+                    .collect(),
+            )
+        }
+        // For null and objects, convert to string representation as fallback
+        _ => FilterValue::String(value.to_string()),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Authentication Context
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Authentication context for file search access control.
+///
+/// This captures all relevant authentication information needed to verify
+/// access to vector stores during file_search tool execution. It mirrors
+/// the access checks performed in route handlers (`check_resource_access`).
+///
+/// # Access Control Rules
+///
+/// - **User-owned resources**: `user_id` must match the owner
+/// - **Org-owned resources**: `org_id` matches OR `identity_org_ids` contains the owner
+/// - **Project-owned resources**: `project_id` matches OR `identity_project_ids` contains the owner
+#[derive(Debug, Clone, Default)]
+pub struct FileSearchAuthContext {
+    /// User ID from API key or identity
+    pub user_id: Option<Uuid>,
+    /// Organization ID from API key (direct ownership)
+    pub org_id: Option<Uuid>,
+    /// Project ID from API key (direct ownership)
+    pub project_id: Option<Uuid>,
+    /// Organization IDs from OAuth/OIDC identity claims
+    pub identity_org_ids: Vec<String>,
+    /// Project IDs from OAuth/OIDC identity claims
+    pub identity_project_ids: Vec<String>,
+}
+
+impl FileSearchAuthContext {
+    /// Create an auth context from an AuthenticatedRequest.
+    pub fn from_auth(auth: &AuthenticatedRequest) -> Self {
+        Self {
+            user_id: auth.user_id(),
+            org_id: auth.org_id(),
+            project_id: auth.project_id(),
+            identity_org_ids: auth
+                .identity()
+                .map(|i| i.org_ids.clone())
+                .unwrap_or_default(),
+            identity_project_ids: auth
+                .identity()
+                .map(|i| i.project_ids.clone())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Create an auth context from an optional AuthenticatedRequest.
+    ///
+    /// Returns a default (empty) context if auth is None, which will
+    /// allow access when no authentication is configured.
+    pub fn from_auth_optional(auth: Option<&AuthenticatedRequest>) -> Option<Self> {
+        auth.map(Self::from_auth)
+    }
+}
+
+/// Type alias for the provider callback function.
+///
+/// This callback is used to send continuation requests to the provider
+/// after executing file_search tool calls.
+pub type ProviderCallback = Arc<
+    dyn Fn(
+            CreateResponsesPayload,
+        ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, ProviderError>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Errors that can occur during file search middleware processing.
+#[derive(Debug, Error)]
+#[allow(dead_code)] // Variants will be used as implementation grows
+pub enum FileSearchMiddlewareError {
+    /// File search service is not configured.
+    #[error("File search is not configured")]
+    NotConfigured,
+
+    /// Search operation failed.
+    #[error("Search failed: {0}")]
+    SearchFailed(String),
+
+    /// Stream processing error.
+    #[error("Stream error: {0}")]
+    StreamError(String),
+
+    /// Tool call parsing error.
+    #[error("Failed to parse tool call: {0}")]
+    ParseError(String),
+
+    /// Maximum iterations exceeded.
+    #[error("Maximum file_search iterations exceeded ({0})")]
+    MaxIterationsExceeded(usize),
+
+    /// Timeout during search.
+    #[error("Search timed out after {0} seconds")]
+    Timeout(u64),
+
+    /// Provider continuation request failed.
+    #[error("Provider error: {0}")]
+    ProviderError(String),
+
+    /// No provider callback configured.
+    #[error("Provider callback not configured for multi-turn execution")]
+    NoProviderCallback,
+}
+
+/// A detected file_search tool call from the model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileSearchToolCall {
+    /// The tool call ID for the response.
+    pub id: String,
+    /// The search query.
+    pub query: String,
+    /// Vector store IDs to search (from the tool definition).
+    pub vector_store_ids: Vec<String>,
+    /// Maximum number of results (optional).
+    pub max_num_results: Option<usize>,
+    /// Minimum relevance score threshold (optional, 0.0-1.0).
+    pub score_threshold: Option<f64>,
+    /// Attribute filters to narrow search results (optional).
+    pub filters: Option<FileSearchFilter>,
+    /// Ranking options to control result scoring and reranking (optional).
+    pub ranking_options: Option<crate::models::FileSearchRankingOptions>,
+}
+
+impl FileSearchToolCall {
+    /// Generate a cache key for deduplication within a single request.
+    ///
+    /// The key uniquely identifies the search parameters (excluding the tool call ID,
+    /// which changes per call even for identical queries). This allows caching results
+    /// for identical queries within a single multi-turn conversation.
+    ///
+    /// The key is a JSON string of the relevant fields, which is simple and debuggable.
+    /// For high-frequency use, consider switching to a hash-based approach.
+    pub fn cache_key(&self) -> String {
+        // Sort vector_store_ids for consistent ordering
+        let mut sorted_ids = self.vector_store_ids.clone();
+        sorted_ids.sort();
+
+        // Serialize the relevant fields to JSON for a consistent key
+        // Using serde_json ensures proper handling of Option types and nested structures
+        serde_json::json!({
+            "query": self.query,
+            "vector_store_ids": sorted_ids,
+            "max_num_results": self.max_num_results,
+            "score_threshold": self.score_threshold,
+            "filters": self.filters,
+        })
+        .to_string()
+    }
+}
+
+/// Result of executing a file search tool call.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileSearchToolResult {
+    /// The tool call ID this result corresponds to.
+    pub tool_call_id: String,
+    /// The search results as formatted content.
+    pub content: String,
+    /// Number of results returned.
+    pub result_count: usize,
+    /// Vector stores that were searched.
+    pub vector_stores_searched: usize,
+    /// The raw search response for building file_search_call output.
+    #[serde(skip)]
+    pub raw_response: Option<FileSearchResponse>,
+}
+
+/// Tracks file references from search results for citation annotation.
+///
+/// When the model generates a response with citation markers like `[Source 1]`,
+/// this tracker provides the file information needed to create `FileCitation` annotations.
+#[derive(Debug, Clone, Default)]
+pub struct CitationTracker {
+    /// Maps source number (1-indexed) to file information.
+    sources: HashMap<usize, SourceInfo>,
+}
+
+/// Information about a source file from search results.
+#[derive(Debug, Clone)]
+pub struct SourceInfo {
+    pub file_id: Uuid,
+    pub filename: String,
+}
+
+impl CitationTracker {
+    /// Create a new citation tracker.
+    pub fn new() -> Self {
+        Self {
+            sources: HashMap::new(),
+        }
+    }
+
+    /// Add sources from a file search response.
+    ///
+    /// Sources are numbered starting from 1, matching the format used in
+    /// `format_search_results()`.
+    pub fn add_from_response(&mut self, response: &FileSearchResponse) {
+        for (i, result) in response.results.iter().enumerate() {
+            let source_num = i + 1;
+            self.sources.insert(
+                source_num,
+                SourceInfo {
+                    file_id: result.file_id,
+                    filename: result
+                        .filename
+                        .clone()
+                        .unwrap_or_else(|| result.file_id.to_string()),
+                },
+            );
+        }
+    }
+
+    /// Get source info by number.
+    pub fn get(&self, source_num: usize) -> Option<&SourceInfo> {
+        self.sources.get(&source_num)
+    }
+
+    /// Check if the tracker has any sources.
+    pub fn is_empty(&self) -> bool {
+        self.sources.is_empty()
+    }
+
+    /// Parse citation markers from text and generate FileCitation annotations.
+    ///
+    /// Scans the text for patterns like `[Source 1]`, `[Source 2]`, etc. and creates
+    /// `FileCitation` annotations with the file information from the tracker.
+    ///
+    /// Returns a list of annotations sorted by their position in the text.
+    pub fn parse_citations(&self, text: &str) -> Vec<ResponsesAnnotation> {
+        use regex::Regex;
+
+        let mut annotations = Vec::new();
+
+        // Match patterns like [Source 1], [Source 2], etc.
+        // Also match variations: [source 1], [SOURCE 1], [Source1]
+        let re = Regex::new(r"\[(?i)source\s*(\d+)\]").expect("Invalid regex");
+
+        for cap in re.captures_iter(text) {
+            if let (Some(full_match), Some(num_match)) = (cap.get(0), cap.get(1))
+                && let Ok(source_num) = num_match.as_str().parse::<usize>()
+                && let Some(source_info) = self.get(source_num)
+            {
+                // The index is the byte position where the citation marker starts
+                let index = full_match.start() as u64;
+
+                annotations.push(ResponsesAnnotation::FileCitation {
+                    file_id: source_info.file_id.to_string(),
+                    filename: source_info.filename.clone(),
+                    index,
+                });
+            }
+        }
+
+        // Sort by index (position in text)
+        annotations.sort_by_key(|a| match a {
+            ResponsesAnnotation::FileCitation { index, .. } => *index,
+            ResponsesAnnotation::UrlCitation { start_index, .. } => *start_index,
+            ResponsesAnnotation::FilePath { index, .. } => *index,
+        });
+
+        annotations
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SSE Frame Buffer
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Buffer for accumulating SSE (Server-Sent Events) data and extracting complete events.
+///
+/// SSE events are delimited by double newlines (`\n\n` or `\r\n\r\n`). TCP chunks may
+/// arrive with events split across boundaries, so this buffer accumulates data until
+/// complete events can be extracted.
+///
+/// # Example
+///
+/// ```ignore
+/// let mut buffer = SseBuffer::new();
+///
+/// // First chunk arrives with partial event
+/// buffer.extend(b"data: {\"type\":");
+/// assert!(buffer.extract_complete_events().is_empty());
+///
+/// // Second chunk completes the event
+/// buffer.extend(b" \"test\"}\n\n");
+/// let events = buffer.extract_complete_events();
+/// assert_eq!(events.len(), 1);
+/// ```
+#[derive(Debug, Default)]
+struct SseBuffer {
+    buffer: BytesMut,
+}
+
+impl SseBuffer {
+    /// Create a new empty SSE buffer.
+    fn new() -> Self {
+        Self {
+            buffer: BytesMut::new(),
+        }
+    }
+
+    /// Append data to the buffer.
+    fn extend(&mut self, data: &[u8]) {
+        self.buffer.extend_from_slice(data);
+    }
+
+    /// Extract all complete SSE events from the buffer.
+    ///
+    /// Returns a vector of complete events (each ending with `\n\n` or `\r\n\r\n`)
+    /// and retains any incomplete data for the next call.
+    fn extract_complete_events(&mut self) -> Vec<Bytes> {
+        let mut events = Vec::new();
+
+        while let Some(end_pos) = self.find_event_boundary() {
+            // Extract the complete event including the delimiter
+            let event = self.buffer.split_to(end_pos);
+            events.push(event.freeze());
+        }
+
+        events
+    }
+
+    /// Find the position of the next event boundary (end of `\n\n` or `\r\n\r\n`).
+    ///
+    /// Returns the position immediately after the delimiter, or None if no
+    /// complete event boundary is found.
+    fn find_event_boundary(&self) -> Option<usize> {
+        let bytes = &self.buffer[..];
+
+        // Look for \n\n (most common)
+        for i in 0..bytes.len().saturating_sub(1) {
+            if bytes[i] == b'\n' && bytes[i + 1] == b'\n' {
+                return Some(i + 2);
+            }
+        }
+
+        // Also check for \r\n\r\n (Windows-style)
+        for i in 0..bytes.len().saturating_sub(3) {
+            if bytes[i] == b'\r'
+                && bytes[i + 1] == b'\n'
+                && bytes[i + 2] == b'\r'
+                && bytes[i + 3] == b'\n'
+            {
+                return Some(i + 4);
+            }
+        }
+
+        None
+    }
+
+    /// Get any remaining incomplete data in the buffer.
+    ///
+    /// This is useful for forwarding partial data when the stream ends
+    /// or when we need to pass through data that couldn't be parsed.
+    fn take_remaining(&mut self) -> Bytes {
+        self.buffer.split().freeze()
+    }
+
+    /// Check if the buffer is empty.
+    fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
+}
+
+/// Context for file search middleware operations.
+#[derive(Clone)]
+pub struct FileSearchContext {
+    /// The file search service for executing searches.
+    pub service: Arc<FileSearchService>,
+    /// Configuration for file search behavior.
+    pub config: FileSearchConfig,
+    /// Authentication context for access control (optional).
+    /// When None, access control is bypassed (for deployments without auth).
+    pub auth: Option<FileSearchAuthContext>,
+    /// The file_search tool definitions from the request.
+    pub tool_definitions: Vec<FileSearchTool>,
+    /// The original request payload (used to build continuation requests).
+    pub original_payload: CreateResponsesPayload,
+    /// Callback to send continuation requests to the provider.
+    pub provider_callback: Option<ProviderCallback>,
+}
+
+impl FileSearchContext {
+    /// Create a new file search context.
+    pub fn new(
+        service: Arc<FileSearchService>,
+        config: FileSearchConfig,
+        auth: Option<FileSearchAuthContext>,
+        tool_definitions: Vec<FileSearchTool>,
+        original_payload: CreateResponsesPayload,
+    ) -> Self {
+        Self {
+            service,
+            config,
+            auth,
+            tool_definitions,
+            original_payload,
+            provider_callback: None,
+        }
+    }
+
+    /// Set the provider callback for multi-turn execution.
+    pub fn with_provider_callback(mut self, callback: ProviderCallback) -> Self {
+        self.provider_callback = Some(callback);
+        self
+    }
+
+    /// Check if file search is enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.config.enabled && !self.tool_definitions.is_empty()
+    }
+
+    /// Get vector store IDs from the first file_search tool definition.
+    pub fn get_vector_store_ids(&self) -> Vec<String> {
+        self.tool_definitions
+            .first()
+            .map(|t| t.vector_store_ids.clone())
+            .unwrap_or_default()
+    }
+
+    /// Execute a file search based on a tool call.
+    #[instrument(skip(self), fields(
+        tool_call_id = %tool_call.id,
+        query = %tool_call.query,
+        vector_store_ids = ?tool_call.vector_store_ids,
+    ))]
+    pub async fn execute_search(
+        &self,
+        tool_call: &FileSearchToolCall,
+    ) -> Result<FileSearchToolResult, FileSearchMiddlewareError> {
+        let start = Instant::now();
+        let vector_stores_count = tool_call.vector_store_ids.len() as u32;
+
+        info!(
+            stage = "search_executing",
+            tool_call_id = %tool_call.id,
+            query = %tool_call.query,
+            max_num_results = ?tool_call.max_num_results,
+            score_threshold = ?tool_call.score_threshold,
+            has_filters = tool_call.filters.is_some(),
+            "Executing file search"
+        );
+
+        // Parse vector store IDs to UUIDs
+        let vector_store_ids: Vec<Uuid> = tool_call
+            .vector_store_ids
+            .iter()
+            .filter_map(|id| Uuid::parse_str(id).ok())
+            .collect();
+
+        if vector_store_ids.is_empty() {
+            let duration_ms = start.elapsed().as_millis() as u64;
+            record_file_search("error", start.elapsed().as_secs_f64(), 0, 0, false);
+            error!(
+                stage = "search_completed",
+                tool_call_id = %tool_call.id,
+                status = "error",
+                duration_ms = duration_ms,
+                "No valid vector store IDs provided"
+            );
+            otel_span_error!("No valid vector store IDs provided");
+            return Err(FileSearchMiddlewareError::SearchFailed(
+                "No valid vector store IDs provided".to_string(),
+            ));
+        }
+
+        // Build the search request
+        let max_results = tool_call
+            .max_num_results
+            .unwrap_or(self.config.max_results_per_search);
+
+        // Use tool call's score_threshold if provided, otherwise fall back to config
+        let threshold = tool_call
+            .score_threshold
+            .unwrap_or(self.config.score_threshold);
+
+        // Convert API filter type to service filter type if provided
+        let filters = tool_call.filters.as_ref().map(convert_file_search_filter);
+
+        let request = FileSearchRequest {
+            query: tool_call.query.clone(),
+            vector_store_ids,
+            max_results: Some(max_results),
+            threshold: Some(threshold),
+            file_ids: None,
+            filters,
+            ranking_options: tool_call.ranking_options.clone(),
+        };
+
+        // Execute the search with timeout.
+        // Access control is enforced by the FileSearchAuth passed to the service,
+        // which carries the caller's identity for ownership/membership checks.
+        let search_future = self.service.search(request, self.auth.clone());
+        let search_result = tokio::time::timeout(
+            std::time::Duration::from_secs(self.config.timeout_secs),
+            search_future,
+        )
+        .await;
+
+        let result = match search_result {
+            Err(_) => {
+                // Timeout
+                let duration_ms = start.elapsed().as_millis() as u64;
+                record_file_search(
+                    "timeout",
+                    start.elapsed().as_secs_f64(),
+                    0,
+                    vector_stores_count,
+                    false,
+                );
+                warn!(
+                    stage = "search_completed",
+                    tool_call_id = %tool_call.id,
+                    status = "timeout",
+                    duration_ms = duration_ms,
+                    timeout_secs = self.config.timeout_secs,
+                    "File search timed out"
+                );
+                otel_span_error!("File search timed out");
+                return Err(FileSearchMiddlewareError::Timeout(self.config.timeout_secs));
+            }
+            Ok(Err(e)) => {
+                // Search failed
+                let duration_ms = start.elapsed().as_millis() as u64;
+                record_file_search(
+                    "error",
+                    start.elapsed().as_secs_f64(),
+                    0,
+                    vector_stores_count,
+                    false,
+                );
+                error!(
+                    stage = "search_completed",
+                    tool_call_id = %tool_call.id,
+                    status = "error",
+                    duration_ms = duration_ms,
+                    error = %e,
+                    "File search failed"
+                );
+                otel_span_error!("File search failed: {}", e);
+                return Err(FileSearchMiddlewareError::SearchFailed(e.to_string()));
+            }
+            Ok(Ok(result)) => result,
+        };
+
+        // Format results for the model with truncation to prevent context overflow
+        let content = format_search_results_truncated(&result, self.config.max_search_result_chars);
+        let result_count = result.results.len();
+        let vector_stores_searched = result.vector_stores_searched;
+
+        // Determine status based on whether we got results
+        let status = if result_count == 0 {
+            "no_results"
+        } else {
+            "success"
+        };
+        let duration_ms = start.elapsed().as_millis() as u64;
+        record_file_search(
+            status,
+            start.elapsed().as_secs_f64(),
+            result_count as u32,
+            vector_stores_searched as u32,
+            false,
+        );
+
+        info!(
+            stage = "search_completed",
+            tool_call_id = %tool_call.id,
+            result_count = result_count,
+            vector_stores_searched = vector_stores_searched,
+            duration_ms = duration_ms,
+            cache_hit = false,
+            status = status,
+            "File search completed"
+        );
+
+        otel_span_ok!();
+        Ok(FileSearchToolResult {
+            tool_call_id: tool_call.id.clone(),
+            content,
+            result_count,
+            vector_stores_searched,
+            raw_response: Some(result),
+        })
+    }
+}
+
+/// Format search results into a string suitable for the model (no truncation).
+///
+/// Convenience wrapper around `format_search_results_truncated` for tests
+/// and cases where truncation is not needed.
+#[cfg(test)]
+fn format_search_results(response: &FileSearchResponse) -> String {
+    format_search_results_truncated(response, usize::MAX)
+}
+
+/// Format search results with truncation to prevent context overflow.
+///
+/// Similar to `format_search_results`, but limits total output to `max_chars`.
+/// Results are included in full - if adding a result would exceed the limit,
+/// it is excluded entirely. A truncation notice is added if results were omitted.
+///
+/// # Arguments
+/// * `response` - The search response to format
+/// * `max_chars` - Maximum total characters in the output (0 for unlimited)
+fn format_search_results_truncated(response: &FileSearchResponse, max_chars: usize) -> String {
+    if response.results.is_empty() {
+        return format!(
+            "No results found for query: \"{}\".\nSearched {} vector store(s).",
+            response.query, response.vector_stores_searched
+        );
+    }
+
+    // If max_chars is 0 or usize::MAX, treat as unlimited
+    let unlimited = max_chars == 0 || max_chars == usize::MAX;
+
+    let header = format!(
+        "Search results for query: \"{}\" ({} results from {} vector store(s)):\n\n",
+        response.query,
+        response.results.len(),
+        response.vector_stores_searched
+    );
+
+    let citation_guidance =
+        "When citing these sources, reference them as [Source N] where N is the source number.\n";
+
+    let truncation_notice =
+        "\n[... additional results truncated to prevent context overflow ...]\n";
+
+    let mut output = header;
+    let mut truncate_at: Option<usize> = None;
+
+    for (i, result) in response.results.iter().enumerate() {
+        let source_num = i + 1;
+
+        // Format the source reference with file_id for citation tracking
+        let source_ref = if let Some(filename) = &result.filename {
+            format!(
+                "[Source {}: {} (file_id: {})]",
+                source_num, filename, result.file_id
+            )
+        } else {
+            format!("[Source {}: file_id: {}]", source_num, result.file_id)
+        };
+
+        let result_text = format!(
+            "--- {} (relevance: {:.1}%) ---\n{}\n\n",
+            source_ref,
+            result.score * 100.0,
+            result.content
+        );
+
+        // Check if adding this result would exceed the limit
+        if !unlimited {
+            let potential_size = output.len()
+                + result_text.len()
+                + citation_guidance.len()
+                + if i + 1 < response.results.len() {
+                    truncation_notice.len()
+                } else {
+                    0
+                };
+
+            if potential_size > max_chars {
+                truncate_at = Some(i);
+                warn!(
+                    stage = "results_truncated",
+                    query = %response.query,
+                    total_results = response.results.len(),
+                    included_results = i,
+                    max_chars = max_chars,
+                    "Truncating file search results to prevent context overflow"
+                );
+                break;
+            }
+        }
+
+        output.push_str(&result_text);
+    }
+
+    if truncate_at.is_some() {
+        output.push_str(truncation_notice);
+    }
+
+    output.push_str(citation_guidance);
+
+    output
+}
+
+/// Check if the request's `include` parameter contains `file_search_call.results`.
+fn should_include_results(payload: &CreateResponsesPayload) -> bool {
+    payload
+        .include
+        .as_ref()
+        .map(|includes| includes.contains(&ResponsesIncludable::FileSearchCallResults))
+        .unwrap_or(false)
+}
+
+/// Build a `file_search_call` output item from the search results.
+///
+/// This creates the output item that OpenAI returns when the model invokes
+/// the file_search tool. When `include_results` is true, the detailed search
+/// results are included in the response.
+fn build_file_search_call_output(
+    tool_call_id: &str,
+    query: &str,
+    response: &FileSearchResponse,
+    include_results: bool,
+) -> FileSearchCallOutput {
+    let results = if include_results {
+        Some(
+            response
+                .results
+                .iter()
+                .map(|r| {
+                    // Convert serde_json::Value metadata to HashMap if it's an object
+                    let attributes = r.metadata.as_ref().and_then(|v| {
+                        v.as_object()
+                            .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                    });
+
+                    FileSearchResultItem {
+                        file_id: r.file_id.to_string(),
+                        filename: r.filename.clone().unwrap_or_else(|| "unknown".to_string()),
+                        score: r.score,
+                        attributes,
+                        content: vec![FileSearchResultContent::Text {
+                            text: r.content.clone(),
+                        }],
+                    }
+                })
+                .collect(),
+        )
+    } else {
+        None
+    };
+
+    FileSearchCallOutput {
+        type_: FileSearchCallOutputType::FileSearchCall,
+        id: tool_call_id.to_string(),
+        queries: vec![query.to_string()],
+        status: WebSearchStatus::Completed,
+        results,
+    }
+}
+
+/// Format a `file_search_call` output item as an SSE event.
+///
+/// The format matches OpenAI's Responses API streaming format where each
+/// output item is sent as an `response.output_item.done` event.
+fn format_file_search_call_sse_event(output: &FileSearchCallOutput) -> Option<Bytes> {
+    // Create the SSE event data
+    // OpenAI sends output items as part of the response stream with type "response.output_item.done"
+    let event_data = serde_json::json!({
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": output,
+    });
+
+    let json_str = serde_json::to_string(&event_data).ok()?;
+    let sse_event = format!("data: {}\n\n", json_str);
+    Some(Bytes::from(sse_event))
+}
+
+/// Format a `response.file_search_call.in_progress` SSE event.
+///
+/// This event is emitted when a file_search tool call is detected and about to be executed.
+/// It allows clients to show visual feedback while the search is in progress.
+fn format_file_search_in_progress_event(item_id: &str, output_index: usize) -> Bytes {
+    let event_data = serde_json::json!({
+        "type": "response.file_search_call.in_progress",
+        "output_index": output_index,
+        "item_id": item_id,
+    });
+    let json_str = serde_json::to_string(&event_data).unwrap_or_default();
+    Bytes::from(format!("data: {}\n\n", json_str))
+}
+
+/// Format a `response.file_search_call.searching` SSE event.
+///
+/// This event is emitted while the file search is actively executing.
+fn format_file_search_searching_event(item_id: &str, output_index: usize) -> Bytes {
+    let event_data = serde_json::json!({
+        "type": "response.file_search_call.searching",
+        "output_index": output_index,
+        "item_id": item_id,
+    });
+    let json_str = serde_json::to_string(&event_data).unwrap_or_default();
+    Bytes::from(format!("data: {}\n\n", json_str))
+}
+
+/// Format a `response.file_search_call.completed` SSE event.
+///
+/// This event is emitted when the file search completes successfully.
+fn format_file_search_completed_event(item_id: &str, output_index: usize) -> Bytes {
+    let event_data = serde_json::json!({
+        "type": "response.file_search_call.completed",
+        "output_index": output_index,
+        "item_id": item_id,
+    });
+    let json_str = serde_json::to_string(&event_data).unwrap_or_default();
+    Bytes::from(format!("data: {}\n\n", json_str))
+}
+
+/// Inject citation annotations into SSE stream chunks.
+///
+/// This function processes SSE events and adds `FileCitation` annotations
+/// to `response.content_part.done` events based on citation markers found
+/// in the text.
+///
+/// Returns the modified chunk with annotations injected, or the original
+/// chunk if no modifications were needed.
+fn inject_citation_annotations(chunk: &[u8], tracker: &CitationTracker) -> Bytes {
+    if tracker.is_empty() {
+        return Bytes::copy_from_slice(chunk);
+    }
+
+    let Ok(chunk_str) = std::str::from_utf8(chunk) else {
+        return Bytes::copy_from_slice(chunk);
+    };
+
+    let mut output = String::new();
+
+    for line in chunk_str.split_inclusive('\n') {
+        if let Some(data) = line.strip_prefix("data:") {
+            let data = data.trim();
+            if data == "[DONE]" || data.is_empty() {
+                output.push_str(line);
+                continue;
+            }
+
+            // Try to parse and potentially modify the event
+            if let Ok(mut json) = serde_json::from_str::<Value>(data) {
+                let event_type = json.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+                // Handle response.content_part.done events
+                if event_type == "response.content_part.done"
+                    && let Some(part) = json.get_mut("part")
+                    && let Some(part_obj) = part.as_object_mut()
+                    && part_obj.get("type").and_then(|t| t.as_str()) == Some("output_text")
+                    && let Some(text) = part_obj.get("text").and_then(|t| t.as_str())
+                {
+                    // Parse citations from the text
+                    let annotations = tracker.parse_citations(text);
+
+                    if !annotations.is_empty() {
+                        // Serialize annotations
+                        let annotations_json =
+                            serde_json::to_value(&annotations).unwrap_or(serde_json::json!([]));
+
+                        // Update the annotations field
+                        part_obj.insert("annotations".to_string(), annotations_json);
+
+                        debug!(
+                            stage = "annotations_injected",
+                            annotation_count = annotations.len(),
+                            "Injected citation annotations into response.content_part.done"
+                        );
+                    }
+                }
+
+                // Re-serialize and format as SSE
+                if let Ok(json_str) = serde_json::to_string(&json) {
+                    output.push_str("data: ");
+                    output.push_str(&json_str);
+                    output.push_str("\n\n");
+                    continue;
+                }
+            }
+        }
+
+        // If we couldn't modify the line, just pass it through
+        output.push_str(line);
+    }
+
+    Bytes::from(output)
+}
+
+/// Parse a file_search tool call from a JSON value.
+///
+/// Expected format (from model response):
+/// ```json
+/// {
+///   "type": "function_call",
+///   "name": "file_search",
+///   "call_id": "call_xyz",
+///   "arguments": "{\"query\": \"search query\", \"max_num_results\": 5, \"score_threshold\": 0.7, \"filters\": {...}}"
+/// }
+/// ```
+///
+/// All fields except `query` are optional. This function uses [`FileSearchToolArguments::parse()`]
+/// to deserialize the arguments, ensuring consistency with the schema sent to the model.
+pub fn parse_file_search_tool_call(
+    value: &Value,
+    vector_store_ids: &[String],
+) -> Option<FileSearchToolCall> {
+    // Check if this is a function call
+    let obj = value.as_object()?;
+
+    // Check type
+    let type_val = obj.get("type")?.as_str()?;
+    if type_val != "function_call" {
+        return None;
+    }
+
+    // Check name
+    let name = obj.get("name")?.as_str()?;
+    if name != "file_search" {
+        return None;
+    }
+
+    // Get call ID
+    let id = obj
+        .get("call_id")
+        .or_else(|| obj.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    // Parse arguments using the schema-defined struct
+    let arguments_str = obj.get("arguments")?.as_str()?;
+    let args = FileSearchToolArguments::parse(arguments_str)?;
+
+    Some(FileSearchToolCall {
+        id,
+        query: args.query,
+        vector_store_ids: vector_store_ids.to_vec(),
+        max_num_results: args.max_num_results.map(|v| v as usize),
+        score_threshold: args.score_threshold,
+        filters: args.filters,
+        ranking_options: args.ranking_options,
+    })
+}
+
+/// Check if a streaming chunk contains file_search tool calls.
+///
+/// For SSE streams, we need to parse the data field and check for tool calls.
+/// Returns all file_search tool calls found in the chunk.
+pub fn detect_file_search_in_chunk(
+    chunk: &[u8],
+    vector_store_ids: &[String],
+) -> Vec<FileSearchToolCall> {
+    let Some(chunk_str) = std::str::from_utf8(chunk).ok() else {
+        return Vec::new();
+    };
+
+    let mut found_calls = Vec::new();
+
+    // Handle SSE format - look for "data:" lines
+    for line in chunk_str.lines() {
+        if let Some(data) = line.strip_prefix("data:") {
+            let data = data.trim();
+            if data == "[DONE]" {
+                continue;
+            }
+
+            // Try to parse as JSON
+            if let Ok(json) = serde_json::from_str::<Value>(data) {
+                // Check for tool calls in various response formats
+
+                // OpenAI-style responses API output
+                if let Some(output) = json.get("output").and_then(|o| o.as_array()) {
+                    for item in output {
+                        if let Some(tool_call) = parse_file_search_tool_call(item, vector_store_ids)
+                        {
+                            found_calls.push(tool_call);
+                        }
+                    }
+                }
+
+                // Check for function_call directly in the response
+                if let Some(tool_call) = parse_file_search_tool_call(&json, vector_store_ids) {
+                    found_calls.push(tool_call);
+                }
+
+                // Check for response.function_call_arguments.done events (Responses API streaming)
+                // Format: {"type": "response.function_call_arguments.done", "name": "file_search",
+                //          "item_id": "...", "arguments": "{...}"}
+                if json.get("type").and_then(|t| t.as_str())
+                    == Some("response.function_call_arguments.done")
+                    && json.get("name").and_then(|n| n.as_str()) == Some("file_search")
+                {
+                    let id = json
+                        .get("item_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    if let Some(arguments_str) = json.get("arguments").and_then(|a| a.as_str())
+                        && let Some(args) = FileSearchToolArguments::parse(arguments_str)
+                    {
+                        found_calls.push(FileSearchToolCall {
+                            id,
+                            query: args.query,
+                            vector_store_ids: vector_store_ids.to_vec(),
+                            max_num_results: args.max_num_results.map(|v| v as usize),
+                            score_threshold: args.score_threshold,
+                            filters: args.filters,
+                            ranking_options: args.ranking_options,
+                        });
+                    }
+                }
+
+                // Check for response.output_item.done events (Responses API streaming)
+                // Format: {"type": "response.output_item.done", "item": {"type": "function_call", ...}}
+                if json.get("type").and_then(|t| t.as_str()) == Some("response.output_item.done")
+                    && let Some(item) = json.get("item")
+                    && let Some(tool_call) = parse_file_search_tool_call(item, vector_store_ids)
+                {
+                    found_calls.push(tool_call);
+                }
+
+                // Check delta for streaming responses
+                if let Some(delta) = json.get("delta")
+                    && let Some(tool_calls) = delta.get("tool_calls").and_then(|t| t.as_array())
+                {
+                    for tc in tool_calls {
+                        if let Some(tool_call) = parse_file_search_tool_call(tc, vector_store_ids) {
+                            found_calls.push(tool_call);
+                        }
+                    }
+                }
+
+                // Check choices array for chat completion format
+                if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
+                    for choice in choices {
+                        if let Some(delta) = choice.get("delta")
+                            && let Some(tool_calls) =
+                                delta.get("tool_calls").and_then(|t| t.as_array())
+                        {
+                            for tc in tool_calls {
+                                if let Some(tool_call) =
+                                    parse_file_search_tool_call(tc, vector_store_ids)
+                                {
+                                    found_calls.push(tool_call);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    found_calls
+}
+
+/// Build a continuation payload with the original input plus tool call outputs.
+///
+/// Handles multiple file_search tool calls from a single LLM response by adding
+/// all function call outputs to the payload.
+///
+/// # Arguments
+/// * `original` - The original request payload to clone and modify
+/// * `tool_results` - The tool calls and their results to add to the input
+/// * `is_final_iteration` - If true, removes file_search tools from the payload to force
+///   the model to generate a final text response instead of requesting more tool calls
+#[instrument(skip(original, tool_results), fields(
+    tool_result_count = tool_results.len(),
+    is_final_iteration = is_final_iteration,
+))]
+fn build_continuation_payload(
+    original: &CreateResponsesPayload,
+    tool_results: &[(&FileSearchToolCall, FileSearchToolResult)],
+    is_final_iteration: bool,
+) -> CreateResponsesPayload {
+    let mut payload = original.clone();
+
+    // Build function call output items for all tool calls
+    let function_outputs: Vec<ResponsesInputItem> = tool_results
+        .iter()
+        .map(|(tool_call, tool_result)| {
+            ResponsesInputItem::FunctionCallOutput(FunctionCallOutput {
+                type_: FunctionCallOutputType::FunctionCallOutput,
+                id: Some(tool_call.id.clone()),
+                call_id: tool_call.id.clone(),
+                output: tool_result.content.clone(),
+                status: None,
+            })
+        })
+        .collect();
+
+    // Add all function call outputs to the input
+    match payload.input {
+        Some(ResponsesInput::Items(ref mut items)) => {
+            items.extend(function_outputs);
+        }
+        Some(ResponsesInput::Text(text)) => {
+            // Convert text input to items and add all function call outputs
+            let mut items = vec![ResponsesInputItem::EasyMessage(
+                crate::api_types::responses::EasyInputMessage {
+                    type_: None,
+                    role: crate::api_types::responses::EasyInputMessageRole::User,
+                    content: crate::api_types::responses::EasyInputMessageContent::Text(text),
+                },
+            )];
+            items.extend(function_outputs);
+            payload.input = Some(ResponsesInput::Items(items));
+        }
+        None => {
+            payload.input = Some(ResponsesInput::Items(function_outputs));
+        }
+    }
+
+    // On the final iteration, remove file_search tools to force the model to
+    // generate a final text response instead of requesting more tool calls.
+    // This prevents hitting the iteration limit with an unexecuted tool call.
+    if is_final_iteration && let Some(ref mut tools) = payload.tools {
+        let original_count = tools.len();
+        tools.retain(|t| !t.is_file_search());
+        let removed_count = original_count - tools.len();
+        if removed_count > 0 {
+            info!(
+                stage = "tools_removed",
+                removed_count = removed_count,
+                "Removed file_search tools on final iteration to force completion"
+            );
+        }
+        // If no tools remain, set to None to avoid sending empty array
+        if tools.is_empty() {
+            payload.tools = None;
+        }
+    }
+
+    // Ensure streaming is enabled for the continuation
+    payload.stream = true;
+
+    payload
+}
+
+/// Wrap a streaming response with file_search tool interception and multi-turn execution.
+///
+/// This function monitors the stream for file_search tool calls. When detected:
+/// 1. Executes the search against configured vector stores
+/// 2. Builds a continuation payload with the tool result
+/// 3. Sends the continuation request to the provider via the callback
+/// 4. Streams the continuation response to the client
+///
+/// If no provider callback is configured, it falls back to detection-only mode
+/// (logs tool calls but doesn't execute multi-turn).
+pub fn wrap_streaming_with_file_search(
+    response: Response<Body>,
+    context: FileSearchContext,
+) -> Response<Body> {
+    if !context.is_enabled() {
+        return response;
+    }
+
+    let (parts, body) = response.into_parts();
+    let vector_store_ids = context.get_vector_store_ids();
+    let max_iterations = context.config.max_iterations;
+    let has_callback = context.provider_callback.is_some();
+    let include_results = should_include_results(&context.original_payload);
+
+    // Create parent span for the entire file search flow
+    let file_search_span = info_span!(
+        "file_search_stream",
+        vector_store_ids = ?vector_store_ids,
+        max_iterations = max_iterations,
+        has_callback = has_callback,
+    );
+
+    // Create a channel for forwarding chunks
+    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
+
+    // Spawn a task to process the stream, propagating the span context
+    tokio::spawn(
+        async move {
+            let mut iteration = 0;
+            let mut current_body = body;
+            // Track citations across all search results for annotation injection
+            let mut citation_tracker = CitationTracker::new();
+            // Cache for query deduplication within this request
+            // Maps cache_key -> FileSearchToolResult to avoid redundant searches
+            let mut query_cache: HashMap<String, FileSearchToolResult> = HashMap::new();
+
+            loop {
+                iteration += 1;
+                let at_iteration_limit = iteration > max_iterations;
+
+                // Create child span for this iteration
+                let iteration_span = info_span!(
+                    "file_search_iteration",
+                    iteration = iteration,
+                    at_limit = at_iteration_limit,
+                );
+                let _iteration_guard = iteration_span.enter();
+
+                let mut body_stream = current_body.into_data_stream();
+                let mut accumulated = BytesMut::new();
+                // Collect all file_search tool calls from this response
+                let mut detected_tool_calls: Vec<FileSearchToolCall> = Vec::new();
+                // SSE buffer to handle events split across TCP chunks
+                let mut sse_buffer = SseBuffer::new();
+
+                // Process the current response stream
+                while let Some(chunk_result) = body_stream.next().await {
+                    match chunk_result {
+                        Ok(chunk) => {
+                            accumulated.extend_from_slice(&chunk);
+                            sse_buffer.extend(&chunk);
+
+                            // Extract complete SSE events from the buffer
+                            let complete_events = sse_buffer.extract_complete_events();
+
+                            for event in complete_events {
+                                // Check for file_search tool calls in this event
+                                // (skip detection if we've hit the iteration limit - we'll forward everything)
+                                if !at_iteration_limit {
+                                    let tool_calls =
+                                        detect_file_search_in_chunk(&event, &vector_store_ids);
+                                    for tool_call in tool_calls {
+                                        info!(
+                                            stage = "tool_call_detected",
+                                            tool_call_id = %tool_call.id,
+                                            query = %tool_call.query,
+                                            vector_store_ids = ?tool_call.vector_store_ids,
+                                            iteration = iteration,
+                                            "Detected file_search tool call in stream"
+                                        );
+                                        detected_tool_calls.push(tool_call);
+                                    }
+
+                                    // If we found tool calls and have a callback,
+                                    // we're accumulating the response, don't forward yet
+                                    if !detected_tool_calls.is_empty() && has_callback {
+                                        continue;
+                                    }
+                                }
+
+                                // Forward the complete event to the client, injecting citations if we have tracked sources
+                                let event_to_send = if !citation_tracker.is_empty() {
+                                    inject_citation_annotations(&event, &citation_tracker)
+                                } else {
+                                    event
+                                };
+                                if tx.send(Ok(event_to_send)).await.is_err() {
+                                    return; // Client disconnected
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                stage = "stream_error",
+                                error = %e,
+                                iteration = iteration,
+                                "Error reading stream chunk"
+                            );
+                            let _ = tx.send(Err(std::io::Error::other(e))).await;
+                            return;
+                        }
+                    }
+                }
+
+                // Forward any remaining incomplete data in the SSE buffer
+                // (provider may have sent data without final \n\n)
+                if !sse_buffer.is_empty() {
+                    let remaining = sse_buffer.take_remaining();
+                    if !remaining.is_empty() {
+                        // Only forward if we're not accumulating for tool calls
+                        if detected_tool_calls.is_empty() || !has_callback {
+                            let data_to_send = if !citation_tracker.is_empty() {
+                                inject_citation_annotations(&remaining, &citation_tracker)
+                            } else {
+                                remaining
+                            };
+                            if tx.send(Ok(data_to_send)).await.is_err() {
+                                return; // Client disconnected
+                            }
+                        }
+                    }
+                }
+
+                // If we've hit the iteration limit, we've forwarded the final response above
+                // (tool call detection was skipped, so all chunks were forwarded)
+                if at_iteration_limit {
+                    warn!(
+                        stage = "iteration_limit_reached",
+                        iteration = iteration,
+                        max_iterations = max_iterations,
+                        "Maximum file_search iterations exceeded, forwarding final response"
+                    );
+                    record_file_search_iteration(iteration as u32, true, "limit_reached");
+                    break;
+                }
+
+                // If we detected tool calls, execute them all in parallel and continue
+                if !detected_tool_calls.is_empty() {
+                    let tool_call_count = detected_tool_calls.len();
+
+                    // Emit in_progress events for each tool call to notify the client
+                    for (idx, tool_call) in detected_tool_calls.iter().enumerate() {
+                        let event = format_file_search_in_progress_event(&tool_call.id, idx);
+                        if tx.send(Ok(event)).await.is_err() {
+                            return; // Client disconnected
+                        }
+                    }
+
+                    // Create span for the batch search execution
+                    let batch_search_span = info_span!(
+                        "execute_batch_searches",
+                        tool_call_count = tool_call_count,
+                        iteration = iteration,
+                    );
+                    let _batch_guard = batch_search_span.enter();
+
+                    info!(
+                        stage = "batch_search_starting",
+                        tool_call_count = tool_call_count,
+                        iteration = iteration,
+                        "Executing {} file_search tool calls in parallel",
+                        tool_call_count
+                    );
+
+                    // Emit searching events as we start the actual search
+                    for (idx, tool_call) in detected_tool_calls.iter().enumerate() {
+                        let event = format_file_search_searching_event(&tool_call.id, idx);
+                        if tx.send(Ok(event)).await.is_err() {
+                            return; // Client disconnected
+                        }
+                    }
+
+                    // Execute all searches in parallel
+                    // First, separate cached vs uncached to minimize redundant work
+                    let search_futures: Vec<_> = detected_tool_calls
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, tool_call)| {
+                            let cache_key = tool_call.cache_key();
+                            let cached = query_cache.get(&cache_key).cloned();
+                            let ctx = context.clone();
+                            let tc = tool_call.clone();
+
+                            // Create child span for each individual search
+                            let search_span = info_span!(
+                                "execute_single_search",
+                                search_index = idx,
+                                tool_call_id = %tc.id,
+                                query = %tc.query,
+                                cache_hit = cached.is_some(),
+                            );
+
+                            async move {
+                                if let Some(cached_result) = cached {
+                                    info!(
+                                        stage = "search_completed",
+                                        tool_call_id = %tc.id,
+                                        query = %tc.query,
+                                        result_count = cached_result.result_count,
+                                        vector_stores_searched = cached_result.vector_stores_searched,
+                                        cache_hit = true,
+                                        duration_ms = 0_u64,
+                                        "Returning cached file search result (duplicate query)"
+                                    );
+                                    // Record cache hit metric (duration ~0 for cached result)
+                                    record_file_search(
+                                        "success",
+                                        0.0,
+                                        cached_result.result_count as u32,
+                                        cached_result.vector_stores_searched as u32,
+                                        true, // cache_hit = true
+                                    );
+                                    let tool_call_id = tc.id.clone();
+                                    Ok((
+                                        tc,
+                                        FileSearchToolResult {
+                                            tool_call_id,
+                                            ..cached_result
+                                        },
+                                        None, // No cache key to update
+                                    ))
+                                } else {
+                                    match ctx.execute_search(&tc).await {
+                                        Ok(result) => {
+                                            // execute_search already logs search_completed
+                                            Ok((tc, result, Some(cache_key)))
+                                        }
+                                        Err(e) => {
+                                            // execute_search already logs the error
+                                            Err(e)
+                                        }
+                                    }
+                                }
+                            }
+                            .instrument(search_span)
+                        })
+                        .collect();
+
+                    let search_results = futures_util::future::join_all(search_futures).await;
+
+                    // Process results: check for failures, update cache, emit to client
+                    let mut successful_results: Vec<(&FileSearchToolCall, FileSearchToolResult)> =
+                        Vec::new();
+                    let mut had_failure = false;
+
+                    for result in search_results {
+                        match result {
+                            Ok((tool_call, search_result, cache_key_opt)) => {
+                                // Update cache for newly executed searches
+                                if let Some(cache_key) = cache_key_opt {
+                                    query_cache.insert(cache_key, search_result.clone());
+                                }
+
+                                // Track sources for citation annotation
+                                if let Some(ref raw_response) = search_result.raw_response {
+                                    citation_tracker.add_from_response(raw_response);
+                                    debug!(
+                                        stage = "citations_tracked",
+                                        tool_call_id = %tool_call.id,
+                                        source_count = raw_response.results.len(),
+                                        "Added search results to citation tracker"
+                                    );
+
+                                    // Emit file_search_call output item to the client
+                                    let file_search_call_output = build_file_search_call_output(
+                                        &tool_call.id,
+                                        &tool_call.query,
+                                        raw_response,
+                                        include_results,
+                                    );
+
+                                    if let Some(sse_event) =
+                                        format_file_search_call_sse_event(&file_search_call_output)
+                                    {
+                                        debug!(
+                                            stage = "result_emitted",
+                                            tool_call_id = %tool_call.id,
+                                            include_results = include_results,
+                                            "Sending file_search_call output to client"
+                                        );
+                                        if tx.send(Ok(sse_event)).await.is_err() {
+                                            return; // Client disconnected
+                                        }
+                                    }
+
+                                    // Emit completed event for this tool call
+                                    // Find the index of this tool call in the detected list
+                                    let output_index = detected_tool_calls
+                                        .iter()
+                                        .position(|tc| tc.id == tool_call.id)
+                                        .unwrap_or(0);
+                                    let completed_event = format_file_search_completed_event(
+                                        &tool_call.id,
+                                        output_index,
+                                    );
+                                    if tx.send(Ok(completed_event)).await.is_err() {
+                                        return; // Client disconnected
+                                    }
+                                }
+
+                                // Find the original tool call reference for the continuation payload
+                                if let Some(orig_tc) =
+                                    detected_tool_calls.iter().find(|tc| tc.id == tool_call.id)
+                                {
+                                    successful_results.push((orig_tc, search_result));
+                                }
+                            }
+                            Err(_) => {
+                                had_failure = true;
+                            }
+                        }
+                    }
+
+                    // If any search failed, forward accumulated response and stop
+                    if had_failure {
+                        if tx.send(Ok(accumulated.freeze())).await.is_err() {
+                            return;
+                        }
+                        record_file_search_iteration(iteration as u32, true, "error");
+                        break;
+                    }
+
+                    // If we have a callback, make the continuation request with all results
+                    if let Some(ref callback) = context.provider_callback {
+                        // On the final iteration (iteration == max_iterations), remove file_search
+                        // tools from the continuation request to force the model to generate a
+                        // final text response instead of requesting another tool call.
+                        let is_final_iteration = iteration == max_iterations;
+                        let continuation_payload = build_continuation_payload(
+                            &context.original_payload,
+                            &successful_results,
+                            is_final_iteration,
+                        );
+
+                        info!(
+                            stage = "continuation_sent",
+                            tool_call_count = successful_results.len(),
+                            iteration = iteration,
+                            is_final_iteration = is_final_iteration,
+                            "Sending continuation request to provider with {} tool results",
+                            successful_results.len()
+                        );
+
+                        match callback(continuation_payload).await {
+                            Ok(continuation_response) => {
+                                // Continue processing the new response stream
+                                let (_, new_body) = continuation_response.into_parts();
+                                current_body = new_body;
+                                continue; // Go to next iteration of the loop
+                            }
+                            Err(e) => {
+                                error!(
+                                    stage = "continuation_failed",
+                                    iteration = iteration,
+                                    error = %e,
+                                    "Provider continuation request failed"
+                                );
+                                // On provider error, forward accumulated response and stop
+                                if tx.send(Ok(accumulated.freeze())).await.is_err() {
+                                    return;
+                                }
+                                record_file_search_iteration(iteration as u32, true, "error");
+                                break;
+                            }
+                        }
+                    } else {
+                        // No callback - forward accumulated response
+                        debug!(
+                            stage = "no_callback",
+                            iteration = iteration,
+                            "No provider callback configured, forwarding original response"
+                        );
+                        if tx.send(Ok(accumulated.freeze())).await.is_err() {
+                            return;
+                        }
+                        record_file_search_iteration(iteration as u32, true, "no_callback");
+                        break;
+                    }
+                } else {
+                    // No tool calls detected, we're done
+                    debug!(
+                        stage = "stream_completed",
+                        iteration = iteration,
+                        "No tool calls detected, stream complete"
+                    );
+                    record_file_search_iteration(iteration as u32, true, "completed");
+                    break;
+                }
+            }
+
+            debug!(
+                stage = "processing_completed",
+                "File search stream processing completed"
+            );
+        }
+        .instrument(file_search_span),
+    );
+
+    // Create a stream from the receiver using futures_util::stream::unfold
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|item| (item, rx))
+    });
+    let body = Body::from_stream(stream);
+
+    Response::from_parts(parts, body)
+}
+
+/// Check a non-streaming response for file_search tool calls.
+///
+/// Returns the detected tool calls and whether the response requires
+/// file search execution.
+#[allow(dead_code)] // Will be used for non-streaming responses
+pub fn check_response_for_file_search(
+    body: &[u8],
+    vector_store_ids: &[String],
+) -> Vec<FileSearchToolCall> {
+    let Ok(json) = serde_json::from_slice::<Value>(body) else {
+        return Vec::new();
+    };
+
+    let mut tool_calls = Vec::new();
+
+    // Check output array (Responses API format)
+    if let Some(output) = json.get("output").and_then(|o| o.as_array()) {
+        for item in output {
+            if let Some(tool_call) = parse_file_search_tool_call(item, vector_store_ids) {
+                tool_calls.push(tool_call);
+            }
+        }
+    }
+
+    // Check choices array (Chat Completions format)
+    if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
+        for choice in choices {
+            if let Some(message) = choice.get("message")
+                && let Some(tc_array) = message.get("tool_calls").and_then(|t| t.as_array())
+            {
+                for tc in tc_array {
+                    if let Some(tool_call) = parse_file_search_tool_call(tc, vector_store_ids) {
+                        tool_calls.push(tool_call);
+                    }
+                }
+            }
+        }
+    }
+
+    tool_calls
+}
+
+/// Format a tool result as JSON for sending back to the provider.
+#[allow(dead_code)] // Will be used for non-streaming responses
+pub fn format_tool_result_json(result: &FileSearchToolResult) -> Value {
+    serde_json::json!({
+        "role": "tool",
+        "tool_call_id": result.tool_call_id,
+        "content": result.content
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_file_search_tool_call() {
+        let json = serde_json::json!({
+            "type": "function_call",
+            "name": "file_search",
+            "call_id": "call_123",
+            "arguments": "{\"query\": \"revenue growth in Q3\"}"
+        });
+
+        let vector_store_ids = vec!["vs_abc123".to_string()];
+        let result = parse_file_search_tool_call(&json, &vector_store_ids);
+
+        assert!(result.is_some());
+        let tool_call = result.unwrap();
+        assert_eq!(tool_call.id, "call_123");
+        assert_eq!(tool_call.query, "revenue growth in Q3");
+        assert_eq!(tool_call.vector_store_ids, vector_store_ids);
+    }
+
+    #[test]
+    fn test_parse_file_search_tool_call_not_file_search() {
+        let json = serde_json::json!({
+            "type": "function_call",
+            "name": "get_weather",
+            "call_id": "call_456",
+            "arguments": "{\"location\": \"San Francisco\"}"
+        });
+
+        let result = parse_file_search_tool_call(&json, &["vs_abc".to_string()]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_file_search_tool_call_with_max_results() {
+        let json = serde_json::json!({
+            "type": "function_call",
+            "name": "file_search",
+            "call_id": "call_789",
+            "arguments": "{\"query\": \"annual report\", \"max_num_results\": 5}"
+        });
+
+        let vector_store_ids = vec!["vs_abc".to_string()];
+        let result = parse_file_search_tool_call(&json, &vector_store_ids).unwrap();
+
+        assert_eq!(result.max_num_results, Some(5));
+    }
+
+    #[test]
+    fn test_parse_file_search_tool_call_with_score_threshold() {
+        let json = serde_json::json!({
+            "type": "function_call",
+            "name": "file_search",
+            "call_id": "call_threshold",
+            "arguments": "{\"query\": \"policy document\", \"score_threshold\": 0.85}"
+        });
+
+        let vector_store_ids = vec!["vs_abc".to_string()];
+        let result = parse_file_search_tool_call(&json, &vector_store_ids).unwrap();
+
+        assert_eq!(result.query, "policy document");
+        assert_eq!(result.score_threshold, Some(0.85));
+        assert!(result.filters.is_none());
+    }
+
+    #[test]
+    fn test_parse_file_search_tool_call_with_comparison_filter() {
+        let json = serde_json::json!({
+            "type": "function_call",
+            "name": "file_search",
+            "call_id": "call_filter",
+            "arguments": "{\"query\": \"budget report\", \"filters\": {\"type\": \"eq\", \"key\": \"department\", \"value\": \"finance\"}}"
+        });
+
+        let vector_store_ids = vec!["vs_abc".to_string()];
+        let result = parse_file_search_tool_call(&json, &vector_store_ids).unwrap();
+
+        assert_eq!(result.query, "budget report");
+        assert!(result.filters.is_some());
+
+        // Verify it's a comparison filter
+        match result.filters.unwrap() {
+            FileSearchFilter::Comparison(f) => {
+                assert_eq!(f.key, "department");
+                assert_eq!(f.value, serde_json::json!("finance"));
+            }
+            _ => panic!("Expected comparison filter"),
+        }
+    }
+
+    #[test]
+    fn test_parse_file_search_tool_call_with_compound_filter() {
+        let json = serde_json::json!({
+            "type": "function_call",
+            "name": "file_search",
+            "call_id": "call_compound",
+            "arguments": "{\"query\": \"meeting notes\", \"filters\": {\"type\": \"and\", \"filters\": [{\"type\": \"eq\", \"key\": \"year\", \"value\": 2024}, {\"type\": \"eq\", \"key\": \"status\", \"value\": \"approved\"}]}}"
+        });
+
+        let vector_store_ids = vec!["vs_abc".to_string()];
+        let result = parse_file_search_tool_call(&json, &vector_store_ids).unwrap();
+
+        assert_eq!(result.query, "meeting notes");
+        assert!(result.filters.is_some());
+
+        // Verify it's a compound filter
+        match result.filters.unwrap() {
+            FileSearchFilter::Compound(f) => {
+                assert_eq!(f.filters.len(), 2);
+            }
+            _ => panic!("Expected compound filter"),
+        }
+    }
+
+    #[test]
+    fn test_parse_file_search_tool_call_with_all_arguments() {
+        let json = serde_json::json!({
+            "type": "function_call",
+            "name": "file_search",
+            "call_id": "call_full",
+            "arguments": "{\"query\": \"quarterly earnings\", \"max_num_results\": 10, \"score_threshold\": 0.75, \"filters\": {\"type\": \"eq\", \"key\": \"quarter\", \"value\": \"Q3\"}}"
+        });
+
+        let vector_store_ids = vec!["vs_abc".to_string(), "vs_def".to_string()];
+        let result = parse_file_search_tool_call(&json, &vector_store_ids).unwrap();
+
+        assert_eq!(result.id, "call_full");
+        assert_eq!(result.query, "quarterly earnings");
+        assert_eq!(result.vector_store_ids, vector_store_ids);
+        assert_eq!(result.max_num_results, Some(10));
+        assert_eq!(result.score_threshold, Some(0.75));
+        assert!(result.filters.is_some());
+    }
+
+    #[test]
+    fn test_parse_file_search_tool_call_backward_compatible_query_only() {
+        // Ensure backward compatibility: calls with only query should still work
+        let json = serde_json::json!({
+            "type": "function_call",
+            "name": "file_search",
+            "call_id": "call_simple",
+            "arguments": "{\"query\": \"simple search\"}"
+        });
+
+        let vector_store_ids = vec!["vs_abc".to_string()];
+        let result = parse_file_search_tool_call(&json, &vector_store_ids).unwrap();
+
+        assert_eq!(result.query, "simple search");
+        assert!(result.max_num_results.is_none());
+        assert!(result.score_threshold.is_none());
+        assert!(result.filters.is_none());
+    }
+
+    #[test]
+    fn test_detect_file_search_in_sse_chunk() {
+        let chunk = b"data: {\"output\": [{\"type\": \"function_call\", \"name\": \"file_search\", \"call_id\": \"call_abc\", \"arguments\": \"{\\\"query\\\": \\\"test query\\\"}\"}]}\n\n";
+
+        let vector_store_ids = vec!["vs_test".to_string()];
+        let results = detect_file_search_in_chunk(chunk, &vector_store_ids);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "call_abc");
+        assert_eq!(results[0].query, "test query");
+    }
+
+    #[test]
+    fn test_detect_file_search_in_sse_chunk_no_match() {
+        let chunk =
+            b"data: {\"output\": [{\"type\": \"message\", \"content\": \"Hello world\"}]}\n\n";
+
+        let results = detect_file_search_in_chunk(chunk, &["vs_test".to_string()]);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_detect_file_search_done_message() {
+        let chunk = b"data: [DONE]\n\n";
+
+        let results = detect_file_search_in_chunk(chunk, &["vs_test".to_string()]);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_detect_file_search_function_call_arguments_done() {
+        // Test response.function_call_arguments.done event format from Responses API streaming
+        let chunk = br#"data: {"type": "response.function_call_arguments.done", "item_id": "fc_abc123", "name": "file_search", "output_index": 0, "arguments": "{\"query\": \"budget report\", \"max_num_results\": 5}", "sequence_number": 10}
+
+"#;
+
+        let vector_store_ids = vec!["vs_test".to_string()];
+        let results = detect_file_search_in_chunk(chunk, &vector_store_ids);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "fc_abc123");
+        assert_eq!(results[0].query, "budget report");
+        assert_eq!(results[0].max_num_results, Some(5));
+        assert_eq!(results[0].vector_store_ids, vec!["vs_test".to_string()]);
+    }
+
+    #[test]
+    fn test_detect_file_search_function_call_arguments_done_with_filters() {
+        // Test with score_threshold and filters
+        let chunk = br#"data: {"type": "response.function_call_arguments.done", "item_id": "fc_xyz", "name": "file_search", "output_index": 1, "arguments": "{\"query\": \"quarterly sales\", \"score_threshold\": 0.7}", "sequence_number": 5}
+
+"#;
+
+        let results = detect_file_search_in_chunk(chunk, &["vs_123".to_string()]);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].query, "quarterly sales");
+        assert_eq!(results[0].score_threshold, Some(0.7));
+    }
+
+    #[test]
+    fn test_detect_file_search_function_call_arguments_done_wrong_name() {
+        // Should not match when function name is not "file_search"
+        let chunk = br#"data: {"type": "response.function_call_arguments.done", "item_id": "fc_abc", "name": "get_weather", "output_index": 0, "arguments": "{\"location\": \"NYC\"}", "sequence_number": 1}
+
+"#;
+
+        let results = detect_file_search_in_chunk(chunk, &["vs_test".to_string()]);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_detect_file_search_output_item_done() {
+        // Test response.output_item.done event format from Responses API streaming
+        let chunk = br#"data: {"type": "response.output_item.done", "output_index": 0, "item": {"type": "function_call", "id": "fc_item123", "call_id": "call_456", "name": "file_search", "arguments": "{\"query\": \"project status\"}", "status": "completed"}, "sequence_number": 15}
+
+"#;
+
+        let vector_store_ids = vec!["vs_prod".to_string()];
+        let results = detect_file_search_in_chunk(chunk, &vector_store_ids);
+
+        assert_eq!(results.len(), 1);
+        // parse_file_search_tool_call prefers call_id over id
+        assert_eq!(results[0].id, "call_456");
+        assert_eq!(results[0].query, "project status");
+        assert_eq!(results[0].vector_store_ids, vec!["vs_prod".to_string()]);
+    }
+
+    #[test]
+    fn test_detect_file_search_output_item_done_message_type() {
+        // Should not match when item type is "message" (not function_call)
+        let chunk = br#"data: {"type": "response.output_item.done", "output_index": 0, "item": {"type": "message", "id": "msg_123", "role": "assistant", "content": [{"type": "output_text", "text": "Hello!"}], "status": "completed"}, "sequence_number": 5}
+
+"#;
+
+        let results = detect_file_search_in_chunk(chunk, &["vs_test".to_string()]);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_detect_file_search_output_item_done_wrong_function() {
+        // Should not match when function name is not "file_search"
+        let chunk = br#"data: {"type": "response.output_item.done", "output_index": 1, "item": {"type": "function_call", "id": "fc_other", "call_id": "call_other", "name": "get_current_time", "arguments": "{}", "status": "completed"}, "sequence_number": 8}
+
+"#;
+
+        let results = detect_file_search_in_chunk(chunk, &["vs_test".to_string()]);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_detect_multiple_file_search_in_output() {
+        // Test detecting multiple file_search calls in the same output array
+        let chunk = br#"data: {"output": [{"type": "function_call", "name": "file_search", "call_id": "call_1", "arguments": "{\"query\": \"Q1 revenue\"}"}, {"type": "function_call", "name": "file_search", "call_id": "call_2", "arguments": "{\"query\": \"Q2 expenses\"}"}]}
+
+"#;
+
+        let vector_store_ids = vec!["vs_finance".to_string()];
+        let results = detect_file_search_in_chunk(chunk, &vector_store_ids);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, "call_1");
+        assert_eq!(results[0].query, "Q1 revenue");
+        assert_eq!(results[1].id, "call_2");
+        assert_eq!(results[1].query, "Q2 expenses");
+    }
+
+    #[test]
+    fn test_detect_multiple_file_search_mixed_with_other_tools() {
+        // Test detecting file_search calls when mixed with other tool types
+        let chunk = br#"data: {"output": [{"type": "function_call", "name": "get_weather", "call_id": "weather_1", "arguments": "{\"location\": \"NYC\"}"}, {"type": "function_call", "name": "file_search", "call_id": "search_1", "arguments": "{\"query\": \"weather data\"}"}, {"type": "message", "content": "Processing..."}, {"type": "function_call", "name": "file_search", "call_id": "search_2", "arguments": "{\"query\": \"climate report\"}"}]}
+
+"#;
+
+        let vector_store_ids = vec!["vs_data".to_string()];
+        let results = detect_file_search_in_chunk(chunk, &vector_store_ids);
+
+        // Should only detect the 2 file_search calls, not get_weather or message
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, "search_1");
+        assert_eq!(results[0].query, "weather data");
+        assert_eq!(results[1].id, "search_2");
+        assert_eq!(results[1].query, "climate report");
+    }
+
+    #[test]
+    fn test_build_continuation_payload_multiple_results() {
+        use crate::api_types::responses::{CreateResponsesPayload, ResponsesInput};
+
+        let original = CreateResponsesPayload {
+            input: Some(ResponsesInput::Text(
+                "What are Q1 and Q2 metrics?".to_string(),
+            )),
+            instructions: None,
+            metadata: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: None,
+            model: Some("gpt-4".to_string()),
+            models: None,
+            text: None,
+            reasoning: None,
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt: None,
+            include: None,
+            background: None,
+            safety_identifier: None,
+            store: None,
+            service_tier: None,
+            truncation: None,
+            stream: false,
+            provider: None,
+            plugins: None,
+            user: None,
+        };
+
+        let tool_call_1 = FileSearchToolCall {
+            id: "call_1".to_string(),
+            query: "Q1 metrics".to_string(),
+            vector_store_ids: vec!["vs_1".to_string()],
+            max_num_results: None,
+            score_threshold: None,
+            filters: None,
+            ranking_options: None,
+        };
+
+        let tool_call_2 = FileSearchToolCall {
+            id: "call_2".to_string(),
+            query: "Q2 metrics".to_string(),
+            vector_store_ids: vec!["vs_1".to_string()],
+            max_num_results: None,
+            score_threshold: None,
+            filters: None,
+            ranking_options: None,
+        };
+
+        let result_1 = FileSearchToolResult {
+            tool_call_id: "call_1".to_string(),
+            content: "Q1 revenue: $1M".to_string(),
+            result_count: 1,
+            vector_stores_searched: 1,
+            raw_response: None,
+        };
+
+        let result_2 = FileSearchToolResult {
+            tool_call_id: "call_2".to_string(),
+            content: "Q2 revenue: $1.5M".to_string(),
+            result_count: 1,
+            vector_stores_searched: 1,
+            raw_response: None,
+        };
+
+        let tool_results = vec![(&tool_call_1, result_1), (&tool_call_2, result_2)];
+
+        let payload = build_continuation_payload(&original, &tool_results, false);
+
+        // Check that streaming is enabled
+        assert!(payload.stream);
+
+        // Check that the payload has items input (converted from text)
+        match payload.input {
+            Some(ResponsesInput::Items(items)) => {
+                // Should have: original text message + 2 function outputs
+                assert_eq!(items.len(), 3);
+
+                // First item should be the original text as an EasyMessage
+                match &items[0] {
+                    ResponsesInputItem::EasyMessage(msg) => {
+                        assert_eq!(
+                            msg.role,
+                            crate::api_types::responses::EasyInputMessageRole::User
+                        );
+                    }
+                    _ => panic!("Expected EasyMessage as first item"),
+                }
+
+                // Second and third items should be FunctionCallOutput
+                match &items[1] {
+                    ResponsesInputItem::FunctionCallOutput(output) => {
+                        assert_eq!(output.call_id, "call_1");
+                        assert_eq!(output.output, "Q1 revenue: $1M");
+                    }
+                    _ => panic!("Expected FunctionCallOutput as second item"),
+                }
+
+                match &items[2] {
+                    ResponsesInputItem::FunctionCallOutput(output) => {
+                        assert_eq!(output.call_id, "call_2");
+                        assert_eq!(output.output, "Q2 revenue: $1.5M");
+                    }
+                    _ => panic!("Expected FunctionCallOutput as third item"),
+                }
+            }
+            _ => panic!("Expected Items input"),
+        }
+    }
+
+    #[test]
+    fn test_build_continuation_payload_final_iteration_removes_file_search() {
+        use crate::api_types::responses::{
+            CreateResponsesPayload, FileSearchTool, FileSearchToolType, ResponsesInput,
+            ResponsesToolDefinition,
+        };
+
+        // Create a payload with file_search and function tools
+        let function_tool = serde_json::json!({
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get current weather",
+            "parameters": {"type": "object", "properties": {}}
+        });
+
+        let original = CreateResponsesPayload {
+            input: Some(ResponsesInput::Text("Find Q1 results".to_string())),
+            instructions: None,
+            metadata: None,
+            tools: Some(vec![
+                ResponsesToolDefinition::FileSearch(FileSearchTool {
+                    type_: FileSearchToolType::FileSearch,
+                    vector_store_ids: vec!["vs_1".to_string()],
+                    max_num_results: None,
+                    ranking_options: None,
+                    filters: None,
+                    cache_control: None,
+                }),
+                ResponsesToolDefinition::Function(function_tool.clone()),
+            ]),
+            tool_choice: None,
+            parallel_tool_calls: None,
+            model: Some("gpt-4".to_string()),
+            models: None,
+            text: None,
+            reasoning: None,
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt: None,
+            include: None,
+            background: None,
+            safety_identifier: None,
+            store: None,
+            service_tier: None,
+            truncation: None,
+            stream: false,
+            provider: None,
+            plugins: None,
+            user: None,
+        };
+
+        let tool_call = FileSearchToolCall {
+            id: "call_1".to_string(),
+            query: "Q1 metrics".to_string(),
+            vector_store_ids: vec!["vs_1".to_string()],
+            max_num_results: None,
+            score_threshold: None,
+            filters: None,
+            ranking_options: None,
+        };
+
+        let result = FileSearchToolResult {
+            tool_call_id: "call_1".to_string(),
+            content: "Q1 revenue: $1M".to_string(),
+            result_count: 1,
+            vector_stores_searched: 1,
+            raw_response: None,
+        };
+
+        let tool_results = vec![(&tool_call, result)];
+
+        // Test with is_final_iteration = true
+        let payload = build_continuation_payload(&original, &tool_results, true);
+
+        // file_search tool should be removed
+        let tools = payload.tools.expect("tools should exist");
+        assert_eq!(tools.len(), 1, "Should have 1 tool (function only)");
+        assert!(
+            !tools[0].is_file_search(),
+            "Remaining tool should not be file_search"
+        );
+
+        // Function tool should be preserved
+        match &tools[0] {
+            ResponsesToolDefinition::Function(v) => {
+                assert_eq!(v["name"], "get_weather");
+            }
+            _ => panic!("Expected Function tool"),
+        }
+    }
+
+    #[test]
+    fn test_build_continuation_payload_final_iteration_removes_all_tools_if_only_file_search() {
+        use crate::api_types::responses::{
+            CreateResponsesPayload, FileSearchTool, FileSearchToolType, ResponsesInput,
+            ResponsesToolDefinition,
+        };
+
+        // Create a payload with only file_search tool
+        let original = CreateResponsesPayload {
+            input: Some(ResponsesInput::Text("Find Q1 results".to_string())),
+            instructions: None,
+            metadata: None,
+            tools: Some(vec![ResponsesToolDefinition::FileSearch(FileSearchTool {
+                type_: FileSearchToolType::FileSearch,
+                vector_store_ids: vec!["vs_1".to_string()],
+                max_num_results: None,
+                ranking_options: None,
+                filters: None,
+                cache_control: None,
+            })]),
+            tool_choice: None,
+            parallel_tool_calls: None,
+            model: Some("gpt-4".to_string()),
+            models: None,
+            text: None,
+            reasoning: None,
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt: None,
+            include: None,
+            background: None,
+            safety_identifier: None,
+            store: None,
+            service_tier: None,
+            truncation: None,
+            stream: false,
+            provider: None,
+            plugins: None,
+            user: None,
+        };
+
+        let tool_call = FileSearchToolCall {
+            id: "call_1".to_string(),
+            query: "Q1 metrics".to_string(),
+            vector_store_ids: vec!["vs_1".to_string()],
+            max_num_results: None,
+            score_threshold: None,
+            filters: None,
+            ranking_options: None,
+        };
+
+        let result = FileSearchToolResult {
+            tool_call_id: "call_1".to_string(),
+            content: "Q1 revenue: $1M".to_string(),
+            result_count: 1,
+            vector_stores_searched: 1,
+            raw_response: None,
+        };
+
+        let tool_results = vec![(&tool_call, result)];
+
+        // Test with is_final_iteration = true
+        let payload = build_continuation_payload(&original, &tool_results, true);
+
+        // tools should be None (not empty array) since only file_search was present
+        assert!(
+            payload.tools.is_none(),
+            "tools should be None when only file_search was present"
+        );
+    }
+
+    #[test]
+    fn test_build_continuation_payload_not_final_iteration_preserves_tools() {
+        use crate::api_types::responses::{
+            CreateResponsesPayload, FileSearchTool, FileSearchToolType, ResponsesInput,
+            ResponsesToolDefinition,
+        };
+
+        // Create a payload with file_search tool
+        let original = CreateResponsesPayload {
+            input: Some(ResponsesInput::Text("Find Q1 results".to_string())),
+            instructions: None,
+            metadata: None,
+            tools: Some(vec![ResponsesToolDefinition::FileSearch(FileSearchTool {
+                type_: FileSearchToolType::FileSearch,
+                vector_store_ids: vec!["vs_1".to_string()],
+                max_num_results: None,
+                ranking_options: None,
+                filters: None,
+                cache_control: None,
+            })]),
+            tool_choice: None,
+            parallel_tool_calls: None,
+            model: Some("gpt-4".to_string()),
+            models: None,
+            text: None,
+            reasoning: None,
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt: None,
+            include: None,
+            background: None,
+            safety_identifier: None,
+            store: None,
+            service_tier: None,
+            truncation: None,
+            stream: false,
+            provider: None,
+            plugins: None,
+            user: None,
+        };
+
+        let tool_call = FileSearchToolCall {
+            id: "call_1".to_string(),
+            query: "Q1 metrics".to_string(),
+            vector_store_ids: vec!["vs_1".to_string()],
+            max_num_results: None,
+            score_threshold: None,
+            filters: None,
+            ranking_options: None,
+        };
+
+        let result = FileSearchToolResult {
+            tool_call_id: "call_1".to_string(),
+            content: "Q1 revenue: $1M".to_string(),
+            result_count: 1,
+            vector_stores_searched: 1,
+            raw_response: None,
+        };
+
+        let tool_results = vec![(&tool_call, result)];
+
+        // Test with is_final_iteration = false
+        let payload = build_continuation_payload(&original, &tool_results, false);
+
+        // file_search tool should be preserved
+        let tools = payload.tools.expect("tools should exist");
+        assert_eq!(tools.len(), 1, "Should have 1 tool");
+        assert!(tools[0].is_file_search(), "Tool should be file_search");
+    }
+
+    #[test]
+    fn test_check_response_for_file_search() {
+        let body = serde_json::json!({
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "file_search",
+                    "call_id": "call_xyz",
+                    "arguments": "{\"query\": \"budget analysis\"}"
+                }
+            ]
+        });
+
+        let vector_store_ids = vec!["vs_abc".to_string()];
+        let results =
+            check_response_for_file_search(body.to_string().as_bytes(), &vector_store_ids);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].query, "budget analysis");
+    }
+
+    #[test]
+    fn test_format_tool_result_json() {
+        let result = FileSearchToolResult {
+            tool_call_id: "call_123".to_string(),
+            content: "Search results...".to_string(),
+            result_count: 3,
+            vector_stores_searched: 1,
+            raw_response: None,
+        };
+
+        let json = format_tool_result_json(&result);
+
+        assert_eq!(json["role"], "tool");
+        assert_eq!(json["tool_call_id"], "call_123");
+        assert_eq!(json["content"], "Search results...");
+    }
+
+    #[test]
+    fn test_format_search_results_empty() {
+        use crate::services::FileSearchResponse;
+
+        let response = FileSearchResponse {
+            results: vec![],
+            query: "test query".to_string(),
+            vector_stores_searched: 2,
+        };
+
+        let formatted = format_search_results(&response);
+
+        assert!(formatted.contains("No results found"));
+        assert!(formatted.contains("test query"));
+        assert!(formatted.contains("2 vector store(s)"));
+    }
+
+    #[test]
+    fn test_format_search_results_with_results() {
+        use crate::services::{FileSearchResponse, FileSearchResult};
+
+        let file_id = Uuid::new_v4();
+        let response = FileSearchResponse {
+            results: vec![FileSearchResult {
+                chunk_id: Uuid::new_v4(),
+                vector_store_id: Uuid::new_v4(),
+                file_id,
+                chunk_index: 0,
+                content: "This is the content of the chunk.".to_string(),
+                score: 0.95,
+                filename: Some("report.pdf".to_string()),
+                metadata: None,
+            }],
+            query: "annual report".to_string(),
+            vector_stores_searched: 1,
+        };
+
+        let formatted = format_search_results(&response);
+
+        // Check query and result count
+        assert!(formatted.contains("annual report"));
+        assert!(formatted.contains("1 results"));
+
+        // Check source formatting with filename and file_id
+        assert!(formatted.contains("[Source 1: report.pdf"));
+        assert!(formatted.contains(&file_id.to_string()));
+
+        // Check relevance percentage (95.0%)
+        assert!(formatted.contains("95.0%"));
+
+        // Check content
+        assert!(formatted.contains("This is the content"));
+
+        // Check citation guidance
+        assert!(formatted.contains("When citing these sources"));
+    }
+
+    #[test]
+    fn test_format_search_results_without_filename() {
+        use crate::services::{FileSearchResponse, FileSearchResult};
+
+        let file_id = Uuid::new_v4();
+        let response = FileSearchResponse {
+            results: vec![FileSearchResult {
+                chunk_id: Uuid::new_v4(),
+                vector_store_id: Uuid::new_v4(),
+                file_id,
+                chunk_index: 0,
+                content: "Content without filename.".to_string(),
+                score: 0.80,
+                filename: None,
+                metadata: None,
+            }],
+            query: "test query".to_string(),
+            vector_stores_searched: 1,
+        };
+
+        let formatted = format_search_results(&response);
+
+        // Check source formatting without filename
+        assert!(formatted.contains("[Source 1: file_id:"));
+        assert!(formatted.contains(&file_id.to_string()));
+        assert!(formatted.contains("80.0%"));
+    }
+
+    #[test]
+    fn test_build_file_search_call_output_without_results() {
+        use crate::services::{FileSearchResponse, FileSearchResult};
+
+        let file_id = Uuid::new_v4();
+        let response = FileSearchResponse {
+            results: vec![FileSearchResult {
+                chunk_id: Uuid::new_v4(),
+                vector_store_id: Uuid::new_v4(),
+                file_id,
+                chunk_index: 0,
+                content: "Test content".to_string(),
+                score: 0.85,
+                filename: Some("test.pdf".to_string()),
+                metadata: None,
+            }],
+            query: "test query".to_string(),
+            vector_stores_searched: 1,
+        };
+
+        let output = build_file_search_call_output("call_123", "test query", &response, false);
+
+        assert_eq!(output.id, "call_123");
+        assert_eq!(output.queries, vec!["test query"]);
+        assert_eq!(output.status, WebSearchStatus::Completed);
+        assert!(output.results.is_none()); // Results not included
+    }
+
+    #[test]
+    fn test_build_file_search_call_output_with_results() {
+        use crate::services::{FileSearchResponse, FileSearchResult};
+
+        let file_id = Uuid::new_v4();
+        let response = FileSearchResponse {
+            results: vec![FileSearchResult {
+                chunk_id: Uuid::new_v4(),
+                vector_store_id: Uuid::new_v4(),
+                file_id,
+                chunk_index: 0,
+                content: "Test content".to_string(),
+                score: 0.85,
+                filename: Some("test.pdf".to_string()),
+                metadata: Some(serde_json::json!({"author": "Test Author"})),
+            }],
+            query: "test query".to_string(),
+            vector_stores_searched: 1,
+        };
+
+        let output = build_file_search_call_output("call_456", "test query", &response, true);
+
+        assert_eq!(output.id, "call_456");
+        assert_eq!(output.queries, vec!["test query"]);
+        assert_eq!(output.status, WebSearchStatus::Completed);
+        assert!(output.results.is_some());
+
+        let results = output.results.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].file_id, file_id.to_string());
+        assert_eq!(results[0].filename, "test.pdf");
+        assert_eq!(results[0].score, 0.85);
+        assert!(results[0].attributes.is_some());
+        assert_eq!(results[0].content.len(), 1);
+    }
+
+    #[test]
+    fn test_format_file_search_call_sse_event() {
+        use crate::api_types::responses::{
+            FileSearchCallOutput, FileSearchCallOutputType, WebSearchStatus,
+        };
+
+        let output = FileSearchCallOutput {
+            type_: FileSearchCallOutputType::FileSearchCall,
+            id: "fs_123".to_string(),
+            queries: vec!["test query".to_string()],
+            status: WebSearchStatus::Completed,
+            results: None,
+        };
+
+        let sse_event = format_file_search_call_sse_event(&output).unwrap();
+        let event_str = std::str::from_utf8(&sse_event).unwrap();
+
+        // Check SSE format
+        assert!(event_str.starts_with("data: "));
+        assert!(event_str.ends_with("\n\n"));
+
+        // Parse the JSON
+        let data_part = event_str
+            .strip_prefix("data: ")
+            .unwrap()
+            .strip_suffix("\n\n")
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(data_part).unwrap();
+
+        assert_eq!(parsed["type"], "response.output_item.done");
+        assert_eq!(parsed["item"]["id"], "fs_123");
+        assert_eq!(parsed["item"]["type"], "file_search_call");
+        assert_eq!(parsed["item"]["queries"][0], "test query");
+        assert_eq!(parsed["item"]["status"], "completed");
+    }
+
+    #[test]
+    fn test_citation_tracker_new() {
+        let tracker = CitationTracker::new();
+        assert!(tracker.is_empty());
+        assert!(tracker.get(1).is_none());
+    }
+
+    #[test]
+    fn test_citation_tracker_add_from_response() {
+        use crate::services::{FileSearchResponse, FileSearchResult};
+
+        let file_id_1 = Uuid::new_v4();
+        let file_id_2 = Uuid::new_v4();
+        let response = FileSearchResponse {
+            results: vec![
+                FileSearchResult {
+                    chunk_id: Uuid::new_v4(),
+                    vector_store_id: Uuid::new_v4(),
+                    file_id: file_id_1,
+                    chunk_index: 0,
+                    content: "Content 1".to_string(),
+                    score: 0.95,
+                    filename: Some("report.pdf".to_string()),
+                    metadata: None,
+                },
+                FileSearchResult {
+                    chunk_id: Uuid::new_v4(),
+                    vector_store_id: Uuid::new_v4(),
+                    file_id: file_id_2,
+                    chunk_index: 0,
+                    content: "Content 2".to_string(),
+                    score: 0.85,
+                    filename: None, // No filename, should use file_id
+                    metadata: None,
+                },
+            ],
+            query: "test query".to_string(),
+            vector_stores_searched: 1,
+        };
+
+        let mut tracker = CitationTracker::new();
+        tracker.add_from_response(&response);
+
+        assert!(!tracker.is_empty());
+
+        // Source 1 should have the filename
+        let source_1 = tracker.get(1).unwrap();
+        assert_eq!(source_1.file_id, file_id_1);
+        assert_eq!(source_1.filename, "report.pdf");
+
+        // Source 2 should use file_id as filename
+        let source_2 = tracker.get(2).unwrap();
+        assert_eq!(source_2.file_id, file_id_2);
+        assert_eq!(source_2.filename, file_id_2.to_string());
+
+        // Source 3 doesn't exist
+        assert!(tracker.get(3).is_none());
+    }
+
+    #[test]
+    fn test_citation_tracker_parse_citations() {
+        use crate::services::{FileSearchResponse, FileSearchResult};
+
+        let file_id = Uuid::new_v4();
+        let response = FileSearchResponse {
+            results: vec![FileSearchResult {
+                chunk_id: Uuid::new_v4(),
+                vector_store_id: Uuid::new_v4(),
+                file_id,
+                chunk_index: 0,
+                content: "Content".to_string(),
+                score: 0.95,
+                filename: Some("report.pdf".to_string()),
+                metadata: None,
+            }],
+            query: "test".to_string(),
+            vector_stores_searched: 1,
+        };
+
+        let mut tracker = CitationTracker::new();
+        tracker.add_from_response(&response);
+
+        // Test basic citation parsing
+        let text = "According to [Source 1], the revenue increased.";
+        let annotations = tracker.parse_citations(text);
+
+        assert_eq!(annotations.len(), 1);
+        if let ResponsesAnnotation::FileCitation {
+            file_id: fid,
+            filename,
+            index,
+        } = &annotations[0]
+        {
+            assert_eq!(fid, &file_id.to_string());
+            assert_eq!(filename, "report.pdf");
+            // Index should be position of "[Source 1]" in the text
+            assert_eq!(*index as usize, text.find("[Source 1]").unwrap());
+        } else {
+            panic!("Expected FileCitation annotation");
+        }
+    }
+
+    #[test]
+    fn test_citation_tracker_parse_citations_multiple() {
+        use crate::services::{FileSearchResponse, FileSearchResult};
+
+        let file_id_1 = Uuid::new_v4();
+        let file_id_2 = Uuid::new_v4();
+        let response = FileSearchResponse {
+            results: vec![
+                FileSearchResult {
+                    chunk_id: Uuid::new_v4(),
+                    vector_store_id: Uuid::new_v4(),
+                    file_id: file_id_1,
+                    chunk_index: 0,
+                    content: "Content 1".to_string(),
+                    score: 0.95,
+                    filename: Some("doc1.pdf".to_string()),
+                    metadata: None,
+                },
+                FileSearchResult {
+                    chunk_id: Uuid::new_v4(),
+                    vector_store_id: Uuid::new_v4(),
+                    file_id: file_id_2,
+                    chunk_index: 0,
+                    content: "Content 2".to_string(),
+                    score: 0.85,
+                    filename: Some("doc2.pdf".to_string()),
+                    metadata: None,
+                },
+            ],
+            query: "test".to_string(),
+            vector_stores_searched: 1,
+        };
+
+        let mut tracker = CitationTracker::new();
+        tracker.add_from_response(&response);
+
+        // Test multiple citations
+        let text = "First point [Source 1], second point [Source 2], and back to [Source 1].";
+        let annotations = tracker.parse_citations(text);
+
+        // Should have 3 annotations (Source 1 appears twice, Source 2 once)
+        assert_eq!(annotations.len(), 3);
+
+        // Annotations should be sorted by index
+        let indices: Vec<u64> = annotations
+            .iter()
+            .map(|a| match a {
+                ResponsesAnnotation::FileCitation { index, .. } => *index,
+                _ => 0,
+            })
+            .collect();
+        assert!(indices[0] < indices[1]);
+        assert!(indices[1] < indices[2]);
+    }
+
+    #[test]
+    fn test_citation_tracker_parse_citations_case_insensitive() {
+        use crate::services::{FileSearchResponse, FileSearchResult};
+
+        let file_id = Uuid::new_v4();
+        let response = FileSearchResponse {
+            results: vec![FileSearchResult {
+                chunk_id: Uuid::new_v4(),
+                vector_store_id: Uuid::new_v4(),
+                file_id,
+                chunk_index: 0,
+                content: "Content".to_string(),
+                score: 0.95,
+                filename: Some("report.pdf".to_string()),
+                metadata: None,
+            }],
+            query: "test".to_string(),
+            vector_stores_searched: 1,
+        };
+
+        let mut tracker = CitationTracker::new();
+        tracker.add_from_response(&response);
+
+        // Test case-insensitive matching
+        let text = "[source 1] and [SOURCE 1] and [Source1]";
+        let annotations = tracker.parse_citations(text);
+
+        // Should match all three variations
+        assert_eq!(annotations.len(), 3);
+    }
+
+    #[test]
+    fn test_citation_tracker_parse_citations_unknown_source() {
+        use crate::services::{FileSearchResponse, FileSearchResult};
+
+        let file_id = Uuid::new_v4();
+        let response = FileSearchResponse {
+            results: vec![FileSearchResult {
+                chunk_id: Uuid::new_v4(),
+                vector_store_id: Uuid::new_v4(),
+                file_id,
+                chunk_index: 0,
+                content: "Content".to_string(),
+                score: 0.95,
+                filename: Some("report.pdf".to_string()),
+                metadata: None,
+            }],
+            query: "test".to_string(),
+            vector_stores_searched: 1,
+        };
+
+        let mut tracker = CitationTracker::new();
+        tracker.add_from_response(&response);
+
+        // Reference to unknown source should not produce annotation
+        let text = "See [Source 1] and [Source 99].";
+        let annotations = tracker.parse_citations(text);
+
+        // Should only have 1 annotation (Source 99 is unknown)
+        assert_eq!(annotations.len(), 1);
+    }
+
+    #[test]
+    fn test_inject_citation_annotations_empty_tracker() {
+        let tracker = CitationTracker::new();
+        let chunk = b"data: {\"type\": \"response.content_part.done\"}\n\n";
+
+        let result = inject_citation_annotations(chunk, &tracker);
+
+        // Should return the chunk unchanged
+        assert_eq!(result.as_ref(), chunk);
+    }
+
+    #[test]
+    fn test_inject_citation_annotations_with_citations() {
+        use crate::services::{FileSearchResponse, FileSearchResult};
+
+        let file_id = Uuid::new_v4();
+        let response = FileSearchResponse {
+            results: vec![FileSearchResult {
+                chunk_id: Uuid::new_v4(),
+                vector_store_id: Uuid::new_v4(),
+                file_id,
+                chunk_index: 0,
+                content: "Content".to_string(),
+                score: 0.95,
+                filename: Some("report.pdf".to_string()),
+                metadata: None,
+            }],
+            query: "test".to_string(),
+            vector_stores_searched: 1,
+        };
+
+        let mut tracker = CitationTracker::new();
+        tracker.add_from_response(&response);
+
+        // Create an SSE event with a content_part.done containing a citation marker
+        let event_json = serde_json::json!({
+            "type": "response.content_part.done",
+            "item_id": "msg_123",
+            "output_index": 0,
+            "content_index": 0,
+            "part": {
+                "type": "output_text",
+                "text": "According to [Source 1], the data shows growth.",
+                "annotations": []
+            }
+        });
+        let chunk = format!("data: {}\n\n", event_json);
+
+        let result = inject_citation_annotations(chunk.as_bytes(), &tracker);
+        let result_str = std::str::from_utf8(&result).unwrap();
+
+        // Parse the result
+        let data_part = result_str
+            .strip_prefix("data: ")
+            .unwrap()
+            .strip_suffix("\n\n")
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(data_part).unwrap();
+
+        // Check annotations were added
+        let annotations = &parsed["part"]["annotations"];
+        assert!(annotations.is_array());
+        assert_eq!(annotations.as_array().unwrap().len(), 1);
+
+        let annotation = &annotations[0];
+        assert_eq!(annotation["type"], "file_citation");
+        assert_eq!(annotation["file_id"], file_id.to_string());
+        assert_eq!(annotation["filename"], "report.pdf");
+    }
+
+    #[test]
+    fn test_inject_citation_annotations_passthrough_other_events() {
+        use crate::services::{FileSearchResponse, FileSearchResult};
+
+        let file_id = Uuid::new_v4();
+        let response = FileSearchResponse {
+            results: vec![FileSearchResult {
+                chunk_id: Uuid::new_v4(),
+                vector_store_id: Uuid::new_v4(),
+                file_id,
+                chunk_index: 0,
+                content: "Content".to_string(),
+                score: 0.95,
+                filename: Some("report.pdf".to_string()),
+                metadata: None,
+            }],
+            query: "test".to_string(),
+            vector_stores_searched: 1,
+        };
+
+        let mut tracker = CitationTracker::new();
+        tracker.add_from_response(&response);
+
+        // Events that aren't content_part.done should pass through unchanged
+        let chunk = "data: {\"type\": \"response.output_text.delta\", \"delta\": \"Hello\"}\n\n";
+
+        let result = inject_citation_annotations(chunk.as_bytes(), &tracker);
+        let result_str = std::str::from_utf8(&result).unwrap();
+
+        // Parse both and compare
+        let original_data: serde_json::Value =
+            serde_json::from_str(chunk.strip_prefix("data: ").unwrap().trim()).unwrap();
+        let result_data: serde_json::Value = serde_json::from_str(
+            result_str
+                .strip_prefix("data: ")
+                .unwrap()
+                .strip_suffix("\n\n")
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(original_data, result_data);
+    }
+
+    #[test]
+    fn test_inject_citation_annotations_done_message() {
+        use crate::services::{FileSearchResponse, FileSearchResult};
+
+        let mut tracker = CitationTracker::new();
+        tracker.add_from_response(&FileSearchResponse {
+            results: vec![FileSearchResult {
+                chunk_id: Uuid::new_v4(),
+                vector_store_id: Uuid::new_v4(),
+                file_id: Uuid::new_v4(),
+                chunk_index: 0,
+                content: "Content".to_string(),
+                score: 0.95,
+                filename: Some("report.pdf".to_string()),
+                metadata: None,
+            }],
+            query: "test".to_string(),
+            vector_stores_searched: 1,
+        });
+
+        let chunk = "data: [DONE]\n\n";
+        let result = inject_citation_annotations(chunk.as_bytes(), &tracker);
+        let result_str = std::str::from_utf8(&result).unwrap();
+
+        assert_eq!(result_str, chunk);
+    }
+
+    // =========================================================================
+    // FileSearchToolArguments Schema Tests
+    // =========================================================================
+
+    #[test]
+    fn test_function_parameters_schema_structure() {
+        let schema = FileSearchToolArguments::function_parameters_schema();
+
+        // Check it's an object type
+        assert_eq!(schema["type"], "object");
+
+        // Check required properties
+        let properties = &schema["properties"];
+        assert!(properties.get("query").is_some());
+        assert!(properties.get("max_num_results").is_some());
+        assert!(properties.get("score_threshold").is_some());
+        assert!(properties.get("filters").is_some());
+
+        // Check query is required
+        let required = schema["required"].as_array().unwrap();
+        assert!(required.iter().any(|v| v == "query"));
+
+        // Check additionalProperties is false
+        assert_eq!(schema["additionalProperties"], false);
+    }
+
+    #[test]
+    fn test_function_parameters_schema_query_field() {
+        let schema = FileSearchToolArguments::function_parameters_schema();
+        let query = &schema["properties"]["query"];
+
+        assert_eq!(query["type"], "string");
+        assert!(query.get("description").is_some());
+    }
+
+    #[test]
+    fn test_function_parameters_schema_max_num_results_field() {
+        let schema = FileSearchToolArguments::function_parameters_schema();
+        let max_num_results = &schema["properties"]["max_num_results"];
+
+        assert_eq!(max_num_results["type"], "integer");
+        assert_eq!(max_num_results["minimum"], 1);
+        assert_eq!(max_num_results["maximum"], 50);
+    }
+
+    #[test]
+    fn test_function_parameters_schema_score_threshold_field() {
+        let schema = FileSearchToolArguments::function_parameters_schema();
+        let score_threshold = &schema["properties"]["score_threshold"];
+
+        assert_eq!(score_threshold["type"], "number");
+        assert_eq!(score_threshold["minimum"], 0.0);
+        assert_eq!(score_threshold["maximum"], 1.0);
+    }
+
+    #[test]
+    fn test_function_tool_definition_structure() {
+        let def = FileSearchToolArguments::function_tool_definition();
+
+        assert_eq!(def["type"], "function");
+        assert_eq!(def["name"], "file_search");
+        assert!(def.get("description").is_some());
+        assert!(def.get("parameters").is_some());
+
+        // Parameters should match the function_parameters_schema
+        let params = &def["parameters"];
+        assert_eq!(params["type"], "object");
+        assert!(params["properties"].get("query").is_some());
+    }
+
+    #[test]
+    fn test_function_name_constant() {
+        assert_eq!(FileSearchToolArguments::FUNCTION_NAME, "file_search");
+    }
+
+    #[test]
+    fn test_function_description_not_empty() {
+        let desc = FileSearchToolArguments::function_description();
+        assert!(!desc.is_empty());
+        assert!(desc.contains("knowledge base"));
+    }
+
+    // =========================================================================
+    // Preprocessing Tests
+    // =========================================================================
+
+    #[test]
+    fn test_preprocess_file_search_tools_empty() {
+        use crate::api_types::responses::CreateResponsesPayload;
+
+        let mut payload = CreateResponsesPayload {
+            input: None,
+            instructions: None,
+            metadata: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: None,
+            model: None,
+            models: None,
+            text: None,
+            reasoning: None,
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt: None,
+            include: None,
+            background: None,
+            safety_identifier: None,
+            store: None,
+            service_tier: None,
+            truncation: None,
+            stream: false,
+            provider: None,
+            plugins: None,
+            user: None,
+        };
+
+        // Should not panic with no tools
+        preprocess_file_search_tools(&mut payload);
+        assert!(payload.tools.is_none());
+    }
+
+    #[test]
+    fn test_preprocess_file_search_tools_converts_file_search() {
+        use crate::api_types::responses::{
+            CreateResponsesPayload, FileSearchTool, FileSearchToolType, ResponsesToolDefinition,
+        };
+
+        let mut payload = CreateResponsesPayload {
+            input: None,
+            instructions: None,
+            metadata: None,
+            tools: Some(vec![ResponsesToolDefinition::FileSearch(FileSearchTool {
+                type_: FileSearchToolType::FileSearch,
+                vector_store_ids: vec!["vs_123".to_string()],
+                max_num_results: None,
+                ranking_options: None,
+                filters: None,
+                cache_control: None,
+            })]),
+            tool_choice: None,
+            parallel_tool_calls: None,
+            model: None,
+            models: None,
+            text: None,
+            reasoning: None,
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt: None,
+            include: None,
+            background: None,
+            safety_identifier: None,
+            store: None,
+            service_tier: None,
+            truncation: None,
+            stream: false,
+            provider: None,
+            plugins: None,
+            user: None,
+        };
+
+        preprocess_file_search_tools(&mut payload);
+
+        // Should have converted to a function tool
+        let tools = payload.tools.as_ref().unwrap();
+        assert_eq!(tools.len(), 1);
+
+        match &tools[0] {
+            ResponsesToolDefinition::Function(json) => {
+                assert_eq!(json["type"], "function");
+                assert_eq!(json["name"], "file_search");
+                assert!(json.get("parameters").is_some());
+            }
+            _ => panic!("Expected Function tool, got {:?}", tools[0]),
+        }
+    }
+
+    #[test]
+    fn test_preprocess_file_search_tools_preserves_other_tools() {
+        use crate::api_types::responses::{
+            CreateResponsesPayload, FileSearchTool, FileSearchToolType, ResponsesToolDefinition,
+        };
+
+        let function_tool = serde_json::json!({
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get weather for a location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                }
+            }
+        });
+
+        let mut payload = CreateResponsesPayload {
+            input: None,
+            instructions: None,
+            metadata: None,
+            tools: Some(vec![
+                ResponsesToolDefinition::Function(function_tool.clone()),
+                ResponsesToolDefinition::FileSearch(FileSearchTool {
+                    type_: FileSearchToolType::FileSearch,
+                    vector_store_ids: vec!["vs_123".to_string()],
+                    max_num_results: None,
+                    ranking_options: None,
+                    filters: None,
+                    cache_control: None,
+                }),
+            ]),
+            tool_choice: None,
+            parallel_tool_calls: None,
+            model: None,
+            models: None,
+            text: None,
+            reasoning: None,
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt: None,
+            include: None,
+            background: None,
+            safety_identifier: None,
+            store: None,
+            service_tier: None,
+            truncation: None,
+            stream: false,
+            provider: None,
+            plugins: None,
+            user: None,
+        };
+
+        preprocess_file_search_tools(&mut payload);
+
+        let tools = payload.tools.as_ref().unwrap();
+        assert_eq!(tools.len(), 2);
+
+        // First tool should be unchanged
+        match &tools[0] {
+            ResponsesToolDefinition::Function(json) => {
+                assert_eq!(json["name"], "get_weather");
+            }
+            _ => panic!("Expected Function tool"),
+        }
+
+        // Second tool should be converted from file_search
+        match &tools[1] {
+            ResponsesToolDefinition::Function(json) => {
+                assert_eq!(json["name"], "file_search");
+            }
+            _ => panic!("Expected converted file_search tool"),
+        }
+    }
+
+    // =========================================================================
+    // Filter Conversion Tests
+    // =========================================================================
+
+    #[test]
+    fn test_convert_comparison_filter_eq() {
+        use crate::{
+            api_types::responses::{
+                FileSearchComparisonFilter, FileSearchFilter, FileSearchFilterComparison,
+            },
+            models::{AttributeFilter, ComparisonOperator, FilterValue},
+        };
+
+        let api_filter = FileSearchFilter::Comparison(FileSearchComparisonFilter {
+            type_: FileSearchFilterComparison::Eq,
+            key: "author".to_string(),
+            value: serde_json::json!("John Doe"),
+        });
+
+        let result = convert_file_search_filter(&api_filter);
+
+        match result {
+            AttributeFilter::Comparison(c) => {
+                assert_eq!(c.operator, ComparisonOperator::Eq);
+                assert_eq!(c.key, "author");
+                assert_eq!(c.value, FilterValue::String("John Doe".to_string()));
+            }
+            _ => panic!("Expected Comparison variant"),
+        }
+    }
+
+    #[test]
+    fn test_convert_comparison_filter_all_operators() {
+        use crate::{
+            api_types::responses::{
+                FileSearchComparisonFilter, FileSearchFilter, FileSearchFilterComparison,
+            },
+            models::{AttributeFilter, ComparisonOperator},
+        };
+
+        let operators = [
+            (FileSearchFilterComparison::Eq, ComparisonOperator::Eq),
+            (FileSearchFilterComparison::Ne, ComparisonOperator::Ne),
+            (FileSearchFilterComparison::Gt, ComparisonOperator::Gt),
+            (FileSearchFilterComparison::Gte, ComparisonOperator::Gte),
+            (FileSearchFilterComparison::Lt, ComparisonOperator::Lt),
+            (FileSearchFilterComparison::Lte, ComparisonOperator::Lte),
+        ];
+
+        for (api_op, expected_op) in operators {
+            let api_filter = FileSearchFilter::Comparison(FileSearchComparisonFilter {
+                type_: api_op,
+                key: "test".to_string(),
+                value: serde_json::json!(42),
+            });
+
+            let result = convert_file_search_filter(&api_filter);
+
+            match result {
+                AttributeFilter::Comparison(c) => {
+                    assert_eq!(
+                        c.operator, expected_op,
+                        "Operator mismatch for {:?}",
+                        api_op
+                    );
+                }
+                _ => panic!("Expected Comparison variant"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_convert_comparison_filter_number_value() {
+        use crate::{
+            api_types::responses::{
+                FileSearchComparisonFilter, FileSearchFilter, FileSearchFilterComparison,
+            },
+            models::{AttributeFilter, FilterValue},
+        };
+
+        let api_filter = FileSearchFilter::Comparison(FileSearchComparisonFilter {
+            type_: FileSearchFilterComparison::Gte,
+            key: "score".to_string(),
+            value: serde_json::json!(0.75),
+        });
+
+        let result = convert_file_search_filter(&api_filter);
+
+        match result {
+            AttributeFilter::Comparison(c) => {
+                assert_eq!(c.value, FilterValue::Number(0.75));
+            }
+            _ => panic!("Expected Comparison variant"),
+        }
+    }
+
+    #[test]
+    fn test_convert_comparison_filter_boolean_value() {
+        use crate::{
+            api_types::responses::{
+                FileSearchComparisonFilter, FileSearchFilter, FileSearchFilterComparison,
+            },
+            models::{AttributeFilter, FilterValue},
+        };
+
+        let api_filter = FileSearchFilter::Comparison(FileSearchComparisonFilter {
+            type_: FileSearchFilterComparison::Eq,
+            key: "is_published".to_string(),
+            value: serde_json::json!(true),
+        });
+
+        let result = convert_file_search_filter(&api_filter);
+
+        match result {
+            AttributeFilter::Comparison(c) => {
+                assert_eq!(c.value, FilterValue::Boolean(true));
+            }
+            _ => panic!("Expected Comparison variant"),
+        }
+    }
+
+    #[test]
+    fn test_convert_compound_filter_and() {
+        use crate::{
+            api_types::responses::{
+                FileSearchComparisonFilter, FileSearchCompoundFilter, FileSearchFilter,
+                FileSearchFilterComparison, FileSearchFilterLogicalType,
+            },
+            models::{AttributeFilter, LogicalOperator},
+        };
+
+        let api_filter = FileSearchFilter::Compound(FileSearchCompoundFilter {
+            type_: FileSearchFilterLogicalType::And,
+            filters: vec![
+                FileSearchFilter::Comparison(FileSearchComparisonFilter {
+                    type_: FileSearchFilterComparison::Eq,
+                    key: "author".to_string(),
+                    value: serde_json::json!("Alice"),
+                }),
+                FileSearchFilter::Comparison(FileSearchComparisonFilter {
+                    type_: FileSearchFilterComparison::Gte,
+                    key: "year".to_string(),
+                    value: serde_json::json!(2024),
+                }),
+            ],
+        });
+
+        let result = convert_file_search_filter(&api_filter);
+
+        match result {
+            AttributeFilter::Compound(c) => {
+                assert_eq!(c.operator, LogicalOperator::And);
+                assert_eq!(c.filters.len(), 2);
+            }
+            _ => panic!("Expected Compound variant"),
+        }
+    }
+
+    #[test]
+    fn test_convert_compound_filter_or() {
+        use crate::{
+            api_types::responses::{
+                FileSearchComparisonFilter, FileSearchCompoundFilter, FileSearchFilter,
+                FileSearchFilterComparison, FileSearchFilterLogicalType,
+            },
+            models::{AttributeFilter, LogicalOperator},
+        };
+
+        let api_filter = FileSearchFilter::Compound(FileSearchCompoundFilter {
+            type_: FileSearchFilterLogicalType::Or,
+            filters: vec![
+                FileSearchFilter::Comparison(FileSearchComparisonFilter {
+                    type_: FileSearchFilterComparison::Eq,
+                    key: "category".to_string(),
+                    value: serde_json::json!("docs"),
+                }),
+                FileSearchFilter::Comparison(FileSearchComparisonFilter {
+                    type_: FileSearchFilterComparison::Eq,
+                    key: "category".to_string(),
+                    value: serde_json::json!("guides"),
+                }),
+            ],
+        });
+
+        let result = convert_file_search_filter(&api_filter);
+
+        match result {
+            AttributeFilter::Compound(c) => {
+                assert_eq!(c.operator, LogicalOperator::Or);
+                assert_eq!(c.filters.len(), 2);
+            }
+            _ => panic!("Expected Compound variant"),
+        }
+    }
+
+    #[test]
+    fn test_convert_nested_compound_filter() {
+        use crate::{
+            api_types::responses::{
+                FileSearchComparisonFilter, FileSearchCompoundFilter, FileSearchFilter,
+                FileSearchFilterComparison, FileSearchFilterLogicalType,
+            },
+            models::{AttributeFilter, LogicalOperator},
+        };
+
+        // Build: (category == "docs") AND ((author == "Alice") OR (author == "Bob"))
+        let api_filter = FileSearchFilter::Compound(FileSearchCompoundFilter {
+            type_: FileSearchFilterLogicalType::And,
+            filters: vec![
+                FileSearchFilter::Comparison(FileSearchComparisonFilter {
+                    type_: FileSearchFilterComparison::Eq,
+                    key: "category".to_string(),
+                    value: serde_json::json!("docs"),
+                }),
+                FileSearchFilter::Compound(FileSearchCompoundFilter {
+                    type_: FileSearchFilterLogicalType::Or,
+                    filters: vec![
+                        FileSearchFilter::Comparison(FileSearchComparisonFilter {
+                            type_: FileSearchFilterComparison::Eq,
+                            key: "author".to_string(),
+                            value: serde_json::json!("Alice"),
+                        }),
+                        FileSearchFilter::Comparison(FileSearchComparisonFilter {
+                            type_: FileSearchFilterComparison::Eq,
+                            key: "author".to_string(),
+                            value: serde_json::json!("Bob"),
+                        }),
+                    ],
+                }),
+            ],
+        });
+
+        let result = convert_file_search_filter(&api_filter);
+
+        match result {
+            AttributeFilter::Compound(outer) => {
+                assert_eq!(outer.operator, LogicalOperator::And);
+                assert_eq!(outer.filters.len(), 2);
+
+                // Second filter should be the nested OR
+                match &outer.filters[1] {
+                    AttributeFilter::Compound(inner) => {
+                        assert_eq!(inner.operator, LogicalOperator::Or);
+                        assert_eq!(inner.filters.len(), 2);
+                    }
+                    _ => panic!("Expected nested Compound variant"),
+                }
+            }
+            _ => panic!("Expected Compound variant"),
+        }
+    }
+
+    #[test]
+    fn test_convert_json_value_to_filter_value_array() {
+        use crate::models::{FilterValue, FilterValueItem};
+
+        let json_array = serde_json::json!(["tag1", "tag2", 123]);
+        let result = convert_json_value_to_filter_value(&json_array);
+
+        match result {
+            FilterValue::Array(items) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0], FilterValueItem::String("tag1".to_string()));
+                assert_eq!(items[1], FilterValueItem::String("tag2".to_string()));
+                assert_eq!(items[2], FilterValueItem::Number(123.0));
+            }
+            _ => panic!("Expected Array variant"),
+        }
+    }
+
+    #[test]
+    fn test_convert_json_value_to_filter_value_null_fallback() {
+        use crate::models::FilterValue;
+
+        let json_null = serde_json::json!(null);
+        let result = convert_json_value_to_filter_value(&json_null);
+
+        // Null should fall back to string representation
+        assert_eq!(result, FilterValue::String("null".to_string()));
+    }
+
+    #[test]
+    fn test_convert_json_value_to_filter_value_object_fallback() {
+        use crate::models::FilterValue;
+
+        let json_obj = serde_json::json!({"nested": "object"});
+        let result = convert_json_value_to_filter_value(&json_obj);
+
+        // Objects should fall back to string representation
+        match result {
+            FilterValue::String(s) => {
+                assert!(s.contains("nested"));
+                assert!(s.contains("object"));
+            }
+            _ => panic!("Expected String variant for object fallback"),
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Query Deduplication Tests (cache_key)
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_cache_key_identical_queries() {
+        let call1 = FileSearchToolCall {
+            id: "call_1".to_string(),
+            query: "What is the return policy?".to_string(),
+            vector_store_ids: vec!["vs_123".to_string(), "vs_456".to_string()],
+            max_num_results: Some(5),
+            score_threshold: Some(0.7),
+            filters: None,
+            ranking_options: None,
+        };
+
+        let call2 = FileSearchToolCall {
+            id: "call_2".to_string(), // Different ID
+            query: "What is the return policy?".to_string(),
+            vector_store_ids: vec!["vs_123".to_string(), "vs_456".to_string()],
+            max_num_results: Some(5),
+            score_threshold: Some(0.7),
+            filters: None,
+            ranking_options: None,
+        };
+
+        assert_eq!(call1.cache_key(), call2.cache_key());
+    }
+
+    #[test]
+    fn test_cache_key_different_queries() {
+        let call1 = FileSearchToolCall {
+            id: "call_1".to_string(),
+            query: "What is the return policy?".to_string(),
+            vector_store_ids: vec!["vs_123".to_string()],
+            max_num_results: None,
+            score_threshold: None,
+            filters: None,
+            ranking_options: None,
+        };
+
+        let call2 = FileSearchToolCall {
+            id: "call_1".to_string(),
+            query: "How do I contact support?".to_string(), // Different query
+            vector_store_ids: vec!["vs_123".to_string()],
+            max_num_results: None,
+            score_threshold: None,
+            filters: None,
+            ranking_options: None,
+        };
+
+        assert_ne!(call1.cache_key(), call2.cache_key());
+    }
+
+    #[test]
+    fn test_cache_key_vector_store_order_independent() {
+        // Cache keys should be identical regardless of vector_store_ids order
+        let call1 = FileSearchToolCall {
+            id: "call_1".to_string(),
+            query: "search query".to_string(),
+            vector_store_ids: vec![
+                "vs_aaa".to_string(),
+                "vs_bbb".to_string(),
+                "vs_ccc".to_string(),
+            ],
+            max_num_results: None,
+            score_threshold: None,
+            filters: None,
+            ranking_options: None,
+        };
+
+        let call2 = FileSearchToolCall {
+            id: "call_2".to_string(),
+            query: "search query".to_string(),
+            vector_store_ids: vec![
+                "vs_ccc".to_string(),
+                "vs_aaa".to_string(),
+                "vs_bbb".to_string(),
+            ], // Different order
+            max_num_results: None,
+            score_threshold: None,
+            filters: None,
+            ranking_options: None,
+        };
+
+        assert_eq!(call1.cache_key(), call2.cache_key());
+    }
+
+    #[test]
+    fn test_cache_key_different_max_results() {
+        let call1 = FileSearchToolCall {
+            id: "call_1".to_string(),
+            query: "search query".to_string(),
+            vector_store_ids: vec!["vs_123".to_string()],
+            max_num_results: Some(5),
+            score_threshold: None,
+            filters: None,
+            ranking_options: None,
+        };
+
+        let call2 = FileSearchToolCall {
+            id: "call_1".to_string(),
+            query: "search query".to_string(),
+            vector_store_ids: vec!["vs_123".to_string()],
+            max_num_results: Some(10), // Different max_results
+            score_threshold: None,
+            filters: None,
+            ranking_options: None,
+        };
+
+        assert_ne!(call1.cache_key(), call2.cache_key());
+    }
+
+    #[test]
+    fn test_cache_key_different_score_threshold() {
+        let call1 = FileSearchToolCall {
+            id: "call_1".to_string(),
+            query: "search query".to_string(),
+            vector_store_ids: vec!["vs_123".to_string()],
+            max_num_results: None,
+            score_threshold: Some(0.5),
+            filters: None,
+            ranking_options: None,
+        };
+
+        let call2 = FileSearchToolCall {
+            id: "call_1".to_string(),
+            query: "search query".to_string(),
+            vector_store_ids: vec!["vs_123".to_string()],
+            max_num_results: None,
+            score_threshold: Some(0.8), // Different threshold
+            filters: None,
+            ranking_options: None,
+        };
+
+        assert_ne!(call1.cache_key(), call2.cache_key());
+    }
+
+    #[test]
+    fn test_cache_key_with_filters() {
+        use crate::api_types::responses::{FileSearchComparisonFilter, FileSearchFilterComparison};
+
+        let filter1 = FileSearchFilter::Comparison(FileSearchComparisonFilter {
+            type_: FileSearchFilterComparison::Eq,
+            key: "category".to_string(),
+            value: serde_json::json!("policy"),
+        });
+
+        let filter2 = FileSearchFilter::Comparison(FileSearchComparisonFilter {
+            type_: FileSearchFilterComparison::Eq,
+            key: "category".to_string(),
+            value: serde_json::json!("faq"), // Different value
+        });
+
+        let call1 = FileSearchToolCall {
+            id: "call_1".to_string(),
+            query: "search query".to_string(),
+            vector_store_ids: vec!["vs_123".to_string()],
+            max_num_results: None,
+            score_threshold: None,
+            filters: Some(filter1.clone()),
+            ranking_options: None,
+        };
+
+        let call2 = FileSearchToolCall {
+            id: "call_2".to_string(),
+            query: "search query".to_string(),
+            vector_store_ids: vec!["vs_123".to_string()],
+            max_num_results: None,
+            score_threshold: None,
+            filters: Some(filter1), // Same filter
+            ranking_options: None,
+        };
+
+        let call3 = FileSearchToolCall {
+            id: "call_3".to_string(),
+            query: "search query".to_string(),
+            vector_store_ids: vec!["vs_123".to_string()],
+            max_num_results: None,
+            score_threshold: None,
+            filters: Some(filter2), // Different filter
+            ranking_options: None,
+        };
+
+        // Same filters should produce same key
+        assert_eq!(call1.cache_key(), call2.cache_key());
+        // Different filters should produce different key
+        assert_ne!(call1.cache_key(), call3.cache_key());
+    }
+
+    #[test]
+    fn test_cache_key_none_vs_some_options() {
+        let call1 = FileSearchToolCall {
+            id: "call_1".to_string(),
+            query: "search query".to_string(),
+            vector_store_ids: vec!["vs_123".to_string()],
+            max_num_results: None,
+            score_threshold: None,
+            filters: None,
+            ranking_options: None,
+        };
+
+        let call2 = FileSearchToolCall {
+            id: "call_2".to_string(),
+            query: "search query".to_string(),
+            vector_store_ids: vec!["vs_123".to_string()],
+            max_num_results: Some(10),
+            score_threshold: None,
+            filters: None,
+            ranking_options: None,
+        };
+
+        // None vs Some should produce different keys
+        assert_ne!(call1.cache_key(), call2.cache_key());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SSE Buffer Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_sse_buffer_single_complete_event() {
+        let mut buffer = SseBuffer::new();
+        buffer.extend(b"data: {\"type\": \"test\"}\n\n");
+
+        let events = buffer.extract_complete_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].as_ref(), b"data: {\"type\": \"test\"}\n\n");
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn test_sse_buffer_multiple_events_single_chunk() {
+        let mut buffer = SseBuffer::new();
+        buffer.extend(b"data: {\"id\": 1}\n\ndata: {\"id\": 2}\n\ndata: {\"id\": 3}\n\n");
+
+        let events = buffer.extract_complete_events();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].as_ref(), b"data: {\"id\": 1}\n\n");
+        assert_eq!(events[1].as_ref(), b"data: {\"id\": 2}\n\n");
+        assert_eq!(events[2].as_ref(), b"data: {\"id\": 3}\n\n");
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn test_sse_buffer_partial_event_across_chunks() {
+        let mut buffer = SseBuffer::new();
+
+        // First chunk has partial event
+        buffer.extend(b"data: {\"type\":");
+        let events = buffer.extract_complete_events();
+        assert!(events.is_empty()); // No complete events yet
+        assert!(!buffer.is_empty()); // Buffer has partial data
+
+        // Second chunk completes the event
+        buffer.extend(b" \"test\"}\n\n");
+        let events = buffer.extract_complete_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].as_ref(), b"data: {\"type\": \"test\"}\n\n");
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn test_sse_buffer_json_split_at_various_points() {
+        // Test JSON split in the middle of a key
+        let mut buffer = SseBuffer::new();
+        buffer.extend(b"data: {\"func");
+        let events = buffer.extract_complete_events();
+        assert!(events.is_empty());
+
+        buffer.extend(b"tion_call\": true}\n\n");
+        let events = buffer.extract_complete_events();
+        assert_eq!(events.len(), 1);
+
+        // Test split at delimiter boundary
+        let mut buffer = SseBuffer::new();
+        buffer.extend(b"data: {\"done\": true}\n");
+        let events = buffer.extract_complete_events();
+        assert!(events.is_empty()); // Only one \n, need \n\n
+
+        buffer.extend(b"\n");
+        let events = buffer.extract_complete_events();
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn test_sse_buffer_windows_line_endings() {
+        let mut buffer = SseBuffer::new();
+        buffer.extend(b"data: {\"type\": \"test\"}\r\n\r\n");
+
+        let events = buffer.extract_complete_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].as_ref(), b"data: {\"type\": \"test\"}\r\n\r\n");
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn test_sse_buffer_mixed_complete_and_partial() {
+        let mut buffer = SseBuffer::new();
+        buffer.extend(b"data: {\"id\": 1}\n\ndata: {\"id\":");
+
+        let events = buffer.extract_complete_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].as_ref(), b"data: {\"id\": 1}\n\n");
+        assert!(!buffer.is_empty()); // Partial event remains
+
+        buffer.extend(b" 2}\n\n");
+        let events = buffer.extract_complete_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].as_ref(), b"data: {\"id\": 2}\n\n");
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn test_sse_buffer_take_remaining() {
+        let mut buffer = SseBuffer::new();
+        buffer.extend(b"data: partial");
+
+        let events = buffer.extract_complete_events();
+        assert!(events.is_empty());
+
+        let remaining = buffer.take_remaining();
+        assert_eq!(remaining.as_ref(), b"data: partial");
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn test_sse_buffer_empty() {
+        let mut buffer = SseBuffer::new();
+        assert!(buffer.is_empty());
+
+        let events = buffer.extract_complete_events();
+        assert!(events.is_empty());
+
+        let remaining = buffer.take_remaining();
+        assert!(remaining.is_empty());
+    }
+
+    #[test]
+    fn test_sse_buffer_tool_call_split_across_chunks() {
+        // Simulate a realistic scenario where a file_search tool call is split
+        let mut buffer = SseBuffer::new();
+
+        // First chunk: partial JSON
+        buffer.extend(
+            b"data: {\"type\": \"function_call\", \"name\": \"file_search\", \"call_id\": \"call_",
+        );
+        let events = buffer.extract_complete_events();
+        assert!(events.is_empty());
+
+        // Second chunk: rest of JSON
+        buffer.extend(b"abc\", \"arguments\": \"{\\\"query\\\": \\\"test\\\"}\"}\n\n");
+        let events = buffer.extract_complete_events();
+        assert_eq!(events.len(), 1);
+
+        // Now verify the complete event can be parsed
+        let event_str = std::str::from_utf8(&events[0]).unwrap();
+        assert!(event_str.contains("file_search"));
+        assert!(event_str.contains("call_abc"));
+    }
+
+    #[test]
+    fn test_format_search_results_truncated_no_limit() {
+        use crate::services::{FileSearchResponse, FileSearchResult};
+
+        let response = FileSearchResponse {
+            results: vec![
+                FileSearchResult {
+                    chunk_id: Uuid::new_v4(),
+                    vector_store_id: Uuid::new_v4(),
+                    file_id: Uuid::new_v4(),
+                    chunk_index: 0,
+                    content: "A".repeat(1000),
+                    score: 0.95,
+                    filename: Some("file1.txt".to_string()),
+                    metadata: None,
+                },
+                FileSearchResult {
+                    chunk_id: Uuid::new_v4(),
+                    vector_store_id: Uuid::new_v4(),
+                    file_id: Uuid::new_v4(),
+                    chunk_index: 0,
+                    content: "B".repeat(1000),
+                    score: 0.85,
+                    filename: Some("file2.txt".to_string()),
+                    metadata: None,
+                },
+            ],
+            query: "test".to_string(),
+            vector_stores_searched: 1,
+        };
+
+        // With usize::MAX (no limit), all results should be included
+        let formatted = format_search_results_truncated(&response, usize::MAX);
+        assert!(formatted.contains("[Source 1: file1.txt"));
+        assert!(formatted.contains("[Source 2: file2.txt"));
+        assert!(!formatted.contains("truncated"));
+    }
+
+    #[test]
+    fn test_format_search_results_truncated_with_limit() {
+        use crate::services::{FileSearchResponse, FileSearchResult};
+
+        let response = FileSearchResponse {
+            results: vec![
+                FileSearchResult {
+                    chunk_id: Uuid::new_v4(),
+                    vector_store_id: Uuid::new_v4(),
+                    file_id: Uuid::new_v4(),
+                    chunk_index: 0,
+                    content: "A".repeat(500),
+                    score: 0.95,
+                    filename: Some("file1.txt".to_string()),
+                    metadata: None,
+                },
+                FileSearchResult {
+                    chunk_id: Uuid::new_v4(),
+                    vector_store_id: Uuid::new_v4(),
+                    file_id: Uuid::new_v4(),
+                    chunk_index: 0,
+                    content: "B".repeat(500),
+                    score: 0.85,
+                    filename: Some("file2.txt".to_string()),
+                    metadata: None,
+                },
+                FileSearchResult {
+                    chunk_id: Uuid::new_v4(),
+                    vector_store_id: Uuid::new_v4(),
+                    file_id: Uuid::new_v4(),
+                    chunk_index: 0,
+                    content: "C".repeat(500),
+                    score: 0.75,
+                    filename: Some("file3.txt".to_string()),
+                    metadata: None,
+                },
+            ],
+            query: "test".to_string(),
+            vector_stores_searched: 1,
+        };
+
+        // Set a limit that allows only 2 results
+        // Each result is ~600 chars (500 content + ~100 header/formatting)
+        // So 1500 chars should fit 2 results but not 3
+        let formatted = format_search_results_truncated(&response, 1500);
+
+        assert!(formatted.contains("[Source 1: file1.txt"));
+        assert!(formatted.contains("[Source 2: file2.txt"));
+        assert!(!formatted.contains("[Source 3: file3.txt"));
+        assert!(formatted.contains("truncated to prevent context overflow"));
+    }
+
+    #[test]
+    fn test_format_search_results_truncated_first_result_too_large() {
+        use crate::services::{FileSearchResponse, FileSearchResult};
+
+        let response = FileSearchResponse {
+            results: vec![FileSearchResult {
+                chunk_id: Uuid::new_v4(),
+                vector_store_id: Uuid::new_v4(),
+                file_id: Uuid::new_v4(),
+                chunk_index: 0,
+                content: "A".repeat(10000),
+                score: 0.95,
+                filename: Some("huge_file.txt".to_string()),
+                metadata: None,
+            }],
+            query: "test".to_string(),
+            vector_stores_searched: 1,
+        };
+
+        // Limit smaller than the first result - should get empty results with truncation notice
+        let formatted = format_search_results_truncated(&response, 500);
+
+        assert!(formatted.contains("test")); // Query is in header
+        assert!(formatted.contains("1 results")); // Header says 1 result
+        assert!(!formatted.contains("[Source 1")); // But result not included
+        assert!(formatted.contains("truncated to prevent context overflow"));
+    }
+
+    #[test]
+    fn test_format_search_results_truncated_zero_means_unlimited() {
+        use crate::services::{FileSearchResponse, FileSearchResult};
+
+        let response = FileSearchResponse {
+            results: vec![
+                FileSearchResult {
+                    chunk_id: Uuid::new_v4(),
+                    vector_store_id: Uuid::new_v4(),
+                    file_id: Uuid::new_v4(),
+                    chunk_index: 0,
+                    content: "A".repeat(1000),
+                    score: 0.95,
+                    filename: Some("file1.txt".to_string()),
+                    metadata: None,
+                },
+                FileSearchResult {
+                    chunk_id: Uuid::new_v4(),
+                    vector_store_id: Uuid::new_v4(),
+                    file_id: Uuid::new_v4(),
+                    chunk_index: 0,
+                    content: "B".repeat(1000),
+                    score: 0.85,
+                    filename: Some("file2.txt".to_string()),
+                    metadata: None,
+                },
+            ],
+            query: "test".to_string(),
+            vector_stores_searched: 1,
+        };
+
+        // max_chars = 0 should be treated as unlimited
+        let formatted = format_search_results_truncated(&response, 0);
+        assert!(formatted.contains("[Source 1: file1.txt"));
+        assert!(formatted.contains("[Source 2: file2.txt"));
+        assert!(!formatted.contains("truncated"));
+    }
+
+    #[test]
+    fn test_format_search_results_truncated_preserves_complete_results() {
+        use crate::services::{FileSearchResponse, FileSearchResult};
+
+        let response = FileSearchResponse {
+            results: vec![
+                FileSearchResult {
+                    chunk_id: Uuid::new_v4(),
+                    vector_store_id: Uuid::new_v4(),
+                    file_id: Uuid::new_v4(),
+                    chunk_index: 0,
+                    content: "Short content".to_string(),
+                    score: 0.95,
+                    filename: Some("small.txt".to_string()),
+                    metadata: None,
+                },
+                FileSearchResult {
+                    chunk_id: Uuid::new_v4(),
+                    vector_store_id: Uuid::new_v4(),
+                    file_id: Uuid::new_v4(),
+                    chunk_index: 0,
+                    content: "X".repeat(5000),
+                    score: 0.85,
+                    filename: Some("large.txt".to_string()),
+                    metadata: None,
+                },
+            ],
+            query: "test".to_string(),
+            vector_stores_searched: 1,
+        };
+
+        // Set limit that fits first result but not second
+        let formatted = format_search_results_truncated(&response, 500);
+
+        // First result should be completely included
+        assert!(formatted.contains("[Source 1: small.txt"));
+        assert!(formatted.contains("Short content"));
+        assert!(formatted.contains("95.0%"));
+
+        // Second result should be completely excluded (not partially included)
+        assert!(!formatted.contains("large.txt"));
+        assert!(!formatted.contains("XXXXX")); // No partial content
+
+        // Truncation notice present
+        assert!(formatted.contains("truncated to prevent context overflow"));
+    }
+}

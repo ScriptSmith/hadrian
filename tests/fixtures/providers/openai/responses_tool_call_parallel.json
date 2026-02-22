@@ -1,0 +1,123 @@
+{
+  "id": "openai:responses_tool_call:parallel",
+  "description": "Responses API with parallel tool calls",
+  "request": {
+    "method": "POST",
+    "path": "/responses"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-ratelimit-remaining-tokens": "199706",
+      "x-ratelimit-reset-requests": "57.922s",
+      "x-ratelimit-reset-tokens": "88ms",
+      "x-ratelimit-limit-requests": "10000",
+      "x-ratelimit-limit-tokens": "200000",
+      "x-ratelimit-remaining-requests": "9993",
+      "x-request-id": "req_f65c9aaf33bc43278ce13c71e8002206",
+      "x-envoy-upstream-service-time": "2470",
+      "content-type": "application/json",
+      "x-content-type-options": "nosniff"
+    },
+    "body": {
+      "background": false,
+      "billing": {
+        "payer": "developer"
+      },
+      "completed_at": 1766147514,
+      "created_at": 1766147512,
+      "error": null,
+      "id": "resp_02406f4f50ad5e3b00694545b894f0819384031fd18a0f2247",
+      "incomplete_details": null,
+      "instructions": null,
+      "max_output_tokens": null,
+      "max_tool_calls": null,
+      "metadata": {},
+      "model": "gpt-4o-mini-2024-07-18",
+      "object": "response",
+      "output": [
+        {
+          "arguments": "{\"location\":\"Tokyo, Japan\",\"unit\":\"celsius\"}",
+          "call_id": "call_cEiw6LSkw4YCym29UljWofii",
+          "id": "fc_02406f4f50ad5e3b00694545ba5c948193980f56ea692ad5c4",
+          "name": "get_weather",
+          "status": "completed",
+          "type": "function_call"
+        },
+        {
+          "arguments": "{\"location\":\"London, UK\",\"unit\":\"celsius\"}",
+          "call_id": "call_DO48gwLqge0pDD4qjZmCUhQt",
+          "id": "fc_02406f4f50ad5e3b00694545babc2c8193bd03a2298fffabcf",
+          "name": "get_weather",
+          "status": "completed",
+          "type": "function_call"
+        }
+      ],
+      "parallel_tool_calls": true,
+      "previous_response_id": null,
+      "prompt_cache_key": null,
+      "prompt_cache_retention": null,
+      "reasoning": {
+        "effort": null,
+        "summary": null
+      },
+      "safety_identifier": null,
+      "service_tier": "default",
+      "status": "completed",
+      "store": true,
+      "temperature": 0.0,
+      "text": {
+        "format": {
+          "type": "text"
+        },
+        "verbosity": "medium"
+      },
+      "tool_choice": "auto",
+      "tools": [
+        {
+          "description": "Get the current weather in a location",
+          "name": "get_weather",
+          "parameters": {
+            "additionalProperties": false,
+            "properties": {
+              "location": {
+                "description": "The city and country, e.g. San Francisco, USA",
+                "type": "string"
+              },
+              "unit": {
+                "description": "The temperature unit",
+                "enum": [
+                  "celsius",
+                  "fahrenheit"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "location",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "strict": true,
+          "type": "function"
+        }
+      ],
+      "top_logprobs": 0,
+      "top_p": 1.0,
+      "truncation": "disabled",
+      "usage": {
+        "input_tokens": 38,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 58,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 96
+      },
+      "user": null
+    }
+  }
+}

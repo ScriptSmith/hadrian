@@ -1,0 +1,171 @@
+# Docker Compose with Keycloak OIDC Authentication
+# Provides enterprise-grade identity management with OIDC/OAuth2
+#
+# !! LOCAL DEVELOPMENT ONLY - NOT FOR PRODUCTION !!
+# Uses default passwords for convenience. For production, use docker-compose.production.yml
+#
+# Port configuration (override via environment variables for parallel testing):
+#   GATEWAY_PORT - Gateway HTTP port (default: 3000)
+#   KEYCLOAK_PORT - Keycloak port (default: 8080)
+#   OAUTH2_PROXY_PORT - OAuth2 Proxy port (default: 4180)
+#
+# Authentication architecture:
+# - JIT provisioning with organization_id (users provisioned into "default" org)
+# - SSO group mappings configured via Admin UI (stored in database)
+# - Authorization uses database memberships, not JWT group claims
+# - Raw IdP groups captured for group mapping feature
+#
+# Setup:
+# 1. Start services: docker compose -f docker-compose.keycloak.yml up -d
+# 2. Access Keycloak admin: http://localhost:8080 (admin/admin)
+# 3. Create realm "hadrian" and configure clients (or import realm-export.json)
+# 4. Create "default" organization in Hadrian (required for JIT provisioning)
+# 5. Configure SSO group mappings via Admin UI if needed
+#
+# Endpoints:
+# - Gateway: http://localhost:3000
+# - Keycloak: http://localhost:8080
+# - OIDC Discovery: http://localhost:8080/realms/hadrian/.well-known/openid-configuration
+
+services:
+  gateway:
+    image: hadrian:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "${GATEWAY_PORT:-3000}:8080"
+    extra_hosts:
+      # Allow gateway to reach localhost:8080 (Keycloak) from inside the container
+      - "localhost:host-gateway"
+    volumes:
+      - ./config/hadrian.keycloak.toml:/app/config/hadrian.toml:ro
+      - gateway-data:/app/data
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - REDIS_URL=redis://redis:6379
+      # OIDC Configuration
+      - OIDC_ISSUER_URL=http://keycloak:8080/realms/hadrian
+      - OIDC_CLIENT_ID=hadrian-gateway
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
+      - OIDC_AUDIENCE=hadrian-gateway
+      # JWT validation
+      - JWT_ISSUER=http://keycloak:8080/realms/hadrian
+      - JWT_AUDIENCE=hadrian-gateway
+      - JWKS_URL=http://keycloak:8080/realms/hadrian/protocol/openid-connect/certs
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0
+    ports:
+      - "${KEYCLOAK_PORT:-8080}:8080"
+    volumes:
+      # Import realm configuration on startup
+      - ./config/keycloak/realm-export.json:/opt/keycloak/data/import/realm.json:ro
+      # Custom themes (optional)
+      - ./config/keycloak/themes:/opt/keycloak/themes:ro
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://keycloak-db:5432/keycloak
+      - KC_DB_USERNAME=keycloak
+      - KC_DB_PASSWORD=${KEYCLOAK_DB_PASSWORD:-keycloak}
+      # Configure Keycloak to advertise localhost:8080 in discovery documents
+      - KC_HOSTNAME=localhost
+      - KC_HOSTNAME_PORT=8080
+      - KC_HOSTNAME_STRICT=false
+      - KC_HTTP_ENABLED=true
+      - KC_PROXY=edge
+      - KC_HEALTH_ENABLED=true
+      - KC_METRICS_ENABLED=true
+    command:
+      - start-dev
+      - --import-realm
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200 OK'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  keycloak-db:
+    image: postgres:16-alpine
+    volumes:
+      - keycloak-db-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=keycloak
+      - POSTGRES_USER=keycloak
+      - POSTGRES_PASSWORD=${KEYCLOAK_DB_PASSWORD:-keycloak}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # OAuth2 Proxy - Alternative to built-in OIDC (for legacy apps)
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.5.1
+    ports:
+      - "${OAUTH2_PROXY_PORT:-4180}:4180"
+    environment:
+      - OAUTH2_PROXY_PROVIDER=keycloak-oidc
+      - OAUTH2_PROXY_CLIENT_ID=hadrian-gateway
+      - OAUTH2_PROXY_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
+      - OAUTH2_PROXY_OIDC_ISSUER_URL=http://keycloak:8080/realms/hadrian
+      - OAUTH2_PROXY_REDIRECT_URL=http://localhost:4180/oauth2/callback
+      - OAUTH2_PROXY_COOKIE_SECRET=${OAUTH2_PROXY_COOKIE_SECRET}
+      - OAUTH2_PROXY_COOKIE_SECURE=false
+      - OAUTH2_PROXY_UPSTREAMS=http://gateway:3000
+      - OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:4180
+      - OAUTH2_PROXY_EMAIL_DOMAINS=*
+      - OAUTH2_PROXY_PASS_ACCESS_TOKEN=true
+      - OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER=true
+      - OAUTH2_PROXY_SET_XAUTHREQUEST=true
+      - OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - oauth2-proxy
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  gateway-data:
+    driver: local
+  keycloak-db-data:
+    driver: local
+  redis-data:
+    driver: local

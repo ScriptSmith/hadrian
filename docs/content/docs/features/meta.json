@@ -1,0 +1,25 @@
+{
+  "title": "Features",
+  "pages": [
+    "index",
+    "---Core---",
+    "providers",
+    "chat-ui",
+    "multi-tenancy",
+    "budgets",
+    "---Security---",
+    "authentication",
+    "sso-admin-guide",
+    "saml",
+    "scim",
+    "authorization",
+    "---Advanced---",
+    "knowledge-bases",
+    "chat-modes",
+    "frontend-tools",
+    "guardrails",
+    "mcp",
+    "mcp-agents",
+    "caching"
+  ]
+}

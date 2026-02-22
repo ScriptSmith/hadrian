@@ -1,0 +1,318 @@
+---
+title: SSO Admin Guide
+description: Configure single sign-on for your organization through the Admin UI
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { StoryEmbed } from "@/components/story-embed";
+
+This guide is for **organization administrators** who need to configure SSO for their organization using the Admin UI. For platform operators configuring SSO at the gateway level, see the [Authentication Configuration](/docs/configuration/auth) reference.
+
+## Overview
+
+Per-organization SSO allows each organization in a multi-tenant deployment to configure their own identity provider. This enables:
+
+- **Self-service setup** - Configure SSO without platform operator involvement
+- **Domain verification** - Prove domain ownership before enabling SSO
+- **Enforcement modes** - Control whether SSO is optional, in test mode, or required
+- **Email-based discovery** - Users enter their email and are redirected to the correct IdP
+
+<Callout type="info">
+  This guide covers OIDC (OpenID Connect) configuration. For SAML 2.0 configuration with legacy
+  identity providers like AD FS, see the [SAML Admin Guide](/docs/features/saml).
+</Callout>
+
+## Prerequisites
+
+Before configuring SSO:
+
+1. **Organization exists** - Your organization must be created in Hadrian
+2. **Admin access** - You need organization admin role
+3. **IdP credentials** - Have your identity provider's client ID, client secret, and issuer URL ready
+
+## Configuring SSO
+
+Navigate to **Admin → Organizations → [Your Org] → SSO** to access the SSO configuration page.
+
+<StoryEmbed storyId="admin-orgssoconfigpage--with-config" height={500} />
+
+### Creating an SSO Configuration
+
+Click **Configure SSO** to open the configuration form.
+
+<StoryEmbed storyId="admin-orgssoconfigformmodal--create-mode" height={550} />
+
+#### Required Fields
+
+| Field             | Description                          | Example                                     |
+| ----------------- | ------------------------------------ | ------------------------------------------- |
+| **Issuer URL**    | Your IdP's issuer URL                | `https://accounts.google.com`               |
+| **Client ID**     | OAuth client ID from your IdP        | `123456789.apps.googleusercontent.com`      |
+| **Client Secret** | OAuth client secret                  | `GOCSPX-...`                                |
+| **Redirect URI**  | Callback URL (must match IdP config) | `https://gateway.example.com/auth/callback` |
+
+#### Optional Fields
+
+| Field              | Description                                        | Default                      |
+| ------------------ | -------------------------------------------------- | ---------------------------- |
+| **Discovery URL**  | OIDC discovery endpoint (if different from issuer) | Same as issuer               |
+| **Scopes**         | OAuth scopes to request                            | `openid`, `email`, `profile` |
+| **Identity Claim** | ID token claim for user identity                   | `sub`                        |
+| **Groups Claim**   | ID token claim for group membership                | `groups`                     |
+
+### Identity Provider Setup
+
+Configure your identity provider with these settings:
+
+| Setting              | Value                                                 |
+| -------------------- | ----------------------------------------------------- |
+| **Application Type** | Web application                                       |
+| **Redirect URI**     | `https://your-gateway.com/auth/callback`              |
+| **Scopes**           | `openid`, `email`, `profile`, `groups` (if available) |
+| **Grant Type**       | Authorization Code                                    |
+
+<Callout type="info">
+  The redirect URI must exactly match what you configure in Hadrian. Include the protocol
+  (`https://`) and ensure there's no trailing slash mismatch.
+</Callout>
+
+#### Provider-Specific Notes
+
+**Google Workspace:**
+
+- Create credentials in Google Cloud Console → APIs & Services → Credentials
+- Enable the "Google Identity" API
+- Groups require Google Workspace admin setup
+
+**Okta:**
+
+- Create a new OIDC Web Application
+- Issuer URL format: `https://your-org.okta.com`
+- Groups claim requires adding groups to the ID token in the authorization server
+
+**Azure AD / Entra ID:**
+
+- Register an application in Azure Portal → App registrations
+- Issuer URL format: `https://login.microsoftonline.com/{tenant-id}/v2.0`
+- Groups may require Microsoft Graph API permissions
+
+**Keycloak:**
+
+- Create a new client with "Standard Flow" enabled
+- Issuer URL format: `https://keycloak.example.com/realms/{realm-name}`
+- Groups are included by default in most configurations
+
+## Domain Verification
+
+Before enforcing SSO, you must verify ownership of your email domains. This prevents unauthorized organizations from claiming domains they don't own.
+
+<StoryEmbed storyId="admin-domainverificationlist--with-domains" height={300} />
+
+### Adding a Domain
+
+1. Click **Add Domain**
+2. Enter your domain (e.g., `acme.com`)
+3. You'll receive a DNS TXT record to add
+
+### DNS Verification
+
+Add the provided TXT record to your domain's DNS:
+
+```
+Type:  TXT
+Host:  _hadrian-verify (or @ for root)
+Value: hadrian-verify=abc123xyz...
+```
+
+The record format is:
+
+```
+hadrian-verify={verification_token}
+```
+
+<Callout type="warn">
+  DNS propagation can take up to 48 hours. Most changes propagate within 15 minutes to a few hours.
+</Callout>
+
+### Verification Status
+
+| Status       | Meaning                                         |
+| ------------ | ----------------------------------------------- |
+| **Pending**  | Awaiting DNS verification                       |
+| **Verified** | Domain ownership confirmed                      |
+| **Failed**   | Verification attempted but TXT record not found |
+
+Click **Verify** to check the DNS record. Failed verifications can be retried after updating DNS.
+
+### Blocked Domains
+
+Public email domains cannot be verified:
+
+- `gmail.com`, `googlemail.com`
+- `outlook.com`, `hotmail.com`, `live.com`
+- `yahoo.com`, `icloud.com`
+- `protonmail.com`, `proton.me`
+
+These domains are shared by millions of users and cannot be claimed by a single organization.
+
+## Enforcement Modes
+
+SSO enforcement determines whether users must authenticate via SSO to access your organization.
+
+<StoryEmbed storyId="admin-orgssoconfigpage--required-enforcement" height={500} />
+
+### Mode Descriptions
+
+| Mode         | Behavior                                          | Use Case                        |
+| ------------ | ------------------------------------------------- | ------------------------------- |
+| **Optional** | Users can log in with SSO or other methods        | Initial setup, gradual rollout  |
+| **Test**     | SSO required, but failures are logged not blocked | Validate SSO before enforcement |
+| **Required** | SSO mandatory for all users in verified domains   | Production enforcement          |
+
+### Rollout Strategy
+
+1. **Start with Optional** - Configure SSO and verify domains without affecting users
+2. **Enable Test Mode** - Monitor logs for users who would be blocked
+3. **Switch to Required** - Enforce SSO after validating test mode results
+
+<Callout type="info">
+  Test mode logs authentication attempts that would fail under Required mode. Check your logs for
+  entries with `sso_enforcement=test` to identify affected users.
+</Callout>
+
+### Domain Requirements for Enforcement
+
+- **Optional mode**: No domain verification required
+- **Test mode**: At least one verified domain recommended
+- **Required mode**: At least one verified domain required
+
+Users with email addresses matching verified domains will be subject to enforcement. Users with unverified domains can still access the organization through other means.
+
+## Just-in-Time Provisioning
+
+JIT provisioning automatically creates user accounts when they first authenticate via SSO.
+
+<Callout type="info">
+  JIT creates users on first login only. For real-time provisioning and immediate deprovisioning
+  when employees are terminated, see [SCIM Provisioning](/docs/features/scim).
+</Callout>
+
+### Configuration
+
+In the SSO configuration form, enable provisioning options:
+
+| Option                    | Description                                           |
+| ------------------------- | ----------------------------------------------------- |
+| **Enable Provisioning**   | Create users on first SSO login                       |
+| **Create Users**          | Actually create user records (vs. just adding to org) |
+| **Default Team**          | Team to add new users to                              |
+| **Default Org Role**      | Role in the organization (`member`, `admin`)          |
+| **Default Team Role**     | Role in the default team                              |
+| **Allowed Email Domains** | Restrict which domains can be provisioned             |
+
+### Attribute Sync
+
+| Option                        | Description                                         |
+| ----------------------------- | --------------------------------------------------- |
+| **Sync Attributes on Login**  | Update user name/email from IdP on each login       |
+| **Sync Memberships on Login** | Reset team memberships to match provisioning config |
+
+<Callout type="warn">
+  **Membership Sync Warning:** When enabled, users will lose access to teams not configured in
+  provisioning settings. Only enable if you want SSO to be the source of truth for team membership.
+</Callout>
+
+## SSO Group Mappings
+
+Map identity provider groups to Hadrian teams for automatic team assignment.
+
+<StoryEmbed storyId="admin-ssogroupmappingspage--with-mappings" height={450} />
+
+### Creating Mappings
+
+Navigate to **Admin → Organizations → [Your Org] → SSO Group Mappings**.
+
+| Field         | Description                                                   |
+| ------------- | ------------------------------------------------------------- |
+| **IdP Group** | Exact group name from your identity provider (case-sensitive) |
+| **Team**      | Hadrian team to add users to                                  |
+| **Role**      | Role within the team (`member`, `admin`, etc.)                |
+| **Priority**  | Higher priority wins when multiple mappings target same team  |
+
+### Priority Resolution
+
+When a user belongs to multiple IdP groups that map to the same team:
+
+1. Mapping with highest `priority` value wins
+2. If tied, alphabetically earlier group name wins
+3. If still tied, earlier creation time wins
+
+**Example:**
+
+| IdP Group         | Team       | Role     | Priority |
+| ----------------- | ---------- | -------- | -------- |
+| `Engineers`       | `platform` | `member` | 0        |
+| `SeniorEngineers` | `platform` | `lead`   | 10       |
+| `PlatformAdmins`  | `platform` | `admin`  | 20       |
+
+A user in `Engineers` and `SeniorEngineers` gets `lead` role (priority 10 > 0).
+A user in all three groups gets `admin` role (priority 20 wins).
+
+### Testing Mappings
+
+Use the **Test Mappings** feature to validate your configuration:
+
+1. Enter a list of IdP groups (as they appear in the token)
+2. Click **Test**
+3. View which teams/roles would be assigned
+
+This helps identify unmapped groups before users encounter issues.
+
+### Import/Export
+
+For large mapping sets:
+
+- **Export**: Download mappings as CSV or JSON
+- **Import**: Upload mappings with conflict resolution:
+  - `skip` - Skip existing mappings
+  - `overwrite` - Update existing mappings
+  - `error` - Fail if any mapping exists
+
+## Troubleshooting
+
+### SSO Login Fails
+
+1. **Check redirect URI** - Must exactly match IdP configuration
+2. **Verify client credentials** - Client ID and secret must be correct
+3. **Check issuer URL** - Must be the exact issuer URL from your IdP
+4. **Review scopes** - Ensure `openid` scope is included
+
+### Domain Verification Fails
+
+1. **Wait for DNS propagation** - Can take up to 48 hours
+2. **Check TXT record format** - Must be exactly `hadrian-verify={token}`
+3. **Verify correct domain** - TXT record must be on the domain being verified
+4. **Check DNS provider** - Some providers require specific formatting
+
+### Users Not Provisioned
+
+1. **Check provisioning enabled** - Both "Enable Provisioning" and "Create Users" must be on
+2. **Verify email domain** - User's email domain must be in allowed list (if configured)
+3. **Check group mappings** - User must be in a mapped group to get team membership
+
+### Groups Not Mapped
+
+1. **Verify groups claim** - Must match the claim name in your IdP's token
+2. **Check exact group names** - Mappings are case-sensitive
+3. **Review IdP token** - Use IdP's token debugger to see actual group values
+
+## Related Topics
+
+<Cards>
+  <Card title="Authentication Overview" href="/docs/features/authentication" />
+  <Card title="SAML Admin Guide" href="/docs/features/saml" />
+  <Card title="SCIM Provisioning" href="/docs/features/scim" />
+  <Card title="Auth Configuration Reference" href="/docs/configuration/auth" />
+  <Card title="Authorization" href="/docs/features/authorization" />
+  <Card title="Multi-Tenancy" href="/docs/features/multi-tenancy" />
+</Cards>

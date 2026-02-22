@@ -1,0 +1,42 @@
+{
+  "id": "bedrock:tool_call:with_result",
+  "description": "Bedrock Converse API response after tool result is provided",
+  "request": {
+    "method": "POST",
+    "path": "/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+    "path_pattern": "/model/.+/converse"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-amzn-requestid": "d48e22d8-fff9-4faf-8fb4-57053320fa46",
+      "content-type": "application/json"
+    },
+    "body": {
+      "metrics": {
+        "latencyMs": 1741
+      },
+      "output": {
+        "message": {
+          "content": [
+            {
+              "text": "The current weather in San Francisco is partly cloudy with a temperature of 18°C (64°F) and humidity at 65%."
+            }
+          ],
+          "role": "assistant"
+        }
+      },
+      "stopReason": "end_turn",
+      "usage": {
+        "cacheReadInputTokenCount": 0,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokenCount": 0,
+        "cacheWriteInputTokens": 0,
+        "inputTokens": 696,
+        "outputTokens": 32,
+        "serverToolUsage": {},
+        "totalTokens": 728
+      }
+    }
+  }
+}

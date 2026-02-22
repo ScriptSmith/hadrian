@@ -1,0 +1,25 @@
+{
+  "id": "anthropic:unauthorized",
+  "description": "Unauthorized error response (401) - requires --invalid-key flag",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages"
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json",
+      "x-envoy-upstream-service-time": "78",
+      "x-should-retry": "false",
+      "x-robots-tag": "none"
+    },
+    "body": {
+      "error": {
+        "message": "invalid x-api-key",
+        "type": "authentication_error"
+      },
+      "request_id": "req_011CWGxiQGy8Eh8wBsPVRQgg",
+      "type": "error"
+    }
+  }
+}

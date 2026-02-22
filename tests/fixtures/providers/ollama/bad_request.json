@@ -1,0 +1,22 @@
+{
+  "id": "ollama:bad_request",
+  "description": "Error response for invalid/missing model",
+  "request": {
+    "method": "POST",
+    "path": "/chat/completions"
+  },
+  "response": {
+    "status": 404,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "code": null,
+        "message": "model 'nonexistent-model-xyz' not found",
+        "param": null,
+        "type": "api_error"
+      }
+    }
+  }
+}

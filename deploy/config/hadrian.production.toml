@@ -1,0 +1,27 @@
+# Hadrian Gateway Configuration - Production
+# Full production setup with PostgreSQL HA, Redis Cluster, RabbitMQ, OIDC
+
+[database]
+type = "postgres"
+url = "${DATABASE_URL}"
+# Read replica for read-heavy queries (optional)
+# read_url = "${DATABASE_READ_URL}"
+
+[cache]
+type = "redis"
+url = "${REDIS_URL}"
+
+[auth.gateway]
+type = "api_key"
+header_name = "X-API-Key"
+key_prefix = "gw_"
+cache_ttl_secs = 300
+
+[providers]
+default_provider = "openrouter"
+
+[providers.openrouter]
+type = "open_ai"
+api_key = "${OPENROUTER_API_KEY}"
+base_url = "https://openrouter.ai/api/v1/"
+timeout_secs = 60

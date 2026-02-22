@@ -1,0 +1,78 @@
+{{- if .Values.serviceMonitor.enabled }}
+{{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+  {{- fail "ServiceMonitor requires prometheus-operator CRDs. Install with: kubectl apply -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/main/bundle.yaml" }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "hadrian.fullname" . }}
+  namespace: {{ .Values.serviceMonitor.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "hadrian.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.serviceMonitor.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  jobLabel: {{ .Values.serviceMonitor.jobLabel | default "app.kubernetes.io/name" }}
+  selector:
+    matchLabels:
+      {{- include "hadrian.selectorLabels" . | nindent 6 }}
+      {{- with .Values.serviceMonitor.selector }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+  namespaceSelector:
+    {{- if .Values.serviceMonitor.namespaceSelector }}
+    {{- toYaml .Values.serviceMonitor.namespaceSelector | nindent 4 }}
+    {{- else }}
+    matchNames:
+      - {{ .Release.Namespace }}
+    {{- end }}
+  endpoints:
+    - port: http
+      path: {{ .Values.gateway.observability.metrics.path | default "/metrics" }}
+      {{- with .Values.serviceMonitor.interval }}
+      interval: {{ . }}
+      {{- end }}
+      {{- with .Values.serviceMonitor.scrapeTimeout }}
+      scrapeTimeout: {{ . }}
+      {{- end }}
+      {{- with .Values.serviceMonitor.scheme }}
+      scheme: {{ . }}
+      {{- end }}
+      {{- with .Values.serviceMonitor.tlsConfig }}
+      tlsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.serviceMonitor.bearerTokenSecret }}
+      bearerTokenSecret:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.serviceMonitor.basicAuth }}
+      basicAuth:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.serviceMonitor.honorLabels }}
+      honorLabels: {{ .Values.serviceMonitor.honorLabels }}
+      {{- end }}
+      {{- if .Values.serviceMonitor.honorTimestamps }}
+      honorTimestamps: {{ .Values.serviceMonitor.honorTimestamps }}
+      {{- end }}
+      {{- with .Values.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.serviceMonitor.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- with .Values.serviceMonitor.sampleLimit }}
+  sampleLimit: {{ . }}
+  {{- end }}
+  {{- with .Values.serviceMonitor.targetLimit }}
+  targetLimit: {{ . }}
+  {{- end }}
+{{- end }}

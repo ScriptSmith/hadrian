@@ -1,0 +1,78 @@
+{{- if .Values.podMonitor.enabled }}
+{{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+  {{- fail "PodMonitor requires prometheus-operator CRDs. Install with: kubectl apply -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/main/bundle.yaml" }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "hadrian.fullname" . }}
+  namespace: {{ .Values.podMonitor.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "hadrian.labels" . | nindent 4 }}
+    {{- with .Values.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.podMonitor.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  jobLabel: {{ .Values.podMonitor.jobLabel | default "app.kubernetes.io/name" }}
+  selector:
+    matchLabels:
+      {{- include "hadrian.selectorLabels" . | nindent 6 }}
+      {{- with .Values.podMonitor.selector }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+  namespaceSelector:
+    {{- if .Values.podMonitor.namespaceSelector }}
+    {{- toYaml .Values.podMonitor.namespaceSelector | nindent 4 }}
+    {{- else }}
+    matchNames:
+      - {{ .Release.Namespace }}
+    {{- end }}
+  podMetricsEndpoints:
+    - port: http
+      path: {{ .Values.gateway.observability.metrics.path | default "/metrics" }}
+      {{- with .Values.podMonitor.interval }}
+      interval: {{ . }}
+      {{- end }}
+      {{- with .Values.podMonitor.scrapeTimeout }}
+      scrapeTimeout: {{ . }}
+      {{- end }}
+      {{- with .Values.podMonitor.scheme }}
+      scheme: {{ . }}
+      {{- end }}
+      {{- with .Values.podMonitor.tlsConfig }}
+      tlsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podMonitor.bearerTokenSecret }}
+      bearerTokenSecret:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podMonitor.basicAuth }}
+      basicAuth:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.podMonitor.honorLabels }}
+      honorLabels: {{ .Values.podMonitor.honorLabels }}
+      {{- end }}
+      {{- if .Values.podMonitor.honorTimestamps }}
+      honorTimestamps: {{ .Values.podMonitor.honorTimestamps }}
+      {{- end }}
+      {{- with .Values.podMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podMonitor.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- with .Values.podMonitor.sampleLimit }}
+  sampleLimit: {{ . }}
+  {{- end }}
+  {{- with .Values.podMonitor.targetLimit }}
+  targetLimit: {{ . }}
+  {{- end }}
+{{- end }}

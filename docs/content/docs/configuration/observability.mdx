@@ -1,0 +1,601 @@
+---
+title: Observability Configuration
+description: Logging, tracing, metrics, and monitoring configuration
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The `[observability]` section configures logging, distributed tracing, Prometheus metrics, request logging, usage tracking, and response validation.
+
+## Overview
+
+| Subsection            | Purpose                                            |
+| --------------------- | -------------------------------------------------- |
+| `logging`             | Console log format, level, and SIEM integration    |
+| `tracing`             | OpenTelemetry distributed tracing with OTLP export |
+| `metrics`             | Prometheus metrics endpoint and histogram buckets  |
+| `request_logging`     | Request/response body logging with redaction       |
+| `usage`               | Usage data export to database and OTLP             |
+| `dead_letter_queue`   | Failed operations recovery and retry               |
+| `response_validation` | OpenAI schema validation for responses             |
+
+## Logging
+
+Configure console log output format and level.
+
+```toml
+[observability.logging]
+level = "info"
+format = "compact"
+timestamps = true
+file_line = false
+include_spans = true
+filter = "tower_http=debug,sqlx=warn"
+```
+
+| Setting         | Type    | Default   | Description                                              |
+| --------------- | ------- | --------- | -------------------------------------------------------- |
+| `level`         | string  | `info`    | Log level: `trace`, `debug`, `info`, `warn`, `error`.    |
+| `format`        | string  | `compact` | Output format (see below).                               |
+| `timestamps`    | boolean | `true`    | Include timestamps in log output.                        |
+| `file_line`     | boolean | `false`   | Include file and line number in log output.              |
+| `include_spans` | boolean | `true`    | Include tracing span information (JSON format only).     |
+| `filter`        | string  | None      | Additional filter directives (e.g., `tower_http=debug`). |
+
+### Log Formats
+
+| Format    | Description                                  | Use Case                        |
+| --------- | -------------------------------------------- | ------------------------------- |
+| `pretty`  | Human-readable multi-line format with colors | Local development               |
+| `compact` | Single-line format with colors               | Development, simple deployments |
+| `json`    | Structured JSON for log aggregation          | Production, log pipelines       |
+| `cef`     | Common Event Format for ArcSight, Splunk     | Enterprise SIEM integration     |
+| `leef`    | Log Event Extended Format for IBM QRadar     | IBM QRadar SIEM                 |
+| `syslog`  | RFC 5424 Syslog format                       | Standard syslog servers         |
+
+### Environment Variable Override
+
+The `RUST_LOG` environment variable takes precedence over config file settings:
+
+```bash
+RUST_LOG=debug ./hadrian
+RUST_LOG=hadrian=debug,tower_http=trace ./hadrian
+```
+
+### SIEM Configuration
+
+For CEF, LEEF, and Syslog formats, configure additional SIEM-specific fields:
+
+```toml
+[observability.logging]
+format = "cef"
+
+[observability.logging.siem]
+device_vendor = "Hadrian"
+device_product = "Gateway"
+device_version = "1.0.0"
+hostname = "gateway-prod-01"
+app_name = "hadrian"
+facility = "local0"
+leef_version = "2.0"
+```
+
+| Setting          | Type   | Default         | Description                                 |
+| ---------------- | ------ | --------------- | ------------------------------------------- |
+| `device_vendor`  | string | `Hadrian`       | Vendor name for CEF/LEEF headers.           |
+| `device_product` | string | `Gateway`       | Product name for CEF/LEEF headers.          |
+| `device_version` | string | Crate version   | Version for CEF/LEEF headers.               |
+| `hostname`       | string | System hostname | Override hostname in log headers.           |
+| `app_name`       | string | `hadrian`       | Application name for Syslog APP-NAME field. |
+| `facility`       | string | `local0`        | Syslog facility (see below).                |
+| `leef_version`   | string | `2.0`           | LEEF format version (`1.0` or `2.0`).       |
+
+#### Syslog Facilities
+
+| Facility          | Code  | Description            |
+| ----------------- | ----- | ---------------------- |
+| `kern`            | 0     | Kernel messages        |
+| `user`            | 1     | User-level messages    |
+| `daemon`          | 3     | System daemons         |
+| `auth`            | 4     | Security/authorization |
+| `local0`          | 16    | Local use 0 (default)  |
+| `local1`-`local7` | 17-23 | Local use 1-7          |
+
+## Distributed Tracing
+
+OpenTelemetry distributed tracing with OTLP export for request correlation across services.
+
+```toml
+[observability.tracing]
+enabled = true
+service_name = "hadrian"
+service_version = "1.0.0"
+environment = "production"
+
+[observability.tracing.otlp]
+endpoint = "http://jaeger:4317"
+protocol = "grpc"
+timeout_secs = 10
+compression = true
+
+[observability.tracing.otlp.headers]
+Authorization = "Bearer ${OTLP_TOKEN}"
+
+[observability.tracing.sampling]
+strategy = "ratio"
+rate = 0.1
+
+[observability.tracing.resource_attributes]
+"deployment.region" = "us-east-1"
+"k8s.namespace" = "ai-gateway"
+```
+
+### Tracing Configuration
+
+| Setting               | Type    | Default         | Description                                   |
+| --------------------- | ------- | --------------- | --------------------------------------------- |
+| `enabled`             | boolean | `false`         | Enable OpenTelemetry tracing.                 |
+| `service_name`        | string  | `ai-gateway`    | Service name in traces.                       |
+| `service_version`     | string  | None            | Service version in traces.                    |
+| `environment`         | string  | None            | Deployment environment (e.g., `production`).  |
+| `propagation`         | string  | `trace_context` | Context propagation format.                   |
+| `resource_attributes` | map     | `{}`            | Additional resource attributes for all spans. |
+
+### OTLP Exporter
+
+| Setting        | Type    | Default | Description                  |
+| -------------- | ------- | ------- | ---------------------------- |
+| `endpoint`     | string  | —       | OTLP collector endpoint URL. |
+| `protocol`     | string  | `grpc`  | Protocol: `grpc` or `http`.  |
+| `timeout_secs` | integer | `10`    | Export timeout in seconds.   |
+| `compression`  | boolean | `true`  | Enable gzip compression.     |
+| `headers`      | map     | `{}`    | Headers for authentication.  |
+
+### Sampling Strategies
+
+| Strategy       | Description                                       |
+| -------------- | ------------------------------------------------- |
+| `always_on`    | Sample all traces (default).                      |
+| `always_off`   | Sample no traces.                                 |
+| `ratio`        | Sample a percentage of traces (use `rate` field). |
+| `parent_based` | Inherit sampling decision from parent span.       |
+
+### Propagation Formats
+
+| Format          | Description                              |
+| --------------- | ---------------------------------------- |
+| `trace_context` | W3C Trace Context (default, recommended) |
+| `b3`            | Zipkin B3 format                         |
+| `jaeger`        | Jaeger native format                     |
+| `multi`         | TraceContext + Baggage combined          |
+
+## Prometheus Metrics
+
+Expose Prometheus metrics for monitoring dashboards and alerting.
+
+```toml
+[observability.metrics]
+enabled = true
+latency_buckets_ms = [10, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
+token_buckets = [10, 50, 100, 500, 1000, 5000, 10000, 50000, 100000]
+
+[observability.metrics.prometheus]
+enabled = true
+path = "/metrics"
+process_metrics = true
+```
+
+| Setting              | Type    | Default                                                | Description                         |
+| -------------------- | ------- | ------------------------------------------------------ | ----------------------------------- |
+| `enabled`            | boolean | `true`                                                 | Enable metrics collection.          |
+| `latency_buckets_ms` | float[] | `[10, 50, 100, 250, 500, 1000, 2500, 5000, 10000]`     | Histogram buckets for latency (ms). |
+| `token_buckets`      | float[] | `[10, 50, 100, 500, 1000, 5000, 10000, 50000, 100000]` | Histogram buckets for token counts. |
+
+### Prometheus Endpoint
+
+| Setting           | Type    | Default    | Description                              |
+| ----------------- | ------- | ---------- | ---------------------------------------- |
+| `enabled`         | boolean | `true`     | Enable the `/metrics` endpoint.          |
+| `path`            | string  | `/metrics` | Path for the Prometheus scrape endpoint. |
+| `process_metrics` | boolean | `true`     | Include process metrics (memory, CPU).   |
+
+### Available Metrics
+
+#### HTTP Metrics
+
+| Metric                          | Type      | Labels                                     | Description                 |
+| ------------------------------- | --------- | ------------------------------------------ | --------------------------- |
+| `http_requests_total`           | Counter   | `method`, `path`, `status`, `status_class` | Total HTTP requests.        |
+| `http_request_duration_seconds` | Histogram | `method`, `path`, `status_class`           | Request latency.            |
+| `active_connections`            | Gauge     | —                                          | Current active connections. |
+
+#### LLM Metrics
+
+| Metric                         | Type      | Labels                        | Description                    |
+| ------------------------------ | --------- | ----------------------------- | ------------------------------ |
+| `llm_requests_total`           | Counter   | `provider`, `model`, `status` | Total LLM requests.            |
+| `llm_request_duration_seconds` | Histogram | `provider`, `model`           | LLM request latency.           |
+| `llm_input_tokens_total`       | Counter   | `provider`, `model`           | Total input tokens processed.  |
+| `llm_output_tokens_total`      | Counter   | `provider`, `model`           | Total output tokens generated. |
+| `llm_input_tokens`             | Histogram | `provider`, `model`           | Input tokens per request.      |
+| `llm_output_tokens`            | Histogram | `provider`, `model`           | Output tokens per request.     |
+| `llm_cost_microcents_total`    | Counter   | `provider`, `model`           | Total cost in microcents.      |
+
+#### Streaming Metrics
+
+| Metric                                      | Type      | Labels                         | Description                    |
+| ------------------------------------------- | --------- | ------------------------------ | ------------------------------ |
+| `llm_streaming_chunks_total`                | Counter   | `provider`, `model`            | Total streaming chunks.        |
+| `llm_streaming_chunk_count`                 | Histogram | `provider`, `model`            | Chunks per stream.             |
+| `llm_streaming_time_to_first_chunk_seconds` | Histogram | `provider`, `model`            | Time to first chunk (TTFC).    |
+| `llm_streaming_duration_seconds`            | Histogram | `provider`, `model`            | Total stream duration.         |
+| `llm_streaming_completions_total`           | Counter   | `provider`, `model`, `outcome` | Stream completions by outcome. |
+
+#### Authentication & Authorization
+
+| Metric                    | Type    | Labels                 | Description               |
+| ------------------------- | ------- | ---------------------- | ------------------------- |
+| `auth_attempts_total`     | Counter | `method`, `status`     | Authentication attempts.  |
+| `budget_checks_total`     | Counter | `result`               | Budget check results.     |
+| `budget_warnings_total`   | Counter | `period`               | Budget warning triggers.  |
+| `budget_spend_percentage` | Gauge   | `api_key_id`, `period` | Current spend percentage. |
+| `rate_limit_checks_total` | Counter | `result`               | Rate limit check results. |
+
+#### Provider Health
+
+| Metric                                   | Type      | Labels                                    | Description                                            |
+| ---------------------------------------- | --------- | ----------------------------------------- | ------------------------------------------------------ |
+| `provider_health`                        | Gauge     | `provider`                                | Provider health (1=healthy, 0=unhealthy).              |
+| `provider_health_checks_total`           | Counter   | `provider`, `status`                      | Health check results.                                  |
+| `provider_health_check_duration_seconds` | Histogram | `provider`                                | Health check latency.                                  |
+| `provider_circuit_breaker_state`         | Gauge     | `provider`                                | Circuit breaker state (0=closed, 1=open, 2=half_open). |
+| `provider_circuit_breaker_failure_count` | Gauge     | `provider`                                | Current failure count.                                 |
+| `provider_fallback_attempts_total`       | Counter   | `from_provider`, `to_provider`, `success` | Fallback attempts.                                     |
+| `provider_fallback_exhausted_total`      | Counter   | `primary_provider`, `chain_length`        | Exhausted fallback chains.                             |
+
+#### RAG / Knowledge Base Metrics
+
+| Metric                                     | Type      | Labels                           | Description           |
+| ------------------------------------------ | --------- | -------------------------------- | --------------------- |
+| `rag_document_processing_total`            | Counter   | `status`, `file_type`            | Documents processed.  |
+| `rag_document_processing_duration_seconds` | Histogram | `status`, `file_type`            | Processing time.      |
+| `rag_document_chunks_total`                | Counter   | `file_type`                      | Total chunks created. |
+| `rag_embedding_requests_total`             | Counter   | `provider`, `model`, `status`    | Embedding API calls.  |
+| `rag_embedding_duration_seconds`           | Histogram | `provider`, `model`              | Embedding latency.    |
+| `rag_file_search_total`                    | Counter   | `status`, `cache`                | File search queries.  |
+| `rag_file_search_duration_seconds`         | Histogram | `status`, `cache`                | Search latency.       |
+| `rag_vector_store_operations_total`        | Counter   | `backend`, `operation`, `status` | Vector DB operations. |
+
+#### Guardrails Metrics
+
+| Metric                         | Type      | Labels                                       | Description             |
+| ------------------------------ | --------- | -------------------------------------------- | ----------------------- |
+| `guardrails_evaluations_total` | Counter   | `provider`, `stage`, `result`                | Guardrails evaluations. |
+| `guardrails_latency_seconds`   | Histogram | `provider`, `stage`                          | Evaluation latency.     |
+| `guardrails_violations_total`  | Counter   | `provider`, `category`, `severity`, `action` | Violations detected.    |
+| `guardrails_timeouts_total`    | Counter   | `provider`, `stage`                          | Evaluation timeouts.    |
+| `guardrails_errors_total`      | Counter   | `provider`, `stage`, `error_type`            | Provider errors.        |
+
+#### System Metrics
+
+| Metric                          | Type      | Labels                                 | Description                   |
+| ------------------------------- | --------- | -------------------------------------- | ----------------------------- |
+| `gateway_errors_total`          | Counter   | `error_type`, `error_code`, `provider` | Gateway errors.               |
+| `cache_operations_total`        | Counter   | `cache_type`, `operation`, `result`    | Cache operations.             |
+| `db_operations_total`           | Counter   | `operation`, `table`, `status`         | Database operations.          |
+| `db_operation_duration_seconds` | Histogram | `operation`, `table`                   | Database operation latency.   |
+| `dlq_operations_total`          | Counter   | `operation`, `entry_type`              | Dead letter queue operations. |
+| `retention_deletions_total`     | Counter   | `table`                                | Records deleted by retention. |
+
+## Request Logging
+
+Log request and response bodies for debugging and auditing.
+
+<Callout type="warn">
+  Request logging can expose sensitive data. Enable only in controlled environments and always use
+  `redact_sensitive = true` in production.
+</Callout>
+
+```toml
+[observability.request_logging]
+enabled = true
+log_request_body = true
+log_response_body = false
+max_body_size = 10240
+redact_sensitive = true
+redact_fields = ["api_key", "password", "secret", "authorization"]
+```
+
+| Setting             | Type     | Default                                              | Description                       |
+| ------------------- | -------- | ---------------------------------------------------- | --------------------------------- |
+| `enabled`           | boolean  | `false`                                              | Enable request logging.           |
+| `log_request_body`  | boolean  | `false`                                              | Log request bodies.               |
+| `log_response_body` | boolean  | `false`                                              | Log response bodies.              |
+| `max_body_size`     | integer  | `10240`                                              | Maximum body size to log (bytes). |
+| `redact_sensitive`  | boolean  | `true`                                               | Redact sensitive fields.          |
+| `redact_fields`     | string[] | `["api_key", "password", "secret", "authorization"]` | Fields to redact.                 |
+
+### Log Destinations
+
+```toml
+[observability.request_logging]
+enabled = true
+
+# Log to a separate file
+[observability.request_logging.destination]
+type = "file"
+path = "/var/log/hadrian/requests.log"
+
+[observability.request_logging.destination.rotation]
+type = "daily"
+```
+
+| Destination | Configuration                                                     |
+| ----------- | ----------------------------------------------------------------- |
+| `stdout`    | Log to standard output (same as regular logs).                    |
+| `file`      | Log to a file with optional rotation (`daily`, `hourly`, `size`). |
+| `http`      | POST logs to an HTTP endpoint with custom headers.                |
+
+## Usage Tracking
+
+Configure where API usage data (tokens, costs, latency) is recorded.
+
+```toml
+[observability.usage]
+database = true
+
+[observability.usage.buffer]
+max_size = 1000
+flush_interval_ms = 1000
+max_pending_entries = 10000
+```
+
+| Setting    | Type    | Default | Description                          |
+| ---------- | ------- | ------- | ------------------------------------ |
+| `database` | boolean | `true`  | Write usage records to the database. |
+
+### Buffer Configuration
+
+Usage records are buffered before writing to improve performance.
+
+| Setting               | Type    | Default | Description                                        |
+| --------------------- | ------- | ------- | -------------------------------------------------- |
+| `max_size`            | integer | `1000`  | Flush buffer when this many records accumulate.    |
+| `flush_interval_ms`   | integer | `1000`  | Flush buffer at this interval (milliseconds).      |
+| `max_pending_entries` | integer | `10000` | Drop oldest entries if pending exceeds this limit. |
+
+### OTLP Usage Export
+
+Export usage records to an OpenTelemetry-compatible backend:
+
+```toml
+[observability.usage.otlp]
+enabled = true
+endpoint = "http://otel-collector:4317"
+protocol = "grpc"
+timeout_secs = 10
+compression = true
+service_name = "hadrian-usage"
+
+[observability.usage.otlp.headers]
+Authorization = "Bearer ${OTLP_TOKEN}"
+```
+
+### OTLP Usage Attributes
+
+Each exported usage record includes the following OpenTelemetry attributes for attribution and filtering:
+
+| Attribute                    | Description                                       |
+| ---------------------------- | ------------------------------------------------- |
+| `hadrian.request_id`         | Unique request identifier                         |
+| `hadrian.model`              | Model used (e.g., `gpt-4o`)                       |
+| `hadrian.provider`           | Provider name (e.g., `openai`)                    |
+| `hadrian.api_key_id`         | API key used (if applicable)                      |
+| `hadrian.user_id`            | Authenticated user ID (session or user-owned key) |
+| `hadrian.org_id`             | Organization context                              |
+| `hadrian.project_id`         | Project context (from key or `X-Hadrian-Project`) |
+| `hadrian.team_id`            | Team context (from team-scoped key)               |
+| `hadrian.service_account_id` | Service account that owns the API key             |
+| `hadrian.input_tokens`       | Input token count                                 |
+| `hadrian.output_tokens`      | Output token count                                |
+| `hadrian.cost_microcents`    | Calculated cost in microcents                     |
+
+These attributes enable building Grafana dashboards, alerts, and queries filtered by organization, team, project, or individual user.
+
+## Dead Letter Queue
+
+Capture failed operations (usage logging, etc.) for later retry.
+
+```toml
+[observability.dead_letter_queue]
+type = "redis"
+url = "${REDIS_URL}"
+key_prefix = "gw:dlq:"
+max_entries = 100000
+ttl_secs = 604800  # 7 days
+
+[observability.dead_letter_queue.retry]
+enabled = true
+interval_secs = 60
+initial_delay_secs = 60
+max_delay_secs = 3600
+backoff_multiplier = 2.0
+max_retries = 10
+batch_size = 100
+prune_enabled = true
+```
+
+### DLQ Types
+
+| Type       | Configuration                                  | Use Case                   |
+| ---------- | ---------------------------------------------- | -------------------------- |
+| `file`     | `path`, `max_file_size_mb`, `max_files`        | Single-node, local storage |
+| `redis`    | `url`, `key_prefix`, `max_entries`, `ttl_secs` | Multi-node, shared storage |
+| `database` | `table_name`, `max_entries`, `ttl_secs`        | Uses existing database     |
+
+### Retry Configuration
+
+| Setting              | Type    | Default | Description                              |
+| -------------------- | ------- | ------- | ---------------------------------------- |
+| `enabled`            | boolean | `true`  | Enable automatic retry processing.       |
+| `interval_secs`      | integer | `60`    | Interval between retry runs (seconds).   |
+| `initial_delay_secs` | integer | `60`    | Initial delay before first retry.        |
+| `max_delay_secs`     | integer | `3600`  | Maximum delay between retries.           |
+| `backoff_multiplier` | float   | `2.0`   | Exponential backoff multiplier.          |
+| `max_retries`        | integer | `10`    | Maximum retry attempts before giving up. |
+| `batch_size`         | integer | `100`   | Records to process per retry run.        |
+| `prune_enabled`      | boolean | `true`  | Automatically delete expired entries.    |
+
+## Response Validation
+
+Validate API responses against the OpenAI OpenAPI specification.
+
+```toml
+[observability.response_validation]
+enabled = true
+mode = "warn"
+```
+
+| Setting   | Type    | Default | Description                                        |
+| --------- | ------- | ------- | -------------------------------------------------- |
+| `enabled` | boolean | `false` | Enable response schema validation.                 |
+| `mode`    | string  | `warn`  | `warn` (log and continue) or `error` (return 500). |
+
+<Callout type="info">
+  Response validation helps catch format issues from non-OpenAI providers. Use `warn` mode in
+  production to log issues without breaking requests. Use `error` mode during provider integration
+  testing.
+</Callout>
+
+## Complete Examples
+
+### Development
+
+```toml
+[observability.logging]
+level = "debug"
+format = "pretty"
+
+[observability.metrics]
+enabled = true
+
+[observability.metrics.prometheus]
+enabled = true
+path = "/metrics"
+```
+
+### Production with Jaeger
+
+```toml
+[observability.logging]
+level = "info"
+format = "json"
+
+[observability.tracing]
+enabled = true
+service_name = "hadrian"
+service_version = "1.0.0"
+environment = "production"
+
+[observability.tracing.otlp]
+endpoint = "http://jaeger:4317"
+protocol = "grpc"
+compression = true
+
+[observability.tracing.sampling]
+strategy = "ratio"
+rate = 0.1
+
+[observability.metrics]
+enabled = true
+
+[observability.metrics.prometheus]
+enabled = true
+path = "/metrics"
+
+[observability.usage]
+database = true
+
+[observability.usage.buffer]
+max_size = 1000
+flush_interval_ms = 1000
+
+[observability.dead_letter_queue]
+type = "redis"
+url = "${REDIS_URL}"
+ttl_secs = 604800
+```
+
+### Enterprise SIEM Integration
+
+```toml
+[observability.logging]
+level = "info"
+format = "cef"
+
+[observability.logging.siem]
+device_vendor = "Acme Corp"
+device_product = "AI Gateway"
+device_version = "1.0.0"
+hostname = "gateway-prod-01"
+facility = "local0"
+
+[observability.tracing]
+enabled = true
+service_name = "ai-gateway"
+
+[observability.tracing.otlp]
+endpoint = "https://otel.internal:4317"
+protocol = "grpc"
+
+[observability.tracing.otlp.headers]
+Authorization = "Bearer ${OTEL_TOKEN}"
+
+[observability.metrics]
+enabled = true
+
+[observability.request_logging]
+enabled = true
+log_request_body = true
+log_response_body = true
+redact_sensitive = true
+
+[observability.request_logging.destination]
+type = "file"
+path = "/var/log/hadrian/requests.log"
+
+[observability.request_logging.destination.rotation]
+type = "daily"
+```
+
+### Grafana Cloud
+
+```toml
+[observability.logging]
+level = "info"
+format = "json"
+
+[observability.tracing]
+enabled = true
+service_name = "hadrian"
+environment = "production"
+
+[observability.tracing.otlp]
+endpoint = "https://otlp-gateway-prod-us-central-0.grafana.net/otlp"
+protocol = "http"
+
+[observability.tracing.otlp.headers]
+Authorization = "Basic ${GRAFANA_OTLP_TOKEN}"
+
+[observability.tracing.sampling]
+strategy = "ratio"
+rate = 0.05
+
+[observability.usage.otlp]
+enabled = true
+endpoint = "https://otlp-gateway-prod-us-central-0.grafana.net/otlp"
+protocol = "http"
+
+[observability.usage.otlp.headers]
+Authorization = "Basic ${GRAFANA_OTLP_TOKEN}"
+```

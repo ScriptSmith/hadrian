@@ -1,0 +1,26 @@
+/target
+.env
+hadrian.toml
+/coverage
+.kreuzberg
+todo/
+AGENTS.md
+CLAUDE.md
+
+# Model catalog (fetched via scripts/fetch-model-catalog.sh)
+data/models-dev-catalog.json
+
+# Third-party OpenAPI reference specs (fetched via scripts/fetch-openapi-specs.sh)
+openapi/openai.*
+openapi/anthropic.*
+openapi/openrouter.*
+
+# Generated OpenAPI clients (regenerate with pnpm openapi-ts)
+ui/src/api/generated/
+deploy/tests/src/client/
+
+# Test coverage reports
+deploy/tests/coverage/
+
+# Helm chart dependencies (fetched via helm dependency build)
+helm/*/charts/*.tgz

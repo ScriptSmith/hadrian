@@ -1,0 +1,66 @@
+{{- if .Values.tests.enabled }}
+{{- if .Values.tests.connection.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "hadrian.fullname" . }}-test-connection
+  labels:
+    {{- include "hadrian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    {{- with .Values.tests.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  containers:
+    - name: wget
+      image: "{{ .Values.tests.image.repository }}:{{ .Values.tests.image.tag }}"
+      imagePullPolicy: {{ .Values.tests.image.pullPolicy }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+      command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Testing connection to {{ include "hadrian.fullname" . }}:{{ .Values.service.port }}/health"
+
+          # Retry logic for connection test
+          ATTEMPTS={{ .Values.tests.connection.retries | default 3 }}
+          DELAY={{ .Values.tests.connection.retryDelay | default 5 }}
+          n=0
+
+          until [ "$n" -ge $ATTEMPTS ]; do
+            echo "Attempt $((n+1))/$ATTEMPTS..."
+            if wget --timeout=10 --spider -q "http://{{ include "hadrian.fullname" . }}:{{ .Values.service.port }}/health"; then
+              echo "SUCCESS: Gateway health endpoint is accessible"
+              exit 0
+            fi
+            n=$((n+1))
+            if [ "$n" -lt $ATTEMPTS ]; then
+              echo "Retrying in ${DELAY}s..."
+              sleep $DELAY
+            fi
+          done
+
+          echo "FAILED: Could not connect to gateway health endpoint after $ATTEMPTS attempts"
+          exit 1
+      resources:
+        {{- toYaml .Values.tests.resources | nindent 8 }}
+  restartPolicy: Never
+{{- end }}
+{{- end }}

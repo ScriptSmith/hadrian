@@ -1,0 +1,722 @@
+---
+title: Kubernetes
+description: Deploy Hadrian Gateway to Kubernetes using the official Helm chart
+---
+
+Deploy Hadrian Gateway to Kubernetes clusters using the official Helm chart with support for high availability, observability, and cloud-native integrations.
+
+## Prerequisites
+
+- Kubernetes 1.21+
+- Helm 3.8+
+- PV provisioner support (if using persistence)
+
+### Optional Prerequisites
+
+| Feature               | Requirement                                                  |
+| --------------------- | ------------------------------------------------------------ |
+| Gateway API           | [Gateway API CRDs](https://gateway-api.sigs.k8s.io/) v1.0+   |
+| cert-manager          | [cert-manager](https://cert-manager.io/) v1.0+               |
+| Prometheus monitoring | [prometheus-operator](https://prometheus-operator.dev/) CRDs |
+| Network policies      | CNI plugin with NetworkPolicy support (Calico, Cilium, etc.) |
+
+## Quick Start
+
+```bash
+# Clone the repository
+git clone https://github.com/ScriptSmith/hadrian.git
+cd gateway/helm/hadrian
+
+# Update dependencies and install
+helm dependency update
+helm install my-gateway . -n hadrian --create-namespace
+
+# Verify the installation
+kubectl get pods -n hadrian
+```
+
+Access the gateway:
+
+```bash
+kubectl port-forward -n hadrian svc/my-gateway-hadrian 8080:80
+# Open http://localhost:8080
+```
+
+## Installation
+
+```bash
+git clone https://github.com/ScriptSmith/hadrian.git
+cd gateway/helm/hadrian
+helm dependency update
+
+# Install with default configuration
+helm install my-gateway .
+
+# Install with custom values file
+helm install my-gateway . -f values.yaml
+
+# Install in a specific namespace
+helm install my-gateway . -n hadrian --create-namespace
+```
+
+### With PostgreSQL and Redis
+
+For production deployments, enable the PostgreSQL and Redis subcharts:
+
+```bash
+helm install my-gateway . \
+  --set postgresql.enabled=true \
+  --set redis.enabled=true \
+  --set gateway.database.type=postgres \
+  --set gateway.cache.type=redis
+```
+
+## Configuration
+
+### Database
+
+#### SQLite (Development)
+
+SQLite is the default database, suitable for development and single-node deployments:
+
+```yaml
+gateway:
+  database:
+    type: sqlite
+    sqlite:
+      path: "/app/data/hadrian.db"
+
+persistence:
+  enabled: true
+  size: 1Gi
+```
+
+#### PostgreSQL Subchart (Production)
+
+Enable the Bitnami PostgreSQL subchart for production:
+
+```yaml
+postgresql:
+  enabled: true
+  auth:
+    username: gateway
+    database: gateway
+    existingSecret: postgres-credentials # Secret with 'password' key
+  primary:
+    persistence:
+      enabled: true
+      size: 50Gi
+
+gateway:
+  database:
+    type: postgres
+```
+
+Create the credentials secret:
+
+```bash
+kubectl create secret generic postgres-credentials \
+  --from-literal=password=$(openssl rand -base64 32)
+```
+
+#### External PostgreSQL (AWS RDS, Cloud SQL, Azure)
+
+Connect to managed database services:
+
+```yaml
+gateway:
+  database:
+    type: postgres
+    postgres:
+      host: "mydb.abc123.us-east-1.rds.amazonaws.com"
+      port: 5432
+      database: gateway
+      username: gateway
+      existingSecret: rds-credentials
+      sslMode: verify-full
+      ssl:
+        enabled: true
+        existingSecret: rds-ca-cert # Secret with 'ca.crt' key
+```
+
+### Cache
+
+#### Memory Cache (Development)
+
+In-memory cache is the default, suitable for single-node deployments:
+
+```yaml
+gateway:
+  cache:
+    type: memory
+```
+
+#### Redis Subchart (Production)
+
+Enable the Bitnami Redis subchart for distributed caching:
+
+```yaml
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    existingSecret: redis-credentials
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+
+gateway:
+  cache:
+    type: redis
+```
+
+#### External Redis (ElastiCache, MemoryStore, Azure Cache)
+
+Connect to managed Redis services:
+
+```yaml
+gateway:
+  cache:
+    type: redis
+    redis:
+      host: "my-redis.abc123.cache.amazonaws.com"
+      port: 6379
+      existingSecret: elasticache-credentials
+      tls:
+        enabled: true
+```
+
+### LLM Providers
+
+Configure LLM providers with API keys stored in Kubernetes secrets:
+
+```yaml
+gateway:
+  providers:
+    defaultProvider: openrouter
+
+    openrouter:
+      enabled: true
+      existingSecret: provider-secrets
+      existingSecretKey: openrouter-api-key
+
+    openai:
+      enabled: true
+      existingSecret: provider-secrets
+      existingSecretKey: openai-api-key
+
+    anthropic:
+      enabled: true
+      existingSecret: provider-secrets
+      existingSecretKey: anthropic-api-key
+```
+
+Create the provider secrets:
+
+```bash
+kubectl create secret generic provider-secrets \
+  --from-literal=openrouter-api-key=sk-or-xxx \
+  --from-literal=openai-api-key=sk-xxx \
+  --from-literal=anthropic-api-key=sk-ant-xxx
+```
+
+### Ingress
+
+#### Standard Kubernetes Ingress
+
+```yaml
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  hosts:
+    - host: gateway.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: gateway-tls
+      hosts:
+        - gateway.example.com
+```
+
+#### Gateway API (HTTPRoute)
+
+For clusters using Gateway API:
+
+```yaml
+gatewayAPI:
+  enabled: true
+  parentRefs:
+    - name: my-gateway
+      namespace: gateway-system
+  hostnames:
+    - gateway.example.com
+```
+
+#### TLS with cert-manager
+
+Automatically provision TLS certificates:
+
+```yaml
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: gateway.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+certManager:
+  enabled: true
+  issuer:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+```
+
+## High Availability
+
+### Multiple Replicas with HPA
+
+```yaml
+replicaCount: 3
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+```
+
+### Topology Spread Constraints
+
+Distribute pods across availability zones and nodes:
+
+```yaml
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+```
+
+## Observability
+
+### Prometheus ServiceMonitor
+
+Enable metrics scraping with prometheus-operator:
+
+```yaml
+serviceMonitor:
+  enabled: true
+  labels:
+    release: prometheus # Match your Prometheus selector
+  interval: 30s
+```
+
+### Prometheus Alerting Rules
+
+Enable built-in alerting rules:
+
+```yaml
+prometheusRule:
+  enabled: true
+  labels:
+    release: prometheus
+  defaultRules:
+    enabled: true
+    critical:
+      highErrorRate:
+        enabled: true
+        threshold: 0.05 # 5%
+```
+
+### OpenTelemetry Tracing
+
+Export traces to an OTLP collector:
+
+```yaml
+gateway:
+  observability:
+    tracing:
+      enabled: true
+      otlpEndpoint: "http://otel-collector:4317"
+      serviceName: hadrian
+```
+
+## Security
+
+### Network Policy
+
+Restrict pod communication:
+
+```yaml
+networkPolicy:
+  enabled: true
+  ingress:
+    enabled: true
+    allowSameNamespace: true
+    ingressController:
+      enabled: true
+      namespace: ingress-nginx
+    prometheus:
+      enabled: true
+      namespace: monitoring
+  egress:
+    enabled: true
+    dns:
+      enabled: true
+    https:
+      enabled: true
+      excludePrivateRanges: true
+```
+
+### Pod Security Context
+
+The chart runs with secure defaults:
+
+```yaml
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+```
+
+## Init Containers and Sidecars
+
+### Database Migrations
+
+Run migrations before the main container starts:
+
+```yaml
+initContainers:
+  waitForDb:
+    enabled: true
+    timeoutSeconds: 60
+  migrate:
+    enabled: true
+```
+
+### Vault Agent Sidecar
+
+Inject secrets from HashiCorp Vault:
+
+```yaml
+sidecars:
+  vaultAgent:
+    enabled: true
+    vaultAddr: "https://vault.example.com"
+    role: hadrian-gateway
+    templates:
+      - name: api-keys
+        destination: /vault/secrets/api-keys.env
+        contents: |
+          {{ with secret "secret/data/hadrian/providers" }}
+          OPENAI_API_KEY={{ .Data.data.openai_api_key }}
+          {{ end }}
+```
+
+### Cloud SQL Auth Proxy
+
+Connect to Google Cloud SQL with Workload Identity:
+
+```yaml
+serviceAccount:
+  annotations:
+    iam.gke.io/gcp-service-account: hadrian@project.iam.gserviceaccount.com
+
+sidecars:
+  cloudSqlProxy:
+    enabled: true
+    instanceConnectionName: "project:region:instance"
+    credentials:
+      useWorkloadIdentity: true
+
+gateway:
+  database:
+    type: postgres
+    postgres:
+      host: "127.0.0.1"
+      port: 5432
+      sslMode: disable # Proxy handles SSL
+```
+
+## Example Configurations
+
+### Development Setup
+
+```yaml
+# values-dev.yaml
+replicaCount: 1
+
+gateway:
+  database:
+    type: sqlite
+  cache:
+    type: memory
+  providers:
+    openrouter:
+      enabled: true
+      apiKey: "sk-or-dev-xxx"
+
+persistence:
+  enabled: true
+  size: 1Gi
+
+service:
+  type: NodePort
+```
+
+### Production Setup
+
+```yaml
+# values-prod.yaml
+replicaCount: 3
+
+postgresql:
+  enabled: true
+  auth:
+    existingSecret: postgres-credentials
+  primary:
+    persistence:
+      size: 50Gi
+
+redis:
+  enabled: true
+  auth:
+    existingSecret: redis-credentials
+  master:
+    persistence:
+      size: 10Gi
+
+gateway:
+  database:
+    type: postgres
+  cache:
+    type: redis
+  providers:
+    openrouter:
+      enabled: true
+      existingSecret: provider-secrets
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: gateway.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+certManager:
+  enabled: true
+  issuer:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+
+serviceMonitor:
+  enabled: true
+  labels:
+    release: prometheus
+
+prometheusRule:
+  enabled: true
+  labels:
+    release: prometheus
+
+networkPolicy:
+  enabled: true
+
+initContainers:
+  waitForDb:
+    enabled: true
+  migrate:
+    enabled: true
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 2
+    memory: 2Gi
+```
+
+### AWS EKS
+
+```yaml
+# values-eks.yaml
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789:role/hadrian-gateway
+
+gateway:
+  database:
+    type: postgres
+    postgres:
+      host: "hadrian.abc123.us-east-1.rds.amazonaws.com"
+      existingSecret: rds-credentials
+      sslMode: verify-full
+      ssl:
+        enabled: true
+        existingSecret: rds-ca-cert
+  cache:
+    type: redis
+    redis:
+      host: "hadrian.abc123.cache.amazonaws.com"
+      existingSecret: elasticache-credentials
+      tls:
+        enabled: true
+
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:123456789:certificate/xxx
+```
+
+### GKE with Cloud SQL
+
+```yaml
+# values-gke.yaml
+serviceAccount:
+  annotations:
+    iam.gke.io/gcp-service-account: hadrian@project.iam.gserviceaccount.com
+
+sidecars:
+  cloudSqlProxy:
+    enabled: true
+    instanceConnectionName: "project:us-central1:hadrian-db"
+    credentials:
+      useWorkloadIdentity: true
+
+gateway:
+  database:
+    type: postgres
+    postgres:
+      host: "127.0.0.1"
+      existingSecret: cloudsql-credentials
+      sslMode: disable
+
+ingress:
+  enabled: true
+  className: gce
+  annotations:
+    kubernetes.io/ingress.global-static-ip-name: hadrian-ip
+    networking.gke.io/managed-certificates: hadrian-cert
+```
+
+## Uninstallation
+
+```bash
+helm uninstall my-gateway -n hadrian
+
+# Delete PVCs if no longer needed
+kubectl delete pvc -l app.kubernetes.io/instance=my-gateway -n hadrian
+
+# Delete namespace
+kubectl delete namespace hadrian
+```
+
+## Troubleshooting
+
+### Pod Not Starting
+
+Check pod events and logs:
+
+```bash
+kubectl describe pod -l app.kubernetes.io/name=hadrian -n hadrian
+kubectl logs -l app.kubernetes.io/name=hadrian -n hadrian --all-containers
+```
+
+### Database Connection Issues
+
+1. Verify database credentials:
+
+   ```bash
+   kubectl get secret postgres-credentials -n hadrian -o yaml
+   ```
+
+2. Check database accessibility:
+
+   ```bash
+   kubectl exec -it deploy/my-gateway-hadrian -n hadrian -- nc -zv <db-host> 5432
+   ```
+
+3. For PostgreSQL subchart:
+   ```bash
+   kubectl get pods -l app.kubernetes.io/name=postgresql -n hadrian
+   kubectl logs -l app.kubernetes.io/name=postgresql -n hadrian
+   ```
+
+### Ingress Not Working
+
+1. Check ingress status:
+
+   ```bash
+   kubectl get ingress -n hadrian
+   kubectl describe ingress my-gateway-hadrian -n hadrian
+   ```
+
+2. Verify ingress controller logs:
+   ```bash
+   kubectl logs -n ingress-nginx -l app.kubernetes.io/name=ingress-nginx
+   ```
+
+### Prometheus Not Scraping
+
+1. Verify ServiceMonitor exists:
+
+   ```bash
+   kubectl get servicemonitor -n hadrian
+   ```
+
+2. Check Prometheus targets:
+
+   ```bash
+   kubectl port-forward -n monitoring svc/prometheus-operated 9090:9090
+   # Visit http://localhost:9090/targets
+   ```
+
+3. Ensure ServiceMonitor labels match your Prometheus selector.
+
+## Next Steps
+
+- [Configuration Reference](/docs/configuration) - All gateway configuration options
+- [Security](/docs/security) - Authentication and authorization setup
+- [Observability](/docs/configuration/observability) - Logging, metrics, and tracing

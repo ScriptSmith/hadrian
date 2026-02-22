@@ -1,0 +1,283 @@
+---
+title: Chat UI
+description: Built-in web interface for multi-model conversations with streaming, file uploads, and advanced features
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Hadrian Gateway includes a built-in React-based chat interface for interacting with multiple LLM models simultaneously. The UI supports real-time streaming, file uploads, conversation history, and advanced multi-model interaction modes.
+
+## Multi-Model Chat
+
+Chat with multiple models in a single conversation to compare responses, leverage different model strengths, or get diverse perspectives.
+
+### Selecting Models
+
+Select one or more models from the model picker. Each model responds to your messages in parallel, with responses displayed side-by-side.
+
+| Feature           | Description                                            |
+| ----------------- | ------------------------------------------------------ |
+| Multi-select      | Choose any number of models to respond simultaneously  |
+| Provider grouping | Models organized by provider (OpenAI, Anthropic, etc.) |
+| Search            | Filter models by name or provider                      |
+| Favorites         | Pin frequently used models for quick access            |
+
+### Model Instances
+
+Create multiple instances of the same model with different settings to compare behavior:
+
+```
+GPT-4 (Creative)     → temperature: 0.9, top_p: 0.95
+GPT-4 (Precise)      → temperature: 0.3, top_p: 0.8
+GPT-4 (Reasoning)    → reasoning: high effort
+```
+
+Each instance has:
+
+- **Unique ID** - Distinguishes instances in the UI and message history
+- **Custom label** - Display name (e.g., "Creative", "Precise")
+- **Instance parameters** - Override temperature, max tokens, reasoning, system prompt
+
+<Callout type="info">
+  Instance parameters take precedence over per-model settings, which take precedence over global
+  defaults.
+</Callout>
+
+### Response Display
+
+Responses are displayed in a configurable layout:
+
+| Layout      | Description                                               |
+| ----------- | --------------------------------------------------------- |
+| **Grid**    | Side-by-side cards, adjusts columns based on screen width |
+| **Stacked** | Vertical list, one response per row                       |
+
+Each response card shows:
+
+- Model name and instance label
+- Streaming content with syntax-highlighted markdown
+- Usage stats (tokens, cost, latency)
+- Action buttons (copy, regenerate, expand, feedback)
+
+### Per-Model Settings
+
+Configure settings for each model independently:
+
+| Setting           | Description                                      |
+| ----------------- | ------------------------------------------------ |
+| Temperature       | Randomness (0.0 = deterministic, 2.0 = creative) |
+| Max tokens        | Maximum response length                          |
+| Top P             | Nucleus sampling threshold                       |
+| Top K             | Top-k sampling (where supported)                 |
+| Frequency penalty | Reduce repetition of tokens                      |
+| Presence penalty  | Encourage topic diversity                        |
+| Reasoning         | Enable extended thinking (see below)             |
+| System prompt     | Per-model system prompt override                 |
+
+### Reasoning Mode
+
+Enable extended thinking for models that support it:
+
+| Model                   | Reasoning Support                 |
+| ----------------------- | --------------------------------- |
+| OpenAI o1/o3/o4-mini    | Native reasoning_effort           |
+| Anthropic Claude 3.5+/4 | Extended thinking (budget_tokens) |
+| Bedrock Claude          | Via reasoning_config              |
+| Vertex Gemini 2.5+/3+   | thinking_config                   |
+
+Effort levels: `none`, `minimal`, `low`, `medium`, `high`
+
+When reasoning is enabled, the model's thinking process appears in a collapsible section above the response. Reasoning tokens are tracked separately in usage stats.
+
+## Streaming
+
+All responses stream in real-time using Server-Sent Events (SSE), providing immediate feedback as models generate content.
+
+### Performance
+
+The chat UI is optimized for high-performance multi-model streaming:
+
+| Metric             | Capability                                            |
+| ------------------ | ----------------------------------------------------- |
+| Token rate         | 50-100+ tokens/second per model                       |
+| Concurrent streams | Unlimited (parallel SSE connections)                  |
+| Render efficiency  | Only active response cards re-render                  |
+| Message list       | Virtualized for smooth scrolling with large histories |
+
+### Streaming Features
+
+| Feature             | Description                                     |
+| ------------------- | ----------------------------------------------- |
+| Live markdown       | Content renders as markdown while streaming     |
+| Syntax highlighting | Code blocks highlighted in real-time            |
+| Auto-scroll         | Follows streaming content, pauses on scroll-up  |
+| Cancel              | Stop any or all streams mid-generation          |
+| Usage stats         | Time-to-first-token and tokens/second displayed |
+
+### Usage Statistics
+
+Each response displays detailed usage information:
+
+| Stat             | Description                           |
+| ---------------- | ------------------------------------- |
+| Input tokens     | Tokens in the prompt                  |
+| Output tokens    | Tokens generated                      |
+| Cached tokens    | Tokens served from cache (Anthropic)  |
+| Reasoning tokens | Tokens used for thinking (if enabled) |
+| Cost             | Estimated cost based on model pricing |
+| First token      | Time to first token (ms)              |
+| Duration         | Total response time (ms)              |
+| Tokens/sec       | Output tokens per second              |
+
+## File Uploads
+
+Attach files to your messages for vision models, document analysis, or data processing with frontend tools.
+
+### Supported File Types
+
+| Category  | Extensions               | Notes                                 |
+| --------- | ------------------------ | ------------------------------------- |
+| Images    | PNG, JPG, GIF, WebP, SVG | Inline preview, sent to vision models |
+| Documents | PDF, DOCX, TXT, MD, HTML | Text extraction for context           |
+| Data      | CSV, XLSX, JSON, Parquet | Available to SQL/Python tools         |
+| Code      | JS, TS, PY, RS, GO, etc. | Syntax highlighting in preview        |
+| Archives  | ZIP, TAR, GZ             | Extracted for processing              |
+| Audio     | WAV, MP3, WebM           | For transcription models              |
+
+### Upload Methods
+
+- **Click** - File picker dialog
+- **Drag & drop** - Drop files onto the input area
+- **Paste** - Paste images from clipboard
+
+### File Handling
+
+Files are processed based on type:
+
+| Type       | Handling                                  |
+| ---------- | ----------------------------------------- |
+| Images     | Sent as base64 to vision-capable models   |
+| Documents  | Text extracted and included in context    |
+| Data files | Available to frontend tools (Python, SQL) |
+
+<Callout type="info">
+  File size limits and allowed types are configurable in `hadrian.toml` under `[ui.chat]`.
+</Callout>
+
+### Configuration
+
+```toml
+[ui.chat]
+file_uploads_enabled = true
+max_file_size_bytes = 10485760  # 10 MB
+allowed_file_types = [
+  "image/png", "image/jpeg", "image/gif", "image/webp",
+  "application/pdf", "text/plain", "text/markdown",
+  "text/csv", "application/json"
+]
+```
+
+## Conversation Management
+
+### History
+
+Conversations are persisted locally in IndexedDB:
+
+| Feature     | Description                               |
+| ----------- | ----------------------------------------- |
+| Auto-save   | Messages saved as they're received        |
+| Persistence | Survives page refresh and browser restart |
+| Search      | Find conversations by title or content    |
+| Export      | Download conversation as JSON or Markdown |
+
+### Organization
+
+| Feature | Description                                   |
+| ------- | --------------------------------------------- |
+| Pin     | Pin important conversations to the top        |
+| Rename  | Edit conversation titles                      |
+| Delete  | Remove conversations (with confirmation)      |
+| Fork    | Create a copy to explore different directions |
+
+### Project Assignment
+
+Assign conversations to a project using the project picker in the chat header. Select a project from the dropdown or choose "Personal" for unscoped usage.
+
+When a project is selected:
+
+- The `X-Hadrian-Project` header is sent with every request, attributing usage to that project
+- Usage appears in the project's usage dashboard in the admin panel
+- Session-based users (SSO/proxy auth) get per-project usage tracking without needing a project-scoped API key
+
+### Project Sharing
+
+Share conversations with team members via projects:
+
+1. Create or select a project in the admin panel
+2. Move conversation to the project
+3. Team members with project access can view and continue the conversation
+
+## Message Features
+
+### User Messages
+
+| Feature      | Description                                          |
+| ------------ | ---------------------------------------------------- |
+| Edit         | Modify and re-send (deletes subsequent messages)     |
+| Files        | Attach images and documents                          |
+| History mode | Choose which history to send (`all` or `same-model`) |
+
+### Assistant Messages
+
+| Feature      | Description                             |
+| ------------ | --------------------------------------- |
+| Copy         | Copy response to clipboard              |
+| Regenerate   | Get a new response from the same model  |
+| Expand       | Full-screen view for long responses     |
+| Feedback     | Thumbs up/down rating                   |
+| Mark as best | Select the best response when comparing |
+| Hide         | Temporarily hide a response             |
+| Speak        | Text-to-speech playback                 |
+
+### Citations
+
+When using file search (RAG) or web search tools, responses include citations:
+
+| Citation Type | Source                             |
+| ------------- | ---------------------------------- |
+| File          | Chunks from vector store documents |
+| URL           | Web search results                 |
+| Chunk         | Full text of retrieved chunks      |
+
+Citations appear as inline references with expandable previews.
+
+### Artifacts
+
+Tool execution produces artifacts displayed inline:
+
+| Artifact Type | Source                             |
+| ------------- | ---------------------------------- |
+| Code          | Python/JavaScript execution output |
+| Tables        | DataFrames, SQL query results      |
+| Charts        | Vega-Lite visualizations           |
+| Images        | Generated plots and graphics       |
+| HTML          | Rendered HTML previews             |
+
+## Keyboard Shortcuts
+
+| Shortcut      | Action              |
+| ------------- | ------------------- |
+| `Enter`       | Send message        |
+| `Shift+Enter` | New line            |
+| `Ctrl+/`      | Focus message input |
+| `Escape`      | Cancel streaming    |
+| `Ctrl+N`      | New conversation    |
+
+## Related Features
+
+<Cards>
+  <Card title="Chat Modes" href="/docs/features/chat-modes" />
+  <Card title="Frontend Tools" href="/docs/features/frontend-tools" />
+  <Card title="MCP Integration" href="/docs/features/mcp" />
+  <Card title="Vector Stores" href="/docs/features/vector-stores" />
+</Cards>

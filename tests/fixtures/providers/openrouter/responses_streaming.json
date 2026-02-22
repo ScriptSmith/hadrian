@@ -1,0 +1,577 @@
+{
+  "id": "openrouter:responses:streaming",
+  "description": "Streaming Responses API via OpenRouter with cost in final event",
+  "request": {
+    "method": "POST",
+    "path": "/responses"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "x-content-type-options": "nosniff",
+      "transfer-encoding": "chunked"
+    },
+    "streaming": true,
+    "chunks": [
+      {
+        "response": {
+          "background": false,
+          "created_at": 1766147976,
+          "error": null,
+          "id": "gen-1766147976-amwXcEEYZv5kPF6KeCG4",
+          "incomplete_details": null,
+          "instructions": null,
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "metadata": {},
+          "model": "openai/gpt-4o-mini",
+          "object": "response",
+          "output": [],
+          "output_text": "",
+          "parallel_tool_calls": true,
+          "previous_response_id": null,
+          "prompt_cache_key": null,
+          "reasoning": null,
+          "safety_identifier": null,
+          "service_tier": "auto",
+          "status": "in_progress",
+          "store": false,
+          "temperature": 0,
+          "tool_choice": "auto",
+          "tools": [],
+          "top_p": null,
+          "truncation": null,
+          "user": null
+        },
+        "sequence_number": 0,
+        "type": "response.created"
+      },
+      {
+        "response": {
+          "background": false,
+          "created_at": 1766147976,
+          "error": null,
+          "id": "gen-1766147976-amwXcEEYZv5kPF6KeCG4",
+          "incomplete_details": null,
+          "instructions": null,
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "metadata": {},
+          "model": "openai/gpt-4o-mini",
+          "object": "response",
+          "output": [],
+          "output_text": "",
+          "parallel_tool_calls": true,
+          "previous_response_id": null,
+          "prompt_cache_key": null,
+          "reasoning": null,
+          "safety_identifier": null,
+          "service_tier": "auto",
+          "status": "in_progress",
+          "store": false,
+          "temperature": 0,
+          "tool_choice": "auto",
+          "tools": [],
+          "top_p": null,
+          "truncation": null,
+          "user": null
+        },
+        "sequence_number": 1,
+        "type": "response.in_progress"
+      },
+      {
+        "item": {
+          "content": [],
+          "id": "msg_tmp_zr1gxkx8bgi",
+          "role": "assistant",
+          "status": "in_progress",
+          "type": "message"
+        },
+        "output_index": 0,
+        "sequence_number": 2,
+        "type": "response.output_item.added"
+      },
+      {
+        "content_index": 0,
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "output_index": 0,
+        "part": {
+          "annotations": [],
+          "logprobs": [],
+          "text": "",
+          "type": "output_text"
+        },
+        "sequence_number": 3,
+        "type": "response.content_part.added"
+      },
+      {
+        "content_index": 0,
+        "delta": "1",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 4,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 5,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "2",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 6,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 7,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "3",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 8,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 9,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "4",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 10,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 11,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "5",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 12,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 13,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "6",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 14,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 15,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "7",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 16,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 17,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "8",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 18,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 19,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "9",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 20,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 21,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "10",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 22,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 23,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "11",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 24,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 25,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "12",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 26,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 27,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "13",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 28,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 29,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "14",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 30,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 31,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "15",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 32,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 33,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "16",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 34,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 35,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "17",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 36,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 37,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "18",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 38,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 39,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "19",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 40,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  \n",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 41,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "20",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 42,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "  ",
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 43,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 44,
+        "text": "1  \n2  \n3  \n4  \n5  \n6  \n7  \n8  \n9  \n10  \n11  \n12  \n13  \n14  \n15  \n16  \n17  \n18  \n19  \n20  ",
+        "type": "response.output_text.done"
+      },
+      {
+        "content_index": 0,
+        "item_id": "msg_tmp_zr1gxkx8bgi",
+        "output_index": 0,
+        "part": {
+          "annotations": [],
+          "logprobs": [],
+          "text": "1  \n2  \n3  \n4  \n5  \n6  \n7  \n8  \n9  \n10  \n11  \n12  \n13  \n14  \n15  \n16  \n17  \n18  \n19  \n20  ",
+          "type": "output_text"
+        },
+        "sequence_number": 45,
+        "type": "response.content_part.done"
+      },
+      {
+        "item": {
+          "content": [
+            {
+              "annotations": [],
+              "logprobs": [],
+              "text": "1  \n2  \n3  \n4  \n5  \n6  \n7  \n8  \n9  \n10  \n11  \n12  \n13  \n14  \n15  \n16  \n17  \n18  \n19  \n20  ",
+              "type": "output_text"
+            }
+          ],
+          "id": "msg_tmp_zr1gxkx8bgi",
+          "role": "assistant",
+          "status": "completed",
+          "type": "message"
+        },
+        "output_index": 0,
+        "sequence_number": 46,
+        "type": "response.output_item.done"
+      },
+      {
+        "response": {
+          "background": false,
+          "created_at": 1766147976,
+          "error": null,
+          "id": "gen-1766147976-amwXcEEYZv5kPF6KeCG4",
+          "incomplete_details": null,
+          "instructions": null,
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "metadata": {},
+          "model": "openai/gpt-4o-mini",
+          "object": "response",
+          "output": [
+            {
+              "content": [
+                {
+                  "annotations": [],
+                  "logprobs": [],
+                  "text": "1  \n2  \n3  \n4  \n5  \n6  \n7  \n8  \n9  \n10  \n11  \n12  \n13  \n14  \n15  \n16  \n17  \n18  \n19  \n20  ",
+                  "type": "output_text"
+                }
+              ],
+              "id": "msg_tmp_zr1gxkx8bgi",
+              "role": "assistant",
+              "status": "completed",
+              "type": "message"
+            }
+          ],
+          "output_text": "",
+          "parallel_tool_calls": true,
+          "previous_response_id": null,
+          "prompt_cache_key": null,
+          "reasoning": null,
+          "safety_identifier": null,
+          "service_tier": "auto",
+          "status": "completed",
+          "store": false,
+          "temperature": 0,
+          "tool_choice": "auto",
+          "tools": [],
+          "top_p": null,
+          "truncation": null,
+          "usage": {
+            "cost": 0.00002775,
+            "cost_details": {
+              "upstream_inference_cost": null,
+              "upstream_inference_input_cost": 3.75e-6,
+              "upstream_inference_output_cost": 0.000024
+            },
+            "input_tokens": 25,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "is_byok": false,
+            "output_tokens": 40,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 65
+          },
+          "user": null
+        },
+        "sequence_number": 47,
+        "type": "response.completed"
+      }
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "id": "vertex:bad:request",
+  "description": "Bad request error response (400) - invalid model",
+  "request": {
+    "method": "POST",
+    "path": "/invalid-model:generateContent",
+    "path_pattern": "/.+:generateContent"
+  },
+  "response": {
+    "status": 404,
+    "headers": {
+      "x-xss-protection": "0",
+      "content-type": "application/json; charset=UTF-8",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff"
+    },
+    "body": {
+      "error": {
+        "code": 404,
+        "message": "Publisher Model `projects/747784047116/locations/us-central1/publishers/google/models/invalid-model` not found.",
+        "status": "NOT_FOUND"
+      }
+    }
+  }
+}

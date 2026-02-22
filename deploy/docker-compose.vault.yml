@@ -1,0 +1,133 @@
+# Docker Compose with HashiCorp Vault Secret Management
+# Secrets are stored in Vault and injected via Vault Agent sidecar
+#
+# Port configuration (override via environment variables for parallel testing):
+#   GATEWAY_PORT - Gateway HTTP port (default: 8080)
+#   VAULT_PORT - Vault port (default: 8200)
+#
+# Setup:
+# 1. Start Vault: docker compose -f docker-compose.vault.yml up vault -d
+# 2. Initialize Vault: docker exec hadrian-vault vault operator init
+# 3. Unseal Vault: docker exec hadrian-vault vault operator unseal <key>
+# 4. Enable KV secrets: vault secrets enable -path=secret kv-v2
+# 5. Store secrets: vault kv put secret/gateway openrouter_api_key=... anthropic_api_key=...
+# 6. Create policy and AppRole for gateway
+# 7. Start gateway: docker compose -f docker-compose.vault.yml up -d
+
+services:
+  gateway:
+    image: hadrian:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    volumes:
+      - ./config/hadrian.postgres.toml:/app/config/hadrian.toml:ro
+      # Vault agent writes secrets here
+      - vault-secrets:/run/secrets:ro
+    environment:
+      # Read secrets from files injected by Vault Agent
+      - DATABASE_URL_FILE=/run/secrets/database_url
+      - REDIS_URL=redis://redis:6379
+    env_file:
+      # Vault agent renders secrets to this file
+      - /run/secrets/gateway.env
+    depends_on:
+      vault-agent:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  vault:
+    image: hashicorp/vault:1.15
+    ports:
+      - "${VAULT_PORT:-8200}:8200"
+    volumes:
+      - vault-data:/vault/data
+      - ./config/vault:/vault/config:ro
+    environment:
+      - VAULT_ADDR=http://0.0.0.0:8200
+      - VAULT_API_ADDR=http://vault:8200
+    cap_add:
+      - IPC_LOCK
+    command: server
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "vault", "status", "-address=http://localhost:8200"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  vault-agent:
+    image: hashicorp/vault:1.15
+    volumes:
+      - ./config/vault-agent:/vault/config:ro
+      - vault-secrets:/run/secrets
+    environment:
+      - VAULT_ADDR=http://vault:8200
+    command: agent -config=/vault/config/agent.hcl
+    depends_on:
+      vault:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "test", "-f", "/run/secrets/gateway.env"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+
+  postgres:
+    image: postgres:16-alpine
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./migrations/postgres:/docker-entrypoint-initdb.d:ro
+    environment:
+      # In production, use Vault's database secrets engine instead
+      - POSTGRES_DB=gateway
+      - POSTGRES_USER=gateway
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+secrets:
+  postgres_password:
+    external: true
+
+volumes:
+  vault-data:
+    driver: local
+  vault-secrets:
+    driver: local
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local

@@ -1,0 +1,96 @@
+---
+title: API Reference
+description: OpenAI-compatible API documentation with interactive examples
+---
+
+import { Cards, Card } from "fumadocs-ui/components/card";
+
+Hadrian Gateway provides an OpenAI-compatible API with extensions for multi-provider support and multi-tenancy.
+
+## Base URL
+
+```
+http://localhost:8080
+```
+
+## Authentication
+
+The gateway supports API key and JWT authentication. See the [Authentication](/docs/api/authentication) page for details on authenticating API requests.
+
+## Public API (OpenAI-Compatible)
+
+These endpoints follow the OpenAI API specification and work with existing OpenAI client libraries.
+
+<Cards>
+  <Card
+    href="/docs/api/chat"
+    title="Chat Completions"
+    description="Create chat completions with streaming, tool use, and vision support"
+  />
+  <Card
+    href="/docs/api/completions"
+    title="Completions"
+    description="Legacy text completions API"
+  />
+  <Card
+    href="/docs/api/embeddings"
+    title="Embeddings"
+    description="Generate vector embeddings for semantic search"
+  />
+  <Card
+    href="/docs/api/models"
+    title="Models"
+    description="List available models from all providers"
+  />
+  <Card href="/docs/api/images" title="Images" description="Generate images with DALL-E" />
+  <Card href="/docs/api/audio" title="Audio" description="Text-to-speech and transcription" />
+  <Card href="/docs/api/files" title="Files" description="Upload files for vector stores" />
+  <Card
+    href="/docs/api/vector-stores"
+    title="Vector Stores"
+    description="RAG with semantic search"
+  />
+</Cards>
+
+## Admin API
+
+RESTful endpoints for managing multi-tenant configuration. All admin endpoints require authentication.
+
+<Cards>
+  <Card
+    href="/docs/api/organizations"
+    title="Organizations"
+    description="Top-level multi-tenancy container"
+  />
+  <Card
+    href="/docs/api/projects"
+    title="Projects"
+    description="Workload separation within organizations"
+  />
+  <Card href="/docs/api/teams" title="Teams" description="Group users for permission management" />
+  <Card href="/docs/api/users" title="Users" description="User management and membership" />
+  <Card href="/docs/api/api-keys" title="API Keys" description="Create and manage API keys" />
+  <Card
+    href="/docs/api/dynamic-providers"
+    title="Dynamic Providers"
+    description="Runtime LLM provider configuration"
+  />
+  <Card href="/docs/api/usage" title="Usage" description="Query usage statistics and costs" />
+  <Card
+    href="/docs/api/model-pricing"
+    title="Model Pricing"
+    description="Configure per-model pricing"
+  />
+  <Card href="/docs/api/conversations" title="Conversations" description="Chat history storage" />
+  <Card href="/docs/api/prompts" title="Prompts" description="Reusable prompt templates" />
+  <Card href="/docs/api/audit-logs" title="Audit Logs" description="Security audit trail" />
+  <Card href="/docs/api/access-reviews" title="Access Reviews" description="Compliance reporting" />
+  <Card href="/docs/api/me" title="Me" description="Self-service user endpoints" />
+</Cards>
+
+## Interactive Documentation
+
+The gateway also provides interactive API documentation at runtime:
+
+- **Scalar UI**: `/api/docs` - Interactive API explorer
+- **OpenAPI Spec**: `/api/openapi.json` - Machine-readable specification

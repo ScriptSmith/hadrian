@@ -1,0 +1,329 @@
+---
+title: Authentication
+description: API keys, SSO, OIDC, SAML, JWT, and reverse proxy authentication for the gateway and web UI
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Hadrian provides flexible authentication supporting multiple methods for different use cases. Authentication is split into two independent contexts — API and UI — each configured separately.
+
+## Architecture
+
+Hadrian separates authentication into two independent contexts, configured via `[auth.gateway]` and `[auth.admin]` in `hadrian.toml`:
+
+| Context     | Config Section   | Protects                                                       | Common Methods                |
+| ----------- | ---------------- | -------------------------------------------------------------- | ----------------------------- |
+| **Gateway** | `[auth.gateway]` | `/v1/*` endpoints (chat completions, embeddings, models, etc.) | API keys, JWT tokens          |
+| **Admin**   | `[auth.admin]`   | `/admin/*` endpoints and the web UI                            | OIDC/SSO, reverse proxy, SAML |
+
+These contexts are fully independent. Configure different methods for each, or leave one or both disabled. For example, use API keys for programmatic access while securing the admin UI with OIDC.
+
+```mermaid
+flowchart TD
+    subgraph Clients
+        SDK[SDK / API Clients<br/><i>OpenAI SDK, etc.</i>]
+        Browser[Browser / Web UI]
+    end
+
+    subgraph API_Auth["API Authentication"]
+        A1[• API Keys]
+        A2[• JWT Tokens]
+        A3[• Multi-Auth]
+    end
+
+    subgraph UI_Auth["UI Authentication"]
+        U2[• Reverse Proxy - Cloudflare, etc.]
+        subgraph U3["• Session — Per-Org SSO"]
+            U1[OIDC - Okta, Keycloak...]
+            U4[SAML 2.0 - AD FS, Azure AD...]
+        end
+    end
+
+    AuthZ[Authorization<br/><b>CEL-based RBAC</b>]
+
+    SDK --> API_Auth
+    Browser --> UI_Auth
+    API_Auth --> AuthZ
+    UI_Auth --> AuthZ
+
+```
+
+## Default Behavior (No Auth)
+
+By default, both `auth.gateway` and `auth.admin` are set to `type = "none"`, which allows anonymous access:
+
+```toml
+[auth.gateway]
+type = "none"
+
+[auth.admin]
+type = "none"
+```
+
+This is the configuration used for local development and single-user deployments. When both are disabled:
+
+- **API requests** proceed without credentials. A default anonymous user and organization are created for usage tracking.
+- **Admin routes** are unprotected — the web UI works without login.
+- **RBAC is permissive** — all authorization checks pass automatically.
+
+<Callout type="warn">
+  Do not use `type = "none"` for either context in production. API requests will be unauthenticated,
+  usage cannot be attributed to users, and admin routes will be publicly accessible.
+</Callout>
+
+### Credential Handling in No-Auth Mode
+
+Even when authentication is disabled, the gateway still validates credentials that are explicitly provided. This is a deliberate security behavior:
+
+| Scenario                                                    | Result                                     |
+| ----------------------------------------------------------- | ------------------------------------------ |
+| No credentials sent                                         | Request proceeds as anonymous              |
+| Valid credentials sent                                      | Request proceeds as the authenticated user |
+| Invalid credentials sent (expired JWT, wrong API key, etc.) | **401 Rejected**                           |
+
+This means you can incrementally adopt authentication — existing anonymous clients continue working while authenticated clients get identity tracking and RBAC. However, clients must not send placeholder or invalid credentials (such as an empty or null bearer token) or their requests will be rejected.
+
+## API Authentication
+
+API authentication secures programmatic access to `/v1/*` endpoints (chat completions, embeddings, etc.).
+
+### API Keys
+
+The most common method for API access. Keys are created via the Admin UI or API and validated against the database.
+
+```bash
+# Using X-API-Key header
+curl -H "X-API-Key: gw_live_abc123..." \
+  https://gateway.example.com/v1/chat/completions
+
+# Using Authorization header (OpenAI-compatible)
+curl -H "Authorization: Bearer gw_live_abc123..." \
+  https://gateway.example.com/v1/chat/completions
+```
+
+**Key features:**
+
+- Configurable prefix (`gw_live_`, `gw_test_`, etc.)
+- Budget limits (daily/monthly caps)
+- Expiration dates
+- Usage tracking per key
+- Owner binding (org, team, project, or user)
+
+### JWT Tokens
+
+Validate JWTs signed by an identity provider for service-to-service authentication.
+
+```bash
+curl -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." \
+  https://gateway.example.com/v1/chat/completions
+```
+
+**Capabilities:**
+
+- JWKS-based signature verification
+- Configurable issuer and audience validation
+- Custom claim extraction for RBAC
+- Algorithm allowlisting (RS256, ES256, EdDSA, etc.)
+
+### Multi-Auth
+
+Support both API keys and JWT tokens simultaneously. The gateway tries each method in order until one succeeds.
+
+<Cards>
+  <Card title="Gateway Auth Configuration" href="/docs/configuration/auth#gateway-authentication" />
+</Cards>
+
+## UI Authentication
+
+UI authentication secures browser sessions for the web interface.
+
+### OIDC / SSO
+
+Full OpenID Connect flow with browser redirects. Works with any OIDC-compliant identity provider:
+
+| Provider            | Notes                                     |
+| ------------------- | ----------------------------------------- |
+| Okta                | Enterprise SSO with MFA                   |
+| Auth0               | Developer-friendly with many integrations |
+| Keycloak            | Self-hosted, open source                  |
+| Azure AD / Entra ID | Microsoft 365 integration                 |
+| Google Workspace    | Google account authentication             |
+| OneLogin            | Enterprise identity management            |
+
+**Capabilities:**
+
+- Automatic user provisioning (JIT)
+- Group-to-team mapping
+- Configurable claims extraction
+- Session management
+
+### SAML 2.0
+
+SAML 2.0 authentication for enterprise identity providers that require the Security Assertion Markup Language protocol:
+
+| Provider            | Notes                             |
+| ------------------- | --------------------------------- |
+| AD FS               | Windows Server Active Directory   |
+| Azure AD / Entra ID | Enterprise SAML application       |
+| Okta                | Native SAML application templates |
+| Keycloak            | Self-hosted, open source          |
+| PingFederate        | Enterprise identity federation    |
+
+**Capabilities:**
+
+- XML digital signature verification
+- Configurable attribute mappings
+- SP metadata auto-generation
+- Works with legacy IdPs that only support SAML
+
+<Cards>
+  <Card title="SAML Admin Guide" href="/docs/features/saml" />
+</Cards>
+
+### Per-Organization SSO
+
+In multi-tenant deployments, each organization can configure their own identity provider. This enables:
+
+- **Self-service SSO setup** - Org admins configure their own IdP via the Admin UI
+- **Domain verification** - Prove domain ownership before enabling SSO
+- **Enforcement modes** - Optional, test, or required SSO
+- **Email-based IdP discovery** - Users enter email, redirected to correct IdP
+
+<Callout type="info">
+  Per-organization SSO is configured through the Admin UI, not the gateway config file. See the [SSO
+  Admin Guide](/docs/features/sso-admin-guide) for setup instructions.
+</Callout>
+
+### Reverse Proxy Auth
+
+Trust identity headers from an authenticating reverse proxy:
+
+| Service              | Headers                                 |
+| -------------------- | --------------------------------------- |
+| Cloudflare Access    | `Cf-Access-Authenticated-User-Email`    |
+| oauth2-proxy         | `X-Forwarded-User`, `X-Forwarded-Email` |
+| Tailscale            | `Tailscale-User-Login`                  |
+| Authelia / Authentik | `Remote-User`, `Remote-Groups`          |
+| Pomerium             | `X-Pomerium-Claim-Email`                |
+
+<Callout type="error">
+  Always configure trusted proxies to prevent header spoofing. Without this, attackers can forge
+  identity headers.
+</Callout>
+
+<Cards>
+  <Card title="Admin Auth Configuration" href="/docs/configuration/auth#admin-authentication" />
+  <Card title="SSO Admin Guide" href="/docs/features/sso-admin-guide" />
+</Cards>
+
+## Just-in-Time Provisioning
+
+Automatically create users and add them to organizations when they first authenticate via SSO.
+
+**How it works:**
+
+1. User authenticates via OIDC
+2. Gateway checks if user exists in database
+3. If not, creates user with attributes from ID token
+4. Adds user to configured organization with default role
+5. Optionally adds user to a default team
+
+**Capabilities:**
+
+- Create users on first login
+- Assign to organization and team
+- Map IdP groups to teams (SSO group mappings)
+- Sync attributes on subsequent logins
+- Restrict by email domain
+
+<Callout type="info">
+  JIT provisioning creates users on first login. For real-time provisioning and deprovisioning
+  (required for SOC 2/HIPAA compliance), see [SCIM Provisioning](/docs/features/scim).
+</Callout>
+
+<Cards>
+  <Card title="JIT Configuration" href="/docs/configuration/auth#jit-just-in-time-provisioning" />
+  <Card title="SCIM Provisioning" href="/docs/features/scim" />
+</Cards>
+
+## SSO Group Mappings
+
+Map identity provider groups to Hadrian teams for automatic team assignment during provisioning.
+
+| IdP Group         | Team       | Role     | Priority |
+| ----------------- | ---------- | -------- | -------- |
+| `Engineers`       | `platform` | `member` | 0        |
+| `SeniorEngineers` | `platform` | `lead`   | 10       |
+| `PlatformAdmins`  | `platform` | `admin`  | 20       |
+
+When a user belongs to multiple groups mapping to the same team, the highest priority determines the role.
+
+<Cards>
+  <Card title="Group Mappings Configuration" href="/docs/configuration/auth#sso-group-mappings" />
+  <Card title="SSO Admin Guide" href="/docs/features/sso-admin-guide#sso-group-mappings" />
+</Cards>
+
+## Authorization (RBAC)
+
+After authentication, authorization determines what users can access. Hadrian uses CEL (Common Expression Language) for fine-grained access control.
+
+**Example policies:**
+
+```toml
+# Super admins have full access
+[[auth.rbac.policies]]
+name = "super-admin"
+condition = "'super_admin' in subject.roles"
+effect = "allow"
+priority = 100
+
+# Users can only access resources in their organization
+[[auth.rbac.policies]]
+name = "org-isolation"
+condition = "context.org_id in subject.org_ids"
+effect = "allow"
+priority = 10
+```
+
+**API authorization** extends CEL policies to `/v1/*` endpoints for:
+
+- Model access control (restrict GPT-4 to premium users)
+- Token limits by tier
+- Feature gating (tools, file search, reasoning)
+- Time-based access (business hours only)
+
+<Cards>
+  <Card title="Authorization Guide" href="/docs/features/authorization" />
+  <Card title="RBAC Configuration" href="/docs/configuration/auth#rbac-configuration" />
+</Cards>
+
+## Choosing an Authentication Method
+
+| Use Case                      | `[auth.gateway]`        | `[auth.admin]` |
+| ----------------------------- | ----------------------- | -------------- |
+| **Local development**         | `none`                  | `none`         |
+| **Single-user with API keys** | `api_key`               | `none`         |
+| **Production API access**     | `api_key`               | -              |
+| **Service-to-service**        | `jwt`                   | -              |
+| **Enterprise SSO (Modern)**   | -                       | `session`      |
+| **Enterprise SSO (Legacy)**   | -                       | `session`      |
+| **Multi-tenant SaaS**         | `api_key` or `multi`    | `session`      |
+| **Zero-trust network**        | -                       | `proxy_auth`   |
+| **Combined**                  | `multi` (API key + JWT) | `session`      |
+
+<Callout type="info">
+  A `-` means the context can use any method or be left as `none` — it doesn't affect the other
+  context. For example, you can secure the API with keys while leaving the admin UI open for
+  development, or vice versa.
+</Callout>
+
+## Related Topics
+
+<Cards>
+  <Card title="Auth Configuration Reference" href="/docs/configuration/auth" />
+  <Card title="SSO Admin Guide" href="/docs/features/sso-admin-guide" />
+  <Card title="SAML Admin Guide" href="/docs/features/saml" />
+  <Card title="SCIM Provisioning" href="/docs/features/scim" />
+  <Card title="Authorization" href="/docs/features/authorization" />
+  <Card title="Multi-Tenancy" href="/docs/features/multi-tenancy" />
+</Cards>

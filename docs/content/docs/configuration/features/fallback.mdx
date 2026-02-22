@@ -1,0 +1,158 @@
+---
+title: Fallback & Retry
+description: Configure automatic retries and provider fallbacks
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The `[features.fallback]` section configures automatic retry behavior and provider fallback chains for handling transient errors.
+
+## Configuration Reference
+
+```toml
+[features.fallback]
+retries_enabled = true
+max_retries = 3
+initial_delay_ms = 1000
+max_delay_ms = 30000
+backoff_multiplier = 2.0
+fallback_enabled = false
+fallback_order = []
+fallback_on = ["rate_limit", "server_error", "timeout"]
+```
+
+| Key                  | Type    | Default   | Description                       |
+| -------------------- | ------- | --------- | --------------------------------- |
+| `retries_enabled`    | boolean | `true`    | Enable automatic retries          |
+| `max_retries`        | integer | `3`       | Maximum retry attempts            |
+| `initial_delay_ms`   | integer | `1000`    | Initial retry delay (1 second)    |
+| `max_delay_ms`       | integer | `30000`   | Maximum retry delay (30 seconds)  |
+| `backoff_multiplier` | float   | `2.0`     | Exponential backoff multiplier    |
+| `fallback_enabled`   | boolean | `false`   | Enable provider fallbacks         |
+| `fallback_order`     | array   | `[]`      | Provider fallback chain           |
+| `fallback_on`        | array   | see below | Error types that trigger fallback |
+
+## Retry Behavior
+
+Retries use exponential backoff with the formula:
+
+```
+delay = min(initial_delay_ms * (backoff_multiplier ^ attempt), max_delay_ms)
+```
+
+Example with defaults:
+
+- Attempt 1: 1000ms delay
+- Attempt 2: 2000ms delay
+- Attempt 3: 4000ms delay
+
+## Fallback Triggers
+
+| Trigger          | Description             |
+| ---------------- | ----------------------- |
+| `rate_limit`     | 429 Too Many Requests   |
+| `server_error`   | 5xx errors              |
+| `timeout`        | Request timeout         |
+| `overloaded`     | Provider overloaded     |
+| `context_length` | Context length exceeded |
+
+```toml
+fallback_on = ["rate_limit", "server_error", "timeout"]
+```
+
+## Complete Examples
+
+### Retries Only (Default)
+
+```toml
+[features.fallback]
+retries_enabled = true
+max_retries = 3
+initial_delay_ms = 1000
+max_delay_ms = 30000
+backoff_multiplier = 2.0
+fallback_enabled = false
+```
+
+### With Provider Fallbacks
+
+```toml
+[features.fallback]
+retries_enabled = true
+max_retries = 2
+initial_delay_ms = 500
+max_delay_ms = 10000
+backoff_multiplier = 2.0
+fallback_enabled = true
+fallback_order = ["anthropic", "openai", "bedrock"]
+fallback_on = ["rate_limit", "server_error", "timeout", "overloaded"]
+```
+
+Flow: Primary provider fails → retry 2x → try Anthropic → retry 2x → try OpenAI → retry 2x → try Bedrock → fail
+
+### Aggressive Retries
+
+```toml
+[features.fallback]
+retries_enabled = true
+max_retries = 5
+initial_delay_ms = 200
+max_delay_ms = 5000
+backoff_multiplier = 1.5
+fallback_enabled = false
+```
+
+### No Retries
+
+```toml
+[features.fallback]
+retries_enabled = false
+fallback_enabled = true
+fallback_order = ["anthropic", "openai"]
+fallback_on = ["server_error", "timeout"]
+```
+
+### Context Length Fallback
+
+Handle models with different context limits:
+
+```toml
+[features.fallback]
+retries_enabled = true
+max_retries = 1
+fallback_enabled = true
+fallback_order = ["gpt-4o", "claude-sonnet"]
+fallback_on = ["context_length"]
+```
+
+## Fallback Chain Behavior
+
+```
+Request to primary provider
+         │
+         ▼
+    ┌─────────┐     ┌─────────────────┐
+    │ Success │ ←── │ Retry if failed │
+    └─────────┘     └─────────────────┘
+         │                   │
+         │              max_retries
+         │                   │
+         │                   ▼
+         │         ┌─────────────────┐
+         │         │ Next in fallback│
+         │         │     order       │
+         │         └─────────────────┘
+         │                   │
+         ▼                   ▼
+    Return response    Repeat until
+                       chain exhausted
+```
+
+<Callout type="info">
+Per-provider retry and circuit breaker settings (in `[providers.<name>]`) override global fallback settings for that provider.
+</Callout>
+
+## See Also
+
+- [Load Balancing](/docs/configuration/features/load-balancing) - Provider selection
+- [Provider Configuration](/docs/configuration/providers) - Per-provider retries

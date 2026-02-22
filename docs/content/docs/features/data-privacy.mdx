@@ -1,0 +1,345 @@
+---
+title: Data Privacy & GDPR
+description: User data management, GDPR compliance, and data retention policies
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Hadrian Gateway provides built-in features for GDPR compliance and data privacy management, including self-service data export, user deletion, and configurable data retention policies.
+
+## Overview
+
+The gateway supports key data protection requirements:
+
+- **Right of Access (GDPR Article 15)** - Users can export all their personal data
+- **Right to Erasure (GDPR Article 17)** - Users can request deletion of their data
+- **Data Retention** - Automatic purging of old records based on configurable policies
+- **Audit Logging** - All privacy operations are logged for compliance
+
+## Self-Service Data Export
+
+Users can export their personal data without requiring admin permissions.
+
+### Endpoint
+
+```http
+GET /admin/v1/me/export
+Authorization: Bearer <session_token>
+```
+
+### Exported Data
+
+The export includes all data associated with the authenticated user:
+
+| Data Type     | Contents                                                    |
+| ------------- | ----------------------------------------------------------- |
+| User Profile  | ID, email, name, external ID, timestamps                    |
+| Memberships   | Organizations and projects with roles and join dates        |
+| API Keys      | Key metadata (excludes sensitive hash), budgets, expiration |
+| Conversations | All conversations including soft-deleted ones               |
+| Usage Summary | Total cost, tokens, request count, first/last request times |
+| Audit Logs    | Actions performed by the user                               |
+
+### Response Example
+
+```json
+{
+  "exported_at": "2025-01-07T10:30:00Z",
+  "user": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "external_id": "auth0|123456",
+    "email": "user@example.com",
+    "name": "Jane Smith",
+    "created_at": "2024-06-15T08:00:00Z",
+    "updated_at": "2025-01-05T14:30:00Z"
+  },
+  "memberships": {
+    "organizations": [
+      {
+        "org_id": "...",
+        "org_slug": "acme-corp",
+        "org_name": "Acme Corporation",
+        "role": "member",
+        "joined_at": "2024-06-15T08:00:00Z"
+      }
+    ],
+    "projects": [...]
+  },
+  "api_keys": [
+    {
+      "id": "...",
+      "key_prefix": "gw_live_abc",
+      "name": "Production Key",
+      "budget_limit_cents": 10000,
+      "budget_period": "monthly",
+      "created_at": "2024-07-01T00:00:00Z",
+      "expires_at": null,
+      "revoked_at": null,
+      "last_used_at": "2025-01-07T09:15:00Z"
+    }
+  ],
+  "conversations": [...],
+  "usage_summary": {
+    "total_cost_microcents": 5250000,
+    "total_tokens": 1250000,
+    "request_count": 892,
+    "first_request_at": "2024-07-01T10:00:00Z",
+    "last_request_at": "2025-01-07T09:15:00Z"
+  },
+  "audit_logs": [...]
+}
+```
+
+<Callout type="info">
+  Costs are stored in **microcents** (1/1,000,000 of a dollar) for precision. 5,250,000 microcents =
+  $5.25.
+</Callout>
+
+## Self-Service Data Deletion
+
+Users can request deletion of their account and all associated data.
+
+### Endpoint
+
+```http
+DELETE /admin/v1/me
+Authorization: Bearer <session_token>
+```
+
+### Deleted Data
+
+This operation permanently deletes:
+
+| Data Type         | Description                                    |
+| ----------------- | ---------------------------------------------- |
+| User Record       | The user profile itself                        |
+| Memberships       | Organization and project memberships (CASCADE) |
+| API Keys          | All API keys owned by the user                 |
+| Conversations     | All conversations owned by the user            |
+| Dynamic Providers | Any custom LLM providers configured by user    |
+| Usage Records     | Historical usage data for user's API keys      |
+
+### Response Example
+
+```json
+{
+  "deleted": true,
+  "user_id": "550e8400-e29b-41d4-a716-446655440000",
+  "api_keys_deleted": 3,
+  "conversations_deleted": 47,
+  "dynamic_providers_deleted": 1,
+  "usage_records_deleted": 892
+}
+```
+
+<Callout type="warn">
+  This operation is **irreversible**. Recommend prompting users for confirmation before calling this
+  endpoint.
+</Callout>
+
+## Admin Data Management
+
+Administrators can export or delete data for any user.
+
+### Export User Data
+
+```http
+GET /admin/v1/users/{user_id}/export
+Authorization: Bearer <admin_token>
+```
+
+Requires `user:export` permission.
+
+### Delete User
+
+```http
+DELETE /admin/v1/users/{user_id}
+Authorization: Bearer <admin_token>
+```
+
+Requires `user:delete` permission.
+
+### Audit Trail
+
+All admin operations are logged with GDPR-specific reasons:
+
+```json
+{
+  "action": "user.export",
+  "actor_type": "user",
+  "actor_id": "admin-user-id",
+  "resource_type": "user",
+  "resource_id": "target-user-id",
+  "details": {
+    "email": "user@example.com",
+    "reason": "GDPR Article 15 - Right of Access"
+  }
+}
+```
+
+## Data Retention
+
+Configure automatic purging of old data to manage database size and comply with retention policies.
+
+### Configuration
+
+```toml
+[retention]
+enabled = true
+interval_hours = 24  # Run retention worker daily
+
+[retention.periods]
+usage_records_days = 90        # Individual API request logs
+daily_spend_days = 365         # Aggregated daily summaries
+audit_logs_days = 730          # Admin operation logs (2 years)
+conversations_deleted_days = 30 # Grace period for soft-deleted conversations
+
+[retention.safety]
+dry_run = false                # Set true to test without deleting
+max_deletes_per_run = 100000   # Prevent long-running operations
+batch_size = 1000              # Records deleted per batch
+```
+
+### Retention Periods
+
+| Data Type                    | Default | Description                                     |
+| ---------------------------- | ------- | ----------------------------------------------- |
+| `usage_records_days`         | 90      | Per-request usage records (high volume)         |
+| `daily_spend_days`           | 365     | Aggregated daily spend summaries                |
+| `audit_logs_days`            | 730     | Admin operations (compliance requirement)       |
+| `conversations_deleted_days` | 30      | Grace period before hard-deleting conversations |
+
+Set any period to `0` to disable retention for that data type (keep forever).
+
+### How It Works
+
+1. **Retention Worker** runs as a background task at the configured interval
+2. **Batched Deletion** prevents long-running transactions that lock the database
+3. **Soft-Delete Grace Period** - Conversations are soft-deleted first, then permanently removed after the grace period
+4. **Safety Limits** - `max_deletes_per_run` prevents runaway deletion operations
+
+### Testing Retention Policies
+
+Use dry-run mode to verify what would be deleted:
+
+```toml
+[retention]
+enabled = true
+
+[retention.safety]
+dry_run = true  # Log deletions without executing
+```
+
+Check logs for output like:
+
+```
+[INFO] retention: [DRY RUN] Would delete 1,247 usage_records older than 90 days
+[INFO] retention: [DRY RUN] Would delete 12 daily_spend records older than 365 days
+```
+
+## CSV Export Reports
+
+Administrators can export access reports in CSV format for compliance audits.
+
+### Access Inventory
+
+```http
+GET /admin/v1/csv/access-inventory
+```
+
+Flattened view of all users with their organization/project memberships and API key counts.
+
+### Organization Access Report
+
+```http
+GET /admin/v1/csv/organizations/{org_slug}/access
+```
+
+Members of a specific organization with their roles and activity.
+
+### Stale Access Report
+
+```http
+GET /admin/v1/csv/stale-access?inactive_days=90
+```
+
+Users and API keys that haven't been active within the threshold:
+
+| Report Section     | Contents                                 |
+| ------------------ | ---------------------------------------- |
+| Stale Users        | Users inactive longer than threshold     |
+| Never-Active Users | Users who have never made an API request |
+| Stale API Keys     | API keys unused longer than threshold    |
+
+## Security Considerations
+
+### Authentication Requirements
+
+| Endpoint                          | Authentication Required | Permission           |
+| --------------------------------- | ----------------------- | -------------------- |
+| `GET /admin/v1/me/export`         | Session (any user)      | None (self-service)  |
+| `DELETE /admin/v1/me`             | Session (any user)      | None (self-service)  |
+| `GET /admin/v1/users/{id}/export` | Admin session           | `user:export`        |
+| `DELETE /admin/v1/users/{id}`     | Admin session           | `user:delete`        |
+| `GET /admin/v1/csv/*`             | Admin session           | `access_review:read` |
+
+### Preventing Self-Deletion by Admins
+
+Use CEL policies to prevent users from deleting themselves via the admin endpoint:
+
+```toml
+[[auth.rbac.policies]]
+name = "deny-self-delete"
+description = "Users cannot delete themselves via admin endpoint"
+resource = "user"
+action = "delete"
+effect = "deny"
+priority = 200
+condition = "subject.user_id == context.resource_id"
+```
+
+<Callout type="info">
+  The self-service `DELETE /admin/v1/me` endpoint bypasses RBAC and always allows users to delete
+  their own account.
+</Callout>
+
+### Data Minimization
+
+Consider these practices:
+
+1. **Shorten retention periods** for data you don't need long-term
+2. **Use aggregated data** (`daily_spend`) instead of raw records (`usage_records`) for historical analysis
+3. **Audit log retention** may have legal requirements - consult your compliance team
+
+## Configuration Example
+
+Complete example for GDPR-compliant deployment:
+
+```toml
+# Enable data retention
+[retention]
+enabled = true
+interval_hours = 24
+
+[retention.periods]
+usage_records_days = 90       # Keep detailed logs for 3 months
+daily_spend_days = 365        # Keep aggregates for 1 year
+audit_logs_days = 730         # Keep audit trail for 2 years
+conversations_deleted_days = 30
+
+[retention.safety]
+dry_run = false
+max_deletes_per_run = 100000
+batch_size = 1000
+
+# Audit logging for compliance
+[observability.audit]
+enabled = true
+log_level = "info"
+```
+
+## Next Steps
+
+- [Authentication Setup](/docs/configuration/auth) - Configure user authentication
+- [Multi-Tenancy](/docs/features/multi-tenancy) - Understand organization/project hierarchy
+- [API Reference: Users](/docs/api/users) - Full API documentation

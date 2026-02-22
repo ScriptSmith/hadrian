@@ -1,0 +1,21 @@
+{
+  "id": "openai:chat_completion:bad_request",
+  "description": "Bad request (400) error response",
+  "request": {
+    "method": "POST",
+    "path": "/chat/completions"
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "type": "invalid_request_error",
+        "message": "Invalid model specified",
+        "code": "invalid_model"
+      }
+    }
+  }
+}

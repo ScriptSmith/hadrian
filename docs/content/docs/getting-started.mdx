@@ -1,0 +1,140 @@
+---
+title: Getting Started
+description: Install and configure Hadrian Gateway in minutes
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Get Hadrian Gateway running in under a minute. No complex setup required.
+
+## Quick Start
+
+### Using Cargo (Recommended)
+
+```bash
+# Download and run (creates config automatically)
+cargo install hadrian
+hadrian
+
+# Or with a custom config
+hadrian --config hadrian.toml
+```
+
+### Using Docker
+
+```bash
+# Quick start with OpenRouter (access 100+ models)
+docker run -p 8080:8080 -e OPENROUTER_API_KEY=sk-... ghcr.io/ScriptSmith/hadrian
+
+# Or with your own config file
+docker run -p 8080:8080 -v ./hadrian.toml:/etc/hadrian/hadrian.toml ghcr.io/ScriptSmith/hadrian
+```
+
+The gateway starts at `http://localhost:8080` with the chat UI. No database required for basic use.
+
+## Zero-Config Mode
+
+Running `hadrian` without arguments automatically:
+
+- Creates `~/.config/hadrian/hadrian.toml` with sensible defaults
+- Uses SQLite at `~/.local/share/hadrian/hadrian.db`
+- Opens browser to the chat UI on first run
+
+This is perfect for local development and single-user setups.
+
+## Custom Configuration
+
+Generate a starter config file:
+
+```bash
+hadrian init --output my-config.toml
+```
+
+Or create a minimal `hadrian.toml`:
+
+```toml
+[providers.openai]
+type = "open_ai"
+api_key = "${OPENAI_API_KEY}"
+```
+
+<Callout type="info">
+  Environment variables are interpolated using `${VAR_NAME}` syntax. Never commit API keys to
+  version control.
+</Callout>
+
+See the [Configuration](/docs/configuration) guide for all options.
+
+## Docker Compose Deployments
+
+For persistent deployments, use the configurations in the `deploy/` directory:
+
+```bash
+cd deploy
+
+# Development (SQLite - simplest)
+docker compose -f docker-compose.sqlite.yml up -d
+
+# Development with caching (SQLite + Redis)
+docker compose -f docker-compose.sqlite-redis.yml up -d
+
+# Production (PostgreSQL + Redis)
+cp .env.example .env
+# Edit .env with your API keys and passwords
+docker compose -f docker-compose.postgres.yml up -d
+```
+
+### Available Configurations
+
+| Configuration      | Use Case                                     |
+| ------------------ | -------------------------------------------- |
+| `sqlite.yml`       | Development, single-user                     |
+| `sqlite-redis.yml` | Development with rate limiting               |
+| `postgres.yml`     | Production, single-node                      |
+| `production.yml`   | Full production stack (HA, monitoring, auth) |
+
+See the [Docker Deployment](/docs/deployment/docker) guide for details, or [Advanced Deployment](/docs/deployment/advanced) for high availability setups.
+
+## Verify Installation
+
+Once running, verify everything is working:
+
+```bash
+# Check health endpoint
+curl http://localhost:8080/health
+
+# List available models
+curl http://localhost:8080/v1/models
+
+# Access the web UI
+open http://localhost:8080
+
+# View API documentation
+open http://localhost:8080/api/docs
+```
+
+## Building from Source
+
+```bash
+git clone https://github.com/ScriptSmith/hadrian.git
+cd hadrian/gateway
+cargo build --release
+./target/release/hadrian
+```
+
+## Next Steps
+
+<Cards>
+  <Card
+    title="Configuration"
+    href="/docs/configuration"
+    description="Configure providers, authentication, and features"
+  />
+  <Card title="API Reference" href="/docs/api" description="OpenAI-compatible API documentation" />
+  <Card
+    title="Features"
+    href="/docs/features"
+    description="Explore multi-tenancy, guardrails, RAG, and more"
+  />
+  <Card title="Deployment" href="/docs/deployment" description="Production deployment guides" />
+</Cards>

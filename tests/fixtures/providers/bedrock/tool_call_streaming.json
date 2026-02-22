@@ -1,0 +1,155 @@
+{
+  "id": "bedrock:tool_call:streaming",
+  "description": "Streaming Bedrock Converse API with tool use response",
+  "request": {
+    "method": "POST",
+    "path": "/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse-stream",
+    "path_pattern": "/model/.+/converse-stream"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "transfer-encoding": "chunked",
+      "content-type": "text/event-stream",
+      "x-amzn-requestid": "4bbc03d4-e491-4492-8a71-ae3dcb466e45"
+    },
+    "streaming": true,
+    "streaming_format": "aws_eventstream",
+    "events": [
+      {
+        "event_type": "messageStart",
+        "payload": {
+          "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRS",
+          "role": "assistant"
+        }
+      },
+      {
+        "event_type": "contentBlockStart",
+        "payload": {
+          "contentBlockIndex": 0,
+          "p": "abcdefghijk",
+          "start": {
+            "toolUse": {
+              "name": "get_weather",
+              "toolUseId": "tooluse_Vbt5VfgsRmizsIl7MPx2Qw",
+              "type": "tool_use"
+            }
+          }
+        }
+      },
+      {
+        "event_type": "contentBlockDelta",
+        "payload": {
+          "contentBlockIndex": 0,
+          "delta": {
+            "toolUse": {
+              "input": ""
+            }
+          },
+          "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLM"
+        }
+      },
+      {
+        "event_type": "contentBlockDelta",
+        "payload": {
+          "contentBlockIndex": 0,
+          "delta": {
+            "toolUse": {
+              "input": "{\"locat"
+            }
+          },
+          "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01"
+        }
+      },
+      {
+        "event_type": "contentBlockDelta",
+        "payload": {
+          "contentBlockIndex": 0,
+          "delta": {
+            "toolUse": {
+              "input": "ion\""
+            }
+          },
+          "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQR"
+        }
+      },
+      {
+        "event_type": "contentBlockDelta",
+        "payload": {
+          "contentBlockIndex": 0,
+          "delta": {
+            "toolUse": {
+              "input": ": "
+            }
+          },
+          "p": "abcdefghijklmnopqrstuvwxyzA"
+        }
+      },
+      {
+        "event_type": "contentBlockDelta",
+        "payload": {
+          "contentBlockIndex": 0,
+          "delta": {
+            "toolUse": {
+              "input": "\"San Franci"
+            }
+          },
+          "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXY"
+        }
+      },
+      {
+        "event_type": "contentBlockDelta",
+        "payload": {
+          "contentBlockIndex": 0,
+          "delta": {
+            "toolUse": {
+              "input": "sco, U"
+            }
+          },
+          "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP"
+        }
+      },
+      {
+        "event_type": "contentBlockDelta",
+        "payload": {
+          "contentBlockIndex": 0,
+          "delta": {
+            "toolUse": {
+              "input": "SA\"}"
+            }
+          },
+          "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRST"
+        }
+      },
+      {
+        "event_type": "contentBlockStop",
+        "payload": {
+          "contentBlockIndex": 0,
+          "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567"
+        }
+      },
+      {
+        "event_type": "messageStop",
+        "payload": {
+          "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345678",
+          "stopReason": "tool_use"
+        }
+      },
+      {
+        "event_type": "metadata",
+        "payload": {
+          "metrics": {
+            "latencyMs": 2935
+          },
+          "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTU",
+          "usage": {
+            "inputTokens": 596,
+            "outputTokens": 56,
+            "serverToolUsage": {},
+            "totalTokens": 652
+          }
+        }
+      }
+    ]
+  }
+}

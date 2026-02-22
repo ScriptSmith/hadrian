@@ -1,0 +1,401 @@
+---
+title: Guardrails
+description: Configure content filtering, PII detection, and safety enforcement
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The `[features.guardrails]` section configures comprehensive content filtering for both input (pre-request) and output (post-response). Supports multiple providers, execution modes, and fine-grained actions.
+
+## Configuration Reference
+
+### Main Settings
+
+```toml
+[features.guardrails]
+enabled = true
+```
+
+| Key       | Type    | Default | Description                |
+| --------- | ------- | ------- | -------------------------- |
+| `enabled` | boolean | `true`  | Enable guardrails globally |
+
+## Input Guardrails
+
+Evaluate user messages before sending to the LLM:
+
+```toml
+[features.guardrails.input]
+enabled = true
+mode = "blocking"
+timeout_ms = 5000
+on_timeout = "block"
+on_error = "block"
+default_action = "block"
+
+[features.guardrails.input.actions]
+HATE = "block"
+VIOLENCE = "warn"
+SEXUAL = "log"
+
+[features.guardrails.input.provider]
+type = "openai_moderation"
+```
+
+| Key              | Type    | Default      | Description                                |
+| ---------------- | ------- | ------------ | ------------------------------------------ |
+| `enabled`        | boolean | `true`       | Enable input guardrails                    |
+| `mode`           | string  | `"blocking"` | `blocking` or `concurrent`                 |
+| `timeout_ms`     | integer | `5000`       | Evaluation timeout                         |
+| `on_timeout`     | string  | `"block"`    | `block` or `allow`                         |
+| `on_error`       | string  | `"block"`    | `block`, `allow`, or `log_and_allow`       |
+| `default_action` | string  | `"block"`    | Default action for unconfigured categories |
+
+### Execution Modes
+
+| Mode         | Behavior                                         | Latency                      |
+| ------------ | ------------------------------------------------ | ---------------------------- |
+| `blocking`   | Wait for guardrails before LLM call              | Adds round-trip              |
+| `concurrent` | Race guardrails against LLM, cancel on violation | Minimal for passing requests |
+
+## Output Guardrails
+
+Evaluate LLM responses before returning to users:
+
+```toml
+[features.guardrails.output]
+enabled = true
+timeout_ms = 5000
+on_error = "block"
+default_action = "block"
+streaming_mode = "final_only"
+
+[features.guardrails.output.provider]
+type = "openai_moderation"
+```
+
+| Key              | Type    | Default        | Description               |
+| ---------------- | ------- | -------------- | ------------------------- |
+| `enabled`        | boolean | `true`         | Enable output guardrails  |
+| `timeout_ms`     | integer | `5000`         | Evaluation timeout        |
+| `on_error`       | string  | `"block"`      | Error handling action     |
+| `default_action` | string  | `"block"`      | Default action            |
+| `streaming_mode` | string  | `"final_only"` | Streaming evaluation mode |
+
+### Streaming Modes
+
+| Mode         | Behavior                                   | Trade-off                           |
+| ------------ | ------------------------------------------ | ----------------------------------- |
+| `final_only` | Evaluate complete response after streaming | Fastest, harmful content may stream |
+| `buffered`   | Evaluate every N tokens                    | Balance latency/safety              |
+| `per_chunk`  | Evaluate each chunk                        | Safest, highest latency             |
+
+```toml
+# Buffered mode configuration
+streaming_mode = { buffered = { buffer_tokens = 100 } }
+```
+
+## Providers
+
+### OpenAI Moderation
+
+Free, fast, general-purpose content moderation:
+
+```toml
+[features.guardrails.input.provider]
+type = "openai_moderation"
+api_key = "${OPENAI_API_KEY}"      # Optional, uses default provider key
+base_url = "https://api.openai.com/v1"
+model = "text-moderation-latest"
+```
+
+| Key        | Type   | Default                       | Description               |
+| ---------- | ------ | ----------------------------- | ------------------------- |
+| `api_key`  | string | none                          | OpenAI API key (optional) |
+| `base_url` | string | `"https://api.openai.com/v1"` | API base URL              |
+| `model`    | string | `"text-moderation-latest"`    | Moderation model          |
+
+### AWS Bedrock Guardrails
+
+Enterprise-grade with configurable policies:
+
+```toml
+[features.guardrails.input.provider]
+type = "bedrock"
+guardrail_id = "abc123"
+guardrail_version = "1"
+region = "us-east-1"
+access_key_id = "${AWS_ACCESS_KEY_ID}"
+secret_access_key = "${AWS_SECRET_ACCESS_KEY}"
+trace_enabled = false
+```
+
+| Key                 | Type    | Default  | Description                          |
+| ------------------- | ------- | -------- | ------------------------------------ |
+| `guardrail_id`      | string  | required | Bedrock guardrail ID                 |
+| `guardrail_version` | string  | required | Guardrail version                    |
+| `region`            | string  | none     | AWS region                           |
+| `access_key_id`     | string  | none     | AWS access key (uses env if not set) |
+| `secret_access_key` | string  | none     | AWS secret key (uses env if not set) |
+| `trace_enabled`     | boolean | `false`  | Enable debug tracing                 |
+
+### Azure Content Safety
+
+Enterprise-grade with severity thresholds:
+
+```toml
+[features.guardrails.input.provider]
+type = "azure_content_safety"
+endpoint = "https://your-resource.cognitiveservices.azure.com"
+api_key = "${AZURE_CONTENT_SAFETY_KEY}"
+api_version = "2024-09-01"
+blocklist_names = ["custom-blocklist"]
+
+[features.guardrails.input.provider.thresholds]
+Hate = 2
+Violence = 4
+Sexual = 2
+SelfHarm = 0
+```
+
+| Key               | Type   | Default        | Description                        |
+| ----------------- | ------ | -------------- | ---------------------------------- |
+| `endpoint`        | string | required       | Azure endpoint URL                 |
+| `api_key`         | string | required       | Azure API key                      |
+| `api_version`     | string | `"2024-09-01"` | API version                        |
+| `thresholds`      | map    | none           | Category severity thresholds (0-6) |
+| `blocklist_names` | array  | `[]`           | Custom blocklist names             |
+
+### Blocklist (Built-in)
+
+Fast, local pattern matching:
+
+```toml
+[features.guardrails.input.provider]
+type = "blocklist"
+case_insensitive = true
+
+[[features.guardrails.input.provider.patterns]]
+pattern = "competitor-name"
+is_regex = false
+category = "blocked_content"
+severity = "high"
+message = "Mentions of competitors are not allowed"
+
+[[features.guardrails.input.provider.patterns]]
+pattern = "\\b(hack|exploit)\\b"
+is_regex = true
+category = "security"
+severity = "medium"
+```
+
+| Key                | Type    | Default  | Description               |
+| ------------------ | ------- | -------- | ------------------------- |
+| `case_insensitive` | boolean | `true`   | Case-insensitive matching |
+| `patterns`         | array   | required | List of patterns          |
+
+**Pattern fields:**
+
+| Key        | Type    | Default             | Description                |
+| ---------- | ------- | ------------------- | -------------------------- |
+| `pattern`  | string  | required            | Pattern to match           |
+| `is_regex` | boolean | `false`             | Treat as regex             |
+| `category` | string  | `"blocked_content"` | Category on match          |
+| `severity` | string  | `"high"`            | Severity level             |
+| `message`  | string  | none                | Human-readable explanation |
+
+### PII Regex (Built-in)
+
+Fast, local PII detection:
+
+```toml
+[features.guardrails.input.provider]
+type = "pii_regex"
+email = true
+phone = true
+ssn = true
+credit_card = true
+ip_address = true
+date_of_birth = true
+```
+
+| Key             | Type    | Default | Description                           |
+| --------------- | ------- | ------- | ------------------------------------- |
+| `email`         | boolean | `true`  | Detect email addresses                |
+| `phone`         | boolean | `true`  | Detect phone numbers                  |
+| `ssn`           | boolean | `true`  | Detect Social Security Numbers        |
+| `credit_card`   | boolean | `true`  | Detect credit cards (Luhn validation) |
+| `ip_address`    | boolean | `true`  | Detect IP addresses                   |
+| `date_of_birth` | boolean | `true`  | Detect potential DOBs                 |
+
+### Content Limits (Built-in)
+
+Enforce size constraints:
+
+```toml
+[features.guardrails.input.provider]
+type = "content_limits"
+max_characters = 10000
+max_words = 2000
+max_lines = 500
+```
+
+| Key              | Type    | Default | Description        |
+| ---------------- | ------- | ------- | ------------------ |
+| `max_characters` | integer | none    | Maximum characters |
+| `max_words`      | integer | none    | Maximum words      |
+| `max_lines`      | integer | none    | Maximum lines      |
+
+### Custom HTTP
+
+Bring your own guardrails:
+
+```toml
+[features.guardrails.input.provider]
+type = "custom"
+url = "https://my-guardrails.example.com/evaluate"
+api_key = "${CUSTOM_GUARDRAILS_KEY}"
+timeout_ms = 5000
+retry_enabled = true
+max_retries = 2
+
+[features.guardrails.input.provider.headers]
+X-Custom-Header = "value"
+```
+
+| Key             | Type    | Default  | Description                |
+| --------------- | ------- | -------- | -------------------------- |
+| `url`           | string  | required | Guardrails service URL     |
+| `api_key`       | string  | none     | API key for authentication |
+| `timeout_ms`    | integer | `5000`   | Request timeout            |
+| `retry_enabled` | boolean | `false`  | Enable retries             |
+| `max_retries`   | integer | `2`      | Maximum retries            |
+| `headers`       | map     | `{}`     | Custom headers             |
+
+## PII Detection
+
+Dedicated PII handling with `[features.guardrails.pii]`:
+
+```toml
+[features.guardrails.pii]
+enabled = true
+action = "redact"
+replacement = "[PII REDACTED]"
+apply_to = "both"
+types = ["EMAIL", "PHONE", "SSN", "CREDIT_CARD"]
+
+[features.guardrails.pii.provider]
+type = "regex"
+```
+
+| Key           | Type    | Default            | Description                           |
+| ------------- | ------- | ------------------ | ------------------------------------- |
+| `enabled`     | boolean | `true`             | Enable PII detection                  |
+| `action`      | string  | `"redact"`         | `block`, `redact`, `anonymize`, `log` |
+| `replacement` | string  | `"[PII REDACTED]"` | Replacement text                      |
+| `apply_to`    | string  | `"both"`           | `input`, `output`, `both`             |
+| `types`       | array   | common types       | PII types to detect                   |
+
+**PII types:** `EMAIL`, `PHONE`, `SSN`, `CREDIT_CARD`, `ADDRESS`, `NAME`, `DATE_OF_BIRTH`, `DRIVERS_LICENSE`, `PASSPORT`, `BANK_ACCOUNT`, `IP_ADDRESS`, `MAC_ADDRESS`, `URL`, `USERNAME`, `PASSWORD`, `AWS_ACCESS_KEY`, `AWS_SECRET_KEY`, `API_KEY`
+
+## Actions
+
+| Action   | Behavior                           |
+| -------- | ---------------------------------- |
+| `block`  | Reject request/response with error |
+| `warn`   | Allow with warning headers         |
+| `log`    | Allow silently, log violation      |
+| `redact` | Replace violating content          |
+| `modify` | Provider-specific transformation   |
+
+```toml
+# Per-category action configuration
+[features.guardrails.input.actions]
+HATE = "block"
+VIOLENCE = "block"
+SEXUAL = "warn"
+HARASSMENT = "log"
+SELF_HARM = "block"
+```
+
+## Audit Logging
+
+```toml
+[features.guardrails.audit]
+enabled = true
+log_all_evaluations = false
+log_blocked = true
+log_violations = true
+log_redacted = true
+```
+
+| Key                   | Type    | Default | Description                       |
+| --------------------- | ------- | ------- | --------------------------------- |
+| `enabled`             | boolean | `true`  | Enable audit logging              |
+| `log_all_evaluations` | boolean | `false` | Log all evaluations (high volume) |
+| `log_blocked`         | boolean | `true`  | Log blocked requests              |
+| `log_violations`      | boolean | `true`  | Log policy violations             |
+| `log_redacted`        | boolean | `true`  | Log redaction events              |
+
+## Complete Example
+
+```toml
+[features.guardrails]
+enabled = true
+
+# Input guardrails with OpenAI
+[features.guardrails.input]
+enabled = true
+mode = "blocking"
+timeout_ms = 5000
+on_timeout = "block"
+on_error = "block"
+default_action = "block"
+
+[features.guardrails.input.provider]
+type = "openai_moderation"
+
+[features.guardrails.input.actions]
+HATE = "block"
+VIOLENCE = "block"
+SEXUAL = "warn"
+HARASSMENT = "log"
+
+# Output guardrails with Bedrock
+[features.guardrails.output]
+enabled = true
+timeout_ms = 10000
+on_error = "log_and_allow"
+default_action = "block"
+streaming_mode = "final_only"
+
+[features.guardrails.output.provider]
+type = "bedrock"
+guardrail_id = "abc123"
+guardrail_version = "1"
+region = "us-east-1"
+
+# PII redaction
+[features.guardrails.pii]
+enabled = true
+action = "redact"
+replacement = "[REDACTED]"
+apply_to = "both"
+types = ["EMAIL", "PHONE", "SSN", "CREDIT_CARD"]
+
+[features.guardrails.pii.provider]
+type = "regex"
+
+# Audit logging
+[features.guardrails.audit]
+enabled = true
+log_all_evaluations = false
+log_blocked = true
+log_violations = true
+log_redacted = true
+```
+
+## See Also
+
+- [Guardrails Guide](/docs/features/guardrails) - Conceptual overview
+- [Security Guide](/docs/security) - Security best practices

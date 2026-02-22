@@ -1,0 +1,56 @@
+# Hadrian Gateway Configuration - SQLite + Redis + Keycloak OIDC
+# Development setup with Keycloak for per-org OIDC authentication
+# OIDC SSO is configured via Admin API, not in this config file
+
+[ui]
+enabled = true
+
+# ==============================================================================
+# Bootstrap Configuration
+# ==============================================================================
+# Bootstrap API key for initial setup when database is empty.
+# This key provides admin access ONLY when no users exist.
+# Once the first user is created via OIDC login, bootstrap auth is disabled.
+[auth.bootstrap]
+api_key = "gw_test_bootstrap_key_for_e2e"
+
+# ==============================================================================
+# Session Configuration (for per-org SSO)
+# ==============================================================================
+# OIDC authentication is configured per-organization via the Admin API.
+# This section only configures session management for authenticated users.
+# The test setup creates the SSO connection with OIDC settings.
+[auth.admin]
+type = "session"
+secure = false  # For local dev over HTTP
+
+[database]
+type = "sqlite"
+path = "/app/data/hadrian.db"
+
+[cache]
+type = "redis"
+url = "${REDIS_URL}"
+
+[auth.gateway]
+type = "api_key"
+header_name = "X-API-Key"
+key_prefix = "gw_"
+cache_ttl_secs = 300
+
+# RBAC is disabled for this basic keycloak test to allow unauthenticated admin API access.
+# For comprehensive RBAC testing with OIDC authentication, see the university deployment tests.
+
+[providers]
+default_provider = "test"
+
+# Test provider for e2e testing (echoes back requests)
+[providers.test]
+type = "test"
+
+# Production providers (uncomment and configure as needed)
+# [providers.openrouter]
+# type = "open_ai"
+# api_key = "${OPENROUTER_API_KEY}"
+# base_url = "https://openrouter.ai/api/v1/"
+# timeout_secs = 60

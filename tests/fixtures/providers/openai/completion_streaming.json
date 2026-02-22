@@ -1,0 +1,644 @@
+{
+  "id": "openai:completion:streaming",
+  "description": "Streaming text completion response with SSE chunks",
+  "request": {
+    "method": "POST",
+    "path": "/completions"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-openai-proxy-wasm": "v0.1",
+      "x-ratelimit-limit-requests": "3500",
+      "x-ratelimit-reset-requests": "17ms",
+      "x-ratelimit-reset-tokens": "10ms",
+      "content-type": "text/event-stream",
+      "x-envoy-upstream-service-time": "734",
+      "x-content-type-options": "nosniff",
+      "transfer-encoding": "chunked",
+      "x-ratelimit-limit-tokens": "90000",
+      "x-ratelimit-remaining-requests": "3498",
+      "x-request-id": "req_8ae386d1daac49838e957d68b03dc5b8",
+      "x-ratelimit-remaining-tokens": "89983"
+    },
+    "streaming": true,
+    "chunks": [
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": " "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "6"
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": ","
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": " "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "7"
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": ","
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": " "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "8"
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": ","
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": " "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "9"
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": ","
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": " "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "10"
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": ","
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": " "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "11"
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": ","
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": " "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "12"
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": ","
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": " "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "13"
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": ","
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": " "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "14, "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "15, "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "16, "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "17, "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "18, "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "19, "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "20, "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "21, "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "22, "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "23, "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "24, "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "25, "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "26, "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "27, "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "28, "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "29, "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": "30, 31, 32, 33, 34,"
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": null,
+            "index": 0,
+            "logprobs": null,
+            "text": " "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      },
+      {
+        "choices": [
+          {
+            "finish_reason": "length",
+            "index": 0,
+            "logprobs": null,
+            "text": "35, 36, 37, 38, "
+          }
+        ],
+        "created": 1766147491,
+        "id": "cmpl-CoTvnauLyZULR2u2d7qFjrrjIXZLT",
+        "model": "gpt-3.5-turbo-instruct:20230824-v2",
+        "object": "text_completion"
+      }
+    ]
+  }
+}

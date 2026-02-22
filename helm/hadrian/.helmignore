@@ -1,0 +1,52 @@
+# Patterns to ignore when building packages.
+# This supports shell glob matching, relative path matching, and
+# temporary file patterns.
+
+# Common VCS dirs
+.git/
+.gitignore
+.bzr/
+.bzrignore
+.hg/
+.hgignore
+.svn/
+
+# Common backup files
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+
+# Various IDEs
+.project
+.idea/
+*.iml
+*.tmproj
+.vscode/
+
+# macOS
+.DS_Store
+
+# Helm-specific
+.helmignore
+# Note: Do NOT ignore *.tgz as charts/ directory contains subchart dependencies
+
+# CI files
+.github/
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile
+
+# Chart unit test files (helm-unittest, etc.)
+# Note: templates/tests/ contains helm test hooks and should NOT be ignored
+# Using /tests/ to match only top-level tests directory
+/tests/
+*_test.yaml
+
+# Documentation source (built docs are included)
+docs/
+
+# Development files
+Makefile
+Taskfile.yaml

@@ -1,0 +1,18 @@
+{
+  "id": "openai:audio_translation:success",
+  "description": "Successful audio translation response (Whisper)",
+  "request": {
+    "method": "POST",
+    "path": "/audio/translations"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "req_audio_translate_abcde"
+    },
+    "body": {
+      "text": "Hello, this is the translated text from the audio file."
+    }
+  }
+}
