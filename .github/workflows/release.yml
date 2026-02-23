@@ -223,7 +223,6 @@ jobs:
   # Publish to crates.io (only on tag push, not dry-run)
   publish-crate:
     name: Publish to crates.io
-    needs: build-frontend
     if: github.ref_type == 'tag' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
     runs-on: ubuntu-latest
     steps:
@@ -237,11 +236,6 @@ jobs:
         with:
           shared-key: publish
 
-      - name: Download frontend assets
-        uses: actions/download-artifact@v4
-        with:
-          name: frontend-assets
-
       - name: Fetch model catalog
         run: mkdir -p data && curl -sSL https://models.dev/api.json -o data/models-dev-catalog.json
 
@@ -251,26 +245,63 @@ jobs:
           sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
 
       - name: Publish to crates.io
-        run: cargo publish --no-default-features --features tiny
+        run: cargo publish --no-default-features --features tiny --allow-dirty
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-  # Build and push multi-arch Docker image to GHCR (only on tag push, not dry-run)
+  # Build per-platform Docker images on native runners (no QEMU emulation)
   docker:
-    name: Docker Image
+    name: Docker (${{ matrix.suffix }})
     if: github.ref_type == 'tag' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            suffix: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            suffix: arm64
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ github.ref_name }}-${{ matrix.suffix }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.suffix }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.suffix }}
+
+  # Combine per-platform images into a multi-arch manifest
+  docker-manifest:
+    name: Docker Manifest
+    needs: docker
+    if: github.ref_type == 'tag' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -287,39 +318,48 @@ jobs:
             type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
             type=raw,value=latest
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create and push multi-arch manifests
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}"
+          TAG="${GITHUB_REF_NAME}"
 
-  # Build multi-arch Docker image without pushing (dry-run validation)
+          while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
+            docker buildx imagetools create -t "$tag" \
+              "${IMAGE}:${TAG}-amd64" \
+              "${IMAGE}:${TAG}-arm64"
+          done <<< "$TAGS"
+
+  # Build Docker images without pushing (dry-run validation)
   docker-dry-run:
-    name: Docker Image (Dry Run)
+    name: Docker Dry Run (${{ matrix.suffix }})
     if: github.event_name == 'workflow_dispatch' && inputs.dry_run
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            suffix: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            suffix: arm64
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v3
 
       - name: Build (no push)
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.suffix }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.suffix }}
 
   # Dry-run summary (manual dispatch with dry_run=true)
   dry-run-summary:
