@@ -43,6 +43,8 @@ interface ModelSelectorProps {
   /** Callback when instances change */
   onInstancesChange: (instances: ModelInstance[]) => void;
   availableModels: ModelInfo[];
+  /** Whether models are still loading from the API */
+  isLoading?: boolean;
   maxModels?: number;
   /** Callback when instance parameters change */
   onInstanceParametersChange?: (instanceId: string, params: ModelParameters) => void;
@@ -188,6 +190,7 @@ export function ModelSelector({
   selectedInstances,
   onInstancesChange,
   availableModels,
+  isLoading: isLoadingProp,
   maxModels = 10,
   onInstanceParametersChange,
   onInstanceLabelChange,
@@ -298,7 +301,7 @@ export function ModelSelector({
     ]);
   };
 
-  const isLoading = availableModels.length === 0;
+  const isLoading = isLoadingProp ?? false;
   const canToggleDisabled = hasMessages && !!onDisabledInstancesChange;
 
   // Convert instances to model IDs for the picker (for backward compatibility)

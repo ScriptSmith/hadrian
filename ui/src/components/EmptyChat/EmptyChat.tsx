@@ -8,13 +8,21 @@ import { EXAMPLE_PROMPT_CATEGORIES, type PromptCategory } from "./examplePrompts
 interface EmptyChatProps {
   selectedModels: string[];
   isLoadingModels?: boolean;
+  noModelsAvailable?: boolean;
 }
 
-export function EmptyChat({ selectedModels, isLoadingModels = false }: EmptyChatProps) {
+export function EmptyChat({
+  selectedModels,
+  isLoadingModels = false,
+  noModelsAvailable = false,
+}: EmptyChatProps) {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const setPendingPrompt = useChatUIStore((s) => s.setPendingPrompt);
 
   const getMessage = () => {
+    if (noModelsAvailable) {
+      return "No models available. Add a provider in settings to get started.";
+    }
     if (selectedModels.length === 0) {
       return "Select a model to start chatting.";
     }
@@ -49,7 +57,7 @@ export function EmptyChat({ selectedModels, isLoadingModels = false }: EmptyChat
       )}
 
       {/* Example prompts section */}
-      {!isLoadingModels && (
+      {!isLoadingModels && !noModelsAvailable && (
         <div className="mt-8 w-full max-w-2xl">
           {/* Category tabs */}
           <div className="flex flex-wrap justify-center gap-2 mb-4">

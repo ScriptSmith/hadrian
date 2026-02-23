@@ -45,6 +45,8 @@ interface ChatHeaderProps {
   /** Callback when instances change */
   onInstancesChange: (instances: ModelInstance[]) => void;
   availableModels: ModelInfo[];
+  /** Whether models are still loading */
+  isLoadingModels?: boolean;
   /** Callback when instance parameters change */
   onInstanceParametersChange?: (instanceId: string, params: ModelParameters) => void;
   /** Callback when instance label changes */
@@ -81,6 +83,7 @@ export function ChatHeader({
   selectedInstances,
   onInstancesChange,
   availableModels,
+  isLoadingModels = false,
   onInstanceParametersChange,
   onInstanceLabelChange,
   disabledInstances = [],
@@ -153,6 +156,7 @@ export function ChatHeader({
                 selectedInstances={selectedInstances}
                 onInstancesChange={onInstancesChange}
                 availableModels={availableModels}
+                isLoading={isLoadingModels}
                 onInstanceParametersChange={onInstanceParametersChange}
                 onInstanceLabelChange={onInstanceLabelChange}
                 disabledInstances={disabledInstances}
@@ -428,6 +432,7 @@ export function ChatHeader({
             selectedInstances={selectedInstances}
             onInstancesChange={onInstancesChange}
             availableModels={availableModels}
+            isLoading={isLoadingModels}
             onInstanceParametersChange={onInstanceParametersChange}
             onInstanceLabelChange={onInstanceLabelChange}
             disabledInstances={disabledInstances}

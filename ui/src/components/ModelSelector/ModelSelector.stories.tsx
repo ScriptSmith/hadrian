@@ -298,3 +298,35 @@ function WithDuplicateSettingsStory() {
 export const WithDuplicateSettings: Story = {
   render: () => <WithDuplicateSettingsStory />,
 };
+
+function LoadingStory() {
+  const [instances, setInstances] = useState<ModelInstance[]>([]);
+  return (
+    <ModelSelector
+      selectedInstances={instances}
+      onInstancesChange={setInstances}
+      availableModels={[]}
+      isLoading={true}
+    />
+  );
+}
+
+export const Loading: Story = {
+  render: () => <LoadingStory />,
+};
+
+function NoModelsAvailableStory() {
+  const [instances, setInstances] = useState<ModelInstance[]>([]);
+  return (
+    <ModelSelector
+      selectedInstances={instances}
+      onInstancesChange={setInstances}
+      availableModels={[]}
+      isLoading={false}
+    />
+  );
+}
+
+export const NoModelsAvailable: Story = {
+  render: () => <NoModelsAvailableStory />,
+};

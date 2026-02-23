@@ -103,6 +103,8 @@ interface MessageGroup {
 interface ChatMessageListProps {
   /** Whether to show loading state for models */
   isLoadingModels?: boolean;
+  /** Whether models finished loading but none are available */
+  noModelsAvailable?: boolean;
   /** Callback to regenerate a response */
   onRegenerate?: (messageId: string, model: string) => void;
   /** Callback to fork conversation from a specific message */
@@ -115,6 +117,7 @@ interface ChatMessageListProps {
 
 export function ChatMessageList({
   isLoadingModels = false,
+  noModelsAvailable = false,
   onRegenerate,
   onForkFromMessage,
   onEditAndRerun,
@@ -334,7 +337,11 @@ export function ChatMessageList({
         <div className={`mx-auto px-3 py-4 sm:px-4 sm:py-6 ${widescreenMode ? "" : "max-w-6xl"}`}>
           {!hasMessages && !hasStreamingResponses ? (
             <div className="h-[calc(100vh-280px)] sm:h-[calc(100vh-300px)] flex items-center justify-center">
-              <EmptyChat selectedModels={selectedModels} isLoadingModels={isLoadingModels} />
+              <EmptyChat
+                selectedModels={selectedModels}
+                isLoadingModels={isLoadingModels}
+                noModelsAvailable={noModelsAvailable}
+              />
             </div>
           ) : (
             <div

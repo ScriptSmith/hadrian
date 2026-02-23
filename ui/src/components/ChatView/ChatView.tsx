@@ -176,6 +176,7 @@ export function ChatView({
           selectedInstances={selectedInstances}
           onInstancesChange={setSelectedInstances}
           availableModels={availableModels}
+          isLoadingModels={isLoadingModels}
           onInstanceParametersChange={handleInstanceParametersChange}
           onInstanceLabelChange={handleInstanceLabelChange}
           disabledInstances={disabledInstances}
@@ -199,6 +200,7 @@ export function ChatView({
       <main className="flex flex-1 flex-col overflow-hidden">
         <ChatMessageList
           isLoadingModels={isLoadingModels}
+          noModelsAvailable={!isLoadingModels && availableModels.length === 0}
           onRegenerate={onRegenerate}
           onRegenerateAll={onRegenerateAll}
           onForkFromMessage={onForkFromMessage}

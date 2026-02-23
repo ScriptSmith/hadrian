@@ -112,6 +112,24 @@ export const LoadingModels: Story = {
   },
 };
 
+export const NoModelsAvailable: Story = {
+  args: {
+    selectedModels: [],
+    isLoadingModels: false,
+    noModelsAvailable: true,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    // Should show no models message
+    await expect(canvas.getByText(/no models available/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/add a provider/i)).toBeInTheDocument();
+
+    // Should NOT show example prompts when no models are available
+    await expect(canvas.queryByText(/General/i)).not.toBeInTheDocument();
+  },
+};
+
 /**
  * Test: Clicking a category shows its prompts
  */

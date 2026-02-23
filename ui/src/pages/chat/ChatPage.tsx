@@ -37,7 +37,7 @@ export default function ChatPage() {
   const { preferences } = usePreferences();
 
   // Fetch models from API
-  const { data: modelsResponse } = useQuery(apiV1ModelsOptions());
+  const { data: modelsResponse, isPending: isLoadingModels } = useQuery(apiV1ModelsOptions());
   const availableModels: ModelInfo[] = useMemo(
     () => modelsResponse?.data?.map((m) => m as ModelInfo).filter((m) => m.id) || [],
     [modelsResponse?.data]
@@ -259,7 +259,7 @@ export default function ChatPage() {
         availableModels={availableModels}
         conversation={currentConversation}
         isStreaming={isStreaming}
-        isLoadingModels={availableModels.length === 0}
+        isLoadingModels={isLoadingModels}
         onSendMessage={handleSendMessage}
         onStopStreaming={stopStreaming}
         onClearMessages={clearMessages}
