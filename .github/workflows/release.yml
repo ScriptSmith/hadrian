@@ -236,10 +236,8 @@ jobs:
         with:
           shared-key: publish
 
-      - name: Set version from tag
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxml2-dev libxslt1-dev libxmlsec1-dev libclang-dev tesseract-ocr tesseract-ocr-eng
 
       - name: Publish to crates.io
         run: cargo publish --no-default-features --features headless --allow-dirty
