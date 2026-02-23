@@ -9,34 +9,9 @@ Get Hadrian Gateway running in under a minute. No complex setup required.
 
 ## Quick Start
 
-### Pre-built Binary (Recommended)
+Choose your installation method, platform, and feature profile:
 
-Download the latest release for your platform from the
-[GitHub Releases](https://github.com/ScriptSmith/hadrian/releases) page. Pre-built binaries
-include the embedded web UI, documentation, and model catalog.
-
-```bash
-# Extract and run (creates config automatically)
-tar xzf hadrian-*.tar.gz
-./hadrian
-```
-
-### Using Docker
-
-```bash
-# Quick start with OpenRouter (access 100+ models)
-docker run -p 8080:8080 -e OPENROUTER_API_KEY=sk-... ghcr.io/ScriptSmith/hadrian
-
-# Or with your own config file
-docker run -p 8080:8080 -v ./hadrian.toml:/etc/hadrian/hadrian.toml ghcr.io/ScriptSmith/hadrian
-```
-
-### Using Cargo
-
-```bash
-cargo install hadrian
-hadrian
-```
+<QuickStartSelector />
 
 <Callout type="warn">
   `cargo install` builds the **headless** profile, which includes all backend features but does not

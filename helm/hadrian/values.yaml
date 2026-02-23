@@ -6,7 +6,7 @@ replicaCount: 1
 
 image:
   # -- Container image repository
-  repository: ghcr.io/ScriptSmith/hadrian
+  repository: ghcr.io/scriptsmith/hadrian
   # -- Image pull policy
   pullPolicy: IfNotPresent
   # -- Overrides the image tag (default: Chart appVersion)

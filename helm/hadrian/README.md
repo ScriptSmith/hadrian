@@ -87,7 +87,7 @@ The following sections describe key configuration areas. See the [Parameters](#p
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `image.repository` | Container image repository | `ghcr.io/ScriptSmith/hadrian` |
+| `image.repository` | Container image repository | `ghcr.io/scriptsmith/hadrian` |
 | `image.tag` | Image tag (defaults to Chart appVersion) | `""` |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `imagePullSecrets` | Image pull secrets for private registries | `[]` |
@@ -453,7 +453,7 @@ gateway:
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `image.repository` | Container image repository | `ghcr.io/ScriptSmith/hadrian` |
+| `image.repository` | Container image repository | `ghcr.io/scriptsmith/hadrian` |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `image.tag` | Image tag (defaults to appVersion) | `""` |
 | `imagePullSecrets` | Image pull secrets | `[]` |

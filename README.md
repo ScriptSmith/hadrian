@@ -24,7 +24,7 @@ cargo install hadrian
 hadrian
 
 # Or with Docker
-docker run -p 8080:8080 -e OPENROUTER_API_KEY=sk-... ghcr.io/ScriptSmith/hadrian
+docker run -p 8080:8080 ghcr.io/scriptsmith/hadrian
 ```
 
 The gateway starts at `http://localhost:8080` with the chat UI. No database required for basic use.
