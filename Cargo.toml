@@ -28,6 +28,7 @@ tiny = ["provider-openai", "provider-test"]
 minimal = [
     "tiny",
     "database-sqlite",
+    "embed-catalog",
     "embed-ui",
     "provider-anthropic",
     "provider-azure",
@@ -61,6 +62,40 @@ full = [
     "document-extraction-full",
     "saml",
     "virus-scan",
+]
+
+# All features except embedded assets (UI, docs, catalog).
+# Suitable for `cargo install` users who don't have build artifacts,
+# and for deployments that serve the frontend separately.
+headless = [
+    "cel",
+    "csv-export",
+    "database-postgres",
+    "database-sqlite",
+    "document-extraction-basic",
+    "document-extraction-full",
+    "forecasting",
+    "json-schema",
+    "otlp",
+    "prometheus",
+    "provider-anthropic",
+    "provider-azure",
+    "provider-bedrock",
+    "provider-openai",
+    "provider-test",
+    "provider-vertex",
+    "redis",
+    "response-validation",
+    "s3-storage",
+    "saml",
+    "secrets-aws",
+    "secrets-azure",
+    "secrets-gcp",
+    "sso",
+    "utoipa",
+    "vault",
+    "virus-scan",
+    "wizard",
 ]
 
 # Providers (always-available: openai, anthropic, test)
@@ -99,6 +134,7 @@ s3-storage = ["aws-sdk", "dep:aws-sdk-s3"]
 # Embedded assets
 embed-ui = ["dep:rust-embed"]
 embed-docs = ["dep:rust-embed"]
+embed-catalog = ["dep:rust-embed"]
 
 # Databases
 database-sqlite = ["dep:sqlx", "sqlx/sqlite"]
@@ -214,7 +250,7 @@ opentelemetry-otlp = { version = "0.30", features = ["trace", "logs", "grpc-toni
 opentelemetry-semantic-conventions = { version = "0.30", optional = true }
 opentelemetry_sdk = { version = "0.30", features = ["rt-tokio", "logs"], optional = true }
 redis = { version = "0.32.7", features = ["aio", "tokio-comp", "cluster-async"], optional = true }
-rust-embed = { version = "8", features = ["mime-guess"], optional = true }
+rust-embed = { version = "8", features = ["mime-guess", "include-exclude"], optional = true }
 samael = { version = "0.0.19", optional = true }
 schemars = { version = "0.8", optional = true }
 sqlx = { version = "0.8", features = ["runtime-tokio", "uuid", "chrono", "rust_decimal", "migrate", "json"], optional = true }

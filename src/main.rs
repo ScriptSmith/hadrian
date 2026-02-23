@@ -66,6 +66,7 @@ mod tests;
 #[cfg(feature = "embed-ui")]
 #[derive(Embed)]
 #[folder = "ui/dist"]
+#[allow_missing = true]
 struct UiAssets;
 
 /// Embedded documentation site assets from docs/out directory.
@@ -73,6 +74,7 @@ struct UiAssets;
 #[cfg(feature = "embed-docs")]
 #[derive(Embed)]
 #[folder = "docs/out"]
+#[allow_missing = true]
 struct DocsAssets;
 
 /// Handler for serving embedded UI assets
@@ -622,15 +624,26 @@ impl AppState {
             }
         };
 
-        // Initialize model catalog registry from embedded data
+        // Initialize model catalog registry from embedded data (if available)
         let model_catalog = catalog::ModelCatalogRegistry::new();
-        if let Err(e) = model_catalog.load_from_json(catalog::EMBEDDED_CATALOG) {
-            tracing::error!(error = %e, "Failed to load embedded model catalog");
-        } else {
-            tracing::info!(
-                model_count = model_catalog.model_count(),
-                "Loaded model catalog"
-            );
+        match catalog::embedded_catalog() {
+            Some(json) => match model_catalog.load_from_json(&json) {
+                Ok(()) => {
+                    tracing::info!(
+                        model_count = model_catalog.model_count(),
+                        "Loaded embedded model catalog"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to parse embedded model catalog");
+                }
+            },
+            None => {
+                tracing::info!(
+                    "No embedded model catalog available; \
+                     enable the 'embed-catalog' feature or configure runtime sync"
+                );
+            }
         }
 
         // Initialize pricing from defaults + config + provider configs + catalog
@@ -2546,6 +2559,7 @@ fn run_features() {
         // Assets
         ("embed-ui", "Assets", cfg!(feature = "embed-ui")),
         ("embed-docs", "Assets", cfg!(feature = "embed-docs")),
+        ("embed-catalog", "Assets", cfg!(feature = "embed-catalog")),
         // Databases
         (
             "database-sqlite",
@@ -2616,6 +2630,8 @@ fn run_features() {
     // Infer build profile from enabled features
     let profile = if cfg!(feature = "full") {
         "full"
+    } else if cfg!(feature = "headless") {
+        "headless"
     } else if cfg!(feature = "standard") {
         "standard"
     } else if cfg!(feature = "minimal") {
@@ -2629,14 +2645,15 @@ fn run_features() {
     println!("Hadrian Gateway v{version}\n");
     println!("Build profile: {profile}");
     match profile {
-        "full" => println!(
-            "  (full = standard + bedrock, vertex, azure, saml, vault, secrets, doc-extraction-full, virus-scan, s3)\n"
-        ),
+        "full" => println!("  (full = standard + saml, doc-extraction-full, virus-scan)\n"),
+        "headless" => {
+            println!("  (headless = full features without embedded assets — UI, docs, catalog)\n")
+        }
         "standard" => println!(
             "  (standard = minimal + redis, otlp, doc-extraction-basic, postgres, embed-docs, prometheus, cel, utoipa, sso, forecasting, json-schema, response-validation, csv-export)\n"
         ),
         "minimal" => {
-            println!("  (minimal = tiny + sqlite, embed-ui, wizard)\n")
+            println!("  (minimal = tiny + sqlite, embed-catalog, embed-ui, wizard)\n")
         }
         "tiny" => {
             println!(

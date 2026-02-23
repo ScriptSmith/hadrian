@@ -79,7 +79,7 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            features: "full standard minimal tiny"
+            features: "full headless standard minimal tiny"
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             features: "standard minimal tiny"
@@ -88,7 +88,7 @@ jobs:
             features: "standard minimal tiny"
           - target: aarch64-apple-darwin
             os: macos-latest
-            features: "full standard minimal tiny"
+            features: "full headless standard minimal tiny"
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             features: "standard minimal tiny"
@@ -236,16 +236,13 @@ jobs:
         with:
           shared-key: publish
 
-      - name: Fetch model catalog
-        run: mkdir -p data && curl -sSL https://models.dev/api.json -o data/models-dev-catalog.json
-
       - name: Set version from tag
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
 
       - name: Publish to crates.io
-        run: cargo publish --no-default-features --features tiny --allow-dirty
+        run: cargo publish --no-default-features --features headless --allow-dirty
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 

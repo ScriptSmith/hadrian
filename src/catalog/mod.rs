@@ -3,8 +3,8 @@
 //! This module provides access to the models.dev model catalog, which contains
 //! per-model metadata including capabilities, pricing, context limits, and modalities.
 //!
-//! The catalog is embedded at build time as a fallback and optionally synced at
-//! runtime via a background job.
+//! The catalog is optionally embedded at build time as a fallback (via the `embed-catalog`
+//! feature) and can be synced at runtime via a background job.
 //!
 //! # Usage
 //!
@@ -12,7 +12,9 @@
 //! use crate::catalog::ModelCatalogRegistry;
 //!
 //! let registry = ModelCatalogRegistry::new();
-//! registry.load_from_json(EMBEDDED_CATALOG)?;
+//! if let Some(json) = embedded_catalog() {
+//!     registry.load_from_json(&json)?;
+//! }
 //!
 //! // Look up model metadata
 //! if let Some(enrichment) = registry.lookup("anthropic", "claude-opus-4-5") {
@@ -28,20 +30,39 @@ pub use registry::{
     ModelCapabilities, ModelCatalogRegistry, ModelModalities, resolve_catalog_provider_id,
 };
 
-/// The embedded model catalog from models.dev.
-///
-/// This is loaded at compile time and serves as a fallback when runtime sync is
-/// disabled or unavailable. The catalog is fetched via `scripts/fetch-model-catalog.sh`.
-pub const EMBEDDED_CATALOG: &str = include_str!("../../data/models-dev-catalog.json");
+/// Embedded catalog assets from the data/ directory.
+/// Gated behind the `embed-catalog` feature and uses `allow_missing` so the
+/// build succeeds even when `data/models-dev-catalog.json` is absent.
+#[cfg(feature = "embed-catalog")]
+#[derive(rust_embed::Embed)]
+#[folder = "data"]
+#[include = "models-dev-catalog.json"]
+#[allow_missing = true]
+struct CatalogAssets;
 
-#[cfg(test)]
+/// Returns the embedded model catalog JSON, if the `embed-catalog` feature is
+/// enabled and the catalog file was present at build time.
+pub fn embedded_catalog() -> Option<String> {
+    #[cfg(feature = "embed-catalog")]
+    {
+        CatalogAssets::get("models-dev-catalog.json")
+            .map(|file| String::from_utf8_lossy(&file.data).into_owned())
+    }
+    #[cfg(not(feature = "embed-catalog"))]
+    {
+        None
+    }
+}
+
+#[cfg(all(test, feature = "embed-catalog"))]
 mod tests {
     use super::*;
 
     #[test]
     fn test_embedded_catalog_parses() {
+        let json = embedded_catalog().expect("Embedded catalog should be present");
         let catalog: types::ModelCatalog =
-            serde_json::from_str(EMBEDDED_CATALOG).expect("Embedded catalog should be valid JSON");
+            serde_json::from_str(&json).expect("Embedded catalog should be valid JSON");
 
         // Should have multiple providers
         assert!(
@@ -67,9 +88,10 @@ mod tests {
 
     #[test]
     fn test_load_embedded_catalog_into_registry() {
+        let json = embedded_catalog().expect("Embedded catalog should be present");
         let registry = ModelCatalogRegistry::new();
         registry
-            .load_from_json(EMBEDDED_CATALOG)
+            .load_from_json(&json)
             .expect("Should load embedded catalog");
 
         // Should have many models
