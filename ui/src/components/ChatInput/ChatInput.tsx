@@ -217,6 +217,15 @@ export function ChatInput({
     }
   }, [pendingPrompt, clearPendingPrompt]);
 
+  // Refocus textarea when streaming ends
+  const wasStreamingRef = useRef(false);
+  useEffect(() => {
+    if (wasStreamingRef.current && !isStreaming) {
+      textareaRef.current?.focus();
+    }
+    wasStreamingRef.current = isStreaming;
+  }, [isStreaming]);
+
   const fileUploadsEnabled = config?.chat.file_uploads_enabled ?? false;
   const maxSize = config?.chat.max_file_size_bytes || 10 * 1024 * 1024;
   const allowedTypes = useMemo(
