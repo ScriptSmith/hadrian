@@ -163,8 +163,8 @@ function getDisabledProfiles(os: OS, libc: Libc): Set<Profile> | undefined {
 function QuickStartSelector() {
   const [method, setMethod] = useState<Method>("binary");
   const [os, setOs] = useState<OS>("linux-x86_64");
-  const [profile, setProfile] = useState<Profile>("full");
-  const [libc, setLibc] = useState<Libc>("gnu");
+  const [profile, setProfile] = useState<Profile>("standard");
+  const [libc, setLibc] = useState<Libc>("musl");
   const [copied, setCopied] = useState(false);
 
   const isLinux = os === "linux-x86_64" || os === "linux-arm64";
@@ -197,7 +197,18 @@ function QuickStartSelector() {
   const downloadUrl = method === "binary" ? getDownloadUrl(os, profile, libc) : null;
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(command);
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(command);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = command;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -343,7 +354,13 @@ function DemoGallery() {
   const chatRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    chatRef.current?.scrollIntoView({ inline: "center", block: "nearest" });
+    const el = chatRef.current;
+    const container = el?.parentElement;
+    if (el && container) {
+      const scrollLeft =
+        el.offsetLeft - container.offsetLeft - (container.clientWidth - el.offsetWidth) / 2;
+      container.scrollLeft = scrollLeft;
+    }
   }, []);
 
   return (
