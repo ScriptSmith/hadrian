@@ -1,3 +1,31 @@
+# Default feature profile (full, standard, minimal, tiny)
+profile := "full"
+
+# Install Rust nightly, frontend deps, and model catalog
+init:
+    rustup toolchain install nightly --component rustfmt
+    cd ui && pnpm install
+    cd docs && pnpm install
+    ./scripts/fetch-model-catalog.sh
+    ./scripts/fetch-openapi-specs.sh
+
+# Build frontend assets and release binary (use profile=minimal for faster builds)
+build: build-frontend build-backend
+
+# Build frontend assets (UI + docs)
+build-frontend:
+    cd ui && pnpm run generate-api && pnpm build && pnpm storybook:build
+    cd docs && pnpm build
+
+# Build release binary
+build-backend:
+    cargo build --release --no-default-features --features {{profile}}
+
+# Remove build artifacts
+clean:
+    cargo clean
+    rm -rf ui/dist ui/storybook-static docs/out data/
+
 # Run all CI checks (sequential)
 check: check-rust check-ui check-docs check-openapi check-helm check-security
 

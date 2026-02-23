@@ -18,18 +18,59 @@ An open-source AI Gateway that provides a unified OpenAI-compatible API for rout
 
 ## Quick Start
 
-```bash
-# Download and run
-cargo install hadrian
-hadrian
+See the [Getting Started](https://hadriangateway.com/docs/getting-started) guide for more details. Otherwise:
 
-# Or with Docker
-docker run -p 8080:8080 ghcr.io/scriptsmith/hadrian
+Download the latest binary from [GitHub Releases](https://github.com/ScriptSmith/hadrian/releases/latest) and run it:
+
+```bash
+./hadrian
 ```
 
-The gateway starts at `http://localhost:8080` with the chat UI. No database required for basic use.
+Or use Docker:
 
-Running without arguments creates `~/.config/hadrian/hadrian.toml` with sensible defaults, uses SQLite, and opens the browser to the chat UI.
+```bash
+cat <<'EOF' > hadrian.toml
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[database]
+type = "sqlite"
+path = "/app/data/hadrian.db"
+
+[cache]
+type = "memory"
+
+[ui]
+enabled = true
+
+# Add a provider (uncomment and set your API key)
+# [providers.openai]
+# type = "open_ai"
+# api_key = "${OPENAI_API_KEY}"
+EOF
+
+docker run -p 8080:8080 \
+  -v ./hadrian.toml:/app/config/hadrian.toml:ro \
+  -v hadrian-data:/app/data \
+  ghcr.io/scriptsmith/hadrian
+```
+
+Or build from source ([just](https://just.systems) required):
+
+```bash
+git clone https://github.com/ScriptSmith/hadrian.git
+cd hadrian && just init && just build
+./target/release/hadrian
+```
+
+Or install from crates.io (find the latest version with `cargo search hadrian`):
+
+```bash
+cargo install hadrian@VERSION
+```
+
+The gateway starts at `http://localhost:8080` with the chat UI. No database required for basic use. Running without arguments creates `~/.config/hadrian/hadrian.toml` with sensible defaults, uses SQLite, and opens the browser.
 
 ## Configuration
 

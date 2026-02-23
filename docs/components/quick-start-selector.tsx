@@ -48,6 +48,7 @@ const featureMatrix: { name: string; profiles: Profile[] }[] = [
   { name: "Azure OpenAI", profiles: ["minimal", "standard", "full"] },
   { name: "SQLite", profiles: ["minimal", "standard", "full"] },
   { name: "Embedded UI", profiles: ["minimal", "standard", "full"] },
+  { name: "Model catalog", profiles: ["minimal", "standard", "full"] },
   { name: "Setup wizard", profiles: ["minimal", "standard", "full"] },
   { name: "PostgreSQL", profiles: ["standard", "full"] },
   { name: "Redis caching", profiles: ["standard", "full"] },
@@ -57,7 +58,12 @@ const featureMatrix: { name: string; profiles: Profile[] }[] = [
   { name: "Secrets managers", profiles: ["standard", "full"] },
   { name: "OTLP & Prometheus", profiles: ["standard", "full"] },
   { name: "OpenAPI docs", profiles: ["standard", "full"] },
+  { name: "Embedded docs", profiles: ["standard", "full"] },
   { name: "Doc extraction", profiles: ["standard", "full"] },
+  { name: "Cost forecasting", profiles: ["standard", "full"] },
+  { name: "CSV export", profiles: ["standard", "full"] },
+  { name: "Response validation", profiles: ["standard", "full"] },
+  { name: "JSON schema", profiles: ["standard", "full"] },
   { name: "SAML SSO", profiles: ["full"] },
   { name: "Kreuzberg OCR", profiles: ["full"] },
   { name: "ClamAV scanning", profiles: ["full"] },
@@ -65,10 +71,31 @@ const featureMatrix: { name: string; profiles: Profile[] }[] = [
 
 function getInstallCommand(method: Method, os: OS, profile: Profile, libc: Libc): string {
   if (method === "docker") {
-    return ["docker run \\", "  -p 8080:8080 \\", "  ghcr.io/scriptsmith/hadrian"].join("\n");
+    return [
+      "cat <<'EOF' > hadrian.toml",
+      "[server]",
+      'host = "0.0.0.0"',
+      "port = 8080",
+      "",
+      "[database]",
+      'type = "sqlite"',
+      'path = "/app/data/hadrian.db"',
+      "",
+      "[cache]",
+      'type = "memory"',
+      "",
+      "[ui]",
+      "enabled = true",
+      "EOF",
+      "",
+      "docker run -p 8080:8080 \\",
+      "  -v ./hadrian.toml:/app/config/hadrian.toml:ro \\",
+      "  -v hadrian-data:/app/data \\",
+      "  ghcr.io/scriptsmith/hadrian",
+    ].join("\n");
   }
   if (method === "cargo") {
-    return "cargo install hadrian\nhadrian";
+    return `cargo install hadrian@${process.env.HADRIAN_VERSION}\nhadrian`;
   }
   const ext = os === "windows" ? "zip" : "tar.gz";
   const target = getTarget(os, libc);

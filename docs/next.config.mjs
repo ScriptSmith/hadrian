@@ -1,9 +1,14 @@
+import { readFileSync } from "node:fs";
 import { createMDX } from "fumadocs-mdx/next";
 
 const withMDX = createMDX();
 
+const cargoToml = readFileSync("../Cargo.toml", "utf-8");
+const version = cargoToml.match(/^version\s*=\s*"(.+)"/m)?.[1] ?? "latest";
+
 /** @type {import('next').NextConfig} */
 const config = {
+  env: { HADRIAN_VERSION: version },
   reactStrictMode: true,
   // Static export for serving from gateway
   output: "export",
