@@ -24,6 +24,7 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
 
 # Copy source files
 WORKDIR /app
+COPY Cargo.toml ./Cargo.toml
 COPY ui ./ui
 COPY docs ./docs
 COPY openapi/hadrian.openapi.json ./openapi/hadrian.openapi.json
