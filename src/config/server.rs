@@ -461,17 +461,19 @@ fn default_frame_options() -> Option<String> {
 ///
 /// Directives:
 /// - `script-src blob: 'unsafe-eval' https://cdn.jsdelivr.net` — WASM workers loaded as blob
-///   URLs; `unsafe-eval` required by Pyodide for Python bytecode execution; CDN for Pyodide modules
+///   URLs; `unsafe-eval` required by Pyodide for Python bytecode execution and Vega `Function()`
+///   evaluation; CDN for Pyodide modules and DuckDB WASM bundles
 /// - `style-src 'unsafe-inline'` — Tailwind CSS dynamic styling
 /// - `worker-src blob:` — Web Worker sandboxed execution
 /// - `frame-src blob:` — HTML artifact preview iframes
 /// - `img-src data: blob:` — Generated charts/images and inline assets
 /// - `media-src blob:` — Audio playback from generated TTS blob URLs
-/// - `connect-src https://cdn.jsdelivr.net` — Pyodide fetches WASM/packages from CDN
+/// - `connect-src https://cdn.jsdelivr.net https://*.wikipedia.org https://www.wikidata.org` —
+///   Pyodide/DuckDB fetch WASM/packages from CDN; Wikipedia and Wikidata tools query REST APIs
 /// - `object-src 'none'` — Blocks plugins (Flash, Java applets)
 /// - `base-uri 'self'` — Prevents `<base>` tag injection
 fn default_csp() -> Option<String> {
-    Some("default-src 'self'; script-src 'self' blob: 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'".to_string())
+    Some("default-src 'self'; script-src 'self' blob: 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://*.wikipedia.org https://www.wikidata.org; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'".to_string())
 }
 
 fn default_xss_protection() -> Option<String> {
