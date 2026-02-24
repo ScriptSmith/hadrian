@@ -882,7 +882,7 @@ print(f"Rendered {steps:,} steps, max velocity: {velocity.max():.1f}")`,
     title: "Lorenz Attractor",
     role: "output",
     mimeType: "image/png",
-    data: { src: "/story-assets/lorenz.png" },
+    data: { src: "story-assets/lorenz.png" },
   };
 
   const stdoutArtifact: Artifact = {
