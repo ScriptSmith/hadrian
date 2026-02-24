@@ -18,10 +18,10 @@ function GitHubIcon({ className }: { className?: string }) {
 
 const demos = [
   {
-    id: "studio",
-    title: "Studio",
-    description: "Generate images across providers simultaneously with cost tracking.",
-    storyId: "pages-studiopage--images",
+    id: "knowledge-bases",
+    title: "Knowledge Bases",
+    description: "Search uploaded documents with vector search, citations, and inline references.",
+    storyId: "chat-chatview--knowledge-bases",
   },
   {
     id: "chat",
@@ -29,6 +29,18 @@ const demos = [
     description:
       "Compare responses from multiple models side-by-side with advanced multi-model modes.",
     storyId: "chat-chatview--multi-model-conversation",
+  },
+  {
+    id: "execute-code",
+    title: "Execute Code",
+    description: "Run Python in the browser and display interactive chart artifacts inline.",
+    storyId: "chat-chatview--execute-code",
+  },
+  {
+    id: "studio",
+    title: "Studio",
+    description: "Generate images across providers simultaneously with cost tracking.",
+    storyId: "pages-studiopage--images",
   },
   {
     id: "usage",

@@ -3,7 +3,13 @@ import type { Meta, StoryObj } from "@storybook/react";
 import { expect, userEvent, within, fn } from "storybook/test";
 import { useEffect } from "react";
 
-import type { ChatMessage, ModelResponse } from "@/components/chat-types";
+import type {
+  ChatMessage,
+  ModelResponse,
+  Citation,
+  ToolExecutionRound,
+  Artifact,
+} from "@/components/chat-types";
 import type { ModelInfo } from "@/components/ModelSelector/ModelSelector";
 import { ConfigProvider } from "@/config/ConfigProvider";
 import { PreferencesProvider } from "@/preferences/PreferencesProvider";
@@ -651,5 +657,367 @@ export const LoadingModels: Story = {
     // The loading state should show a loading indicator in the empty chat area
     const loadingElement = canvas.getByRole("status");
     await expect(loadingElement).toBeInTheDocument();
+  },
+};
+
+// ============================================================================
+// Homepage showcase stories
+// ============================================================================
+
+/**
+ * Showcase: Knowledge Bases tool — model searches uploaded documents and cites results
+ */
+function KnowledgeBasesStory({ onSendMessage }: { onSendMessage: (content: string) => void }) {
+  const fileSearchCitations: Citation[] = [
+    {
+      id: "cit-1",
+      type: "file",
+      fileId: "file_q3report",
+      filename: "q3_financial_report.pdf",
+      snippet:
+        "Revenue grew 23% year-over-year to $4.2B, driven by strong enterprise adoption and international expansion into APAC markets.",
+      score: 0.95,
+    },
+    {
+      id: "cit-2",
+      type: "file",
+      fileId: "file_forecast",
+      filename: "2025_forecast_model.xlsx",
+      snippet:
+        "Projected Q4 revenue of $4.8B assumes 15% sequential growth with operating margin improving to 28%.",
+      score: 0.88,
+    },
+    {
+      id: "cit-3",
+      type: "file",
+      fileId: "file_earnings",
+      filename: "earnings_call_transcript.md",
+      snippet:
+        'CEO noted: "We expect sustained double-digit growth through 2026, supported by our expanded product portfolio and deepening customer relationships."',
+      score: 0.82,
+    },
+  ];
+
+  const fileSearchArtifact: Artifact = {
+    id: "search-artifact-1",
+    type: "file_search",
+    title: "Search Results",
+    role: "output",
+    data: {
+      query: "Q3 revenue growth and Q4 outlook",
+      vectorStoreIds: ["vs_financial_docs"],
+      totalResults: 3,
+      results: [
+        {
+          fileId: "file_q3report",
+          filename: "q3_financial_report.pdf",
+          score: 0.95,
+          content:
+            "Revenue grew 23% year-over-year to $4.2B, driven by strong enterprise adoption and international expansion into APAC markets. Gross margin expanded 200bps to 72%.",
+        },
+        {
+          fileId: "file_forecast",
+          filename: "2025_forecast_model.xlsx",
+          score: 0.88,
+          content:
+            "Projected Q4 revenue of $4.8B assumes 15% sequential growth with operating margin improving to 28%. Full-year 2025 revenue estimated at $17.1B.",
+        },
+        {
+          fileId: "file_earnings",
+          filename: "earnings_call_transcript.md",
+          score: 0.82,
+          content:
+            'CEO noted: "We expect sustained double-digit growth through 2026, supported by our expanded product portfolio and deepening customer relationships."',
+        },
+      ],
+    },
+  };
+
+  const fileSearchRounds: ToolExecutionRound[] = [
+    {
+      round: 1,
+      executions: [
+        {
+          id: "exec-fs-1",
+          toolName: "file_search",
+          status: "success",
+          startTime: Date.now() - 850,
+          endTime: Date.now() - 200,
+          duration: 650,
+          input: { query: "Q3 revenue growth and Q4 outlook" },
+          inputArtifacts: [],
+          outputArtifacts: [fileSearchArtifact],
+          round: 1,
+        },
+      ],
+      totalDuration: 650,
+    },
+  ];
+
+  const messages: ChatMessage[] = [
+    {
+      id: "kb-1",
+      role: "user",
+      content: "What were the key takeaways from Q3 earnings and what's the Q4 outlook?",
+      timestamp: new Date("2025-10-20T14:30:00"),
+    },
+    {
+      id: "kb-2",
+      role: "assistant",
+      model: "anthropic/claude-4.6-opus",
+      content: `Based on the financial documents in your knowledge base, here's a summary:
+
+## Q3 Performance
+
+Revenue reached **$4.2B**, up **23% year-over-year**, driven by:
+- Strong enterprise adoption
+- International expansion into APAC markets
+- Gross margin expansion of 200bps to 72%
+
+## Q4 Outlook
+
+The forecast model projects **$4.8B** in Q4 revenue, assuming:
+- 15% sequential growth
+- Operating margin improving to **28%**
+- Full-year 2025 revenue estimated at **$17.1B**
+
+Management expressed confidence in sustained double-digit growth through 2026, citing an expanded product portfolio and deepening customer relationships.`,
+      timestamp: new Date("2025-10-20T14:30:08"),
+      usage: {
+        inputTokens: 1240,
+        outputTokens: 185,
+        totalTokens: 1425,
+        cost: 0.0324,
+        firstTokenMs: 650,
+        totalDurationMs: 3200,
+        tokensPerSecond: 57.8,
+      },
+      citations: fileSearchCitations,
+      toolExecutionRounds: fileSearchRounds,
+    },
+  ];
+
+  useStoreSetup({ messages, selectedModels: ["anthropic/claude-4.6-opus"] });
+
+  return <ChatView availableModels={mockModels} onSendMessage={onSendMessage} />;
+}
+
+export const KnowledgeBases: Story = {
+  args: {
+    onSendMessage: fn(),
+  },
+  render: (args) => <KnowledgeBasesStory onSendMessage={args.onSendMessage} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    // Verify user message
+    await expect(canvas.getByText(/Q3 earnings/)).toBeInTheDocument();
+
+    // Verify assistant content
+    await expect(canvas.getByText(/\$4\.2B/)).toBeInTheDocument();
+
+    // Verify citations are rendered
+    await expect(canvas.getByText("q3_financial_report.pdf")).toBeInTheDocument();
+    await expect(canvas.getByText("2025_forecast_model.xlsx")).toBeInTheDocument();
+  },
+};
+
+/**
+ * Showcase: Code execution — model runs Python and displays chart artifact inline
+ */
+function ExecuteCodeStory({ onSendMessage }: { onSendMessage: (content: string) => void }) {
+  const pythonInputArtifact: Artifact = {
+    id: "py-input-1",
+    type: "code",
+    title: "Python",
+    role: "input",
+    data: {
+      language: "python",
+      code: `import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+
+categories = ['Cloud', 'Enterprise', 'Consumer', 'Services', 'Hardware']
+q3_revenue = [1.42, 1.05, 0.82, 0.58, 0.33]
+q2_revenue = [1.18, 0.94, 0.79, 0.52, 0.31]
+
+x = range(len(categories))
+width = 0.35
+
+fig, ax = plt.subplots(figsize=(10, 6))
+bars_q2 = ax.bar([i - width/2 for i in x], q2_revenue, width, label='Q2', color='#94a3b8')
+bars_q3 = ax.bar([i + width/2 for i in x], q3_revenue, width, label='Q3', color='#3b82f6')
+
+ax.set_ylabel('Revenue ($B)')
+ax.set_title('Revenue by Segment: Q2 vs Q3 2025')
+ax.set_xticks(x)
+ax.set_xticklabels(categories)
+ax.yaxis.set_major_formatter(mticker.FormatStrFormatter('$%.2f'))
+ax.legend()
+ax.bar_label(bars_q3, fmt='$%.2f', padding=3, fontsize=9)
+plt.tight_layout()
+plt.savefig('revenue_comparison.png', dpi=150)
+print("Chart saved successfully")`,
+    },
+  };
+
+  const chartOutputArtifact: Artifact = {
+    id: "chart-output-1",
+    type: "chart",
+    title: "Revenue by Segment",
+    role: "output",
+    data: {
+      spec: {
+        $schema: "https://vega.github.io/schema/vega-lite/v6.json",
+        title: "Revenue by Segment: Q2 vs Q3 2025",
+        width: 500,
+        height: 300,
+        data: {
+          values: [
+            { segment: "Cloud", quarter: "Q2", revenue: 1.18 },
+            { segment: "Cloud", quarter: "Q3", revenue: 1.42 },
+            { segment: "Enterprise", quarter: "Q2", revenue: 0.94 },
+            { segment: "Enterprise", quarter: "Q3", revenue: 1.05 },
+            { segment: "Consumer", quarter: "Q2", revenue: 0.79 },
+            { segment: "Consumer", quarter: "Q3", revenue: 0.82 },
+            { segment: "Services", quarter: "Q2", revenue: 0.52 },
+            { segment: "Services", quarter: "Q3", revenue: 0.58 },
+            { segment: "Hardware", quarter: "Q2", revenue: 0.31 },
+            { segment: "Hardware", quarter: "Q3", revenue: 0.33 },
+          ],
+        },
+        mark: "bar",
+        encoding: {
+          x: { field: "segment", type: "nominal", title: "Segment", axis: { labelAngle: 0 } },
+          xOffset: { field: "quarter" },
+          y: {
+            field: "revenue",
+            type: "quantitative",
+            title: "Revenue ($B)",
+          },
+          color: {
+            field: "quarter",
+            type: "nominal",
+            scale: { range: ["#94a3b8", "#3b82f6"] },
+            title: "Quarter",
+          },
+        },
+      },
+    },
+  };
+
+  const stdoutArtifact: Artifact = {
+    id: "py-stdout-1",
+    type: "code",
+    title: "stdout",
+    role: "output",
+    data: { language: "text", code: "Chart saved successfully" },
+  };
+
+  const displaySelectionArtifact: Artifact = {
+    id: "display-sel-1",
+    type: "display_selection",
+    role: "output",
+    data: {
+      artifactIds: ["chart-output-1"],
+      layout: "inline",
+    },
+  };
+
+  const pythonRounds: ToolExecutionRound[] = [
+    {
+      round: 1,
+      executions: [
+        {
+          id: "exec-py-1",
+          toolName: "code_interpreter",
+          status: "success",
+          startTime: Date.now() - 3800,
+          endTime: Date.now() - 600,
+          duration: 3200,
+          input: {},
+          inputArtifacts: [pythonInputArtifact],
+          outputArtifacts: [stdoutArtifact, chartOutputArtifact],
+          round: 1,
+        },
+      ],
+      totalDuration: 3200,
+    },
+    {
+      round: 2,
+      executions: [
+        {
+          id: "exec-display-1",
+          toolName: "display_artifacts",
+          status: "success",
+          startTime: Date.now() - 500,
+          endTime: Date.now() - 200,
+          duration: 300,
+          input: { artifactIds: ["chart-output-1"], layout: "inline" },
+          inputArtifacts: [],
+          outputArtifacts: [displaySelectionArtifact],
+          round: 2,
+        },
+      ],
+      totalDuration: 300,
+    },
+  ];
+
+  const messages: ChatMessage[] = [
+    {
+      id: "py-1",
+      role: "user",
+      content: "Can you visualize Q2 vs Q3 revenue by business segment?",
+      timestamp: new Date("2025-10-20T15:10:00"),
+    },
+    {
+      id: "py-2",
+      role: "assistant",
+      model: "openai/gpt-5.3",
+      content: `I created a grouped bar chart comparing Q2 and Q3 revenue across all five business segments.
+
+**Key highlights:**
+- **Cloud** led growth with **$1.42B** in Q3, up 20% from Q2
+- **Enterprise** crossed $1B for the first time at **$1.05B**
+- **Consumer** and **Services** showed steady single-digit growth
+- **Hardware** remained stable at **$0.33B**
+
+Total Q3 revenue of **$4.20B** represents a **12.3%** increase over Q2's $3.74B.`,
+      timestamp: new Date("2025-10-20T15:10:12"),
+      usage: {
+        inputTokens: 85,
+        outputTokens: 310,
+        totalTokens: 395,
+        cost: 0.0066,
+        firstTokenMs: 3800,
+        totalDurationMs: 7200,
+        tokensPerSecond: 43.1,
+      },
+      artifacts: [chartOutputArtifact, displaySelectionArtifact],
+      toolExecutionRounds: pythonRounds,
+    },
+  ];
+
+  useStoreSetup({ messages, selectedModels: ["openai/gpt-5.3"] });
+
+  return <ChatView availableModels={mockModels} onSendMessage={onSendMessage} />;
+}
+
+export const ExecuteCode: Story = {
+  args: {
+    onSendMessage: fn(),
+  },
+  render: (args) => <ExecuteCodeStory onSendMessage={args.onSendMessage} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    // Verify user message
+    await expect(canvas.getByText(/Q2 vs Q3 revenue/)).toBeInTheDocument();
+
+    // Verify assistant content has key data points
+    await expect(canvas.getByText(/\$1\.42B/)).toBeInTheDocument();
+    await expect(canvas.getByText(/12\.3%/)).toBeInTheDocument();
+
+    // Verify tool execution block is rendered (2 tools across 2 rounds)
+    await expect(canvas.getByText(/2 tools/)).toBeInTheDocument();
   },
 };

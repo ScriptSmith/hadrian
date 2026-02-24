@@ -287,7 +287,7 @@ export function CitationList({
   return (
     <div className={cn("space-y-2", className)}>
       <div className="flex items-center justify-between">
-        <h4 className="text-sm font-medium text-muted-foreground">Sources ({citations.length})</h4>
+        <p className="text-sm font-medium text-muted-foreground">Sources ({citations.length})</p>
         {citations.length > 1 && (
           <Button
             variant="ghost"
