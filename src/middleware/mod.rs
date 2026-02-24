@@ -10,6 +10,13 @@ mod security_headers;
 mod usage;
 
 pub use admin::{AdminAuth, admin_auth_middleware};
+
+/// Client connection metadata extracted by middleware for audit logging.
+#[derive(Debug, Clone, Default)]
+pub struct ClientInfo {
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+}
 pub use authz::{
     AuthzContext, api_authz_middleware, authz_middleware, permissive_authz_middleware,
 };

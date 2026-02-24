@@ -15,7 +15,7 @@ use serde_json::json;
 use super::{AuditActor, error::AdminError};
 use crate::{
     AppState,
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{CreateAuditLog, CreateOrgScimConfig, CreatedOrgScimConfig, UpdateOrgScimConfig},
     services::Services,
 };
@@ -107,6 +107,7 @@ pub async fn create(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(org_slug): Path<String>,
     Valid(Json(input)): Valid<Json<CreateOrgScimConfig>>,
 ) -> Result<(StatusCode, Json<CreatedOrgScimConfig>), AdminError> {
@@ -176,8 +177,8 @@ pub async fn create(
                     "revoke_api_keys_on_deactivate": created.config.revoke_api_keys_on_deactivate,
                 }
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -203,6 +204,7 @@ pub async fn update(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(org_slug): Path<String>,
     Valid(Json(input)): Valid<Json<UpdateOrgScimConfig>>,
 ) -> Result<Json<crate::models::OrgScimConfig>, AdminError> {
@@ -277,8 +279,8 @@ pub async fn update(
                 "deactivate_deletes_user": input.deactivate_deletes_user,
                 "revoke_api_keys_on_deactivate": input.revoke_api_keys_on_deactivate,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -303,6 +305,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(org_slug): Path<String>,
 ) -> Result<Json<()>, AdminError> {
     let services = get_services(&state)?;
@@ -358,8 +361,8 @@ pub async fn delete(
             details: json!({
                 "token_prefix": token_prefix,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -387,6 +390,7 @@ pub async fn rotate_token(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(org_slug): Path<String>,
 ) -> Result<Json<CreatedOrgScimConfig>, AdminError> {
     let services = get_services(&state)?;
@@ -442,8 +446,8 @@ pub async fn rotate_token(
                 "old_token_prefix": old_token_prefix,
                 "new_token_prefix": rotated.config.token_prefix,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 

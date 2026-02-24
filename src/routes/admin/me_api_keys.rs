@@ -18,7 +18,7 @@ use super::{
 use crate::{
     AppState,
     config::GatewayAuthConfig,
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{
         ApiKey, ApiKeyOwner, CreateApiKey, CreateAuditLog, CreateSelfServiceApiKey, CreatedApiKey,
         DEFAULT_API_KEY_PREFIX,
@@ -140,6 +140,7 @@ pub async fn create(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Valid(Json(input)): Valid<Json<CreateSelfServiceApiKey>>,
 ) -> Result<(StatusCode, Json<CreatedApiKey>), AdminError> {
     authz.require("api_key", "self_create", None, None, None, None)?;
@@ -205,8 +206,8 @@ pub async fn create(
                 "name": created.api_key.name,
                 "key_prefix": created.api_key.key_prefix,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -229,6 +230,7 @@ pub async fn revoke(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(key_id): Path<Uuid>,
 ) -> Result<Json<()>, AdminError> {
     authz.require("api_key", "self_delete", None, None, None, None)?;
@@ -255,8 +257,8 @@ pub async fn revoke(
                 "name": key.name,
                 "key_prefix": key.key_prefix,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -296,6 +298,7 @@ pub async fn rotate(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(key_id): Path<Uuid>,
     Json(request): Json<RotateApiKeyRequest>,
 ) -> Result<(StatusCode, Json<CreatedApiKey>), AdminError> {
@@ -357,8 +360,8 @@ pub async fn rotate(
                 "new_key_prefix": created.api_key.key_prefix,
                 "grace_period_seconds": grace_period_seconds,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 

@@ -22,7 +22,7 @@ use crate::authz::AuthzEngine;
 use crate::{
     AppState,
     authz::{PolicyContext, RequestContext, Subject, pattern_matches},
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{
         CreateAuditLog, CreateOrgRbacPolicy, OrgRbacPolicy, OrgRbacPolicyVersion, RbacPolicyEffect,
         RollbackOrgRbacPolicy, UpdateOrgRbacPolicy,
@@ -413,6 +413,7 @@ pub async fn create(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(org_slug): Path<String>,
     Valid(Json(input)): Valid<Json<CreateOrgRbacPolicy>>,
 ) -> Result<(StatusCode, Json<OrgRbacPolicy>), AdminError> {
@@ -480,8 +481,8 @@ pub async fn create(
                 "priority": policy.priority,
                 "enabled": policy.enabled,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -570,6 +571,7 @@ pub async fn update(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, policy_id)): Path<(String, Uuid)>,
     Valid(Json(input)): Valid<Json<UpdateOrgRbacPolicy>>,
 ) -> Result<Json<OrgRbacPolicy>, AdminError> {
@@ -641,8 +643,8 @@ pub async fn update(
                 "enabled": input.enabled,
                 "condition_changed": input.condition.is_some(),
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -670,6 +672,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, policy_id)): Path<(String, Uuid)>,
 ) -> Result<Json<()>, AdminError> {
     let services = get_services(&state)?;
@@ -736,8 +739,8 @@ pub async fn delete(
             details: json!({
                 "name": policy_name,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -848,6 +851,7 @@ pub async fn rollback(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, policy_id)): Path<(String, Uuid)>,
     Valid(Json(input)): Valid<Json<RollbackOrgRbacPolicy>>,
 ) -> Result<Json<OrgRbacPolicy>, AdminError> {
@@ -918,8 +922,8 @@ pub async fn rollback(
                 "target_version": target_version,
                 "new_version": rolled_back.version,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 

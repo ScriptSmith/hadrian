@@ -24,7 +24,7 @@ use axum::{
 use tower_cookies::Cookies;
 use uuid::Uuid;
 
-use super::RequestId;
+use super::{ClientInfo, RequestId};
 use crate::{
     AppState,
     auth::{AuthError, AuthenticatedRequest, Identity, IdentityKind},
@@ -65,8 +65,24 @@ pub async fn admin_auth_middleware(
         .get::<ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0.ip());
 
+    let client_info = ClientInfo {
+        ip_address: connecting_ip.map(|ip| ip.to_string()),
+        user_agent: headers
+            .get(axum::http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string()),
+    };
+
     // Try to authenticate via Proxy auth or OIDC
-    let identity = match try_admin_auth(&headers, cookies.as_ref(), connecting_ip, &state).await {
+    let identity = match try_admin_auth(
+        &headers,
+        cookies.as_ref(),
+        connecting_ip,
+        &state,
+        &client_info,
+    )
+    .await
+    {
         Ok(identity) => identity,
         Err(AuthError::OidcAuthRequired { .. }) if is_xhr => {
             // For XHR requests, return 401 instead of redirect to avoid CORS issues
@@ -87,12 +103,6 @@ pub async fn admin_auth_middleware(
     // Log audit events for emergency and bootstrap auth
     // These auth types are significant security events that should be logged
     if let Some(services) = &state.services {
-        let ip_address = connecting_ip.map(|ip| ip.to_string());
-        let user_agent = headers
-            .get(axum::http::header::USER_AGENT)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-
         if identity.roles.contains(&EMERGENCY_ADMIN_ROLE.to_string()) {
             let _ = services
                 .audit_logs
@@ -102,8 +112,8 @@ pub async fn admin_auth_middleware(
                     external_id: Some(&identity.external_id),
                     email: identity.email.as_deref(),
                     org_id: None,
-                    ip_address: ip_address.clone(),
-                    user_agent: user_agent.clone(),
+                    ip_address: client_info.ip_address.clone(),
+                    user_agent: client_info.user_agent.clone(),
                     details: serde_json::json!({
                         "provider": "emergency",
                         "account_name": identity.name,
@@ -119,8 +129,8 @@ pub async fn admin_auth_middleware(
                     external_id: Some(&identity.external_id),
                     email: None,
                     org_id: None,
-                    ip_address,
-                    user_agent,
+                    ip_address: client_info.ip_address.clone(),
+                    user_agent: client_info.user_agent.clone(),
                     details: serde_json::json!({
                         "provider": "bootstrap",
                     }),
@@ -129,10 +139,11 @@ pub async fn admin_auth_middleware(
         }
     }
 
-    // Add identity to request extensions
+    // Add identity and client info to request extensions
     let auth = AuthenticatedRequest::new(IdentityKind::Identity(identity.clone()));
     req.extensions_mut().insert(auth);
     req.extensions_mut().insert(AdminAuth { identity });
+    req.extensions_mut().insert(client_info);
 
     Ok(next.run(req).await)
 }
@@ -188,6 +199,7 @@ pub const EMERGENCY_ADMIN_ROLE: &str = "_emergency_admin";
 /// - The `_system_bootstrap` role cannot be assigned by IdPs (reserved prefix)
 async fn try_bootstrap_auth(
     headers: &axum::http::HeaderMap,
+    connecting_ip: Option<IpAddr>,
     state: &AppState,
 ) -> Result<Option<Identity>, AuthError> {
     // Check if bootstrap API key is configured
@@ -224,8 +236,11 @@ async fn try_bootstrap_auth(
                     external_id: None,
                     email: None,
                     org_id: None,
-                    ip_address: None, // Headers available but no trusted proxy context
-                    user_agent: None,
+                    ip_address: connecting_ip.map(|ip| ip.to_string()),
+                    user_agent: headers
+                        .get(axum::http::header::USER_AGENT)
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string()),
                     details: serde_json::json!({
                         "provider": "bootstrap",
                         "reason": "invalid_key",
@@ -430,7 +445,10 @@ async fn try_emergency_auth(
                         email: None,
                         org_id: None,
                         ip_address: Some(ip_str.to_string()),
-                        user_agent: None,
+                        user_agent: headers
+                            .get(axum::http::header::USER_AGENT)
+                            .and_then(|v| v.to_str().ok())
+                            .map(|s| s.to_string()),
                         details: serde_json::json!({
                             "provider": "emergency",
                             "reason": "invalid_key",
@@ -554,11 +572,14 @@ async fn try_admin_auth(
     cookies: Option<&Cookies>,
     connecting_ip: Option<IpAddr>,
     state: &AppState,
+    client_info: &ClientInfo,
 ) -> Result<Identity, AuthError> {
     #[cfg(not(feature = "sso"))]
     let _ = &cookies;
+    #[cfg(not(feature = "sso"))]
+    let _ = &client_info;
     // Try bootstrap API key first (for initial setup when database is empty)
-    if let Some(identity) = try_bootstrap_auth(headers, state).await? {
+    if let Some(identity) = try_bootstrap_auth(headers, connecting_ip, state).await? {
         return Ok(identity);
     }
 
@@ -580,13 +601,13 @@ async fn try_admin_auth(
 
     // Try OIDC session using the shared authenticator
     #[cfg(feature = "sso")]
-    if let Some(identity) = try_oidc_session_auth(cookies, state).await? {
+    if let Some(identity) = try_oidc_session_auth(cookies, state, client_info).await? {
         return Ok(identity);
     }
 
     // Try SAML session using the SAML registry
     #[cfg(feature = "saml")]
-    if let Some(identity) = try_saml_session_auth(cookies, state).await? {
+    if let Some(identity) = try_saml_session_auth(cookies, state, client_info).await? {
         return Ok(identity);
     }
 
@@ -1010,6 +1031,7 @@ async fn try_proxy_auth_auth(
 async fn try_oidc_session_auth(
     cookies: Option<&Cookies>,
     state: &AppState,
+    client_info: &ClientInfo,
 ) -> Result<Option<Identity>, AuthError> {
     use crate::config::AdminAuthConfig;
 
@@ -1123,7 +1145,9 @@ async fn try_oidc_session_auth(
                                 sync_attributes_on_login: sso_config.sync_attributes_on_login,
                                 sync_memberships_on_login: sso_config.sync_memberships_on_login,
                             };
-                            match jit_provision_org_scoped(db, &session, &provisioning).await {
+                            match jit_provision_org_scoped(db, &session, &provisioning, client_info)
+                                .await
+                            {
                                 Ok(provisioned) => Some(provisioned),
                                 Err(e) => {
                                     tracing::warn!(
@@ -1168,7 +1192,14 @@ async fn try_oidc_session_auth(
             .filter_map(|id| id.parse::<Uuid>().ok())
             .collect();
 
-        check_sso_enforcement(services, &org_uuids, session.sso_org_id, &session.email).await?;
+        check_sso_enforcement(
+            services,
+            &org_uuids,
+            session.sso_org_id,
+            &session.email,
+            client_info,
+        )
+        .await?;
     }
 
     Ok(Some(Identity {
@@ -1192,6 +1223,7 @@ async fn try_oidc_session_auth(
 async fn try_saml_session_auth(
     cookies: Option<&Cookies>,
     state: &AppState,
+    client_info: &ClientInfo,
 ) -> Result<Option<Identity>, AuthError> {
     // Get the SAML registry
     let registry = match &state.saml_registry {
@@ -1307,7 +1339,14 @@ async fn try_saml_session_auth(
             .filter_map(|id| id.parse::<Uuid>().ok())
             .collect();
 
-        check_sso_enforcement(services, &org_uuids, session.sso_org_id, &session.email).await?;
+        check_sso_enforcement(
+            services,
+            &org_uuids,
+            session.sso_org_id,
+            &session.email,
+            client_info,
+        )
+        .await?;
     }
 
     tracing::debug!(
@@ -1360,6 +1399,7 @@ async fn check_sso_enforcement(
     org_ids: &[Uuid],
     sso_org_id: Option<Uuid>,
     user_email: &Option<String>,
+    client_info: &ClientInfo,
 ) -> Result<(), AuthError> {
     use crate::models::SsoEnforcementMode;
 
@@ -1457,8 +1497,8 @@ async fn check_sso_enforcement(
                                 "user_email": user_email,
                                 "authenticated_via_org_sso": false,
                             }),
-                            ip_address: None,
-                            user_agent: None,
+                            ip_address: client_info.ip_address.clone(),
+                            user_agent: client_info.user_agent.clone(),
                         })
                         .await;
                 }
@@ -1485,6 +1525,7 @@ async fn jit_provision_org_scoped(
     db: &crate::db::DbPool,
     session: &crate::auth::session_store::OidcSession,
     provisioning: &crate::config::ProvisioningConfig,
+    client_info: &ClientInfo,
 ) -> Result<(Option<Uuid>, Vec<String>, Vec<String>, Vec<String>), AuthError> {
     use crate::{
         db::DbError,
@@ -1511,7 +1552,7 @@ async fn jit_provision_org_scoped(
 
     // Step 2: Get or create user
     let user_id = if provisioning.create_users {
-        let user = get_or_create_user(db, session).await?;
+        let user = get_or_create_user(db, session, client_info).await?;
         Some(user.id)
     } else {
         None
@@ -1562,8 +1603,8 @@ async fn jit_provision_org_scoped(
                             "role": provisioning.default_org_role,
                             "provisioning_mode": "org_scoped",
                         }),
-                        ip_address: None,
-                        user_agent: None,
+                        ip_address: client_info.ip_address.clone(),
+                        user_agent: client_info.user_agent.clone(),
                     })
                     .await;
             }
@@ -1628,8 +1669,8 @@ async fn jit_provision_org_scoped(
                                 "role": provisioning.default_team_role,
                                 "provisioning_mode": "org_scoped",
                             }),
-                            ip_address: None,
-                            user_agent: None,
+                            ip_address: client_info.ip_address.clone(),
+                            user_agent: client_info.user_agent.clone(),
                         })
                         .await;
                 }
@@ -1713,8 +1754,8 @@ async fn jit_provision_org_scoped(
                                     "idp_group": membership.from_idp_group,
                                     "sso_connection": sso_connection_name,
                                 }),
-                                ip_address: None,
-                                user_agent: None,
+                                ip_address: client_info.ip_address.clone(),
+                                user_agent: client_info.user_agent.clone(),
                             })
                             .await;
                     }
@@ -1753,7 +1794,14 @@ async fn jit_provision_org_scoped(
 
         // Step 6: Sync memberships if enabled
         if provisioning.sync_memberships_on_login {
-            sync_memberships(db, user_id, &current_org_ids, &current_team_ids).await;
+            sync_memberships(
+                db,
+                user_id,
+                &current_org_ids,
+                &current_team_ids,
+                client_info,
+            )
+            .await;
         }
     }
 
@@ -1770,6 +1818,7 @@ async fn jit_provision_org_scoped(
 async fn get_or_create_user(
     db: &crate::db::DbPool,
     session: &crate::auth::session_store::OidcSession,
+    client_info: &ClientInfo,
 ) -> Result<crate::models::User, AuthError> {
     use crate::{
         db::DbError,
@@ -1816,8 +1865,8 @@ async fn get_or_create_user(
                         "name": session.name,
                         "groups": session.groups,
                     }),
-                    ip_address: None,
-                    user_agent: None,
+                    ip_address: client_info.ip_address.clone(),
+                    user_agent: client_info.user_agent.clone(),
                 })
                 .await;
 
@@ -1856,6 +1905,7 @@ async fn sync_memberships(
     user_id: Uuid,
     current_org_ids: &[Uuid],
     current_team_ids: &[Uuid],
+    client_info: &ClientInfo,
 ) {
     use crate::{
         models::{AuditActorType, CreateAuditLog, MembershipSource},
@@ -1894,8 +1944,8 @@ async fn sync_memberships(
                         "reason": "not_in_oidc_groups",
                         "source": "jit",
                     }),
-                    ip_address: None,
-                    user_agent: None,
+                    ip_address: client_info.ip_address.clone(),
+                    user_agent: client_info.user_agent.clone(),
                 })
                 .await;
         }
@@ -1943,8 +1993,8 @@ async fn sync_memberships(
                         "reason": "not_in_oidc_groups",
                         "source": "jit",
                     }),
-                    ip_address: None,
-                    user_agent: None,
+                    ip_address: client_info.ip_address.clone(),
+                    user_agent: client_info.user_agent.clone(),
                 })
                 .await;
         }

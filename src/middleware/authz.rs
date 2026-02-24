@@ -595,6 +595,9 @@ pub async fn permissive_authz_middleware(
         }
     };
 
+    // Insert ClientInfo for unprotected routes (no admin middleware to extract it).
+    req.extensions_mut().insert(super::ClientInfo::default());
+
     // Insert a default AdminAuth with system identity for unprotected routes.
     // This allows handlers to extract AdminAuth for audit logging purposes.
     // Use the default_user_id and default_org_id if available (for anonymous access).

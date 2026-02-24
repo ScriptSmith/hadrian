@@ -62,6 +62,8 @@ pub struct BudgetExceededEvent<'a> {
     pub period: BudgetPeriod,
     pub request_path: &'a str,
     pub request_id: Option<&'a str>,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
 }
 
 /// Event data for budget warning audit logging
@@ -76,6 +78,8 @@ pub struct BudgetWarningEvent<'a> {
     pub period: BudgetPeriod,
     pub request_path: &'a str,
     pub request_id: Option<&'a str>,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
 }
 
 /// Result of combined budget and token limit checks
@@ -577,6 +581,16 @@ pub async fn api_middleware(
         .get::<ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0.ip());
 
+    // Insert client info for audit logging
+    let client_info = super::ClientInfo {
+        ip_address: connecting_ip.map(|ip| ip.to_string()),
+        user_agent: headers
+            .get(axum::http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string()),
+    };
+    req.extensions_mut().insert(client_info.clone());
+
     // 2. Try to authenticate (optional - doesn't fail if no auth)
     let auth_result = try_authenticate(&headers, connecting_ip, &state).await;
 
@@ -739,6 +753,8 @@ pub async fn api_middleware(
                             period: warning.period,
                             request_path: &path,
                             request_id: request_id.as_deref(),
+                            ip_address: client_info.ip_address.clone(),
+                            user_agent: client_info.user_agent.clone(),
                         });
                     }
 
@@ -773,6 +789,8 @@ pub async fn api_middleware(
                             period: *period,
                             request_path: &path,
                             request_id: request_id.as_deref(),
+                            ip_address: client_info.ip_address.clone(),
+                            user_agent: client_info.user_agent.clone(),
                         });
                     }
 
@@ -1698,6 +1716,8 @@ fn log_budget_exceeded(event: BudgetExceededEvent<'_>) {
         period,
         request_path,
         request_id,
+        ip_address,
+        user_agent,
     } = event;
 
     // Publish budget threshold reached event to WebSocket subscribers
@@ -1739,8 +1759,8 @@ fn log_budget_exceeded(event: BudgetExceededEvent<'_>) {
                     "request_path": path,
                     "request_id": req_id,
                 }),
-                ip_address: None,
-                user_agent: None,
+                ip_address,
+                user_agent,
             })
             .await;
 
@@ -1779,6 +1799,8 @@ fn log_budget_warning(event: BudgetWarningEvent<'_>) {
         period,
         request_path,
         request_id,
+        ip_address,
+        user_agent,
     } = event;
 
     // Publish budget threshold warning event to WebSocket subscribers
@@ -1842,8 +1864,8 @@ fn log_budget_warning(event: BudgetWarningEvent<'_>) {
                             "request_path": path,
                             "request_id": req_id,
                         }),
-                        ip_address: None,
-                        user_agent: None,
+                        ip_address,
+                        user_agent,
                     })
                     .await;
 

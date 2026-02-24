@@ -1,7 +1,7 @@
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
 };
 use axum_valid::Valid;
 use serde::{Deserialize, Serialize};
@@ -13,7 +13,7 @@ use crate::{
     AppState,
     cache::CacheKeys,
     config::GatewayAuthConfig,
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{
         ApiKey, ApiKeyScope, CreateApiKey, CreateAuditLog, CreatedApiKey, DEFAULT_API_KEY_PREFIX,
         validate_ip_allowlist, validate_model_patterns, validate_scopes,
@@ -21,25 +21,6 @@ use crate::{
     openapi::PaginationMeta,
     services::Services,
 };
-
-/// Extract IP address and user agent from request headers for audit logging.
-///
-/// Uses trusted-proxy-aware IP extraction to prevent spoofing via `X-Forwarded-For`.
-fn extract_audit_context(
-    headers: &HeaderMap,
-    trusted_proxies: &crate::config::TrustedProxiesConfig,
-) -> (Option<String>, Option<String>) {
-    // Note: ConnectInfo (direct TCP connection IP) is not available in route handlers;
-    // the server does not use `into_make_service_with_connect_info`. Most production
-    // deployments use reverse proxies, so X-Forwarded-For is the primary source.
-    let ip = crate::middleware::extract_client_ip_from_parts(headers, None, trusted_proxies)
-        .map(|ip: std::net::IpAddr| ip.to_string());
-    let ua = headers
-        .get("user-agent")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.to_string());
-    (ip, ua)
-}
 
 /// Paginated list of API keys
 #[derive(Debug, Serialize, Deserialize)]
@@ -255,7 +236,7 @@ pub async fn create(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<crate::middleware::AuthzContext>,
-    headers: HeaderMap,
+    Extension(client_info): Extension<ClientInfo>,
     Valid(Json(input)): Valid<Json<CreateApiKey>>,
 ) -> Result<(StatusCode, Json<CreatedApiKey>), AdminError> {
     let services = get_services(&state)?;
@@ -358,9 +339,6 @@ pub async fn create(
     // Create API key through service
     let created = services.api_keys.create(input, &prefix).await?;
 
-    let (ip_address, user_agent) =
-        extract_audit_context(&headers, &state.config.server.trusted_proxies);
-
     // Log audit event (fire-and-forget, don't fail the request if logging fails)
     let _ = services
         .audit_logs
@@ -376,8 +354,8 @@ pub async fn create(
                 "name": created.api_key.name,
                 "key_prefix": created.api_key.key_prefix,
             }),
-            ip_address,
-            user_agent,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -651,7 +629,7 @@ pub async fn revoke(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
-    headers: HeaderMap,
+    Extension(client_info): Extension<ClientInfo>,
     Path(key_id): Path<Uuid>,
 ) -> Result<Json<()>, AdminError> {
     authz.require(
@@ -670,9 +648,6 @@ pub async fn revoke(
     let key_info = services.api_keys.get_by_id(key_id).await?;
 
     services.api_keys.revoke(key_id).await?;
-
-    let (ip_address, user_agent) =
-        extract_audit_context(&headers, &state.config.server.trusted_proxies);
 
     // Log audit event
     if let Some(key) = key_info {
@@ -698,8 +673,8 @@ pub async fn revoke(
                     "name": key.name,
                     "key_prefix": key.key_prefix,
                 }),
-                ip_address,
-                user_agent,
+                ip_address: client_info.ip_address,
+                user_agent: client_info.user_agent,
             })
             .await;
     }
@@ -809,7 +784,7 @@ pub async fn rotate(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
-    headers: HeaderMap,
+    Extension(client_info): Extension<ClientInfo>,
     Path(key_id): Path<Uuid>,
     Json(request): Json<RotateApiKeyRequest>,
 ) -> Result<(StatusCode, Json<CreatedApiKey>), AdminError> {
@@ -859,9 +834,6 @@ pub async fn rotate(
         .rotate(key_id, grace_period_seconds, &prefix)
         .await?;
 
-    let (ip_address, user_agent) =
-        extract_audit_context(&headers, &state.config.server.trusted_proxies);
-
     // Log audit event
     if let Some(key) = old_key {
         let (org_id, project_id) = match &key.owner {
@@ -890,8 +862,8 @@ pub async fn rotate(
                     "new_key_prefix": created.api_key.key_prefix,
                     "grace_period_seconds": grace_period_seconds,
                 }),
-                ip_address,
-                user_agent,
+                ip_address: client_info.ip_address,
+                user_agent: client_info.user_agent,
             })
             .await;
     }

@@ -20,7 +20,7 @@ use validator::Validate;
 use super::{AuditActor, error::AdminError};
 use crate::{
     AppState,
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{
         CreateAuditLog, CreateOrgSsoConfig, OrgSsoConfig, SsoProviderType, UpdateOrgSsoConfig,
     },
@@ -257,6 +257,7 @@ pub async fn create(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(org_slug): Path<String>,
     Valid(Json(input)): Valid<Json<CreateOrgSsoConfig>>,
 ) -> Result<(StatusCode, Json<OrgSsoConfig>), AdminError> {
@@ -382,8 +383,8 @@ pub async fn create(
                 "enforcement_mode": config.enforcement_mode.to_string(),
                 "enabled": config.enabled,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -409,6 +410,7 @@ pub async fn update(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(org_slug): Path<String>,
     Valid(Json(input)): Valid<Json<UpdateOrgSsoConfig>>,
 ) -> Result<Json<OrgSsoConfig>, AdminError> {
@@ -516,8 +518,8 @@ pub async fn update(
                 "enabled": input.enabled,
                 "client_secret_changed": input.client_secret.is_some(),
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -542,6 +544,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(org_slug): Path<String>,
 ) -> Result<Json<()>, AdminError> {
     let services = get_services(&state)?;
@@ -602,8 +605,8 @@ pub async fn delete(
                 "issuer": issuer,
                 "provider_type": provider_type.to_string(),
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 

@@ -10,7 +10,7 @@ use serde_json::json;
 use super::{AuditActor, error::AdminError, organizations::ListQuery};
 use crate::{
     AppState,
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{CreateAuditLog, CreateProject, MembershipSource, Project, UpdateProject},
     openapi::PaginationMeta,
     services::Services,
@@ -50,6 +50,7 @@ pub async fn create(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(org_slug): Path<String>,
     Valid(Json(input)): Valid<Json<CreateProject>>,
 ) -> Result<(StatusCode, Json<Project>), AdminError> {
@@ -98,8 +99,8 @@ pub async fn create(
                 "name": project.name,
                 "slug": project.slug,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -244,6 +245,7 @@ pub async fn update(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, project_slug)): Path<(String, String)>,
     Valid(Json(input)): Valid<Json<UpdateProject>>,
 ) -> Result<Json<Project>, AdminError> {
@@ -298,8 +300,8 @@ pub async fn update(
             org_id: Some(org.id),
             project_id: Some(project.id),
             details: changes,
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -327,6 +329,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, project_slug)): Path<(String, String)>,
 ) -> Result<Json<()>, AdminError> {
     let services = get_services(&state)?;
@@ -383,8 +386,8 @@ pub async fn delete(
                 "name": project_name,
                 "slug": project_slug_val,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 

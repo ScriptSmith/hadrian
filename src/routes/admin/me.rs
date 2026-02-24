@@ -4,7 +4,7 @@ use serde_json::json;
 use super::{AuditActor, error::AdminError};
 use crate::{
     AppState,
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{CreateAuditLog, UserDataExport, UserDeletionResponse},
     services::Services,
 };
@@ -97,6 +97,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
 ) -> Result<Json<UserDeletionResponse>, AdminError> {
     authz.require("me", "delete", None, None, None, None)?;
 
@@ -143,8 +144,8 @@ pub async fn delete(
                 "dynamic_providers_deleted": result.dynamic_providers_deleted,
                 "usage_records_deleted": result.usage_records_deleted,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 

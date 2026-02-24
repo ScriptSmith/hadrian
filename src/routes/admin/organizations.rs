@@ -11,7 +11,7 @@ use super::{AuditActor, error::AdminError};
 use crate::{
     AppState,
     db::{Cursor, CursorDirection, ListParams},
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{CreateAuditLog, CreateOrganization, Organization, UpdateOrganization},
     openapi::PaginationMeta,
     services::{OrganizationService, Services},
@@ -121,6 +121,7 @@ pub async fn create(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Valid(Json(input)): Valid<Json<CreateOrganization>>,
 ) -> Result<(StatusCode, Json<Organization>), AdminError> {
     authz.require("organization", "create", None, None, None, None)?;
@@ -144,8 +145,8 @@ pub async fn create(
                 "slug": org.slug,
                 "name": org.name,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -245,6 +246,7 @@ pub async fn update(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(slug): Path<String>,
     Valid(Json(input)): Valid<Json<UpdateOrganization>>,
 ) -> Result<Json<Organization>, AdminError> {
@@ -289,8 +291,8 @@ pub async fn update(
                 "slug": org.slug,
                 "changes": changes,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -314,6 +316,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(slug): Path<String>,
 ) -> Result<Json<()>, AdminError> {
     let services = get_services(&state)?;
@@ -365,8 +368,8 @@ pub async fn delete(
                 "slug": org.slug,
                 "name": org.name,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 

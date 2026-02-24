@@ -12,7 +12,7 @@ use super::{AuditActor, error::AdminError, organizations::ListQuery};
 use crate::{
     AppState,
     cache::CacheKeys,
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{CreateAuditLog, CreateUser, UpdateUser, User, UserDataExport, UserDeletionResponse},
     openapi::PaginationMeta,
     services::Services,
@@ -73,6 +73,7 @@ pub async fn create(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Valid(Json(input)): Valid<Json<CreateUser>>,
 ) -> Result<(StatusCode, Json<User>), AdminError> {
     authz.require("user", "create", None, None, None, None)?;
@@ -97,8 +98,8 @@ pub async fn create(
                 "name": user.name,
                 "external_id": user.external_id,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -194,6 +195,7 @@ pub async fn update(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(user_id): Path<Uuid>,
     Valid(Json(input)): Valid<Json<UpdateUser>>,
 ) -> Result<Json<User>, AdminError> {
@@ -229,8 +231,8 @@ pub async fn update(
             org_id: None,
             project_id: None,
             details: changes,
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -263,6 +265,7 @@ pub async fn export(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<UserDataExport>, AdminError> {
     // Requires explicit export permission (more restrictive than read)
@@ -303,8 +306,8 @@ pub async fn export(
                 "email": export.user.email,
                 "reason": "GDPR Article 15 - Right of Access",
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -339,6 +342,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<UserDeletionResponse>, AdminError> {
     // Requires explicit delete permission
@@ -387,8 +391,8 @@ pub async fn delete(
                 "dynamic_providers_deleted": result.dynamic_providers_deleted,
                 "usage_records_deleted": result.usage_records_deleted,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -480,6 +484,7 @@ pub async fn add_org_member(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(org_slug): Path<String>,
     Json(req): Json<AddMemberRequest>,
 ) -> Result<(StatusCode, Json<()>), AdminError> {
@@ -528,8 +533,8 @@ pub async fn add_org_member(
                 "org_name": org.name,
                 "role": req.role,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -558,6 +563,7 @@ pub async fn update_org_member(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, user_id)): Path<(String, Uuid)>,
     Json(req): Json<UpdateMemberRequest>,
 ) -> Result<Json<()>, AdminError> {
@@ -600,8 +606,8 @@ pub async fn update_org_member(
                 "org_slug": org_slug,
                 "new_role": req.role,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -629,6 +635,7 @@ pub async fn remove_org_member(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, user_id)): Path<(String, Uuid)>,
 ) -> Result<Json<()>, AdminError> {
     let services = get_services(&state)?;
@@ -674,8 +681,8 @@ pub async fn remove_org_member(
                 "org_slug": org_slug,
                 "org_name": org.name,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -778,6 +785,7 @@ pub async fn add_project_member(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, project_slug)): Path<(String, String)>,
     Json(req): Json<AddMemberRequest>,
 ) -> Result<(StatusCode, Json<()>), AdminError> {
@@ -838,8 +846,8 @@ pub async fn add_project_member(
                 "project_name": project.name,
                 "role": req.role,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -869,6 +877,7 @@ pub async fn update_project_member(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, project_slug, user_id)): Path<(String, String, Uuid)>,
     Json(req): Json<UpdateMemberRequest>,
 ) -> Result<Json<()>, AdminError> {
@@ -923,8 +932,8 @@ pub async fn update_project_member(
                 "project_slug": project_slug,
                 "new_role": req.role,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -953,6 +962,7 @@ pub async fn remove_project_member(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, project_slug, user_id)): Path<(String, String, Uuid)>,
 ) -> Result<Json<()>, AdminError> {
     let services = get_services(&state)?;
@@ -1009,8 +1019,8 @@ pub async fn remove_project_member(
                 "project_slug": project_slug,
                 "project_name": project.name,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 

@@ -11,7 +11,7 @@ use uuid::Uuid;
 use super::{AuditActor, error::AdminError, organizations::ListQuery};
 use crate::{
     AppState,
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{
         ConnectivityTestResponse, CreateAuditLog, CreateDynamicProvider, CreateSelfServiceProvider,
         DynamicProvider, DynamicProviderResponse, ProviderOwner, UpdateDynamicProvider,
@@ -118,6 +118,7 @@ pub async fn create(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Valid(Json(input)): Valid<Json<CreateSelfServiceProvider>>,
 ) -> Result<(StatusCode, Json<DynamicProviderResponse>), AdminError> {
     authz.require("dynamic_provider", "self_create", None, None, None, None)?;
@@ -179,8 +180,8 @@ pub async fn create(
                 "provider_type": provider.provider_type,
                 "base_url": provider.base_url,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -231,6 +232,7 @@ pub async fn update(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(id): Path<Uuid>,
     Valid(Json(input)): Valid<Json<UpdateDynamicProvider>>,
 ) -> Result<Json<DynamicProviderResponse>, AdminError> {
@@ -277,8 +279,8 @@ pub async fn update(
                 "name": provider.name,
                 "changes": changes,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -301,6 +303,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<()>, AdminError> {
     authz.require("dynamic_provider", "self_delete", None, None, None, None)?;
@@ -333,8 +336,8 @@ pub async fn delete(
                 "name": provider_name,
                 "provider_type": provider_type,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 

@@ -14,7 +14,7 @@ use super::{AuditActor, error::AdminError, organizations::ListQuery};
 use crate::{
     AppState,
     db::ListParams,
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{CreateAuditLog, CreateSsoGroupMapping, SsoGroupMapping, UpdateSsoGroupMapping},
     openapi::PaginationMeta,
     services::Services,
@@ -241,6 +241,7 @@ pub async fn create(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(org_slug): Path<String>,
     Valid(Json(input)): Valid<Json<CreateSsoGroupMapping>>,
 ) -> Result<(StatusCode, Json<SsoGroupMapping>), AdminError> {
@@ -304,8 +305,8 @@ pub async fn create(
                 "priority": input.priority,
                 "sso_connection_name": input.sso_connection_name,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -395,6 +396,7 @@ pub async fn update(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, mapping_id)): Path<(String, Uuid)>,
     Valid(Json(input)): Valid<Json<UpdateSsoGroupMapping>>,
 ) -> Result<Json<SsoGroupMapping>, AdminError> {
@@ -476,8 +478,8 @@ pub async fn update(
                 "role": input.role,
                 "priority": input.priority,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -505,6 +507,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, mapping_id)): Path<(String, Uuid)>,
 ) -> Result<Json<()>, AdminError> {
     let services = get_services(&state)?;
@@ -565,8 +568,8 @@ pub async fn delete(
                 "idp_group": idp_group,
                 "team_id": team_id,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -922,6 +925,7 @@ pub async fn import(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(org_slug): Path<String>,
     Valid(Json(input)): Valid<Json<ImportRequest>>,
 ) -> Result<Json<ImportResponse>, AdminError> {
@@ -1111,8 +1115,8 @@ pub async fn import(
                 "skipped": skipped,
                 "errors": errors.len(),
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 

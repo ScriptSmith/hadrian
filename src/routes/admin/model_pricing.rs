@@ -11,7 +11,7 @@ use uuid::Uuid;
 use super::{AuditActor, error::AdminError, organizations::ListQuery};
 use crate::{
     AppState,
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{CreateAuditLog, CreateModelPricing, DbModelPricing, UpdateModelPricing},
     openapi::PaginationMeta,
     services::Services,
@@ -47,6 +47,7 @@ pub async fn create(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Valid(Json(input)): Valid<Json<CreateModelPricing>>,
 ) -> Result<(StatusCode, Json<DbModelPricing>), AdminError> {
     authz.require("model_pricing", "create", None, None, None, None)?;
@@ -80,8 +81,8 @@ pub async fn create(
                 "input_per_1m_tokens": pricing.input_per_1m_tokens,
                 "output_per_1m_tokens": pricing.output_per_1m_tokens,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -134,6 +135,7 @@ pub async fn update(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(id): Path<Uuid>,
     Valid(Json(input)): Valid<Json<UpdateModelPricing>>,
 ) -> Result<Json<DbModelPricing>, AdminError> {
@@ -178,8 +180,8 @@ pub async fn update(
                 "model": pricing.model,
                 "changes": changes,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -202,6 +204,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<()>, AdminError> {
     authz.require("model_pricing", "delete", None, None, None, None)?;
@@ -245,8 +248,8 @@ pub async fn delete(
                 "model": model,
                 "owner": owner,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -522,6 +525,7 @@ pub async fn upsert(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Valid(Json(input)): Valid<Json<CreateModelPricing>>,
 ) -> Result<Json<DbModelPricing>, AdminError> {
     authz.require("model_pricing", "update", None, None, None, None)?;
@@ -555,8 +559,8 @@ pub async fn upsert(
                 "input_per_1m_tokens": pricing.input_per_1m_tokens,
                 "output_per_1m_tokens": pricing.output_per_1m_tokens,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -586,6 +590,7 @@ pub async fn bulk_upsert(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Json(entries): Json<Vec<CreateModelPricing>>,
 ) -> Result<Json<BulkUpsertResponse>, AdminError> {
     authz.require("model_pricing", "update", None, None, None, None)?;
@@ -616,8 +621,8 @@ pub async fn bulk_upsert(
                 "entries_upserted": count,
                 "providers": unique_providers.into_iter().collect::<Vec<_>>(),
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 

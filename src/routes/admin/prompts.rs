@@ -11,7 +11,7 @@ use uuid::Uuid;
 use super::{AuditActor, error::AdminError, organizations::ListQuery};
 use crate::{
     AppState,
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{CreateAuditLog, CreatePrompt, Prompt, PromptOwnerType, UpdatePrompt},
     openapi::PaginationMeta,
     services::Services,
@@ -49,6 +49,7 @@ pub async fn create(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Valid(Json(input)): Valid<Json<CreatePrompt>>,
 ) -> Result<(StatusCode, Json<Prompt>), AdminError> {
     let services = get_services(&state)?;
@@ -81,8 +82,8 @@ pub async fn create(
                 "owner_type": prompt.owner_type,
                 "owner_id": prompt.owner_id,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -139,6 +140,7 @@ pub async fn update(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(id): Path<Uuid>,
     Valid(Json(input)): Valid<Json<UpdatePrompt>>,
 ) -> Result<Json<Prompt>, AdminError> {
@@ -179,8 +181,8 @@ pub async fn update(
                 "name": prompt.name,
                 "changes": changes,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -204,6 +206,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<()>, AdminError> {
     let services = get_services(&state)?;
@@ -248,8 +251,8 @@ pub async fn delete(
                 "owner_type": prompt_owner_type,
                 "owner_id": prompt_owner_id,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 

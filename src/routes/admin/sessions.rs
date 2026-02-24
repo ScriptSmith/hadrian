@@ -18,7 +18,7 @@ use super::{AuditActor, error::AdminError};
 use crate::{
     AppState,
     auth::session_store::{DeviceInfo, SharedSessionStore},
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::CreateAuditLog,
     services::Services,
 };
@@ -183,6 +183,7 @@ pub async fn delete_all(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<SessionsRevokedResponse>, AdminError> {
     // Require user:manage permission (higher privilege than read)
@@ -237,8 +238,8 @@ pub async fn delete_all(
                 "external_id": user.external_id,
                 "sessions_revoked": sessions_revoked,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -276,6 +277,7 @@ pub async fn delete_one(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((user_id, session_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<SessionsRevokedResponse>, AdminError> {
     // Require user:manage permission
@@ -346,8 +348,8 @@ pub async fn delete_one(
                 "external_id": user.external_id,
                 "session_id": session_id,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 

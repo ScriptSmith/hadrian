@@ -17,7 +17,7 @@ use super::{AuditActor, error::AdminError};
 use crate::{
     AppState,
     db::ListParams,
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{
         CreateAuditLog, CreateDomainVerification, DomainVerification,
         DomainVerificationInstructions, VerifyDomainResponse,
@@ -150,6 +150,7 @@ pub async fn create(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(org_slug): Path<String>,
     Valid(Json(input)): Valid<Json<CreateDomainVerification>>,
 ) -> Result<(StatusCode, Json<DomainVerification>), AdminError> {
@@ -206,8 +207,8 @@ pub async fn create(
                 "domain": verification.domain,
                 "org_sso_config_id": sso_config.id,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -387,6 +388,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(OrgDomainPath {
         org_slug,
         domain_id,
@@ -463,8 +465,8 @@ pub async fn delete(
                 "domain": domain,
                 "status": status.to_string(),
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -494,6 +496,7 @@ pub async fn verify(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(OrgDomainPath {
         org_slug,
         domain_id,
@@ -572,8 +575,8 @@ pub async fn verify(
                 "verified": result.verified,
                 "dns_record_found": result.dns_record_found,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 

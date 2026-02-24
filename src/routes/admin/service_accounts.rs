@@ -10,7 +10,7 @@ use serde_json::json;
 use super::{AuditActor, error::AdminError, organizations::ListQuery};
 use crate::{
     AppState,
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{CreateAuditLog, CreateServiceAccount, ServiceAccount, UpdateServiceAccount},
     openapi::PaginationMeta,
     services::Services,
@@ -54,6 +54,7 @@ pub async fn create(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(org_slug): Path<String>,
     Valid(Json(input)): Valid<Json<CreateServiceAccount>>,
 ) -> Result<(StatusCode, Json<ServiceAccount>), AdminError> {
@@ -98,8 +99,8 @@ pub async fn create(
                 "slug": sa.slug,
                 "roles": input.roles,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -247,6 +248,7 @@ pub async fn update(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, sa_slug)): Path<(String, String)>,
     Valid(Json(input)): Valid<Json<UpdateServiceAccount>>,
 ) -> Result<Json<ServiceAccount>, AdminError> {
@@ -336,8 +338,8 @@ pub async fn update(
             org_id: Some(org.id),
             project_id: None,
             details: changes,
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -365,6 +367,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, sa_slug)): Path<(String, String)>,
 ) -> Result<Json<()>, AdminError> {
     let services = get_services(&state)?;
@@ -435,8 +438,8 @@ pub async fn delete(
                 "revoked_api_key_count": revoked_api_key_ids.len(),
                 "revoked_api_key_ids": revoked_api_key_ids,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 

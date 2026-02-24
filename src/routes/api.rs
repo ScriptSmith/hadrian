@@ -30,8 +30,8 @@ use crate::{
     config::ProviderConfig,
     db::{DbError, ListParams},
     middleware::{
-        AuthzContext, FileSearchAuthContext, FileSearchContext, ProviderCallback, RequestId,
-        wrap_streaming_with_file_search,
+        AuthzContext, ClientInfo, FileSearchAuthContext, FileSearchContext, ProviderCallback,
+        RequestId, wrap_streaming_with_file_search,
     },
     models::{
         AddFileToVectorStore, AttributeFilter, ChunkingStrategy, CreateVectorStore, File, FileId,
@@ -497,6 +497,8 @@ async fn apply_output_guardrails(
     response: Response,
     user_id: Option<String>,
     auth: Option<&Extension<AuthenticatedRequest>>,
+    ip_address: Option<String>,
+    user_agent: Option<String>,
 ) -> Result<(Response, Vec<(&'static str, String)>), ApiError> {
     let output_guardrails = state.output_guardrails.as_ref().unwrap();
 
@@ -540,6 +542,8 @@ async fn apply_output_guardrails(
                 output_guardrails.provider_name(),
                 &guardrails_result,
                 None,
+                ip_address,
+                user_agent,
             );
 
             // Check if content should be blocked
@@ -889,7 +893,7 @@ fn wrap_streaming_with_guardrails(
 ))]
 #[tracing::instrument(
     name = "api.chat_completions",
-    skip(state, headers, auth, authz, request_id, payload),
+    skip(state, headers, auth, authz, request_id, client_info, payload),
     fields(
         model = %payload.model.as_deref().unwrap_or("default"),
         streaming = payload.stream,
@@ -901,8 +905,13 @@ pub async fn api_v1_chat_completions(
     auth: Option<Extension<AuthenticatedRequest>>,
     authz: Option<Extension<AuthzContext>>,
     request_id: Option<Extension<RequestId>>,
+    client_info: Option<Extension<ClientInfo>>,
     Valid(Json(mut payload)): Valid<Json<api_types::CreateChatCompletionPayload>>,
 ) -> Result<Response, ApiError> {
+    let (ci_ip, ci_ua) = client_info
+        .map(|Extension(ci)| (ci.ip_address, ci.user_agent))
+        .unwrap_or_default();
+
     // Route the model to a provider with dynamic support
     let model_clone = payload.model.clone();
     let is_streaming = payload.stream;
@@ -1036,6 +1045,8 @@ pub async fn api_v1_chat_completions(
                     "input",
                     &guardrails_result,
                     None,
+                    ci_ip.clone(),
+                    ci_ua.clone(),
                 );
 
                 // Check if content should be blocked
@@ -1237,6 +1248,8 @@ pub async fn api_v1_chat_completions(
                 "input",
                 guardrails_result,
                 None,
+                ci_ip.clone(),
+                ci_ua.clone(),
             );
         }
 
@@ -1289,7 +1302,7 @@ pub async fn api_v1_chat_completions(
             (wrapped, Vec::new())
         } else {
             // Apply guardrails to non-streaming response
-            apply_output_guardrails(&state, response, user_id, auth.as_ref()).await?
+            apply_output_guardrails(&state, response, user_id, auth.as_ref(), ci_ip, ci_ua).await?
         }
     } else {
         (response, Vec::new())
@@ -1481,7 +1494,7 @@ pub async fn api_v1_chat_completions(
 ))]
 #[tracing::instrument(
     name = "api.responses",
-    skip(state, headers, auth, authz, request_id, payload),
+    skip(state, headers, auth, authz, request_id, client_info, payload),
     fields(
         model = %payload.model.as_deref().unwrap_or("default"),
         streaming = payload.stream,
@@ -1493,8 +1506,13 @@ pub async fn api_v1_responses(
     auth: Option<Extension<AuthenticatedRequest>>,
     authz: Option<Extension<AuthzContext>>,
     request_id: Option<Extension<RequestId>>,
+    client_info: Option<Extension<ClientInfo>>,
     Valid(Json(mut payload)): Valid<Json<api_types::CreateResponsesPayload>>,
 ) -> Result<Response, ApiError> {
+    let (ci_ip, ci_ua) = client_info
+        .map(|Extension(ci)| (ci.ip_address, ci.user_agent))
+        .unwrap_or_default();
+
     // Route the model to a provider with dynamic support
     let model_clone = payload.model.clone();
     let models_clone = payload.models.clone();
@@ -1672,6 +1690,8 @@ pub async fn api_v1_responses(
                     "input",
                     &guardrails_result,
                     None,
+                    ci_ip.clone(),
+                    ci_ua.clone(),
                 );
 
                 if guardrails_result.is_blocked() {
@@ -1776,6 +1796,8 @@ pub async fn api_v1_responses(
                 "input",
                 guardrails_result,
                 None,
+                ci_ip.clone(),
+                ci_ua.clone(),
             );
         }
 
@@ -1829,7 +1851,15 @@ pub async fn api_v1_responses(
             (wrapped, Vec::new())
         } else {
             // Apply guardrails to non-streaming response
-            apply_output_guardrails_responses(&state, response, user_id, auth.as_ref()).await?
+            apply_output_guardrails_responses(
+                &state,
+                response,
+                user_id,
+                auth.as_ref(),
+                ci_ip,
+                ci_ua,
+            )
+            .await?
         }
     } else {
         (response, Vec::new())
@@ -2042,6 +2072,8 @@ async fn apply_output_guardrails_responses(
     response: Response,
     user_id: Option<String>,
     auth: Option<&Extension<AuthenticatedRequest>>,
+    ip_address: Option<String>,
+    user_agent: Option<String>,
 ) -> Result<(Response, Vec<(&'static str, String)>), ApiError> {
     let output_guardrails = state.output_guardrails.as_ref().unwrap();
 
@@ -2085,6 +2117,8 @@ async fn apply_output_guardrails_responses(
                 output_guardrails.provider_name(),
                 &guardrails_result,
                 None,
+                ip_address,
+                user_agent,
             );
 
             // Check if content should be blocked
@@ -2180,7 +2214,7 @@ fn modify_responses_content(body: &[u8], new_content: &str) -> Option<Vec<u8>> {
 ))]
 #[tracing::instrument(
     name = "api.completions",
-    skip(state, headers, auth, request_id, payload),
+    skip(state, headers, auth, request_id, client_info, payload),
     fields(
         model = %payload.model.as_deref().unwrap_or("default"),
         streaming = payload.stream,
@@ -2191,8 +2225,13 @@ pub async fn api_v1_completions(
     headers: HeaderMap,
     auth: Option<Extension<AuthenticatedRequest>>,
     request_id: Option<Extension<RequestId>>,
+    client_info: Option<Extension<ClientInfo>>,
     Valid(Json(mut payload)): Valid<Json<api_types::CreateCompletionPayload>>,
 ) -> Result<Response, ApiError> {
+    let (ci_ip, ci_ua) = client_info
+        .map(|Extension(ci)| (ci.ip_address, ci.user_agent))
+        .unwrap_or_default();
+
     // Route the model to a provider with dynamic support
     let model_clone = payload.model.clone();
     let models_clone = payload.models.clone();
@@ -2311,6 +2350,8 @@ pub async fn api_v1_completions(
                     "input",
                     &guardrails_result,
                     None,
+                    ci_ip.clone(),
+                    ci_ua.clone(),
                 );
 
                 if guardrails_result.is_blocked() {
@@ -2414,6 +2455,8 @@ pub async fn api_v1_completions(
                 "input",
                 guardrails_result,
                 None,
+                ci_ip.clone(),
+                ci_ua.clone(),
             );
         }
 
@@ -2464,7 +2507,15 @@ pub async fn api_v1_completions(
             (wrapped, Vec::new())
         } else {
             // Apply guardrails to non-streaming response
-            apply_output_guardrails_completions(&state, response, user_id, auth.as_ref()).await?
+            apply_output_guardrails_completions(
+                &state,
+                response,
+                user_id,
+                auth.as_ref(),
+                ci_ip,
+                ci_ua,
+            )
+            .await?
         }
     } else {
         (response, Vec::new())
@@ -2607,6 +2658,8 @@ async fn apply_output_guardrails_completions(
     response: Response,
     user_id: Option<String>,
     auth: Option<&Extension<AuthenticatedRequest>>,
+    ip_address: Option<String>,
+    user_agent: Option<String>,
 ) -> Result<(Response, Vec<(&'static str, String)>), ApiError> {
     let output_guardrails = state.output_guardrails.as_ref().unwrap();
 
@@ -2650,6 +2703,8 @@ async fn apply_output_guardrails_completions(
                 output_guardrails.provider_name(),
                 &guardrails_result,
                 None,
+                ip_address,
+                user_agent,
             );
 
             // Check if content should be blocked
@@ -5291,6 +5346,7 @@ pub async fn api_v1_audio_translations(
 ///
 /// This function spawns a background task to log the event, ensuring
 /// request latency is not impacted by audit logging.
+#[allow(clippy::too_many_arguments)]
 fn log_guardrails_evaluation(
     state: &AppState,
     auth: Option<&Extension<AuthenticatedRequest>>,
@@ -5298,6 +5354,8 @@ fn log_guardrails_evaluation(
     stage: &str,
     result: &crate::guardrails::InputGuardrailsResult,
     request_id: Option<&str>,
+    ip_address: Option<String>,
+    user_agent: Option<String>,
 ) {
     // Get the audit config
     let Some(guardrails_config) = &state.config.features.guardrails else {
@@ -5377,8 +5435,8 @@ fn log_guardrails_evaluation(
                     "violations": violations,
                     "request_id": request_id,
                 }),
-                ip_address: None,
-                user_agent: None,
+                ip_address,
+                user_agent,
             })
             .await;
 
@@ -5400,6 +5458,8 @@ fn log_output_guardrails_evaluation(
     provider: &str,
     result: &crate::guardrails::OutputGuardrailsResult,
     request_id: Option<&str>,
+    ip_address: Option<String>,
+    user_agent: Option<String>,
 ) {
     // Get the audit config
     let Some(guardrails_config) = &state.config.features.guardrails else {
@@ -5503,8 +5563,8 @@ fn log_output_guardrails_evaluation(
                 org_id,
                 project_id,
                 details,
-                ip_address: None,
-                user_agent: None,
+                ip_address,
+                user_agent,
             })
             .await;
 

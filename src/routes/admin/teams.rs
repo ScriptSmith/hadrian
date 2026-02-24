@@ -11,7 +11,7 @@ use uuid::Uuid;
 use super::{AuditActor, error::AdminError, organizations::ListQuery};
 use crate::{
     AppState,
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{
         AddTeamMember, CreateAuditLog, CreateTeam, Team, TeamMember, UpdateTeam, UpdateTeamMember,
     },
@@ -67,6 +67,7 @@ pub async fn create(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(org_slug): Path<String>,
     Valid(Json(input)): Valid<Json<CreateTeam>>,
 ) -> Result<(StatusCode, Json<Team>), AdminError> {
@@ -107,8 +108,8 @@ pub async fn create(
                 "name": team.name,
                 "slug": team.slug,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -246,6 +247,7 @@ pub async fn update(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, team_slug)): Path<(String, String)>,
     Valid(Json(input)): Valid<Json<UpdateTeam>>,
 ) -> Result<Json<Team>, AdminError> {
@@ -300,8 +302,8 @@ pub async fn update(
             org_id: Some(org.id),
             project_id: None,
             details: changes,
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -329,6 +331,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, team_slug)): Path<(String, String)>,
 ) -> Result<Json<()>, AdminError> {
     let services = get_services(&state)?;
@@ -385,8 +388,8 @@ pub async fn delete(
                 "name": team_name,
                 "slug": team_slug_val,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -492,6 +495,7 @@ pub async fn add_member(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, team_slug)): Path<(String, String)>,
     Valid(Json(input)): Valid<Json<AddTeamMember>>,
 ) -> Result<(StatusCode, Json<TeamMember>), AdminError> {
@@ -546,8 +550,8 @@ pub async fn add_member(
                 "team_slug": team_slug,
                 "team_name": team.name,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -576,6 +580,7 @@ pub async fn remove_member(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, team_slug, user_id)): Path<(String, String, Uuid)>,
 ) -> Result<Json<()>, AdminError> {
     let services = get_services(&state)?;
@@ -626,8 +631,8 @@ pub async fn remove_member(
                 "team_slug": team_slug,
                 "team_name": team.name,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -657,6 +662,7 @@ pub async fn update_member(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path((org_slug, team_slug, user_id)): Path<(String, String, Uuid)>,
     Valid(Json(input)): Valid<Json<UpdateTeamMember>>,
 ) -> Result<Json<TeamMember>, AdminError> {
@@ -713,8 +719,8 @@ pub async fn update_member(
                 "team_slug": team_slug,
                 "team_name": team.name,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 

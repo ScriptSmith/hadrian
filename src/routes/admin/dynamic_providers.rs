@@ -11,7 +11,7 @@ use uuid::Uuid;
 use super::{AuditActor, error::AdminError, organizations::ListQuery};
 use crate::{
     AppState,
-    middleware::{AdminAuth, AuthzContext},
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{
         ConnectivityTestResponse, CreateAuditLog, CreateDynamicProvider, DynamicProvider,
         DynamicProviderResponse, ProviderOwner, UpdateDynamicProvider,
@@ -96,6 +96,7 @@ pub async fn create(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Valid(Json(input)): Valid<Json<CreateDynamicProvider>>,
 ) -> Result<(StatusCode, Json<DynamicProviderResponse>), AdminError> {
     let services = get_services(&state)?;
@@ -146,8 +147,8 @@ pub async fn create(
                 "base_url": provider.base_url,
                 "owner": provider.owner,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -209,6 +210,7 @@ pub async fn update(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(id): Path<Uuid>,
     Valid(Json(input)): Valid<Json<UpdateDynamicProvider>>,
 ) -> Result<Json<DynamicProviderResponse>, AdminError> {
@@ -271,8 +273,8 @@ pub async fn update(
                 "name": provider.name,
                 "changes": changes,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
@@ -295,6 +297,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    Extension(client_info): Extension<ClientInfo>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<()>, AdminError> {
     let services = get_services(&state)?;
@@ -345,8 +348,8 @@ pub async fn delete(
                 "provider_type": provider_type,
                 "owner": provider_owner,
             }),
-            ip_address: None,
-            user_agent: None,
+            ip_address: client_info.ip_address,
+            user_agent: client_info.user_agent,
         })
         .await;
 
