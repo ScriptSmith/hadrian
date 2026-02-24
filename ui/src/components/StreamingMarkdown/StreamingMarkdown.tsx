@@ -1,4 +1,5 @@
 import { Streamdown, type MermaidOptions } from "streamdown";
+import { code } from "@streamdown/code";
 import { memo } from "react";
 
 import { cn } from "@/utils/cn";
@@ -73,6 +74,12 @@ function StreamingMarkdownComponent({ content, isStreaming, className }: Streami
       )}
     >
       <Streamdown
+        plugins={{ code }}
+        shikiTheme={
+          resolvedTheme === "dark"
+            ? ["github-dark", "github-dark"]
+            : ["github-light", "github-light"]
+        }
         mermaid={mermaidOptions}
         mode={isStreaming ? "streaming" : "static"}
         isAnimating={isStreaming}
