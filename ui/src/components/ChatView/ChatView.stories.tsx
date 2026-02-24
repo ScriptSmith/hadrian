@@ -833,76 +833,56 @@ function ExecuteCodeStory({ onSendMessage }: { onSendMessage: (content: string) 
     role: "input",
     data: {
       language: "python",
-      code: `import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
+      code: `import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection
 
-categories = ['Cloud', 'Enterprise', 'Consumer', 'Services', 'Hardware']
-q3_revenue = [1.42, 1.05, 0.82, 0.58, 0.33]
-q2_revenue = [1.18, 0.94, 0.79, 0.52, 0.31]
+# Simulate the Lorenz system
+sigma, rho, beta = 10, 28, 8/3
+dt = 0.002
+steps = 20000
 
-x = range(len(categories))
-width = 0.35
+xyz = np.empty((steps, 3))
+xyz[0] = [0.1, 0, 0]
+for i in range(1, steps):
+    x, y, z = xyz[i-1]
+    xyz[i] = xyz[i-1] + dt * np.array([
+        sigma * (y - x),
+        x * (rho - z) - y,
+        x * y - beta * z,
+    ])
 
-fig, ax = plt.subplots(figsize=(10, 6))
-bars_q2 = ax.bar([i - width/2 for i in x], q2_revenue, width, label='Q2', color='#94a3b8')
-bars_q3 = ax.bar([i + width/2 for i in x], q3_revenue, width, label='Q3', color='#3b82f6')
+fig, ax = plt.subplots(figsize=(10, 7), facecolor='#0f172a')
+ax.set_facecolor('#0f172a')
 
-ax.set_ylabel('Revenue ($B)')
-ax.set_title('Revenue by Segment: Q2 vs Q3 2025')
-ax.set_xticks(x)
-ax.set_xticklabels(categories)
-ax.yaxis.set_major_formatter(mticker.FormatStrFormatter('$%.2f'))
-ax.legend()
-ax.bar_label(bars_q3, fmt='$%.2f', padding=3, fontsize=9)
+# Color by velocity (speed of change)
+velocity = np.linalg.norm(np.diff(xyz, axis=0), axis=1)
+points = xyz[:-1, [0, 2]]  # project onto x-z plane
+segments = np.stack([points[:-1], points[1:]], axis=1)
+
+lc = LineCollection(segments, cmap='turbo', linewidths=0.6, alpha=0.9)
+lc.set_array(velocity[:-1])
+ax.add_collection(lc)
+ax.autoscale()
+ax.set_xlabel('x', color='#94a3b8')
+ax.set_ylabel('z', color='#94a3b8')
+ax.set_title('Lorenz Attractor — Colored by Velocity', color='white', fontsize=14)
+ax.tick_params(colors='#475569')
+for spine in ax.spines.values():
+    spine.set_color('#1e293b')
 plt.tight_layout()
-plt.savefig('revenue_comparison.png', dpi=150)
-print("Chart saved successfully")`,
+plt.savefig('lorenz.png', dpi=180, facecolor='#0f172a')
+print(f"Rendered {steps:,} steps, max velocity: {velocity.max():.1f}")`,
     },
   };
 
   const chartOutputArtifact: Artifact = {
     id: "chart-output-1",
-    type: "chart",
-    title: "Revenue by Segment",
+    type: "image",
+    title: "Lorenz Attractor",
     role: "output",
-    data: {
-      spec: {
-        $schema: "https://vega.github.io/schema/vega-lite/v6.json",
-        title: "Revenue by Segment: Q2 vs Q3 2025",
-        width: 500,
-        height: 300,
-        data: {
-          values: [
-            { segment: "Cloud", quarter: "Q2", revenue: 1.18 },
-            { segment: "Cloud", quarter: "Q3", revenue: 1.42 },
-            { segment: "Enterprise", quarter: "Q2", revenue: 0.94 },
-            { segment: "Enterprise", quarter: "Q3", revenue: 1.05 },
-            { segment: "Consumer", quarter: "Q2", revenue: 0.79 },
-            { segment: "Consumer", quarter: "Q3", revenue: 0.82 },
-            { segment: "Services", quarter: "Q2", revenue: 0.52 },
-            { segment: "Services", quarter: "Q3", revenue: 0.58 },
-            { segment: "Hardware", quarter: "Q2", revenue: 0.31 },
-            { segment: "Hardware", quarter: "Q3", revenue: 0.33 },
-          ],
-        },
-        mark: "bar",
-        encoding: {
-          x: { field: "segment", type: "nominal", title: "Segment", axis: { labelAngle: 0 } },
-          xOffset: { field: "quarter" },
-          y: {
-            field: "revenue",
-            type: "quantitative",
-            title: "Revenue ($B)",
-          },
-          color: {
-            field: "quarter",
-            type: "nominal",
-            scale: { range: ["#94a3b8", "#3b82f6"] },
-            title: "Quarter",
-          },
-        },
-      },
-    },
+    mimeType: "image/png",
+    data: { src: "/story-assets/lorenz.png" },
   };
 
   const stdoutArtifact: Artifact = {
@@ -910,7 +890,7 @@ print("Chart saved successfully")`,
     type: "code",
     title: "stdout",
     role: "output",
-    data: { language: "text", code: "Chart saved successfully" },
+    data: { language: "text", code: "Rendered 20,000 steps, max velocity: 46.3" },
   };
 
   const displaySelectionArtifact: Artifact = {
@@ -966,31 +946,30 @@ print("Chart saved successfully")`,
     {
       id: "py-1",
       role: "user",
-      content: "Can you visualize Q2 vs Q3 revenue by business segment?",
+      content:
+        "Simulate the Lorenz attractor and visualize the chaotic trajectory colored by velocity.",
       timestamp: new Date("2025-10-20T15:10:00"),
     },
     {
       id: "py-2",
       role: "assistant",
       model: "openai/gpt-5.3",
-      content: `I created a grouped bar chart comparing Q2 and Q3 revenue across all five business segments.
+      content: `Here's the Lorenz attractor projected onto the x-z plane, with each point colored by its instantaneous velocity through phase space.
 
-**Key highlights:**
-- **Cloud** led growth with **$1.42B** in Q3, up 20% from Q2
-- **Enterprise** crossed $1B for the first time at **$1.05B**
-- **Consumer** and **Services** showed steady single-digit growth
-- **Hardware** remained stable at **$0.33B**
-
-Total Q3 revenue of **$4.20B** represents a **12.3%** increase over Q2's $3.74B.`,
+**What you're seeing:**
+- The system traces two lobes — the classic "butterfly" shape of deterministic chaos
+- **High-velocity regions** (bright yellow) occur during transitions between lobes, where the trajectory is flung across the attractor
+- **Low-velocity regions** (deep purple) mark the tight spirals where the system lingers before switching
+- Despite being fully deterministic (\u03C3=10, \u03C1=28, \u03B2=8/3), the trajectory never repeats — a hallmark of strange attractors`,
       timestamp: new Date("2025-10-20T15:10:12"),
       usage: {
-        inputTokens: 85,
-        outputTokens: 310,
-        totalTokens: 395,
-        cost: 0.0066,
+        inputTokens: 92,
+        outputTokens: 380,
+        totalTokens: 472,
+        cost: 0.0079,
         firstTokenMs: 3800,
         totalDurationMs: 7200,
-        tokensPerSecond: 43.1,
+        tokensPerSecond: 52.8,
       },
       artifacts: [chartOutputArtifact, displaySelectionArtifact],
       toolExecutionRounds: pythonRounds,
@@ -1011,11 +990,11 @@ export const ExecuteCode: Story = {
     const canvas = within(canvasElement);
 
     // Verify user message
-    await expect(canvas.getByText(/Q2 vs Q3 revenue/)).toBeInTheDocument();
+    await expect(canvas.getByText(/Simulate the Lorenz attractor/)).toBeInTheDocument();
 
     // Verify assistant content has key data points
-    await expect(canvas.getByText(/\$1\.42B/)).toBeInTheDocument();
-    await expect(canvas.getByText(/12\.3%/)).toBeInTheDocument();
+    await expect(canvas.getByText(/butterfly/)).toBeInTheDocument();
+    await expect(canvas.getByText(/strange attractors/)).toBeInTheDocument();
 
     // Verify tool execution block is rendered (2 tools across 2 rounds)
     await expect(canvas.getByText(/2 tools/)).toBeInTheDocument();

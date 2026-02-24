@@ -33,7 +33,7 @@ const demos = [
   {
     id: "execute-code",
     title: "Execute Code",
-    description: "Run Python in the browser and display interactive chart artifacts inline.",
+    description: "Run Python in the browser and display rich visualizations inline.",
     storyId: "chat-chatview--execute-code",
   },
   {
