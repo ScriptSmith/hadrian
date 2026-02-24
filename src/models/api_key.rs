@@ -346,6 +346,28 @@ pub struct CreateApiKey {
     pub rate_limit_tpm: Option<i32>,
 }
 
+/// Self-service API key creation request (owner auto-set to current user).
+#[derive(Debug, Clone, Deserialize, Validate)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct CreateSelfServiceApiKey {
+    #[validate(length(min = 1, max = 255))]
+    pub name: String,
+    /// Budget limit in cents
+    pub budget_limit_cents: Option<i64>,
+    pub budget_period: Option<BudgetPeriod>,
+    pub expires_at: Option<DateTime<Utc>>,
+    /// Permission scopes (null = full access)
+    pub scopes: Option<Vec<String>>,
+    /// Allowed models (null = all models)
+    pub allowed_models: Option<Vec<String>>,
+    /// IP allowlist in CIDR notation (null = all IPs)
+    pub ip_allowlist: Option<Vec<String>>,
+    /// Requests per minute override
+    pub rate_limit_rpm: Option<i32>,
+    /// Tokens per minute override
+    pub rate_limit_tpm: Option<i32>,
+}
+
 /// Returned on creation only (contains the raw key)
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]

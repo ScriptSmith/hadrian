@@ -10,6 +10,7 @@ pub mod domain_verifications;
 pub mod dynamic_providers;
 mod error;
 pub mod me;
+pub mod me_api_keys;
 pub mod me_providers;
 pub mod model_pricing;
 pub mod org_rbac_policies;
@@ -93,6 +94,15 @@ fn admin_v1_routes() -> Router<AppState> {
             "/me/built-in-providers",
             get(me_providers::built_in_providers),
         )
+        .route(
+            "/me/api-keys",
+            get(me_api_keys::list).post(me_api_keys::create),
+        )
+        .route(
+            "/me/api-keys/{key_id}",
+            get(me_api_keys::get).delete(me_api_keys::revoke),
+        )
+        .route("/me/api-keys/{key_id}/rotate", post(me_api_keys::rotate))
         // Organizations
         .route(
             "/organizations",

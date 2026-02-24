@@ -22,6 +22,7 @@ const ProjectsPage = lazy(() => import("@/pages/ProjectsPage"));
 const TeamsPage = lazy(() => import("@/pages/TeamsPage"));
 const KnowledgeBasesPage = lazy(() => import("@/pages/KnowledgeBasesPage"));
 const ApiKeysPage = lazy(() => import("@/pages/ApiKeysPage"));
+const ApiKeyDetailPage = lazy(() => import("@/pages/ApiKeyDetailPage"));
 
 const MyUsagePage = lazy(() => import("@/pages/MyUsagePage"));
 const MyProvidersPage = lazy(() => import("@/pages/MyProvidersPage"));
@@ -175,12 +176,20 @@ export default function App() {
                                 }
                               />
 
-                              {/* API Keys route */}
+                              {/* API Keys routes */}
                               <Route
                                 path="/api-keys"
                                 element={
                                   <Suspense fallback={<PageLoader />}>
                                     <ApiKeysPage />
+                                  </Suspense>
+                                }
+                              />
+                              <Route
+                                path="/api-keys/:keyId"
+                                element={
+                                  <Suspense fallback={<PageLoader />}>
+                                    <ApiKeyDetailPage />
                                   </Suspense>
                                 }
                               />

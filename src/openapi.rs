@@ -397,6 +397,12 @@ requests_per_minute = 120
         admin::me_providers::test_connectivity,
         admin::me_providers::test_credentials,
         admin::me_providers::built_in_providers,
+        // Self-service endpoints - API Keys
+        admin::me_api_keys::get,
+        admin::me_api_keys::list,
+        admin::me_api_keys::create,
+        admin::me_api_keys::revoke,
+        admin::me_api_keys::rotate,
         // Admin routes - Organizations
         admin::organizations::create,
         admin::organizations::get,
@@ -801,6 +807,7 @@ requests_per_minute = 120
         models::DynamicProviderResponse,
         models::CreateDynamicProvider,
         models::CreateSelfServiceProvider,
+        models::CreateSelfServiceApiKey,
         models::UpdateDynamicProvider,
         models::ConnectivityTestResponse,
         models::ProviderOwner,

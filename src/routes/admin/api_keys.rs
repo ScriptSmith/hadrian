@@ -55,6 +55,113 @@ fn get_services(state: &AppState) -> Result<&Services, AdminError> {
     state.services.as_ref().ok_or(AdminError::ServicesRequired)
 }
 
+/// Validate API key input fields (scopes, models, IPs, rate limits).
+/// Shared by both admin and self-service create endpoints.
+pub(super) fn validate_api_key_input(
+    scopes: Option<&Vec<String>>,
+    allowed_models: Option<&Vec<String>>,
+    ip_allowlist: Option<&Vec<String>>,
+    rate_limit_rpm: Option<i32>,
+    rate_limit_tpm: Option<i32>,
+    rate_limits_config: &crate::config::RateLimitDefaults,
+) -> Result<(), AdminError> {
+    if let Some(scopes) = scopes
+        && let Err(invalid_scopes) = validate_scopes(scopes)
+    {
+        return Err(AdminError::Validation(format!(
+            "Invalid scopes: {}. Valid scopes: {}",
+            invalid_scopes.join(", "),
+            ApiKeyScope::all_names().join(", ")
+        )));
+    }
+
+    if let Some(patterns) = allowed_models
+        && let Err(invalid_patterns) = validate_model_patterns(patterns)
+    {
+        return Err(AdminError::Validation(format!(
+            "Invalid model patterns: {}. Patterns must be non-empty and only support trailing wildcards (e.g., 'gpt-4*').",
+            invalid_patterns.join(", ")
+        )));
+    }
+
+    if let Some(allowlist) = ip_allowlist
+        && let Err(invalid_entries) = validate_ip_allowlist(allowlist)
+    {
+        return Err(AdminError::Validation(format!(
+            "Invalid IP allowlist entries: {}. Entries must be valid IPs or CIDR notation (e.g., '192.168.1.0/24', '10.0.0.1').",
+            invalid_entries.join(", ")
+        )));
+    }
+
+    if let Some(rpm) = rate_limit_rpm {
+        if rpm <= 0 {
+            return Err(AdminError::Validation(
+                "rate_limit_rpm must be a positive integer".to_string(),
+            ));
+        }
+        if !rate_limits_config.allow_per_key_above_global
+            && (rpm as u32) > rate_limits_config.requests_per_minute
+        {
+            return Err(AdminError::Validation(format!(
+                "rate_limit_rpm ({}) cannot exceed global limit ({}). Set allow_per_key_above_global = true in config to override.",
+                rpm, rate_limits_config.requests_per_minute
+            )));
+        }
+    }
+    if let Some(tpm) = rate_limit_tpm {
+        if tpm <= 0 {
+            return Err(AdminError::Validation(
+                "rate_limit_tpm must be a positive integer".to_string(),
+            ));
+        }
+        if !rate_limits_config.allow_per_key_above_global
+            && (tpm as u32) > rate_limits_config.tokens_per_minute
+        {
+            return Err(AdminError::Validation(format!(
+                "rate_limit_tpm ({}) cannot exceed global limit ({}). Set allow_per_key_above_global = true in config to override.",
+                tpm, rate_limits_config.tokens_per_minute
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// Invalidate all cache entries for an API key.
+/// Shared by revoke and rotate endpoints (both admin and self-service).
+pub(super) async fn invalidate_api_key_cache(cache: &dyn crate::cache::Cache, key_id: uuid::Uuid) {
+    use crate::models::BudgetPeriod;
+
+    let id_cache_key = CacheKeys::api_key_by_id(key_id);
+    let _ = cache.delete(&id_cache_key).await;
+
+    let reverse_key = CacheKeys::api_key_reverse(key_id);
+    if let Ok(Some(hash_bytes)) = cache.get_bytes(&reverse_key).await
+        && let Ok(hash) = String::from_utf8(hash_bytes)
+    {
+        let hash_cache_key = CacheKeys::api_key(&hash);
+        let _ = cache.delete(&hash_cache_key).await;
+    }
+    let _ = cache.delete(&reverse_key).await;
+
+    let _ = cache.delete(&CacheKeys::rate_limit(key_id, "minute")).await;
+    let _ = cache.delete(&CacheKeys::rate_limit(key_id, "day")).await;
+    let _ = cache
+        .delete(&CacheKeys::rate_limit_tokens(key_id, "minute"))
+        .await;
+    let _ = cache
+        .delete(&CacheKeys::rate_limit_tokens(key_id, "day"))
+        .await;
+    let _ = cache.delete(&CacheKeys::concurrent_requests(key_id)).await;
+
+    let _ = cache
+        .delete(&CacheKeys::spend(key_id, BudgetPeriod::Daily))
+        .await;
+    let _ = cache
+        .delete(&CacheKeys::spend(key_id, BudgetPeriod::Monthly))
+        .await;
+}
+
 /// Create an API key
 ///
 /// Creates a new API key scoped to an organization, project, or user. The raw API key value
@@ -154,36 +261,15 @@ pub async fn create(
     let services = get_services(&state)?;
     let actor = AuditActor::from(&admin_auth);
 
-    // Validate scopes if provided
-    if let Some(ref scopes) = input.scopes
-        && let Err(invalid_scopes) = validate_scopes(scopes)
-    {
-        return Err(AdminError::Validation(format!(
-            "Invalid scopes: {}. Valid scopes: {}",
-            invalid_scopes.join(", "),
-            ApiKeyScope::all_names().join(", ")
-        )));
-    }
-
-    // Validate allowed_models patterns if provided
-    if let Some(ref patterns) = input.allowed_models
-        && let Err(invalid_patterns) = validate_model_patterns(patterns)
-    {
-        return Err(AdminError::Validation(format!(
-            "Invalid model patterns: {}. Patterns must be non-empty and only support trailing wildcards (e.g., 'gpt-4*').",
-            invalid_patterns.join(", ")
-        )));
-    }
-
-    // Validate ip_allowlist if provided
-    if let Some(ref allowlist) = input.ip_allowlist
-        && let Err(invalid_entries) = validate_ip_allowlist(allowlist)
-    {
-        return Err(AdminError::Validation(format!(
-            "Invalid IP allowlist entries: {}. Entries must be valid IPs or CIDR notation (e.g., '192.168.1.0/24', '10.0.0.1').",
-            invalid_entries.join(", ")
-        )));
-    }
+    // Validate input fields
+    validate_api_key_input(
+        input.scopes.as_ref(),
+        input.allowed_models.as_ref(),
+        input.ip_allowlist.as_ref(),
+        input.rate_limit_rpm,
+        input.rate_limit_tpm,
+        &state.config.limits.rate_limits,
+    )?;
 
     // Authorization check for API key creation.
     // Each owner type requires permission scoped to the appropriate org/team/project.
@@ -250,39 +336,6 @@ pub async fn create(
                 None,
                 None,
             )?;
-        }
-    }
-
-    // Validate rate limits if provided (must be positive and within global limits unless override is enabled)
-    let rate_limits_config = &state.config.limits.rate_limits;
-    if let Some(rpm) = input.rate_limit_rpm {
-        if rpm <= 0 {
-            return Err(AdminError::Validation(
-                "rate_limit_rpm must be a positive integer".to_string(),
-            ));
-        }
-        if !rate_limits_config.allow_per_key_above_global
-            && (rpm as u32) > rate_limits_config.requests_per_minute
-        {
-            return Err(AdminError::Validation(format!(
-                "rate_limit_rpm ({}) cannot exceed global limit ({}). Set allow_per_key_above_global = true in config to override.",
-                rpm, rate_limits_config.requests_per_minute
-            )));
-        }
-    }
-    if let Some(tpm) = input.rate_limit_tpm {
-        if tpm <= 0 {
-            return Err(AdminError::Validation(
-                "rate_limit_tpm must be a positive integer".to_string(),
-            ));
-        }
-        if !rate_limits_config.allow_per_key_above_global
-            && (tpm as u32) > rate_limits_config.tokens_per_minute
-        {
-            return Err(AdminError::Validation(format!(
-                "rate_limit_tpm ({}) cannot exceed global limit ({}). Set allow_per_key_above_global = true in config to override.",
-                tpm, rate_limits_config.tokens_per_minute
-            )));
         }
     }
 
@@ -601,8 +654,6 @@ pub async fn revoke(
     headers: HeaderMap,
     Path(key_id): Path<Uuid>,
 ) -> Result<Json<()>, AdminError> {
-    use crate::models::BudgetPeriod;
-
     authz.require(
         "api_key",
         "delete",
@@ -655,40 +706,7 @@ pub async fn revoke(
 
     // Invalidate all cache entries for this API key
     if let Some(cache) = &state.cache {
-        // Invalidate the ID-based cache entry
-        let id_cache_key = CacheKeys::api_key_by_id(key_id);
-        let _ = cache.delete(&id_cache_key).await;
-
-        // Invalidate the reverse lookup
-        let reverse_key = CacheKeys::api_key_reverse(key_id);
-        if let Ok(Some(hash_bytes)) = cache.get_bytes(&reverse_key).await {
-            if let Ok(hash) = String::from_utf8(hash_bytes) {
-                // Invalidate the hash-based cache entry
-                let hash_cache_key = CacheKeys::api_key(&hash);
-                let _ = cache.delete(&hash_cache_key).await;
-            }
-        }
-        let _ = cache.delete(&reverse_key).await;
-
-        // Invalidate rate limit entries
-        let _ = cache.delete(&CacheKeys::rate_limit(key_id, "minute")).await;
-        let _ = cache.delete(&CacheKeys::rate_limit(key_id, "day")).await;
-        let _ = cache
-            .delete(&CacheKeys::rate_limit_tokens(key_id, "minute"))
-            .await;
-        let _ = cache
-            .delete(&CacheKeys::rate_limit_tokens(key_id, "day"))
-            .await;
-        let _ = cache.delete(&CacheKeys::concurrent_requests(key_id)).await;
-
-        // Invalidate spend tracking entries
-        let _ = cache
-            .delete(&CacheKeys::spend(key_id, BudgetPeriod::Daily))
-            .await;
-        let _ = cache
-            .delete(&CacheKeys::spend(key_id, BudgetPeriod::Monthly))
-            .await;
-
+        invalidate_api_key_cache(cache.as_ref(), key_id).await;
         tracing::info!(
             api_key_id = %key_id,
             "Invalidated all cache entries for revoked API key"
@@ -699,9 +717,9 @@ pub async fn revoke(
 }
 
 /// Default grace period for key rotation: 24 hours
-const DEFAULT_GRACE_PERIOD_SECONDS: u64 = 86400;
+pub(super) const DEFAULT_GRACE_PERIOD_SECONDS: u64 = 86400;
 /// Maximum grace period: 7 days
-const MAX_GRACE_PERIOD_SECONDS: u64 = 604800;
+pub(super) const MAX_GRACE_PERIOD_SECONDS: u64 = 604800;
 
 /// Request body for rotating an API key
 #[derive(Debug, Clone, Deserialize)]
@@ -795,8 +813,6 @@ pub async fn rotate(
     Path(key_id): Path<Uuid>,
     Json(request): Json<RotateApiKeyRequest>,
 ) -> Result<(StatusCode, Json<CreatedApiKey>), AdminError> {
-    use crate::models::BudgetPeriod;
-
     authz.require(
         "api_key",
         "update",
@@ -882,39 +898,7 @@ pub async fn rotate(
 
     // Invalidate cache for old key
     if let Some(cache) = &state.cache {
-        // Invalidate the ID-based cache entry
-        let id_cache_key = CacheKeys::api_key_by_id(key_id);
-        let _ = cache.delete(&id_cache_key).await;
-
-        // Invalidate the reverse lookup
-        let reverse_key = CacheKeys::api_key_reverse(key_id);
-        if let Ok(Some(hash_bytes)) = cache.get_bytes(&reverse_key).await
-            && let Ok(hash) = String::from_utf8(hash_bytes)
-        {
-            let hash_cache_key = CacheKeys::api_key(&hash);
-            let _ = cache.delete(&hash_cache_key).await;
-        }
-        let _ = cache.delete(&reverse_key).await;
-
-        // Invalidate rate limit entries (they will be re-created for the new key)
-        let _ = cache.delete(&CacheKeys::rate_limit(key_id, "minute")).await;
-        let _ = cache.delete(&CacheKeys::rate_limit(key_id, "day")).await;
-        let _ = cache
-            .delete(&CacheKeys::rate_limit_tokens(key_id, "minute"))
-            .await;
-        let _ = cache
-            .delete(&CacheKeys::rate_limit_tokens(key_id, "day"))
-            .await;
-        let _ = cache.delete(&CacheKeys::concurrent_requests(key_id)).await;
-
-        // Invalidate spend tracking entries
-        let _ = cache
-            .delete(&CacheKeys::spend(key_id, BudgetPeriod::Daily))
-            .await;
-        let _ = cache
-            .delete(&CacheKeys::spend(key_id, BudgetPeriod::Monthly))
-            .await;
-
+        invalidate_api_key_cache(cache.as_ref(), key_id).await;
         tracing::info!(
             old_key_id = %key_id,
             new_key_id = %created.api_key.id,

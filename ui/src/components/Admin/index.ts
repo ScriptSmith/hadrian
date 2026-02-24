@@ -49,6 +49,10 @@ export {
 } from "./PricingFormModal/PricingFormModal";
 export { ApiKeyFormModal, type ApiKeyFormModalProps } from "./ApiKeyFormModal/ApiKeyFormModal";
 export {
+  SelfServiceApiKeyFormModal,
+  type SelfServiceApiKeyFormModalProps,
+} from "./ApiKeyFormModal/SelfServiceApiKeyFormModal";
+export {
   ApiKeyCreatedModal,
   type ApiKeyCreatedModalProps,
 } from "./ApiKeyFormModal/ApiKeyCreatedModal";

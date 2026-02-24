@@ -6,6 +6,36 @@ import ApiKeysPage from "./ApiKeysPage";
 import { ToastProvider } from "@/components/Toast/Toast";
 import { ConfirmDialogProvider } from "@/components/ConfirmDialog/ConfirmDialog";
 
+const mockMyKeys = {
+  data: [
+    {
+      id: "key-my-1",
+      name: "Personal Dev Key",
+      key_prefix: "gw_dev_abc",
+      owner: { type: "user", user_id: "user-1" },
+      budget_limit_cents: 5000,
+      budget_period: "monthly",
+      created_at: "2024-02-01T00:00:00Z",
+      last_used_at: "2024-03-10T14:30:00Z",
+      revoked_at: null,
+      expires_at: null,
+    },
+    {
+      id: "key-my-2",
+      name: "Testing Key",
+      key_prefix: "gw_test_xyz",
+      owner: { type: "user", user_id: "user-1" },
+      budget_limit_cents: null,
+      budget_period: null,
+      created_at: "2024-03-01T00:00:00Z",
+      last_used_at: null,
+      revoked_at: null,
+      expires_at: "2025-12-31T23:59:59Z",
+    },
+  ],
+  pagination: { has_more: false, next_cursor: null, prev_cursor: null, limit: 100 },
+};
+
 const mockOrganizations = {
   data: [
     {
@@ -19,12 +49,12 @@ const mockOrganizations = {
   total: 1,
 };
 
-const mockApiKeys = {
+const mockOrgApiKeys = {
   data: [
     {
-      id: "key-1",
+      id: "key-org-1",
       name: "Production API Key",
-      key_prefix: "sk-prod-abc",
+      key_prefix: "gw_prod_abc",
       owner: { type: "organization", org_id: "org-1" },
       budget_limit_cents: 10000,
       budget_period: "monthly",
@@ -34,43 +64,55 @@ const mockApiKeys = {
       expires_at: null,
     },
     {
-      id: "key-2",
-      name: "Development Key",
-      key_prefix: "sk-dev-xyz",
+      id: "key-team-1",
+      name: "Engineering Team Key",
+      key_prefix: "gw_eng_def",
+      owner: { type: "team", team_id: "team-1" },
+      budget_limit_cents: 5000,
+      budget_period: "monthly",
+      created_at: "2024-01-20T00:00:00Z",
+      last_used_at: "2024-03-05T10:00:00Z",
+      revoked_at: null,
+      expires_at: null,
+    },
+    {
+      id: "key-proj-1",
+      name: "Project Key",
+      key_prefix: "gw_proj_ghi",
       owner: { type: "project", project_id: "proj-1" },
       budget_limit_cents: null,
       budget_period: null,
-      created_at: "2024-02-01T00:00:00Z",
+      created_at: "2024-02-10T00:00:00Z",
       last_used_at: null,
       revoked_at: null,
-      expires_at: "2024-12-31T23:59:59Z",
-    },
-    {
-      id: "key-3",
-      name: "Old API Key",
-      key_prefix: "sk-old-123",
-      owner: { type: "team", team_id: "team-1" },
-      budget_limit_cents: 5000,
-      budget_period: "weekly",
-      created_at: "2023-06-01T00:00:00Z",
-      last_used_at: "2023-12-15T09:00:00Z",
-      revoked_at: "2024-01-01T00:00:00Z",
       expires_at: null,
     },
+    {
+      id: "key-sa-1",
+      name: "CI/CD Pipeline Key",
+      key_prefix: "gw_cicd_jkl",
+      owner: { type: "service_account", service_account_id: "sa-1" },
+      budget_limit_cents: 20000,
+      budget_period: "monthly",
+      created_at: "2024-01-05T00:00:00Z",
+      last_used_at: "2024-03-11T08:00:00Z",
+      revoked_at: null,
+      expires_at: null,
+    },
+    ...mockMyKeys.data,
   ],
-  pagination: {
-    has_more: false,
-    next_cursor: null,
-    prev_cursor: null,
-  },
+  pagination: { has_more: false, next_cursor: null, prev_cursor: null, limit: 100 },
 };
 
 const defaultHandlers = [
+  http.get("*/api/admin/v1/me/api-keys", () => {
+    return HttpResponse.json(mockMyKeys);
+  }),
   http.get("*/api/admin/v1/organizations", () => {
     return HttpResponse.json(mockOrganizations);
   }),
   http.get("*/api/admin/v1/organizations/acme-corp/api-keys", () => {
-    return HttpResponse.json(mockApiKeys);
+    return HttpResponse.json(mockOrgApiKeys);
   }),
 ];
 
@@ -112,6 +154,10 @@ export const Loading: Story = {
   parameters: {
     msw: {
       handlers: [
+        http.get("*/api/admin/v1/me/api-keys", async () => {
+          await new Promise((resolve) => setTimeout(resolve, 999999));
+          return HttpResponse.json(mockMyKeys);
+        }),
         http.get("*/api/admin/v1/organizations", async () => {
           await new Promise((resolve) => setTimeout(resolve, 999999));
           return HttpResponse.json(mockOrganizations);
@@ -125,13 +171,19 @@ export const Empty: Story = {
   parameters: {
     msw: {
       handlers: [
+        http.get("*/api/admin/v1/me/api-keys", () => {
+          return HttpResponse.json({
+            data: [],
+            pagination: { has_more: false, next_cursor: null, prev_cursor: null, limit: 100 },
+          });
+        }),
         http.get("*/api/admin/v1/organizations", () => {
           return HttpResponse.json(mockOrganizations);
         }),
         http.get("*/api/admin/v1/organizations/*/api-keys", () => {
           return HttpResponse.json({
             data: [],
-            pagination: { has_more: false, next_cursor: null, prev_cursor: null },
+            pagination: { has_more: false, next_cursor: null, prev_cursor: null, limit: 100 },
           });
         }),
       ],
@@ -139,10 +191,13 @@ export const Empty: Story = {
   },
 };
 
-export const NoOrganizations: Story = {
+export const MyKeysOnly: Story = {
   parameters: {
     msw: {
       handlers: [
+        http.get("*/api/admin/v1/me/api-keys", () => {
+          return HttpResponse.json(mockMyKeys);
+        }),
         http.get("*/api/admin/v1/organizations", () => {
           return HttpResponse.json({ data: [], total: 0 });
         }),
@@ -155,84 +210,25 @@ export const WithRevokedKeys: Story = {
   parameters: {
     msw: {
       handlers: [
-        http.get("*/api/admin/v1/organizations", () => {
-          return HttpResponse.json(mockOrganizations);
-        }),
-        http.get("*/api/admin/v1/organizations/acme-corp/api-keys", () => {
+        http.get("*/api/admin/v1/me/api-keys", () => {
           return HttpResponse.json({
             data: [
               {
-                id: "key-active",
-                name: "Active Key",
-                key_prefix: "sk-active",
-                owner: { type: "organization", org_id: "org-1" },
-                budget_limit_cents: 5000,
-                budget_period: "monthly",
-                created_at: "2024-01-15T00:00:00Z",
-                last_used_at: "2024-03-10T14:30:00Z",
-                revoked_at: null,
-                expires_at: null,
+                ...mockMyKeys.data[0],
+                revoked_at: "2024-03-01T00:00:00Z",
               },
-              {
-                id: "key-revoked-1",
-                name: "Revoked Key 1",
-                key_prefix: "sk-rev1",
-                owner: { type: "project", project_id: "proj-1" },
-                budget_limit_cents: null,
-                budget_period: null,
-                created_at: "2024-01-01T00:00:00Z",
-                last_used_at: "2024-01-15T00:00:00Z",
-                revoked_at: "2024-02-01T00:00:00Z",
-                expires_at: null,
-              },
-              {
-                id: "key-revoked-2",
-                name: "Revoked Key 2",
-                key_prefix: "sk-rev2",
-                owner: { type: "team", team_id: "team-1" },
-                budget_limit_cents: 1000,
-                budget_period: "weekly",
-                created_at: "2023-12-01T00:00:00Z",
-                last_used_at: null,
-                revoked_at: "2024-01-15T00:00:00Z",
-                expires_at: null,
-              },
+              mockMyKeys.data[1],
             ],
-            pagination: { has_more: false, next_cursor: null, prev_cursor: null },
+            pagination: { has_more: false, next_cursor: null, prev_cursor: null, limit: 100 },
           });
         }),
-      ],
-    },
-  },
-};
-
-export const ManyKeys: Story = {
-  parameters: {
-    msw: {
-      handlers: [
         http.get("*/api/admin/v1/organizations", () => {
           return HttpResponse.json(mockOrganizations);
         }),
         http.get("*/api/admin/v1/organizations/acme-corp/api-keys", () => {
           return HttpResponse.json({
-            data: Array.from({ length: 9 }, (_, i) => ({
-              id: `key-${i + 1}`,
-              name: `API Key ${i + 1}`,
-              key_prefix: `sk-key${i + 1}`,
-              owner:
-                i % 3 === 0
-                  ? { type: "organization", org_id: "org-1" }
-                  : i % 3 === 1
-                    ? { type: "project", project_id: `proj-${i}` }
-                    : { type: "team", team_id: `team-${i}` },
-              budget_limit_cents: i % 2 === 0 ? (i + 1) * 1000 : null,
-              budget_period: i % 2 === 0 ? "monthly" : null,
-              created_at: new Date(2024, 0, i + 1).toISOString(),
-              last_used_at: i % 3 === 0 ? new Date(2024, 2, i + 1).toISOString() : null,
-              revoked_at: i === 8 ? new Date(2024, 2, 1).toISOString() : null,
-              expires_at: i === 2 ? new Date(2024, 11, 31).toISOString() : null,
-            })),
-            pagination: { has_more: false, next_cursor: null, prev_cursor: null },
+            data: [],
+            pagination: { has_more: false, next_cursor: null, prev_cursor: null, limit: 100 },
           });
         }),
       ],
@@ -244,6 +240,9 @@ export const Error: Story = {
   parameters: {
     msw: {
       handlers: [
+        http.get("*/api/admin/v1/me/api-keys", () => {
+          return HttpResponse.error();
+        }),
         http.get("*/api/admin/v1/organizations", () => {
           return HttpResponse.error();
         }),

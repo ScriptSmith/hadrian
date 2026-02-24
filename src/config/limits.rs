@@ -47,6 +47,11 @@ pub struct ResourceLimits {
     /// Set to 0 for unlimited. Default: 10 providers per user.
     #[serde(default = "default_max_providers_per_user")]
     pub max_providers_per_user: u32,
+
+    /// Maximum API keys per user (self-service).
+    /// Set to 0 for unlimited. Default: 25 keys per user.
+    #[serde(default = "default_max_api_keys_per_user")]
+    pub max_api_keys_per_user: u32,
 }
 
 impl Default for ResourceLimits {
@@ -54,6 +59,7 @@ impl Default for ResourceLimits {
         Self {
             max_policies_per_org: default_max_policies_per_org(),
             max_providers_per_user: default_max_providers_per_user(),
+            max_api_keys_per_user: default_max_api_keys_per_user(),
         }
     }
 }
@@ -64,6 +70,10 @@ fn default_max_policies_per_org() -> u32 {
 
 fn default_max_providers_per_user() -> u32 {
     10
+}
+
+fn default_max_api_keys_per_user() -> u32 {
+    25
 }
 
 /// Rate limiting defaults.
