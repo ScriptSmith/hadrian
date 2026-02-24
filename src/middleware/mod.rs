@@ -29,7 +29,9 @@ pub use file_search::{
 // FileSearchMiddlewareError, FileSearchToolCall, FileSearchToolResult,
 // check_response_for_file_search, detect_file_search_in_chunk,
 // format_tool_result_json, parse_file_search_tool_call
-pub use rate_limit::{extract_client_ip_from_parts, rate_limit_middleware};
+#[cfg(feature = "sso")]
+pub use rate_limit::extract_client_ip_from_parts;
+pub use rate_limit::rate_limit_middleware;
 pub use request_id::{RequestId, request_id_middleware};
 pub use scope::required_scope_for_path;
 pub use security_headers::security_headers_middleware;

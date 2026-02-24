@@ -275,6 +275,7 @@ fn extract_ip_from_xff(
 /// Like [`extract_client_ip`] but works with already-extracted components
 /// instead of a full `Request`, for use in route handlers where the request
 /// has already been decomposed.
+#[cfg(feature = "sso")]
 pub fn extract_client_ip_from_parts(
     headers: &axum::http::HeaderMap,
     connecting_addr: Option<std::net::SocketAddr>,
