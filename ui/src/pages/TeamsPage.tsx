@@ -28,7 +28,7 @@ function TeamCard({ team }: { team: TeamWithProjects }) {
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
               <UsersRound className="h-5 w-5 text-muted-foreground shrink-0" />
-              <h3 className="font-medium truncate">{team.name}</h3>
+              <p className="font-medium truncate">{team.name}</p>
             </div>
             {team.project_count > 0 && (
               <Badge variant="secondary" className="shrink-0 text-xs">

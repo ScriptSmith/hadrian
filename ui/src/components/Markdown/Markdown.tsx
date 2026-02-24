@@ -1,9 +1,14 @@
 import { useRef, useEffect } from "react";
 import { Streamdown, type MermaidOptions } from "streamdown";
-import { code } from "@streamdown/code";
+import { createCodePlugin } from "@streamdown/code";
 
 import { cn } from "@/utils/cn";
 import { usePreferences } from "@/preferences/PreferencesProvider";
+
+const lightCode = createCodePlugin({
+  themes: ["github-light-high-contrast", "github-light-high-contrast"],
+});
+const darkCode = createCodePlugin({ themes: ["github-dark", "github-dark"] });
 
 interface MarkdownProps {
   content: string;
@@ -33,6 +38,8 @@ export function Markdown({ content, className }: MarkdownProps) {
     },
   };
 
+  const code = resolvedTheme === "dark" ? darkCode : lightCode;
+
   return (
     <div
       ref={containerRef}
@@ -43,15 +50,7 @@ export function Markdown({ content, className }: MarkdownProps) {
         className
       )}
     >
-      <Streamdown
-        plugins={{ code }}
-        shikiTheme={
-          resolvedTheme === "dark"
-            ? ["github-dark", "github-dark"]
-            : ["github-light", "github-light"]
-        }
-        mermaid={mermaidOptions}
-      >
+      <Streamdown plugins={{ code }} mermaid={mermaidOptions}>
         {content}
       </Streamdown>
     </div>

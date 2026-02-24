@@ -42,7 +42,7 @@ function KnowledgeBaseCard({ kb }: { kb: VectorStore }) {
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
               <BookOpen className="h-5 w-5 text-muted-foreground shrink-0" />
-              <h3 className="font-medium truncate">{kb.name}</h3>
+              <p className="font-medium truncate">{kb.name}</p>
             </div>
             <StatusBadge status={kb.status} />
           </div>

@@ -79,7 +79,7 @@ function ApiKeyCard({
           <div className="flex items-center gap-2 min-w-0">
             <Key className="h-5 w-5 text-muted-foreground shrink-0" />
             {readOnly ? (
-              <h3 className="font-medium truncate">{apiKey.name}</h3>
+              <p className="font-medium truncate">{apiKey.name}</p>
             ) : (
               <Link
                 to={`/api-keys/${apiKey.id}`}

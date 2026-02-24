@@ -1,9 +1,14 @@
 import { Streamdown, type MermaidOptions } from "streamdown";
-import { code } from "@streamdown/code";
+import { createCodePlugin } from "@streamdown/code";
 import { memo } from "react";
 
 import { cn } from "@/utils/cn";
 import { usePreferences } from "@/preferences/PreferencesProvider";
+
+const lightCode = createCodePlugin({
+  themes: ["github-light-high-contrast", "github-light-high-contrast"],
+});
+const darkCode = createCodePlugin({ themes: ["github-dark", "github-dark"] });
 
 /**
  * StreamingMarkdown - Optimized Markdown Rendering for Token Streaming
@@ -64,6 +69,8 @@ function StreamingMarkdownComponent({ content, isStreaming, className }: Streami
     },
   };
 
+  const code = resolvedTheme === "dark" ? darkCode : lightCode;
+
   return (
     <div
       className={cn(
@@ -75,11 +82,6 @@ function StreamingMarkdownComponent({ content, isStreaming, className }: Streami
     >
       <Streamdown
         plugins={{ code }}
-        shikiTheme={
-          resolvedTheme === "dark"
-            ? ["github-dark", "github-dark"]
-            : ["github-light", "github-light"]
-        }
         mermaid={mermaidOptions}
         mode={isStreaming ? "streaming" : "static"}
         isAnimating={isStreaming}
