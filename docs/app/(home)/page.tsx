@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { Server, Shield, Users, Zap, Eye, Code, Brain } from "lucide-react";
 import { StoryEmbed } from "@/components/story-embed";
@@ -18,17 +18,17 @@ function GitHubIcon({ className }: { className?: string }) {
 
 const demos = [
   {
-    id: "knowledge-bases",
-    title: "Knowledge Bases",
-    description: "Search uploaded documents with vector search, citations, and inline references.",
-    storyId: "chat-chatview--knowledge-bases",
-  },
-  {
     id: "chat",
     title: "Multi-Model Chat",
     description:
       "Compare responses from multiple models side-by-side with advanced multi-model modes.",
     storyId: "chat-chatview--multi-model-conversation",
+  },
+  {
+    id: "knowledge-bases",
+    title: "Knowledge Bases",
+    description: "Search uploaded documents with vector search, citations, and inline references.",
+    storyId: "chat-chatview--knowledge-bases",
   },
   {
     id: "execute-code",
@@ -39,7 +39,7 @@ const demos = [
   {
     id: "studio",
     title: "Studio",
-    description: "Generate images across providers simultaneously with cost tracking.",
+    description: "Generate media across providers simultaneously with cost tracking.",
     storyId: "pages-studiopage--images",
   },
   {
@@ -48,38 +48,68 @@ const demos = [
     description: "Track costs per user, team, and project with microcent precision.",
     storyId: "components-usagedashboard--organization",
   },
+  {
+    id: "provider-health",
+    title: "Provider Health",
+    description: "Monitor provider status, latency, and circuit breakers in real time.",
+    storyId: "admin-providerhealthpage--all-healthy",
+  },
+  {
+    id: "rbac-policies",
+    title: "RBAC Policies",
+    description: "Define fine-grained access control with CEL-based policies per organization.",
+    storyId: "admin-orgrbacpoliciespage--with-policies",
+  },
+  {
+    id: "multi-tenancy",
+    title: "Multi-Tenancy",
+    description: "Manage organizations with teams, projects, members, and scoped resources.",
+    storyId: "admin-organizationdetailpage--default",
+  },
 ];
 
 function DemoGallery() {
-  const chatRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = chatRef.current;
-    const container = el?.parentElement;
-    if (el && container) {
-      const scrollLeft =
-        el.offsetLeft - container.offsetLeft - (container.clientWidth - el.offsetWidth) / 2;
-      container.scrollLeft = scrollLeft;
-    }
-  }, []);
+  const [active, setActive] = useState("chat");
 
   return (
-    <div className="flex snap-x snap-mandatory gap-6 overflow-x-auto pb-4">
-      <div className="w-[15%] shrink-0" aria-hidden="true" />
-      {demos.map((demo) => (
-        <div
-          key={demo.id}
-          ref={demo.id === "chat" ? chatRef : undefined}
-          className="w-[70%] shrink-0 snap-center"
-        >
-          <h3 className="mb-1 text-lg font-semibold">{demo.title}</h3>
-          <p className="mb-3 text-sm text-fd-muted-foreground">{demo.description}</p>
-          <div className="overflow-hidden rounded-xl border border-fd-border shadow-lg">
-            <StoryEmbed storyId={demo.storyId} height={850} />
+    <div className="mx-auto max-w-screen-2xl px-4">
+      <div
+        className="mx-auto mb-6 flex max-w-6xl flex-wrap justify-center gap-2"
+        role="tablist"
+        aria-label="Demo gallery"
+      >
+        {demos.map((demo) => (
+          <button
+            key={demo.id}
+            role="tab"
+            aria-selected={active === demo.id}
+            aria-controls={`demo-panel-${demo.id}`}
+            onMouseEnter={() => setActive(demo.id)}
+            onClick={() => setActive(demo.id)}
+            className={`shrink-0 rounded-lg border px-4 py-3 text-left transition-colors ${
+              active === demo.id
+                ? "border-fd-primary bg-fd-primary/10 text-fd-foreground"
+                : "border-fd-border bg-fd-card text-fd-muted-foreground hover:border-fd-primary/50 hover:text-fd-foreground"
+            }`}
+          >
+            <span className="block text-sm font-semibold">{demo.title}</span>
+            <span className="mt-0.5 block max-w-48 text-xs">{demo.description}</span>
+          </button>
+        ))}
+      </div>
+      <div className="relative overflow-hidden rounded-xl border border-fd-border shadow-lg">
+        {demos.map((demo) => (
+          <div
+            key={demo.id}
+            id={`demo-panel-${demo.id}`}
+            role="tabpanel"
+            aria-label={demo.title}
+            className={active === demo.id ? "" : "invisible absolute inset-0"}
+          >
+            <StoryEmbed storyId={demo.storyId} height={950} />
           </div>
-        </div>
-      ))}
-      <div className="w-[15%] shrink-0" aria-hidden="true" />
+        ))}
+      </div>
     </div>
   );
 }

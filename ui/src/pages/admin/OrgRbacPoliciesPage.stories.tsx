@@ -11,6 +11,8 @@ import type {
 import { ToastProvider } from "@/components/Toast/Toast";
 import { ConfirmDialogProvider } from "@/components/ConfirmDialog/ConfirmDialog";
 
+const daysAgo = (d: number) => new Date(Date.now() - d * 86_400_000).toISOString();
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -24,7 +26,7 @@ const mockOrg: Organization = {
   id: "org-123",
   slug: "acme-corp",
   name: "Acme Corporation",
-  created_at: "2024-01-01T00:00:00Z",
+  created_at: daysAgo(180),
 };
 
 const mockPolicies: OrgRbacPolicy[] = [
@@ -40,8 +42,8 @@ const mockPolicies: OrgRbacPolicy[] = [
     priority: 100,
     enabled: true,
     version: 3,
-    created_at: "2024-01-01T00:00:00Z",
-    updated_at: "2024-06-15T10:30:00Z",
+    created_at: daysAgo(160),
+    updated_at: daysAgo(5),
   },
   {
     id: "policy-2",
@@ -55,8 +57,8 @@ const mockPolicies: OrgRbacPolicy[] = [
     priority: 50,
     enabled: true,
     version: 1,
-    created_at: "2024-03-01T00:00:00Z",
-    updated_at: "2024-03-01T00:00:00Z",
+    created_at: daysAgo(120),
+    updated_at: daysAgo(120),
   },
   {
     id: "policy-3",
@@ -70,8 +72,8 @@ const mockPolicies: OrgRbacPolicy[] = [
     priority: 200,
     enabled: false,
     version: 2,
-    created_at: "2024-04-15T00:00:00Z",
-    updated_at: "2024-05-10T08:00:00Z",
+    created_at: daysAgo(90),
+    updated_at: daysAgo(45),
   },
   {
     id: "policy-4",
@@ -85,8 +87,8 @@ const mockPolicies: OrgRbacPolicy[] = [
     priority: 75,
     enabled: true,
     version: 1,
-    created_at: "2024-06-01T00:00:00Z",
-    updated_at: "2024-06-01T00:00:00Z",
+    created_at: daysAgo(50),
+    updated_at: daysAgo(50),
   },
 ];
 
@@ -268,8 +270,8 @@ export const ManyPolicies: Story = {
             priority: 100 - i,
             enabled: i % 4 !== 0,
             version: Math.floor(Math.random() * 5) + 1,
-            created_at: "2024-01-01T00:00:00Z",
-            updated_at: "2024-06-15T10:30:00Z",
+            created_at: daysAgo(180 - i * 5),
+            updated_at: daysAgo(i * 2),
           }));
           return HttpResponse.json({
             data: manyPolicies,

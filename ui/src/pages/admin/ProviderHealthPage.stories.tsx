@@ -15,6 +15,8 @@ import type {
 } from "@/api/generated/types.gen";
 import { ToastProvider } from "@/components/Toast/Toast";
 
+const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+
 // Create a new QueryClient for each story to prevent cache sharing
 const createQueryClient = () =>
   new QueryClient({
@@ -31,7 +33,7 @@ const mockHealthyProviders: ProviderHealthState[] = [
     provider: "openai",
     status: "healthy",
     latency_ms: 120,
-    last_check: "2024-06-15T10:30:00Z",
+    last_check: minutesAgo(2),
     consecutive_failures: 0,
     consecutive_successes: 15,
   },
@@ -39,7 +41,7 @@ const mockHealthyProviders: ProviderHealthState[] = [
     provider: "anthropic",
     status: "healthy",
     latency_ms: 95,
-    last_check: "2024-06-15T10:30:00Z",
+    last_check: minutesAgo(2),
     consecutive_failures: 0,
     consecutive_successes: 42,
   },
@@ -47,7 +49,7 @@ const mockHealthyProviders: ProviderHealthState[] = [
     provider: "azure-openai",
     status: "healthy",
     latency_ms: 180,
-    last_check: "2024-06-15T10:30:00Z",
+    last_check: minutesAgo(2),
     consecutive_failures: 0,
     consecutive_successes: 8,
   },
@@ -58,7 +60,7 @@ const mockMixedProviders: ProviderHealthState[] = [
     provider: "openai",
     status: "healthy",
     latency_ms: 120,
-    last_check: "2024-06-15T10:30:00Z",
+    last_check: minutesAgo(2),
     consecutive_failures: 0,
     consecutive_successes: 15,
   },
@@ -67,7 +69,7 @@ const mockMixedProviders: ProviderHealthState[] = [
     status: "unhealthy",
     latency_ms: 5000,
     error: "Connection timeout after 5000ms",
-    last_check: "2024-06-15T10:30:00Z",
+    last_check: minutesAgo(2),
     consecutive_failures: 3,
     consecutive_successes: 0,
   },
@@ -75,7 +77,7 @@ const mockMixedProviders: ProviderHealthState[] = [
     provider: "azure-openai",
     status: "unknown",
     latency_ms: 0,
-    last_check: "2024-06-15T10:25:00Z",
+    last_check: minutesAgo(7),
     consecutive_failures: 0,
     consecutive_successes: 0,
   },
@@ -85,7 +87,7 @@ const mockMixedProviders: ProviderHealthState[] = [
     latency_ms: 2500,
     error: "503 Service Unavailable",
     status_code: 503,
-    last_check: "2024-06-15T10:30:00Z",
+    last_check: minutesAgo(2),
     consecutive_failures: 5,
     consecutive_successes: 0,
   },
@@ -125,7 +127,7 @@ const mockStats: ProviderStats[] = [
     input_tokens: 2500000,
     output_tokens: 1200000,
     total_cost_microcents: 4500000000, // $45.00
-    last_updated: "2024-06-15T10:30:00Z",
+    last_updated: minutesAgo(1),
   },
   {
     provider: "anthropic",
@@ -137,7 +139,7 @@ const mockStats: ProviderStats[] = [
     input_tokens: 1800000,
     output_tokens: 950000,
     total_cost_microcents: 3200000000, // $32.00
-    last_updated: "2024-06-15T10:30:00Z",
+    last_updated: minutesAgo(1),
   },
   {
     provider: "azure-openai",
@@ -149,7 +151,7 @@ const mockStats: ProviderStats[] = [
     input_tokens: 890000,
     output_tokens: 450000,
     total_cost_microcents: 1500000000, // $15.00
-    last_updated: "2024-06-15T10:30:00Z",
+    last_updated: minutesAgo(1),
   },
 ];
 
@@ -164,7 +166,7 @@ const mockMixedStats: ProviderStats[] = [
     input_tokens: 2500000,
     output_tokens: 1200000,
     total_cost_microcents: 4500000000,
-    last_updated: "2024-06-15T10:30:00Z",
+    last_updated: minutesAgo(1),
   },
   {
     provider: "anthropic",
@@ -176,7 +178,7 @@ const mockMixedStats: ProviderStats[] = [
     input_tokens: 1800000,
     output_tokens: 950000,
     total_cost_microcents: 3200000000,
-    last_updated: "2024-06-15T10:30:00Z",
+    last_updated: minutesAgo(1),
   },
   {
     provider: "bedrock",
@@ -188,7 +190,7 @@ const mockMixedStats: ProviderStats[] = [
     input_tokens: 650000,
     output_tokens: 320000,
     total_cost_microcents: 980000000,
-    last_updated: "2024-06-15T10:30:00Z",
+    last_updated: minutesAgo(1),
   },
 ];
 
@@ -428,7 +430,7 @@ export const ManyProviders: Story = {
             status: i % 5 === 0 ? "unhealthy" : i % 7 === 0 ? "unknown" : "healthy",
             latency_ms: 50 + Math.floor(Math.random() * 200),
             error: i % 5 === 0 ? `Error for provider ${i + 1}` : undefined,
-            last_check: "2024-06-15T10:30:00Z",
+            last_check: minutesAgo(2),
             consecutive_failures: i % 5 === 0 ? (i % 3) + 1 : 0,
             consecutive_successes: i % 5 === 0 ? 0 : Math.floor(Math.random() * 50),
           }));
@@ -454,7 +456,7 @@ export const ManyProviders: Story = {
             input_tokens: Math.floor(Math.random() * 3000000) + 100000,
             output_tokens: Math.floor(Math.random() * 1500000) + 50000,
             total_cost_microcents: Math.floor(Math.random() * 5000000000) + 100000000,
-            last_updated: "2024-06-15T10:30:00Z",
+            last_updated: minutesAgo(2),
           }));
           return HttpResponse.json({ stats: manyStats });
         }),
