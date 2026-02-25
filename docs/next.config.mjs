@@ -6,9 +6,11 @@ const withMDX = createMDX();
 const cargoToml = readFileSync("../Cargo.toml", "utf-8");
 const version = cargoToml.match(/^version\s*=\s*"(.+)"/m)?.[1] ?? "latest";
 
+const basePath = process.env.DOCS_BASE_PATH || "";
+
 /** @type {import('next').NextConfig} */
 const config = {
-  env: { HADRIAN_VERSION: version },
+  env: { HADRIAN_VERSION: version, DOCS_BASE_PATH: basePath },
   reactStrictMode: true,
   // Static export for serving from gateway
   output: "export",
@@ -16,6 +18,7 @@ const config = {
   distDir: "out",
   // Use trailing slashes for cleaner static URLs
   trailingSlash: true,
+  ...(basePath && { basePath }),
 };
 
 export default withMDX(config);

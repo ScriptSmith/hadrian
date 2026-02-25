@@ -33,7 +33,8 @@ export function StoryEmbed({ storyId, height = 200, title }: StoryEmbedProps) {
     return () => observer.disconnect();
   }, []);
 
-  const src = `/storybook/iframe.html?id=${storyId}&viewMode=story&globals=theme:${theme}`;
+  const basePath = process.env.DOCS_BASE_PATH || "";
+  const src = `${basePath}/storybook/iframe.html?id=${storyId}&viewMode=story&globals=theme:${theme}`;
 
   return (
     <iframe
