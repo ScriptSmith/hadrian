@@ -334,6 +334,12 @@ pub struct AppState {
     /// Loaded from org_sso_configs table at startup for multi-tenant SSO.
     #[cfg(feature = "saml")]
     pub saml_registry: Option<Arc<auth::SamlAuthenticatorRegistry>>,
+    /// Registry of per-org gateway JWT validators.
+    /// Routes incoming JWTs to the correct org-scoped validator by issuer.
+    pub gateway_jwt_registry: Option<Arc<auth::GatewayJwtRegistry>>,
+    /// Cached global JWT validator (from [auth.gateway.jwt] config).
+    /// Created once at startup so the JWKS cache is reused across requests.
+    pub global_jwt_validator: Option<Arc<auth::jwt::JwtValidator>>,
     /// Registry of per-organization RBAC policies.
     /// Loaded from org_rbac_policies table at startup for per-org authorization.
     pub policy_registry: Option<Arc<authz::PolicyRegistry>>,
@@ -780,6 +786,29 @@ impl AppState {
             None
         };
 
+        // Initialize per-org gateway JWT registry for multi-tenant JWT auth on /v1/*.
+        // Validators are pre-loaded in a background task so server startup isn't
+        // blocked by N sequential OIDC discovery HTTP requests.
+        let gateway_jwt_registry = if db.is_some() {
+            Some(Arc::new(auth::GatewayJwtRegistry::new()))
+        } else {
+            None
+        };
+
+        // Build the global JWT validator (if [auth.gateway.jwt] is configured)
+        let global_jwt_validator = match &config.auth.gateway {
+            config::GatewayAuthConfig::Jwt(jwt_config) => Some(Arc::new(
+                auth::jwt::JwtValidator::with_client(jwt_config.clone(), http_client.clone()),
+            )),
+            config::GatewayAuthConfig::Multi(multi) => multi.jwt.as_ref().map(|jwt_config| {
+                Arc::new(auth::jwt::JwtValidator::with_client(
+                    jwt_config.clone(),
+                    http_client.clone(),
+                ))
+            }),
+            _ => None,
+        };
+
         // Initialize per-org RBAC policy registry from database
         let policy_registry = if let (Some(svc), Some(db_pool)) = (&services, &db)
             && config.auth.rbac.enabled
@@ -1066,6 +1095,8 @@ impl AppState {
             oidc_registry,
             #[cfg(feature = "saml")]
             saml_registry,
+            gateway_jwt_registry,
+            global_jwt_validator,
             policy_registry,
             usage_buffer,
             response_cache,
@@ -2806,6 +2837,70 @@ async fn run_server(explicit_config_path: Option<&str>, no_browser: bool) {
 
         tokio::spawn(async move {
             dlq::start_dlq_worker(dlq, db, retry_config, ttl_secs).await;
+        });
+    }
+
+    // Pre-load per-org gateway JWT validators in the background.
+    // Each org requires an HTTP round-trip to its IdP's discovery endpoint, so this
+    // runs concurrently after server start instead of blocking startup.
+    #[cfg(feature = "sso")]
+    if let (Some(registry), Some(db)) = (state.gateway_jwt_registry.clone(), state.db.clone()) {
+        let http_client = state.http_client.clone();
+        let allow_loopback = config.server.allow_loopback_urls;
+        state.task_tracker.spawn(async move {
+            let configs = match db.org_sso_configs().list_enabled().await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "Failed to load SSO configs for gateway JWT registry \
+                         (will lazy-load on first request)"
+                    );
+                    return;
+                }
+            };
+
+            let oidc_configs: Vec<_> = configs
+                .into_iter()
+                .filter(|c| c.config.provider_type == models::SsoProviderType::Oidc)
+                .collect();
+
+            if oidc_configs.is_empty() {
+                return;
+            }
+
+            // Load concurrently with bounded parallelism to avoid overwhelming IdPs
+            use futures::stream::{self, StreamExt};
+            let results: Vec<_> = stream::iter(oidc_configs)
+                .map(|cfg| {
+                    let registry = &registry;
+                    let http_client = &http_client;
+                    async move {
+                        if let Err(e) = registry
+                            .register_from_sso_config(&cfg.config, http_client, allow_loopback)
+                            .await
+                        {
+                            tracing::warn!(
+                                org_id = %cfg.config.org_id,
+                                issuer = ?cfg.config.issuer,
+                                error = %e,
+                                "Failed to register gateway JWT validator for org \
+                                 (will lazy-load on first request)"
+                            );
+                            false
+                        } else {
+                            true
+                        }
+                    }
+                })
+                .buffer_unordered(10)
+                .collect()
+                .await;
+
+            let loaded = results.iter().filter(|ok| **ok).count();
+            if loaded > 0 {
+                tracing::info!(count = loaded, "Gateway JWT validator registry initialized");
+            }
         });
     }
 

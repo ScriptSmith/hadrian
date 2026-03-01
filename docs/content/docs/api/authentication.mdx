@@ -102,6 +102,12 @@ email = "email"           # Use 'email' claim
 org_id = "org_id"         # Custom claim for organization
 ```
 
+### Per-Org JWT Validation
+
+In multi-tenant deployments, each organization can configure their own identity provider via the Admin UI. JWTs from per-org IdPs are automatically validated — the gateway decodes the `iss` claim and routes the token to the correct org's validator. No global `[auth.gateway.jwt]` config is needed for this to work.
+
+See [Per-Org JWT Routing](/docs/authentication#per-org-jwt-routing) for details.
+
 ### Supported Algorithms
 
 | Algorithm           | Description                     |
@@ -133,6 +139,12 @@ With this configuration:
 1. If `X-API-Key` header is present, validate as API key
 2. If `Authorization: Bearer` header is present with JWT format, validate as JWT
 3. If `Authorization: Bearer` header is present with `gw_` prefix, validate as API key
+
+<Callout type="info">
+  The `[auth.gateway.jwt]` section is optional in multi-auth mode. When per-organization SSO is
+  configured, each org's SSO config provides JWT validation automatically. Omit `[auth.gateway.jwt]`
+  if all JWT validation should come from per-org configs.
+</Callout>
 
 ## Error Responses
 

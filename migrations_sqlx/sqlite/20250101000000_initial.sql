@@ -242,6 +242,9 @@ CREATE TABLE IF NOT EXISTS org_sso_configs (
 CREATE INDEX IF NOT EXISTS idx_org_sso_configs_org_id ON org_sso_configs(org_id);
 -- Index for enabled SSO configs (for IdP discovery)
 CREATE INDEX IF NOT EXISTS idx_org_sso_configs_enabled ON org_sso_configs(enabled) WHERE enabled = 1;
+-- Index for gateway JWT issuer-based lookup (per-org JWT validation hot path)
+CREATE INDEX IF NOT EXISTS idx_org_sso_configs_issuer_enabled
+  ON org_sso_configs(issuer, provider_type, enabled) WHERE enabled = 1 AND provider_type = 'oidc';
 
 -- Domain Verifications for SSO (verify ownership of email domains)
 -- status: 'pending', 'verified', 'failed'

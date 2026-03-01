@@ -22,6 +22,25 @@ Per-organization SSO allows each organization in a multi-tenant deployment to co
   identity providers like AD FS, see the [SAML Admin Guide](/docs/features/saml).
 </Callout>
 
+## API Authentication
+
+When you configure OIDC SSO for your organization, Hadrian automatically enables JWT-based API authentication for your org's users — no additional setup required. Users who obtain a JWT from your organization's identity provider can use it directly as a Bearer token on `/v1/*` endpoints:
+
+```bash
+# JWT from your org's IdP works on API endpoints automatically
+curl -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." \
+  https://gateway.example.com/v1/chat/completions \
+  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+The gateway decodes the `iss` claim from the JWT, matches it to your organization's SSO config, and validates the token against your IdP's JWKS keys. This works alongside API keys — users can authenticate with either method.
+
+<Callout type="info">
+  API JWT validation requires the gateway to be configured with `[auth.gateway]` set to `type =
+  "multi"` or `type = "jwt"`. See [Per-Org JWT Routing](/docs/authentication#per-org-jwt-routing)
+  for details on how token routing works.
+</Callout>
+
 ## Prerequisites
 
 Before configuring SSO:
@@ -309,7 +328,7 @@ For large mapping sets:
 ## Related Topics
 
 <Cards>
-  <Card title="Authentication Overview" href="/docs/features/authentication" />
+  <Card title="Authentication Overview" href="/docs/authentication" />
   <Card title="SAML Admin Guide" href="/docs/features/saml" />
   <Card title="SCIM Provisioning" href="/docs/features/scim" />
   <Card title="Auth Configuration Reference" href="/docs/configuration/auth" />

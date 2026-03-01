@@ -1,4 +1,7 @@
+#[cfg(feature = "sso")]
+mod discovery;
 mod error;
+pub mod gateway_jwt;
 mod identity;
 pub mod jwt;
 #[cfg(feature = "sso")]
@@ -13,7 +16,10 @@ mod saml_registry;
 #[cfg(feature = "sso")]
 pub mod session_store;
 
+#[cfg(feature = "sso")]
+pub use discovery::fetch_jwks_uri;
 pub use error::AuthError;
+pub use gateway_jwt::GatewayJwtRegistry;
 pub use identity::{ApiKeyAuth, AuthenticatedRequest, Identity, IdentityKind};
 #[cfg(feature = "sso")]
 pub use oidc::OidcAuthenticator;

@@ -319,6 +319,19 @@ pub async fn create(
         input.saml_metadata_url.as_deref(),
     )?;
 
+    // SSRF-validate OIDC URLs at input time
+    if input.provider_type == SsoProviderType::Oidc {
+        let allow_loopback = state.config.server.allow_loopback_urls;
+        if let Some(ref issuer) = input.issuer {
+            crate::validation::validate_base_url(issuer, allow_loopback)
+                .map_err(|e| AdminError::Validation(format!("Invalid issuer URL: {e}")))?;
+        }
+        if let Some(ref discovery_url) = input.discovery_url {
+            crate::validation::validate_base_url(discovery_url, allow_loopback)
+                .map_err(|e| AdminError::Validation(format!("Invalid discovery URL: {e}")))?;
+        }
+    }
+
     // Create the SSO config
     let config = services
         .org_sso_configs
@@ -387,6 +400,31 @@ pub async fn create(
             user_agent: client_info.user_agent,
         })
         .await;
+
+    // Sync gateway JWT registry for per-org API JWT auth
+    if config.enabled
+        && config.provider_type == SsoProviderType::Oidc
+        && let Some(registry) = &state.gateway_jwt_registry
+    {
+        // Clear any negative cache entry for this issuer so lazy-load can pick it up
+        if let Some(ref issuer) = config.issuer {
+            registry.invalidate_negative_cache(issuer).await;
+        }
+        if let Err(e) = registry
+            .register_from_sso_config(
+                &config,
+                &state.http_client,
+                state.config.server.allow_loopback_urls,
+            )
+            .await
+        {
+            tracing::warn!(
+                org_id = %org.id,
+                error = %e,
+                "Failed to register gateway JWT validator (will lazy-load)"
+            );
+        }
+    }
 
     Ok((StatusCode::CREATED, Json(config)))
 }
@@ -493,6 +531,19 @@ pub async fn update(
         final_metadata_url,
     )?;
 
+    // SSRF-validate OIDC URLs at input time (only check fields being updated)
+    if final_provider_type == SsoProviderType::Oidc {
+        let allow_loopback = state.config.server.allow_loopback_urls;
+        if let Some(ref issuer) = input.issuer {
+            crate::validation::validate_base_url(issuer, allow_loopback)
+                .map_err(|e| AdminError::Validation(format!("Invalid issuer URL: {e}")))?;
+        }
+        if let Some(Some(ref discovery_url)) = input.discovery_url {
+            crate::validation::validate_base_url(discovery_url, allow_loopback)
+                .map_err(|e| AdminError::Validation(format!("Invalid discovery URL: {e}")))?;
+        }
+    }
+
     // Update the SSO config
     let updated = services
         .org_sso_configs
@@ -522,6 +573,33 @@ pub async fn update(
             user_agent: client_info.user_agent,
         })
         .await;
+
+    // Sync gateway JWT registry for per-org API JWT auth
+    if let Some(registry) = &state.gateway_jwt_registry {
+        if updated.enabled && updated.provider_type == SsoProviderType::Oidc {
+            // Clear negative cache so the updated config can be found
+            if let Some(ref issuer) = updated.issuer {
+                registry.invalidate_negative_cache(issuer).await;
+            }
+            if let Err(e) = registry
+                .register_from_sso_config(
+                    &updated,
+                    &state.http_client,
+                    state.config.server.allow_loopback_urls,
+                )
+                .await
+            {
+                tracing::warn!(
+                    org_id = %org.id,
+                    error = %e,
+                    "Failed to update gateway JWT validator (will lazy-load)"
+                );
+            }
+        } else {
+            // Config disabled or not OIDC — remove any existing validator
+            registry.remove(org.id).await;
+        }
+    }
 
     Ok(Json(updated))
 }
@@ -589,6 +667,11 @@ pub async fn delete(
         .org_sso_configs
         .delete(existing.id, secret_manager)
         .await?;
+
+    // Remove from gateway JWT registry
+    if let Some(registry) = &state.gateway_jwt_registry {
+        registry.remove(org.id).await;
+    }
 
     // Log audit event (fire-and-forget)
     let _ = services

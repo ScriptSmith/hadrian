@@ -437,6 +437,31 @@ impl OrgSsoConfigRepo for PostgresOrgSsoConfigRepo {
         Ok(())
     }
 
+    async fn find_enabled_oidc_by_issuer(&self, issuer: &str) -> DbResult<Vec<OrgSsoConfig>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, org_id, provider_type::text,
+                   issuer, discovery_url, client_id, client_secret_key,
+                   redirect_uri, scopes, identity_claim, org_claim, groups_claim,
+                   saml_metadata_url, saml_idp_entity_id, saml_idp_sso_url, saml_idp_slo_url,
+                   saml_idp_certificate, saml_sp_entity_id, saml_name_id_format,
+                   saml_sign_requests, saml_sp_private_key_ref, saml_sp_certificate, saml_force_authn,
+                   saml_authn_context_class_ref, saml_identity_attribute, saml_email_attribute,
+                   saml_name_attribute, saml_groups_attribute,
+                   provisioning_enabled, create_users, default_team_id, default_org_role, default_team_role,
+                   allowed_email_domains, sync_attributes_on_login, sync_memberships_on_login,
+                   enforcement_mode::text, enabled, created_at, updated_at
+            FROM org_sso_configs
+            WHERE enabled = TRUE AND provider_type = 'oidc'::sso_provider_type AND issuer = $1
+            "#,
+        )
+        .bind(issuer)
+        .fetch_all(&self.read_pool)
+        .await?;
+
+        Ok(rows.iter().map(Self::parse_config).collect())
+    }
+
     async fn find_by_email_domain(&self, domain: &str) -> DbResult<Option<OrgSsoConfig>> {
         // PostgreSQL uses jsonb ? operator or jsonb_array_elements to search JSON arrays
         let result = sqlx::query(

@@ -803,6 +803,8 @@ mod tests {
             oidc_registry: None,
             #[cfg(feature = "saml")]
             saml_registry: None,
+            gateway_jwt_registry: None,
+            global_jwt_validator: None,
             policy_registry: None,
             usage_buffer: None,
             response_cache: None,

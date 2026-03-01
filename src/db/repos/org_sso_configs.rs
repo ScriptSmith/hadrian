@@ -83,6 +83,12 @@ pub trait OrgSsoConfigRepo: Send + Sync {
     /// The SSO config if found and enabled, None otherwise.
     async fn find_by_email_domain(&self, domain: &str) -> DbResult<Option<OrgSsoConfig>>;
 
+    /// Find enabled OIDC SSO configurations by issuer URL.
+    ///
+    /// Used by the gateway JWT registry to route tokens to the correct per-org
+    /// validator based on the `iss` claim.
+    async fn find_enabled_oidc_by_issuer(&self, issuer: &str) -> DbResult<Vec<OrgSsoConfig>>;
+
     /// List all enabled SSO configurations.
     ///
     /// Used for building the authenticator registry on startup.

@@ -8,7 +8,7 @@ import { Callout } from "fumadocs-ui/components/callout";
 This page is the **configuration reference** for authentication settings in `hadrian.toml`. For conceptual overviews and guides, see:
 
 <Cards>
-  <Card title="Authentication Overview" href="/docs/features/authentication" />
+  <Card title="Authentication Overview" href="/docs/authentication" />
   <Card title="SSO Admin Guide" href="/docs/features/sso-admin-guide" />
   <Card title="Authorization Guide" href="/docs/features/authorization" />
 </Cards>
@@ -263,6 +263,26 @@ cache_ttl_secs = 300
 issuer = "https://auth.example.com"
 audience = "hadrian"
 jwks_url = "https://auth.example.com/.well-known/jwks.json"
+```
+
+<Callout type="info">
+  The `[auth.gateway.jwt]` section is **optional** in multi-auth mode. When per-organization SSO is
+  configured, each org's SSO config automatically provides JWT validation on `/v1/*` endpoints. If
+  `[auth.gateway.jwt]` is omitted, only per-org SSO configs and API keys are used — there is no
+  global JWT fallback. See [Per-Org JWT Routing](/docs/authentication#per-org-jwt-routing).
+</Callout>
+
+**Multi-auth with API keys only (per-org JWT):**
+
+```toml
+[auth.gateway]
+type = "multi"
+
+[auth.gateway.api_key]
+key_prefix = "gw_"
+cache_ttl_secs = 300
+
+# No [auth.gateway.jwt] — per-org SSO configs provide JWT validation
 ```
 
 **Request Examples:**
@@ -1356,3 +1376,57 @@ slug = "default"
 name = "Default Organization"
 admin_identities = ["admin@example.com"]
 ```
+
+### Multi-Org with Per-IdP API Authentication
+
+Each organization configures their own identity provider via the Admin UI. No global `[auth.gateway.jwt]` is needed — per-org SSO configs automatically enable JWT validation on `/v1/*` endpoints.
+
+```toml
+[auth.gateway]
+type = "multi"
+
+[auth.gateway.api_key]
+key_prefix = "gw_"
+cache_ttl_secs = 300
+
+# No [auth.gateway.jwt] section.
+# Per-org SSO configs provide JWT validation for each org's IdP.
+
+[auth.admin]
+type = "session"
+secret = "${SESSION_SECRET}"
+
+[auth.admin.session]
+secure = true
+same_site = "lax"
+
+[auth.rbac]
+enabled = true
+default_effect = "deny"
+
+[[auth.rbac.policies]]
+name = "super-admin"
+resource = "*"
+action = "*"
+condition = "'super_admin' in subject.roles"
+effect = "allow"
+priority = 100
+
+[[auth.rbac.policies]]
+name = "org-isolation"
+resource = "*"
+action = "*"
+condition = "context.org_id in subject.org_ids"
+effect = "allow"
+priority = 10
+
+[auth.bootstrap]
+api_key = "${HADRIAN_BOOTSTRAP_KEY}"
+auto_verify_domains = ["acme.com", "globex.io"]
+```
+
+<Callout type="info">
+  After deploying, use the bootstrap API key to create organizations and their SSO configs. Once SSO
+  is configured, each org's users can authenticate with both the web UI (via SSO login) and the API
+  (via JWT tokens from their org's IdP).
+</Callout>

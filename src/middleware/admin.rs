@@ -856,20 +856,24 @@ async fn validate_bearer_token(
         .unwrap_or_else(|| "sub".to_string());
 
     // Fetch JWKS URI from OIDC discovery (standard-compliant, works with any IdP)
-    let jwks_url = crate::auth::oidc::fetch_jwks_uri(&discovery_url, &state.http_client)
-        .await
-        .map_err(|e| {
-            tracing::error!(
-                org_slug = %org_slug,
-                discovery_url = %discovery_url,
-                error = %e,
-                "Failed to fetch JWKS URI from OIDC discovery"
-            );
-            AuthError::Internal(format!(
-                "Failed to fetch OIDC discovery for org '{}': {}",
-                org_slug, e
-            ))
-        })?;
+    let jwks_url = crate::auth::oidc::fetch_jwks_uri(
+        &discovery_url,
+        &state.http_client,
+        state.config.server.allow_loopback_urls,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(
+            org_slug = %org_slug,
+            discovery_url = %discovery_url,
+            error = %e,
+            "Failed to fetch JWKS URI from OIDC discovery"
+        );
+        AuthError::Internal(format!(
+            "Failed to fetch OIDC discovery for org '{}': {}",
+            org_slug, e
+        ))
+    })?;
 
     let jwt_config = crate::config::JwtAuthConfig {
         issuer,
@@ -2203,6 +2207,8 @@ mod tests {
             oidc_registry: None,
             #[cfg(feature = "saml")]
             saml_registry: None,
+            gateway_jwt_registry: None,
+            global_jwt_validator: None,
             policy_registry: None,
             usage_buffer: None,
             response_cache: None,
@@ -2505,6 +2511,8 @@ mod tests {
             oidc_registry: None,
             #[cfg(feature = "saml")]
             saml_registry: None,
+            gateway_jwt_registry: None,
+            global_jwt_validator: None,
             policy_registry: None,
             usage_buffer: None,
             response_cache: None,

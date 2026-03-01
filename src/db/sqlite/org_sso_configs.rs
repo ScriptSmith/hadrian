@@ -498,6 +498,31 @@ impl OrgSsoConfigRepo for SqliteOrgSsoConfigRepo {
         Ok(())
     }
 
+    async fn find_enabled_oidc_by_issuer(&self, issuer: &str) -> DbResult<Vec<OrgSsoConfig>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, org_id, provider_type,
+                   issuer, discovery_url, client_id, client_secret_key,
+                   redirect_uri, scopes, identity_claim, org_claim, groups_claim,
+                   saml_metadata_url, saml_idp_entity_id, saml_idp_sso_url, saml_idp_slo_url,
+                   saml_idp_certificate, saml_sp_entity_id, saml_name_id_format,
+                   saml_sign_requests, saml_sp_private_key_ref, saml_sp_certificate, saml_force_authn,
+                   saml_authn_context_class_ref, saml_identity_attribute, saml_email_attribute,
+                   saml_name_attribute, saml_groups_attribute,
+                   provisioning_enabled, create_users, default_team_id, default_org_role, default_team_role,
+                   allowed_email_domains, sync_attributes_on_login, sync_memberships_on_login,
+                   enforcement_mode, enabled, created_at, updated_at
+            FROM org_sso_configs
+            WHERE enabled = 1 AND provider_type = 'oidc' AND issuer = ?
+            "#,
+        )
+        .bind(issuer)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(Self::parse_config).collect()
+    }
+
     async fn find_by_email_domain(&self, domain: &str) -> DbResult<Option<OrgSsoConfig>> {
         // Search for configs where the domain is in the allowed_email_domains JSON array
         // SQLite uses json_each to search JSON arrays
@@ -665,6 +690,17 @@ mod tests {
         .execute(&pool)
         .await
         .expect("Failed to create org_sso_configs table");
+
+        // Match production indexes
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_org_sso_configs_issuer_enabled
+              ON org_sso_configs(issuer, provider_type, enabled) WHERE enabled = 1 AND provider_type = 'oidc'
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("Failed to create issuer index");
 
         pool
     }
@@ -948,5 +984,63 @@ mod tests {
         let enabled = repo.list_enabled().await.expect("Failed to list enabled");
         assert_eq!(enabled.len(), 1);
         assert_eq!(enabled[0].config.org_id, org1_id);
+    }
+
+    #[tokio::test]
+    async fn test_find_enabled_oidc_by_issuer() {
+        let pool = create_test_pool().await;
+        let org1_id = create_test_org(&pool, "org-1").await;
+        let org2_id = create_test_org(&pool, "org-2").await;
+        let org3_id = create_test_org(&pool, "org-3").await;
+        let repo = SqliteOrgSsoConfigRepo::new(pool);
+
+        let issuer = "https://idp.acme.com";
+
+        // Org1: enabled OIDC with matching issuer
+        let mut input = make_test_input();
+        input.issuer = Some(issuer.to_string());
+        input.enabled = true;
+        repo.create(org1_id, input, Some("key1"), None)
+            .await
+            .expect("Failed to create");
+
+        // Org2: enabled OIDC with different issuer
+        let mut input2 = make_test_input();
+        input2.issuer = Some("https://idp.other.com".to_string());
+        input2.enabled = true;
+        repo.create(org2_id, input2, Some("key2"), None)
+            .await
+            .expect("Failed to create");
+
+        // Org3: disabled OIDC with matching issuer
+        let mut input3 = make_test_input();
+        input3.issuer = Some(issuer.to_string());
+        input3.enabled = false;
+        repo.create(org3_id, input3, Some("key3"), None)
+            .await
+            .expect("Failed to create");
+
+        // Should only find org1 (enabled + matching issuer)
+        let found = repo
+            .find_enabled_oidc_by_issuer(issuer)
+            .await
+            .expect("Failed to search");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].org_id, org1_id);
+
+        // Different issuer should find org2
+        let found = repo
+            .find_enabled_oidc_by_issuer("https://idp.other.com")
+            .await
+            .expect("Failed to search");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].org_id, org2_id);
+
+        // Unknown issuer returns empty
+        let found = repo
+            .find_enabled_oidc_by_issuer("https://unknown.com")
+            .await
+            .expect("Failed to search");
+        assert!(found.is_empty());
     }
 }

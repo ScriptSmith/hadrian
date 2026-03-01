@@ -1566,12 +1566,10 @@ async fn try_jwt_api_auth(
 ) -> Result<Option<Identity>, AuthError> {
     use crate::config::GatewayAuthConfig;
 
-    // Get JWT config from auth.gateway and API key prefix for format-based detection
-    let (jwt_config, key_prefix) = match &state.config.auth.gateway {
-        GatewayAuthConfig::Jwt(config) => (config.clone(), None),
-        GatewayAuthConfig::Multi(config) => {
-            (config.jwt.clone(), Some(config.api_key.key_prefix.as_str()))
-        }
+    // Get API key prefix for format-based detection in multi-auth mode
+    let key_prefix = match &state.config.auth.gateway {
+        GatewayAuthConfig::Jwt(_) => None,
+        GatewayAuthConfig::Multi(config) => Some(config.api_key.key_prefix.as_str()),
         _ => return Ok(None), // No JWT config for API endpoints
     };
 
@@ -1596,14 +1594,106 @@ async fn try_jwt_api_auth(
         return Ok(None);
     }
 
-    // Create JWT validator and validate token
-    let validator =
-        crate::auth::jwt::JwtValidator::with_client(jwt_config.clone(), state.http_client.clone());
+    // Try per-org SSO JWT validators first (by issuer), then fall back to global config.
+    // This supports multi-tenant JWT auth where each org has its own IdP.
+    if let Some(registry) = &state.gateway_jwt_registry {
+        // Decode the issuer from the token without verification (cheap base64 decode)
+        if let Some(iss) = decode_jwt_issuer(token) {
+            // Look up validators, lazy-loading from DB on cache miss.
+            // find_or_load_by_issuer deduplicates concurrent loads and caches
+            // negative results to prevent DB query amplification.
+            #[cfg(feature = "sso")]
+            let validators = if let Some(db) = &state.db {
+                match registry
+                    .find_or_load_by_issuer(
+                        &iss,
+                        db,
+                        &state.http_client,
+                        state.config.server.allow_loopback_urls,
+                    )
+                    .await
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(
+                            issuer = %iss,
+                            error = %e,
+                            "Per-org JWT registry lookup failed, falling through to global"
+                        );
+                        Vec::new()
+                    }
+                }
+            } else {
+                registry.find_validators_by_issuer(&iss).await
+            };
+
+            #[cfg(not(feature = "sso"))]
+            let validators = registry.find_validators_by_issuer(&iss).await;
+
+            // Try each matching validator; first success wins.
+            // Disambiguation for shared-issuer orgs works naturally: each validator
+            // enforces its own audience (the org's client_id), so a token issued for
+            // org A's client will fail audience validation on org B's validator.
+            for (org_id, validator) in &validators {
+                match validator.validate(token).await {
+                    Ok(claims) => {
+                        return build_jwt_identity(&claims, validator, state, Some(*org_id))
+                            .await
+                            .map(Some);
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            org_id = %org_id,
+                            error = %e,
+                            "Per-org JWT validation failed"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Fall back to global JWT config (from [auth.gateway.jwt]).
+    // The global validator is built at startup in main.rs.
+    let Some(validator) = state.global_jwt_validator.clone() else {
+        // No per-org match and no global JWT config — not a JWT we can validate
+        return Ok(None);
+    };
 
     let claims = validator.validate(token).await?;
 
-    // Extract identity from claims
-    let external_id = validator.extract_identity(&claims);
+    build_jwt_identity(&claims, &validator, state, None)
+        .await
+        .map(Some)
+}
+
+/// Decode the `iss` claim from a JWT without verifying the signature.
+/// This is a cheap base64 decode of the payload used for routing to the right validator.
+fn decode_jwt_issuer(token: &str) -> Option<String> {
+    use base64::Engine;
+
+    let parts: Vec<&str> = token.splitn(3, '.').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    // JWT payloads use base64url without padding per RFC 7519 §3,
+    // but some IdPs (e.g. older Azure AD) emit padded tokens.
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(parts[1]))
+        .ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&payload).ok()?;
+    value.get("iss")?.as_str().map(String::from)
+}
+
+/// Build an `Identity` from validated JWT claims. Shared by per-org and global paths.
+async fn build_jwt_identity(
+    claims: &crate::auth::jwt::JwtClaims,
+    validator: &crate::auth::jwt::JwtValidator,
+    state: &AppState,
+    known_org_id: Option<uuid::Uuid>,
+) -> Result<Identity, AuthError> {
+    let external_id = validator.extract_identity(claims);
 
     // Look up user in database to get internal user_id
     let user_id = if let Some(db) = &state.db {
@@ -1616,14 +1706,12 @@ async fn try_jwt_api_auth(
         None
     };
 
-    // Extract roles from JWT claims
     let roles = claims.roles.clone().unwrap_or_default();
 
-    // Extract org_ids and team_ids from groups claim (Keycloak format: /org/team)
-    let (org_ids, team_ids) = if let Some(db) = &state.db
+    // Fetch org/team memberships from database (more reliable than JWT claims)
+    let (mut org_ids, team_ids) = if let Some(db) = &state.db
         && let Some(user_id) = user_id
     {
-        // Fetch org/team memberships from database (more reliable than JWT claims)
         let org_memberships = db
             .users()
             .get_org_memberships_for_user(user_id)
@@ -1649,25 +1737,37 @@ async fn try_jwt_api_auth(
         (Vec::new(), Vec::new())
     };
 
+    // If we matched a per-org SSO config, ensure that org is included in org_ids.
+    // This is intentional: a valid JWT from an org's configured IdP proves the user
+    // belongs to that org, enabling JIT provisioning and per-org RBAC evaluation
+    // even before the membership is persisted in the database.
+    if let Some(org_id) = known_org_id {
+        let org_str = org_id.to_string();
+        if !org_ids.contains(&org_str) {
+            org_ids.push(org_str);
+        }
+    }
+
     tracing::debug!(
         sub = %claims.sub,
         external_id = %external_id,
         roles = ?roles,
         user_id = ?user_id,
+        known_org_id = ?known_org_id,
         "API request authenticated via JWT"
     );
 
-    Ok(Some(Identity {
+    Ok(Identity {
         external_id,
-        email: claims.email,
-        name: claims.name,
+        email: claims.email.clone(),
+        name: claims.name.clone(),
         user_id,
         roles,
         idp_groups: claims.groups.clone().unwrap_or_default(),
         org_ids,
         team_ids,
         project_ids: Vec::new(),
-    }))
+    })
 }
 
 fn extract_groups(
@@ -1964,7 +2064,7 @@ mod tests {
                 hash_algorithm: HashAlgorithm::default(),
                 cache_ttl_secs: 300,
             },
-            jwt: JwtAuthConfig {
+            jwt: Some(JwtAuthConfig {
                 issuer: "https://auth.example.com".to_string(),
                 jwks_url: "https://auth.example.com/.well-known/jwks.json".to_string(),
                 audience: OneOrMany::One("hadrian".to_string()),
@@ -1974,7 +2074,7 @@ mod tests {
                 allow_expired: false,
                 allowed_algorithms: Vec::new(),
                 jwks_refresh_secs: 3600,
-            },
+            }),
         });
 
         AppState {
@@ -1994,6 +2094,8 @@ mod tests {
             oidc_registry: None,
             #[cfg(feature = "saml")]
             saml_registry: None,
+            gateway_jwt_registry: None,
+            global_jwt_validator: None,
             policy_registry: None,
             usage_buffer: None,
             response_cache: None,
@@ -2045,6 +2147,8 @@ mod tests {
             oidc_registry: None,
             #[cfg(feature = "saml")]
             saml_registry: None,
+            gateway_jwt_registry: None,
+            global_jwt_validator: None,
             policy_registry: None,
             usage_buffer: None,
             response_cache: None,
@@ -2317,5 +2421,53 @@ mod tests {
 
         assert!(result.is_err());
         assert!(matches!(result, Err(AuthError::MissingCredentials)));
+    }
+
+    #[test]
+    fn test_decode_jwt_issuer_valid() {
+        // Build a JWT-like payload with iss claim: {"iss":"https://idp.acme.com","sub":"user1"}
+        use base64::Engine;
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"alg":"RS256","typ":"JWT"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"iss":"https://idp.acme.com","sub":"user1"}"#);
+        let token = format!("{header}.{payload}.fake_sig");
+
+        assert_eq!(
+            decode_jwt_issuer(&token),
+            Some("https://idp.acme.com".to_string())
+        );
+    }
+
+    #[test]
+    fn test_decode_jwt_issuer_missing_iss() {
+        use base64::Engine;
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"sub":"user1"}"#);
+        let token = format!("{header}.{payload}.sig");
+
+        assert_eq!(decode_jwt_issuer(&token), None);
+    }
+
+    #[test]
+    fn test_decode_jwt_issuer_invalid_token() {
+        assert_eq!(decode_jwt_issuer("not-a-jwt"), None);
+        assert_eq!(decode_jwt_issuer(""), None);
+    }
+
+    #[test]
+    fn test_decode_jwt_issuer_padded() {
+        // Some IdPs (e.g. older Azure AD) emit base64url with padding
+        use base64::Engine;
+        let header =
+            base64::engine::general_purpose::URL_SAFE.encode(r#"{"alg":"RS256","typ":"JWT"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE
+            .encode(r#"{"iss":"https://login.microsoftonline.com/tenant","sub":"user1"}"#);
+        let token = format!("{header}.{payload}.fake_sig");
+
+        assert_eq!(
+            decode_jwt_issuer(&token),
+            Some("https://login.microsoftonline.com/tenant".to_string())
+        );
     }
 }

@@ -677,14 +677,17 @@ pub struct MultiAuthConfig {
     /// API key configuration.
     pub api_key: ApiKeyAuthConfig,
 
-    /// JWT configuration.
-    pub jwt: JwtAuthConfig,
+    /// JWT configuration (optional — omit when using only per-org SSO JWTs).
+    #[serde(default)]
+    pub jwt: Option<JwtAuthConfig>,
 }
 
 impl MultiAuthConfig {
     fn validate(&self) -> Result<(), ConfigError> {
         self.api_key.validate()?;
-        self.jwt.validate()?;
+        if let Some(jwt) = &self.jwt {
+            jwt.validate()?;
+        }
         Ok(())
     }
 }
@@ -1751,5 +1754,37 @@ mod tests {
             !json.contains("\"key\""),
             "Key field should not appear in JSON output"
         );
+    }
+
+    #[test]
+    fn test_multi_auth_config_jwt_optional() {
+        // jwt omitted — should default to None
+        let toml_str = r#"
+            [api_key]
+            header_name = "X-API-Key"
+            key_prefix = "gw_"
+        "#;
+        let config: MultiAuthConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.jwt.is_none());
+        config.validate().unwrap();
+
+        // jwt present — should parse as Some
+        let toml_str = r#"
+            [api_key]
+            header_name = "X-API-Key"
+            key_prefix = "gw_"
+
+            [jwt]
+            issuer = "https://auth.example.com"
+            audience = "hadrian"
+            jwks_url = "https://auth.example.com/.well-known/jwks.json"
+        "#;
+        let config: MultiAuthConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.jwt.is_some());
+        assert_eq!(
+            config.jwt.as_ref().unwrap().issuer,
+            "https://auth.example.com"
+        );
+        config.validate().unwrap();
     }
 }

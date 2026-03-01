@@ -591,56 +591,15 @@ impl OidcAuthenticator {
     }
 }
 
-/// Fetch the JWKS URI from an OIDC discovery document.
+/// Fetch the `jwks_uri` from an OIDC discovery document.
 ///
-/// This is a standalone function that can be used to get the JWKS URL without
-/// needing a full OidcAuthenticator instance. It fetches the OIDC discovery
-/// document and extracts the `jwks_uri` field.
-///
-/// # Arguments
-/// * `discovery_url` - The base URL for OIDC discovery (typically the issuer URL).
-///   The `/.well-known/openid-configuration` path will be appended if not present.
-/// * `http_client` - An HTTP client to use for the request.
-///
-/// # Returns
-/// The `jwks_uri` from the discovery document, or an error if the discovery
-/// document could not be fetched or parsed.
+/// Delegates to the shared [`super::fetch_jwks_uri`] with SSRF validation.
 pub async fn fetch_jwks_uri(
     discovery_url: &str,
     http_client: &reqwest::Client,
+    allow_loopback: bool,
 ) -> Result<String, AuthError> {
-    // Build the full discovery URL
-    let url = if discovery_url.ends_with("/.well-known/openid-configuration") {
-        discovery_url.to_string()
-    } else {
-        format!(
-            "{}/.well-known/openid-configuration",
-            discovery_url.trim_end_matches('/')
-        )
-    };
-
-    tracing::debug!(url = %url, "Fetching OIDC discovery document for JWKS URI");
-
-    let response = http_client.get(&url).send().await.map_err(|e| {
-        tracing::error!(error = %e, url = %url, "Failed to fetch OIDC discovery");
-        AuthError::Internal(format!("Failed to fetch OIDC discovery: {}", e))
-    })?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        tracing::error!(status = %status, url = %url, "OIDC discovery endpoint returned error");
-        return Err(AuthError::Internal(format!(
-            "OIDC discovery returned {}",
-            status
-        )));
-    }
-
-    let discovery: OidcDiscovery = response.json().await.map_err(|e| {
-        tracing::error!(error = %e, "Failed to parse OIDC discovery");
-        AuthError::Internal(format!("Failed to parse OIDC discovery: {}", e))
-    })?;
-
-    Ok(discovery.jwks_uri)
+    super::fetch_jwks_uri(discovery_url, http_client, allow_loopback).await
 }
 
 #[cfg(test)]
