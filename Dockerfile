@@ -89,8 +89,15 @@ COPY --from=frontend-builder /app/docs/out ./docs/out/
 # Fetch model catalog (embedded at compile time via include_str!)
 RUN mkdir -p data && curl -sSL https://models.dev/api.json -o data/models-dev-catalog.json
 
-# Touch main.rs to invalidate the dummy build
-RUN touch src/main.rs
+# Force fresh build of the main crate by removing cached artifacts.
+# The --mount=type=cache for target/ persists across builds, but fingerprints
+# may not detect all source changes. Removing the crate's artifacts ensures
+# a full recompile of application code (dependencies remain cached).
+RUN touch src/main.rs && \
+    rm -rf target/release/.fingerprint/hadrian-* \
+           target/release/deps/hadrian-* \
+           target/release/deps/libhadrian-* \
+           target/release/hadrian
 
 # Build the actual application
 RUN --mount=type=cache,target=/usr/local/cargo/registry \

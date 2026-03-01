@@ -157,7 +157,7 @@ pub struct OidcSession {
     pub session_index: Option<String>,
 
     /// Device information (for enhanced session management)
-    /// Populated when `auth.admin.session.enhanced.track_devices = true`
+    /// Populated when `auth.session.enhanced.track_devices = true`
     #[serde(default)]
     pub device: Option<DeviceInfo>,
 

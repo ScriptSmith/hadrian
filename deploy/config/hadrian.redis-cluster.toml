@@ -17,8 +17,10 @@ retry_delay_ms = 100
 connection_timeout_secs = 5
 response_timeout_secs = 1
 
-[auth.gateway]
+[auth.mode]
 type = "api_key"
+
+[auth.api_key]
 header_name = "X-API-Key"
 key_prefix = "gw_"
 cache_ttl_secs = 300

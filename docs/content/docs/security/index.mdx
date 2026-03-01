@@ -14,7 +14,7 @@ Hadrian supports multiple authentication methods that can be used independently 
 | **API Key**    | Programmatic access     | `X-API-Key` header or `Authorization: Bearer` |
 | **JWT**        | Service-to-service auth | `Authorization: Bearer` header                |
 | **OIDC**       | Browser-based SSO       | Session cookie                                |
-| **Proxy Auth** | Zero-trust networks     | Trusted proxy headers                         |
+| **IAP**        | Zero-trust networks     | Trusted proxy headers                         |
 | **Multi-Auth** | Flexible access         | Tries multiple methods in order               |
 | **Emergency**  | Break-glass access      | `X-Emergency-Key` header                      |
 
@@ -47,10 +47,10 @@ API keys provide simple, secure authentication for programmatic access.
 **Configuration:**
 
 ```toml
-[auth.gateway]
+[auth.mode]
 type = "api_key"
 
-[auth.gateway.api_key]
+[auth.api_key]
 header_name = "X-API-Key"         # Header to check (or "Authorization")
 key_prefix = "gw_"                # Required prefix for all keys
 hash_algorithm = "sha256"         # "sha256" or "argon2"
@@ -116,17 +116,19 @@ JWT authentication validates tokens issued by external identity providers for se
 **Configuration:**
 
 ```toml
-[auth.gateway]
-type = "jwt"
+[auth.mode]
+type = "idp"
 
-[auth.gateway.jwt]
-issuer = "https://auth.example.com"
-audience = ["api", "gateway"]             # Single value or array
-jwks_url = "https://auth.example.com/.well-known/jwks.json"
-jwks_refresh_secs = 3600                  # Refresh JWKS every hour
-identity_claim = "sub"                    # Claim for user identity
-org_claim = "org_ids"                     # Optional: organization membership
-allowed_algorithms = ["RS256", "ES256"]   # Algorithm allowlist
+# JWT validation is configured per-organization via the Admin UI.
+# Each org configures its own OIDC or SAML identity provider with
+# issuer, audience, JWKS URL, and claim mappings.
+# See the SSO Admin Guide for setup details.
+
+[auth.session]
+cookie_name = "__gw_session"
+duration_secs = 604800              # 7 days
+secure = true                       # HTTPS only
+same_site = "lax"                   # CSRF protection
 ```
 
 **Supported Algorithms:**
@@ -161,23 +163,15 @@ OIDC provides browser-based single sign-on with identity providers like Keycloak
 **Configuration:**
 
 ```toml
-[auth.admin]
-type = "oidc"
+[auth.mode]
+type = "idp"
 
-[auth.admin.oidc]
-issuer = "https://auth.example.com"
-client_id = "hadrian"
-client_secret = "${OIDC_CLIENT_SECRET}"
-redirect_uri = "https://gateway.example.com/auth/callback"
-scopes = ["openid", "email", "profile", "groups"]
+# OIDC/SAML identity providers are configured per-organization via
+# the Admin UI or Admin API. Each org can have its own IdP with
+# issuer, client credentials, scopes, and claim mappings.
+# See the SSO Admin Guide for setup details.
 
-# Claim mapping
-identity_claim = "sub"              # User identity
-org_claim = "org_ids"               # Organization membership
-groups_claim = "groups"             # Group membership
-
-# Session settings
-[auth.admin.oidc.session]
+[auth.session]
 cookie_name = "__gw_session"
 duration_secs = 604800              # 7 days
 secure = true                       # HTTPS only
@@ -190,13 +184,13 @@ same_site = "lax"                   # CSRF protection
 - **Redis**: Multi-node deployments (recommended for production)
 
 ```toml
-[auth.admin.oidc.session]
+[auth.session]
 store = "cache"                     # Use Redis cache for sessions
 ```
 
-### Proxy Authentication
+### Identity-Aware Proxy (IAP)
 
-Proxy authentication trusts identity headers from an authenticating reverse proxy, enabling integration with zero-trust networks.
+IAP authentication trusts identity headers from an authenticating reverse proxy, enabling integration with zero-trust networks.
 
 **Supported Proxies:**
 
@@ -217,10 +211,8 @@ Proxy authentication trusts identity headers from an authenticating reverse prox
 [server]
 trusted_proxies = ["10.0.0.1", "10.0.0.2", "192.168.1.0/24"]
 
-[auth.admin]
-type = "proxy_auth"
-
-[auth.admin.proxy_auth]
+[auth.mode]
+type = "iap"
 identity_header = "CF-Access-Authenticated-User-Email"
 email_header = "X-Forwarded-Email"
 name_header = "X-Forwarded-Name"
@@ -228,7 +220,7 @@ groups_header = "X-Forwarded-Groups"    # Comma-separated or JSON array
 require_identity = true
 
 # Optional: Also validate JWT assertion from proxy
-[auth.admin.proxy_auth.jwt_assertion]
+[auth.mode.jwt_assertion]
 header = "CF-Access-JWT-Assertion"
 jwks_url = "https://your-team.cloudflareaccess.com/cdn-cgi/access/certs"
 issuer = "https://your-team.cloudflareaccess.com"
@@ -240,20 +232,16 @@ audience = "your-application-audience"
 Combine multiple authentication methods with configurable priority order.
 
 ```toml
-[auth.gateway]
-type = "multi"
+[auth.mode]
+type = "api_key"
 
-[auth.gateway.api_key]
+[auth.api_key]
 header_name = "X-API-Key"
 key_prefix = "gw_"
 
-[auth.gateway.jwt]
-issuer = "https://auth.example.com"
-audience = "api"
-jwks_url = "https://auth.example.com/.well-known/jwks.json"
-
-# Try API key first, fall back to JWT
-order = ["api_key", "jwt"]
+# For JWT validation, configure per-org SSO via the Admin UI.
+# API key authentication and per-org IdP authentication work together
+# automatically — API keys are checked first, then IdP tokens.
 ```
 
 ## Authorization
@@ -519,8 +507,8 @@ secret_path = "hadrian/gateway"
 
 ### Production Checklist
 
-- [ ] Enable gateway authentication (`auth.gateway.type != "none"`)
-- [ ] Configure `server.trusted_proxies` if using proxy auth
+- [ ] Enable authentication (`auth.mode.type != "none"`)
+- [ ] Configure `server.trusted_proxies` if using IAP auth
 - [ ] Set strong session secrets
 - [ ] Enable RBAC with `default_effect = "deny"`
 - [ ] Configure virus scanning for file uploads

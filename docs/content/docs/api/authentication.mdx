@@ -32,10 +32,10 @@ curl http://localhost:8080/v1/chat/completions \
 ### Configuration
 
 ```toml
-[auth.gateway]
+[auth.mode]
 type = "api_key"
 
-[auth.gateway.api_key]
+[auth.api_key]
 header_name = "X-API-Key"  # or "Authorization" for Bearer tokens
 key_prefix = "gw_"         # Required prefix for all keys
 cache_ttl_secs = 300       # Cache key lookups for 5 minutes
@@ -75,7 +75,7 @@ Response:
 
 ## JWT Authentication
 
-Use JWT tokens from your identity provider (IdP) for service-to-service authentication or SSO.
+Use JWT tokens from your identity provider (IdP) for service-to-service authentication or SSO. JWT validation is configured per-organization through SSO configs in the Admin UI — there is no global JWT configuration.
 
 ### Request Format
 
@@ -86,27 +86,22 @@ curl http://localhost:8080/v1/chat/completions \
   -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
-### Configuration
+### Per-Org JWT Routing
 
-```toml
-[auth.gateway]
-type = "jwt"
-issuer = "https://auth.example.com"
-audience = "hadrian"
-jwks_url = "https://auth.example.com/.well-known/jwks.json"
+In `idp` mode, each organization configures their own identity provider (OIDC or SAML) via the Admin UI. When a JWT is presented, the gateway:
 
-# Optional: Map JWT claims to user identity
-[auth.gateway.jwt.claims]
-user_id = "sub"           # Use 'sub' claim as user ID
-email = "email"           # Use 'email' claim
-org_id = "org_id"         # Custom claim for organization
-```
+1. Decodes the `iss` (issuer) claim from the token
+2. Matches the issuer to the correct organization's SSO config
+3. Validates the token against that organization's IdP JWKS keys
 
-### Per-Org JWT Validation
+This happens automatically — no per-org JWT configuration is needed in the config file. Configure SSO for each organization through **Admin > Organizations > [Org] > SSO**.
 
-In multi-tenant deployments, each organization can configure their own identity provider via the Admin UI. JWTs from per-org IdPs are automatically validated — the gateway decodes the `iss` claim and routes the token to the correct org's validator. No global `[auth.gateway.jwt]` config is needed for this to work.
+See the [SSO Admin Guide](/docs/features/sso-admin-guide) for setup instructions.
 
-See [Per-Org JWT Routing](/docs/authentication#per-org-jwt-routing) for details.
+<Callout type="info">
+  Per-org JWT validation requires `[auth.mode]` set to `type = "idp"`. Each organization's SSO
+  config provides the issuer URL, JWKS endpoint, and claim mappings.
+</Callout>
 
 ### Supported Algorithms
 
@@ -116,50 +111,45 @@ See [Per-Org JWT Routing](/docs/authentication#per-org-jwt-routing) for details.
 | ES256, ES384, ES512 | ECDSA signatures                |
 | HS256, HS384, HS512 | HMAC signatures (shared secret) |
 
-## Multi-Auth Mode
+## Combined Authentication (IdP Mode)
 
-Combine API key and JWT authentication. The gateway tries each method in order.
+IdP mode combines API key and JWT authentication. The gateway tries each method in order, with JWT validation provided automatically by per-org SSO configs.
 
 ```toml
-[auth.gateway]
-type = "multi"
+[auth.mode]
+type = "idp"
 
-[auth.gateway.api_key]
+[auth.api_key]
 header_name = "X-API-Key"
 key_prefix = "gw_"
-
-[auth.gateway.jwt]
-issuer = "https://auth.example.com"
-audience = "hadrian"
-jwks_url = "https://auth.example.com/.well-known/jwks.json"
 ```
 
 With this configuration:
 
 1. If `X-API-Key` header is present, validate as API key
-2. If `Authorization: Bearer` header is present with JWT format, validate as JWT
+2. If `Authorization: Bearer` header is present with JWT format, validate against the issuer's per-org SSO config
 3. If `Authorization: Bearer` header is present with `gw_` prefix, validate as API key
 
 <Callout type="info">
-  The `[auth.gateway.jwt]` section is optional in multi-auth mode. When per-organization SSO is
-  configured, each org's SSO config provides JWT validation automatically. Omit `[auth.gateway.jwt]`
-  if all JWT validation should come from per-org configs.
+  JWT validation in `idp` mode is fully automatic. Each organization's SSO config (configured via
+  the Admin UI) provides the issuer, JWKS endpoint, and claim mappings. No JWT settings are needed
+  in the config file.
 </Callout>
 
 ## Error Responses
 
 All authentication errors return HTTP 401 with a consistent error format:
 
-| Error Code          | Description                | Solution                    |
-| ------------------- | -------------------------- | --------------------------- |
-| `invalid_api_key`   | Key not found or malformed | Check key format and prefix |
-| `key_revoked`       | Key has been revoked       | Generate a new key          |
-| `key_expired`       | Key past expiration date   | Generate a new key          |
-| `invalid_token`     | JWT malformed or invalid   | Check token format          |
-| `token_expired`     | JWT past expiration        | Obtain fresh token from IdP |
-| `invalid_issuer`    | JWT issuer doesn't match   | Verify issuer in config     |
-| `invalid_audience`  | JWT audience doesn't match | Verify audience in config   |
-| `jwks_fetch_failed` | Cannot reach JWKS URL      | Check network connectivity  |
+| Error Code          | Description                | Solution                      |
+| ------------------- | -------------------------- | ----------------------------- |
+| `invalid_api_key`   | Key not found or malformed | Check key format and prefix   |
+| `key_revoked`       | Key has been revoked       | Generate a new key            |
+| `key_expired`       | Key past expiration date   | Generate a new key            |
+| `invalid_token`     | JWT malformed or invalid   | Check token format            |
+| `token_expired`     | JWT past expiration        | Obtain fresh token from IdP   |
+| `invalid_issuer`    | JWT issuer doesn't match   | Verify issuer in SSO config   |
+| `invalid_audience`  | JWT audience doesn't match | Verify audience in SSO config |
+| `jwks_fetch_failed` | Cannot reach JWKS URL      | Check network connectivity    |
 
 ### Example Error Response
 

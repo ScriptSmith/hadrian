@@ -9,17 +9,19 @@ url = "${DATABASE_URL}"
 type = "redis"
 url = "${REDIS_URL}"
 
-[auth.gateway]
+[auth.mode]
 type = "api_key"
+
+[auth.api_key]
 header_name = "X-API-Key"
 key_prefix = "gw_"
 cache_ttl_secs = 300  # 5 minutes with Redis
 
-# Optional: Reverse proxy authentication for UI
+# Optional: IAP (Identity-Aware Proxy) authentication
 # Trusts identity headers from an authenticating proxy (Cloudflare Access, oauth2-proxy, etc.)
 # IMPORTANT: Configure [server.trusted_proxies] to prevent header spoofing
-# [auth.admin]
-# type = "proxy_auth"
+# [auth.mode]
+# type = "iap"
 # identity_header = "Cf-Access-Authenticated-User-Email"
 # email_header = "Cf-Access-Authenticated-User-Email"
 # name_header = "X-Forwarded-User"

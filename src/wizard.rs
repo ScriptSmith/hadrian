@@ -196,12 +196,12 @@ impl std::fmt::Display for ApiAuthType {
     }
 }
 
-/// Gateway authentication configuration.
+/// Authentication mode configuration.
 #[derive(Debug)]
-enum GatewayAuthConfig {
+enum AuthModeConfig {
     None,
     ApiKey { key_prefix: String },
-    Oidc(OidcConfig),
+    Idp(OidcConfig),
 }
 
 /// OIDC configuration.
@@ -234,7 +234,7 @@ struct WizardConfig {
     database: DatabaseConfig,
     cache: CacheConfig,
     providers: Vec<ProviderConfig>,
-    auth: GatewayAuthConfig,
+    auth: AuthModeConfig,
     rate_limits: RateLimitConfig,
     budget: BudgetConfig,
 }
@@ -326,7 +326,7 @@ fn configure_local_dev(theme: &ColorfulTheme) -> Result<WizardConfig, WizardErro
         },
         cache: CacheConfig::Memory,
         providers,
-        auth: GatewayAuthConfig::None,
+        auth: AuthModeConfig::None,
         rate_limits: RateLimitConfig::default(),
         budget: BudgetConfig::default(),
     })
@@ -370,7 +370,7 @@ fn configure_single_node(theme: &ColorfulTheme) -> Result<WizardConfig, WizardEr
         },
         cache: CacheConfig::Redis { url: redis_url },
         providers,
-        auth: GatewayAuthConfig::ApiKey { key_prefix },
+        auth: AuthModeConfig::ApiKey { key_prefix },
         rate_limits,
         budget,
     })
@@ -410,7 +410,7 @@ fn configure_multi_node(theme: &ColorfulTheme) -> Result<WizardConfig, WizardErr
         database: DatabaseConfig::Postgres { url: postgres_url },
         cache: CacheConfig::Redis { url: redis_url },
         providers,
-        auth: GatewayAuthConfig::Oidc(oidc),
+        auth: AuthModeConfig::Idp(oidc),
         rate_limits,
         budget,
     })
@@ -512,7 +512,7 @@ fn select_cache(theme: &ColorfulTheme) -> Result<CacheConfig, WizardError> {
     }
 }
 
-fn select_auth(theme: &ColorfulTheme) -> Result<GatewayAuthConfig, WizardError> {
+fn select_auth(theme: &ColorfulTheme) -> Result<AuthModeConfig, WizardError> {
     let types = [ApiAuthType::None, ApiAuthType::ApiKey, ApiAuthType::Oidc];
 
     let selection = Select::with_theme(theme)
@@ -523,18 +523,18 @@ fn select_auth(theme: &ColorfulTheme) -> Result<GatewayAuthConfig, WizardError> 
         .ok_or(WizardError::Cancelled)?;
 
     match types[selection] {
-        ApiAuthType::None => Ok(GatewayAuthConfig::None),
+        ApiAuthType::None => Ok(AuthModeConfig::None),
         ApiAuthType::ApiKey => {
             let key_prefix: String = Input::with_theme(theme)
                 .with_prompt("API key prefix (e.g., 'gw_')")
                 .default("gw_".to_string())
                 .interact_text()?;
 
-            Ok(GatewayAuthConfig::ApiKey { key_prefix })
+            Ok(AuthModeConfig::ApiKey { key_prefix })
         }
         ApiAuthType::Oidc => {
             let oidc = configure_oidc(theme)?;
-            Ok(GatewayAuthConfig::Oidc(oidc))
+            Ok(AuthModeConfig::Idp(oidc))
         }
     }
 }
@@ -763,10 +763,10 @@ fn validate_config(config: &WizardConfig) -> Result<(), WizardError> {
 
     // Validate auth
     match &config.auth {
-        GatewayAuthConfig::None => {
+        AuthModeConfig::None => {
             println!("  ✓ Authentication: None (local dev only)");
         }
-        GatewayAuthConfig::ApiKey { key_prefix } => {
+        AuthModeConfig::ApiKey { key_prefix } => {
             if key_prefix.is_empty() {
                 let msg = "API key prefix cannot be empty".to_string();
                 println!("  ✗ {}", msg);
@@ -775,7 +775,7 @@ fn validate_config(config: &WizardConfig) -> Result<(), WizardError> {
                 println!("  ✓ Authentication: API key (prefix: {})", key_prefix);
             }
         }
-        GatewayAuthConfig::Oidc(oidc) => {
+        AuthModeConfig::Idp(oidc) => {
             if oidc.issuer.is_empty() {
                 let msg = "OIDC issuer URL cannot be empty".to_string();
                 println!("  ✗ {}", msg);
@@ -785,7 +785,7 @@ fn validate_config(config: &WizardConfig) -> Result<(), WizardError> {
                 println!("  ✗ {}", msg);
                 errors.push(msg);
             } else {
-                println!("  ✓ Authentication: OIDC (issuer: {})", oidc.issuer);
+                println!("  ✓ Authentication: IdP (issuer: {})", oidc.issuer);
             }
         }
     }
@@ -1024,39 +1024,47 @@ fn generate_config(mode: DeploymentMode, wizard_config: &WizardConfig) -> String
 
     // Authentication section
     match &wizard_config.auth {
-        GatewayAuthConfig::None => {
-            config.push_str("[auth.gateway]\n");
+        AuthModeConfig::None => {
+            config.push_str("[auth.mode]\n");
             config.push_str("type = \"none\"\n");
             config.push('\n');
         }
-        GatewayAuthConfig::ApiKey { key_prefix } => {
-            config.push_str("[auth.gateway]\n");
+        AuthModeConfig::ApiKey { key_prefix } => {
+            config.push_str("[auth.mode]\n");
             config.push_str("type = \"api_key\"\n");
+            config.push('\n');
+            config.push_str("[auth.api_key]\n");
             config.push_str(&format!(
                 "key_prefix = \"{}\"\n",
                 escape_toml_string(key_prefix)
             ));
             config.push('\n');
         }
-        GatewayAuthConfig::Oidc(oidc) => {
-            config.push_str("[auth.admin]\n");
-            config.push_str("type = \"oidc\"\n");
+        AuthModeConfig::Idp(oidc) => {
+            config.push_str("[auth.mode]\n");
+            config.push_str("type = \"idp\"\n");
+            config.push('\n');
+            config.push_str("# Note: Per-org SSO is configured via the admin API.\n");
+            config.push_str("# The OIDC settings below are for reference.\n");
             config.push_str(&format!(
-                "issuer = \"{}\"\n",
+                "# issuer = \"{}\"\n",
                 escape_toml_string(&oidc.issuer)
             ));
             config.push_str(&format!(
-                "client_id = \"{}\"\n",
+                "# client_id = \"{}\"\n",
                 escape_toml_string(&oidc.client_id)
             ));
             config.push_str(&format!(
-                "client_secret = \"{}\"\n",
+                "# client_secret = \"{}\"\n",
                 escape_toml_string(&oidc.client_secret)
             ));
             config.push_str(&format!(
-                "redirect_uri = \"{}\"\n",
+                "# redirect_uri = \"{}\"\n",
                 escape_toml_string(&oidc.redirect_uri)
             ));
+            config.push('\n');
+            config.push_str("[auth.session]\n");
+            config.push_str("secret = \"${SESSION_SECRET}\"\n");
             config.push('\n');
         }
     }
@@ -1163,7 +1171,7 @@ mod tests {
                 region: None,
                 project_id: None,
             }],
-            auth: GatewayAuthConfig::None,
+            auth: AuthModeConfig::None,
             rate_limits: RateLimitConfig::default(),
             budget: BudgetConfig::default(),
         };
@@ -1177,7 +1185,7 @@ mod tests {
         assert!(config.contains("type = \"memory\""));
         assert!(config.contains("[providers.openai]"));
         assert!(config.contains("api_key = \"${OPENAI_API_KEY}\""));
-        assert!(config.contains("[auth.gateway]"));
+        assert!(config.contains("[auth.mode]"));
         assert!(config.contains("type = \"none\""));
     }
 
@@ -1198,7 +1206,7 @@ mod tests {
                 region: None,
                 project_id: None,
             }],
-            auth: GatewayAuthConfig::ApiKey {
+            auth: AuthModeConfig::ApiKey {
                 key_prefix: "test_".to_string(),
             },
             rate_limits: RateLimitConfig {
@@ -1214,8 +1222,9 @@ mod tests {
 
         let config = generate_config(DeploymentMode::SingleNode, &wizard_config);
 
-        assert!(config.contains("[auth.gateway]"));
+        assert!(config.contains("[auth.mode]"));
         assert!(config.contains("type = \"api_key\""));
+        assert!(config.contains("[auth.api_key]"));
         assert!(config.contains("key_prefix = \"test_\""));
         assert!(config.contains("[limits.rate_limits]"));
         assert!(config.contains("requests_per_minute = 100"));
@@ -1241,7 +1250,7 @@ mod tests {
                 region: None,
                 project_id: None,
             }],
-            auth: GatewayAuthConfig::Oidc(OidcConfig {
+            auth: AuthModeConfig::Idp(OidcConfig {
                 issuer: "https://auth.example.com".to_string(),
                 client_id: "my-app".to_string(),
                 client_secret: "${OIDC_CLIENT_SECRET}".to_string(),
@@ -1253,10 +1262,11 @@ mod tests {
 
         let config = generate_config(DeploymentMode::MultiNode, &wizard_config);
 
-        assert!(config.contains("[auth.admin]"));
-        assert!(config.contains("type = \"oidc\""));
-        assert!(config.contains("issuer = \"https://auth.example.com\""));
-        assert!(config.contains("client_id = \"my-app\""));
-        assert!(config.contains("client_secret = \"${OIDC_CLIENT_SECRET}\""));
+        assert!(config.contains("[auth.mode]"));
+        assert!(config.contains("type = \"idp\""));
+        assert!(config.contains("[auth.session]"));
+        // OIDC settings are now comments (per-org SSO is configured via admin API)
+        assert!(config.contains("# issuer = \"https://auth.example.com\""));
+        assert!(config.contains("# client_id = \"my-app\""));
     }
 }

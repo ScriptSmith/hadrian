@@ -798,13 +798,10 @@ mod tests {
             provider_health: crate::jobs::ProviderHealthStateRegistry::new(),
             task_tracker: tokio_util::task::TaskTracker::new(),
             #[cfg(feature = "sso")]
-            oidc_authenticator: None,
-            #[cfg(feature = "sso")]
             oidc_registry: None,
             #[cfg(feature = "saml")]
             saml_registry: None,
             gateway_jwt_registry: None,
-            global_jwt_validator: None,
             policy_registry: None,
             usage_buffer: None,
             response_cache: None,

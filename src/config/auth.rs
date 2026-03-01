@@ -5,17 +5,28 @@ use serde::{Deserialize, Serialize};
 use super::ConfigError;
 
 /// Authentication and authorization configuration.
+///
+/// Uses a single `mode` to control authentication for all endpoints:
+/// - `none` — No authentication (local dev, all access is anonymous)
+/// - `api_key` — API key required everywhere (admin shows "enter key" login)
+/// - `idp` — Per-org SSO + session cookies + JWT + API keys
+/// - `iap` — Reverse proxy headers + API keys
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AuthConfig {
-    /// Gateway (data-plane) authentication configuration for `/v1/*` endpoints.
+    /// Authentication mode. Exactly one of: none, api_key, idp, iap.
     #[serde(default)]
-    pub gateway: GatewayAuthConfig,
+    pub mode: AuthMode,
 
-    /// Admin (control-plane) authentication configuration for `/admin/*` endpoints and the web UI.
+    /// Shared API key settings (used by api_key, idp, and iap modes).
     #[serde(default)]
-    pub admin: Option<AdminAuthConfig>,
+    pub api_key: Option<ApiKeyAuthConfig>,
+
+    /// Session settings (used by idp mode for SSO cookie management).
+    #[cfg(feature = "sso")]
+    #[serde(default)]
+    pub session: Option<SessionConfig>,
 
     /// Authorization (RBAC) configuration.
     #[serde(default)]
@@ -34,20 +45,94 @@ pub struct AuthConfig {
 
 impl AuthConfig {
     pub fn validate(&mut self) -> Result<(), ConfigError> {
-        self.gateway.validate()?;
-        // Normalize Some(AdminAuthConfig::None) → None so that is_some()/is_none()
-        // checks throughout the codebase correctly treat "type = none" as disabled.
-        if matches!(&self.admin, Some(AdminAuthConfig::None)) {
-            self.admin = None;
+        if let Some(ref api_key) = self.api_key {
+            api_key.validate()?;
         }
-        if let Some(admin) = &mut self.admin {
-            admin.validate()?;
+        #[cfg(feature = "sso")]
+        if let Some(ref session) = self.session {
+            session.validate()?;
         }
+        self.mode.validate()?;
         self.rbac.validate()?;
         if let Some(emergency) = &self.emergency {
             emergency.validate()?;
         }
         Ok(())
+    }
+
+    /// Whether authentication is enabled (any mode other than None).
+    pub fn is_auth_enabled(&self) -> bool {
+        !matches!(self.mode, AuthMode::None)
+    }
+
+    /// Whether admin routes should be protected by authentication middleware.
+    ///
+    /// Returns true for modes that have an admin auth mechanism (Idp uses sessions/bearer
+    /// tokens, Iap uses proxy headers). Returns false for `ApiKey` mode, where only gateway
+    /// (API) routes require keys and admin routes are unprotected — matching the legacy
+    /// behavior where `[auth.gateway]` could be set without `[auth.admin]`.
+    pub fn requires_admin_auth(&self) -> bool {
+        match self.mode {
+            AuthMode::None | AuthMode::ApiKey => false,
+            #[cfg(feature = "sso")]
+            AuthMode::Idp => true,
+            AuthMode::Iap(_) => true,
+        }
+    }
+
+    /// Whether session cookie management is needed (Idp mode).
+    pub fn requires_session(&self) -> bool {
+        #[cfg(feature = "sso")]
+        {
+            matches!(self.mode, AuthMode::Idp)
+        }
+        #[cfg(not(feature = "sso"))]
+        {
+            false
+        }
+    }
+
+    /// Whether API key validation is available.
+    pub fn requires_api_keys(&self) -> bool {
+        match self.mode {
+            AuthMode::ApiKey => true,
+            AuthMode::Iap(_) => true,
+            #[cfg(feature = "sso")]
+            AuthMode::Idp => true,
+            _ => false,
+        }
+    }
+
+    /// Get the API key configuration (or defaults if not configured).
+    pub fn api_key_config(&self) -> &ApiKeyAuthConfig {
+        use std::sync::OnceLock;
+        static DEFAULT: OnceLock<ApiKeyAuthConfig> = OnceLock::new();
+        self.api_key
+            .as_ref()
+            .unwrap_or_else(|| DEFAULT.get_or_init(ApiKeyAuthConfig::default))
+    }
+
+    /// Get the IAP configuration if in IAP mode.
+    pub fn iap_config(&self) -> Option<&IapConfig> {
+        match &self.mode {
+            AuthMode::Iap(config) => Some(config.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// Get the session configuration if available.
+    #[cfg(feature = "sso")]
+    pub fn session_config(&self) -> Option<&SessionConfig> {
+        self.session.as_ref()
+    }
+
+    /// Get the session configuration or a default.
+    #[cfg(feature = "sso")]
+    pub fn session_config_or_default(&self) -> std::borrow::Cow<'_, SessionConfig> {
+        match &self.session {
+            Some(config) => std::borrow::Cow::Borrowed(config),
+            None => std::borrow::Cow::Owned(SessionConfig::default()),
+        }
     }
 }
 
@@ -395,45 +480,102 @@ fn default_wildcard() -> String {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Gateway Authentication
+// Authentication Mode
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Gateway (data-plane) authentication configuration for `/v1/*` endpoints.
+/// Authentication mode for the gateway.
+///
+/// Controls how both API (`/v1/*`) and admin (`/admin/*`) endpoints are protected:
+///
+/// - **none** — No authentication. Suitable for local development only.
+///   API keys may still be used optionally for cost attribution.
+/// - **api_key** — API key required for all requests. The admin panel shows
+///   an "enter key" login prompt.
+/// - **idp** — Per-org SSO via OIDC/SAML. Session cookies for the web UI,
+///   JWTs for programmatic access, and API keys for machine clients.
+/// - **iap** — Identity-Aware Proxy. Identity is extracted from headers set
+///   by a reverse proxy (Cloudflare Access, oauth2-proxy, Tailscale, etc.).
+///   API keys are also accepted.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
-pub enum GatewayAuthConfig {
+pub enum AuthMode {
     /// No authentication. Any request is allowed.
-    /// Only suitable for local development.
     #[default]
     None,
 
-    /// API key authentication.
-    /// Keys are stored in the database and validated on each request.
-    ApiKey(ApiKeyAuthConfig),
+    /// API key authentication required everywhere.
+    ApiKey,
 
-    /// JWT authentication.
-    /// Tokens are validated against a JWKS endpoint.
-    Jwt(JwtAuthConfig),
+    /// Per-org SSO + session cookies + JWT + API keys.
+    #[cfg(feature = "sso")]
+    Idp,
 
-    /// Support both API key and JWT authentication.
-    /// The gateway tries API key first, then JWT.
-    Multi(MultiAuthConfig),
+    /// Identity-Aware Proxy (reverse proxy headers) + API keys.
+    Iap(Box<IapConfig>),
 }
 
-impl GatewayAuthConfig {
-    pub fn is_enabled(&self) -> bool {
-        !matches!(self, GatewayAuthConfig::None)
-    }
-
+impl AuthMode {
     pub fn validate(&self) -> Result<(), ConfigError> {
         match self {
-            GatewayAuthConfig::None => Ok(()),
-            GatewayAuthConfig::ApiKey(c) => c.validate(),
-            GatewayAuthConfig::Jwt(c) => c.validate(),
-            GatewayAuthConfig::Multi(c) => c.validate(),
+            AuthMode::None | AuthMode::ApiKey => Ok(()),
+            #[cfg(feature = "sso")]
+            AuthMode::Idp => Ok(()),
+            AuthMode::Iap(config) => config.validate(),
         }
+    }
+}
+
+/// Identity-Aware Proxy configuration.
+///
+/// Trusts identity headers set by an authenticating reverse proxy.
+/// Common proxies that work with this include:
+/// - Cloudflare Access (Cf-Access-Authenticated-User-Email)
+/// - oauth2-proxy (X-Forwarded-User, X-Forwarded-Email)
+/// - Tailscale (Tailscale-User-Login)
+/// - Authelia, Authentik, Keycloak Gatekeeper, etc.
+///
+/// **Security:** Configure `server.trusted_proxies` to ensure headers are only
+/// trusted from known proxy IPs. Without this, attackers can spoof identity headers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct IapConfig {
+    /// Header containing the authenticated user's identity.
+    pub identity_header: String,
+
+    /// Header containing the user's email (if different from identity).
+    #[serde(default)]
+    pub email_header: Option<String>,
+
+    /// Header containing the user's name.
+    #[serde(default)]
+    pub name_header: Option<String>,
+
+    /// Header containing groups/roles (comma-separated or JSON array).
+    #[serde(default)]
+    pub groups_header: Option<String>,
+
+    /// Optional: JWT assertion header for additional validation.
+    /// If set, the JWT is validated and claims are extracted.
+    #[serde(default)]
+    pub jwt_assertion: Option<ProxyAuthJwtConfig>,
+
+    /// Require all requests to have identity headers.
+    /// If false, unauthenticated requests are allowed to public endpoints.
+    #[serde(default = "default_true")]
+    pub require_identity: bool,
+}
+
+impl IapConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.identity_header.is_empty() {
+            return Err(ConfigError::Validation(
+                "IAP identity header cannot be empty".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -463,6 +605,18 @@ pub struct ApiKeyAuthConfig {
     /// Set to 0 to disable caching (every request hits the database).
     #[serde(default = "default_key_cache_ttl")]
     pub cache_ttl_secs: u64,
+}
+
+impl Default for ApiKeyAuthConfig {
+    fn default() -> Self {
+        Self {
+            header_name: default_api_key_header(),
+            key_prefix: default_api_key_prefix(),
+            generation_prefix: None,
+            hash_algorithm: HashAlgorithm::default(),
+            cache_ttl_secs: default_key_cache_ttl(),
+        }
+    }
 }
 
 impl ApiKeyAuthConfig {
@@ -552,36 +706,6 @@ pub struct JwtAuthConfig {
     pub allowed_algorithms: Vec<JwtAlgorithm>,
 }
 
-impl JwtAuthConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        if self.issuer.is_empty() {
-            return Err(ConfigError::Validation("JWT issuer cannot be empty".into()));
-        }
-        if self.jwks_url.is_empty() {
-            return Err(ConfigError::Validation("JWKS URL cannot be empty".into()));
-        }
-        if self.allowed_algorithms.is_empty() {
-            return Err(ConfigError::Validation(
-                "At least one JWT algorithm must be allowed".into(),
-            ));
-        }
-        // Check for insecure algorithms
-        for alg in &self.allowed_algorithms {
-            if matches!(
-                alg,
-                JwtAlgorithm::HS256 | JwtAlgorithm::HS384 | JwtAlgorithm::HS512
-            ) {
-                tracing::warn!(
-                    algorithm = ?alg,
-                    "HMAC algorithms (HS256/HS384/HS512) are less secure for public key scenarios. \
-                     Consider using asymmetric algorithms (RS256, ES256) instead."
-                );
-            }
-        }
-        Ok(())
-    }
-}
-
 /// JWT signing algorithm.
 /// SECURITY: Asymmetric algorithms (RS*, ES*) are strongly recommended.
 /// HMAC algorithms (HS*) should only be used when you control both signing and verification.
@@ -656,143 +780,6 @@ fn default_jwks_refresh() -> u64 {
 
 fn default_identity_claim() -> String {
     "sub".to_string()
-}
-
-/// Multiple authentication methods configuration.
-///
-/// When using multi-auth, the gateway uses **format-based detection** to determine
-/// which authentication method to use:
-///
-/// - Tokens in the `Authorization: Bearer` header starting with the configured
-///   API key prefix (default: `gw_`) are validated as API keys
-/// - All other Bearer tokens are validated as JWTs
-/// - The `X-API-Key` header is always validated as an API key
-///
-/// **Important:** Providing both `X-API-Key` and `Authorization` headers simultaneously
-/// results in a 400 error (ambiguous credentials). Choose one authentication method per request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct MultiAuthConfig {
-    /// API key configuration.
-    pub api_key: ApiKeyAuthConfig,
-
-    /// JWT configuration (optional — omit when using only per-org SSO JWTs).
-    #[serde(default)]
-    pub jwt: Option<JwtAuthConfig>,
-}
-
-impl MultiAuthConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        self.api_key.validate()?;
-        if let Some(jwt) = &self.jwt {
-            jwt.validate()?;
-        }
-        Ok(())
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Admin Authentication
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Admin (control-plane) authentication configuration for `/admin/*` endpoints and the web UI.
-///
-/// **Note:** Global OIDC configuration has been removed. For SSO authentication,
-/// configure per-organization SSO connections via the admin API or database.
-/// Users authenticate by visiting `/auth/login?org=<org_slug>` which redirects
-/// to the organization's configured IdP.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[serde(deny_unknown_fields)]
-pub enum AdminAuthConfig {
-    /// No authentication required for UI access.
-    /// Useful for local development or internal deployments.
-    #[default]
-    None,
-
-    /// Reverse proxy authentication.
-    /// Identity is extracted from headers set by an authenticating reverse proxy
-    /// (Cloudflare Access, oauth2-proxy, Tailscale, Authelia, etc.)
-    ///
-    /// **Security:** Headers are only trusted when the request originates from
-    /// a trusted proxy IP (configured via `server.trusted_proxies`).
-    ProxyAuth(Box<ProxyAuthConfig>),
-
-    /// Session-only authentication (for per-org SSO).
-    /// Configures session management without global OIDC. Users authenticate
-    /// through their organization's SSO connection (configured in the database).
-    ///
-    /// Use this when:
-    /// - Different organizations use different IdPs
-    /// - You want SSO configuration to be dynamic (via admin API)
-    /// - You're migrating from global OIDC to per-org SSO
-    #[cfg(feature = "sso")]
-    Session(SessionConfig),
-}
-
-impl AdminAuthConfig {
-    fn validate(&mut self) -> Result<(), ConfigError> {
-        match self {
-            AdminAuthConfig::None => Ok(()),
-            AdminAuthConfig::ProxyAuth(c) => c.validate(),
-            #[cfg(feature = "sso")]
-            AdminAuthConfig::Session(c) => c.validate(),
-        }
-    }
-}
-
-/// Reverse proxy authentication configuration.
-///
-/// This auth method trusts identity headers set by an authenticating reverse proxy.
-/// Common proxies that work with this include:
-/// - Cloudflare Access (Cf-Access-Authenticated-User-Email)
-/// - oauth2-proxy (X-Forwarded-User, X-Forwarded-Email)
-/// - Tailscale (Tailscale-User-Login)
-/// - Authelia, Authentik, Keycloak Gatekeeper, etc.
-///
-/// **Security:** Configure `server.trusted_proxies` to ensure headers are only
-/// trusted from known proxy IPs. Without this, attackers can spoof identity headers.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct ProxyAuthConfig {
-    /// Header containing the authenticated user's identity.
-    pub identity_header: String,
-
-    /// Header containing the user's email (if different from identity).
-    #[serde(default)]
-    pub email_header: Option<String>,
-
-    /// Header containing the user's name.
-    #[serde(default)]
-    pub name_header: Option<String>,
-
-    /// Header containing groups/roles (comma-separated or JSON array).
-    #[serde(default)]
-    pub groups_header: Option<String>,
-
-    /// Optional: JWT assertion header for additional validation.
-    /// If set, the JWT is validated and claims are extracted.
-    #[serde(default)]
-    pub jwt_assertion: Option<ProxyAuthJwtConfig>,
-
-    /// Require all requests to have identity headers.
-    /// If false, unauthenticated requests are allowed to public endpoints.
-    #[serde(default = "default_true")]
-    pub require_identity: bool,
-}
-
-impl ProxyAuthConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        if self.identity_header.is_empty() {
-            return Err(ConfigError::Validation(
-                "Proxy auth identity header cannot be empty".into(),
-            ));
-        }
-        Ok(())
-    }
 }
 
 fn default_true() -> bool {
@@ -1757,34 +1744,93 @@ mod tests {
     }
 
     #[test]
-    fn test_multi_auth_config_jwt_optional() {
-        // jwt omitted — should default to None
-        let toml_str = r#"
-            [api_key]
-            header_name = "X-API-Key"
-            key_prefix = "gw_"
-        "#;
-        let config: MultiAuthConfig = toml::from_str(toml_str).unwrap();
-        assert!(config.jwt.is_none());
-        config.validate().unwrap();
+    fn test_auth_mode_none_default() {
+        let toml_str = "";
+        let config: AuthConfig = toml::from_str(toml_str).unwrap();
+        assert!(matches!(config.mode, AuthMode::None));
+        assert!(!config.is_auth_enabled());
+        assert!(!config.requires_session());
+        assert!(!config.requires_api_keys());
+    }
 
-        // jwt present — should parse as Some
+    #[test]
+    fn test_auth_mode_api_key() {
         let toml_str = r#"
+            [mode]
+            type = "api_key"
+
             [api_key]
-            header_name = "X-API-Key"
+            key_prefix = "sk_"
+        "#;
+        let config: AuthConfig = toml::from_str(toml_str).unwrap();
+        assert!(matches!(config.mode, AuthMode::ApiKey));
+        assert!(config.is_auth_enabled());
+        assert!(config.requires_api_keys());
+        assert_eq!(config.api_key_config().key_prefix, "sk_");
+    }
+
+    #[cfg(feature = "sso")]
+    #[test]
+    fn test_auth_mode_idp() {
+        let toml_str = r#"
+            [mode]
+            type = "idp"
+
+            [api_key]
             key_prefix = "gw_"
 
-            [jwt]
-            issuer = "https://auth.example.com"
-            audience = "hadrian"
-            jwks_url = "https://auth.example.com/.well-known/jwks.json"
+            [session]
+            secret = "test-secret"
         "#;
-        let config: MultiAuthConfig = toml::from_str(toml_str).unwrap();
-        assert!(config.jwt.is_some());
-        assert_eq!(
-            config.jwt.as_ref().unwrap().issuer,
-            "https://auth.example.com"
-        );
-        config.validate().unwrap();
+        let config: AuthConfig = toml::from_str(toml_str).unwrap();
+        assert!(matches!(config.mode, AuthMode::Idp));
+        assert!(config.is_auth_enabled());
+        assert!(config.requires_session());
+        assert!(config.requires_api_keys());
+        assert!(config.session.is_some());
+    }
+
+    #[test]
+    fn test_auth_mode_iap() {
+        let toml_str = r#"
+            [mode]
+            type = "iap"
+            identity_header = "X-Forwarded-User"
+            email_header = "X-Forwarded-Email"
+        "#;
+        let config: AuthConfig = toml::from_str(toml_str).unwrap();
+        assert!(matches!(config.mode, AuthMode::Iap(_)));
+        assert!(config.is_auth_enabled());
+        assert!(config.requires_api_keys());
+        let iap = config.iap_config().unwrap();
+        assert_eq!(iap.identity_header, "X-Forwarded-User");
+        assert_eq!(iap.email_header.as_deref(), Some("X-Forwarded-Email"));
+    }
+
+    #[test]
+    fn test_auth_mode_iap_empty_header_fails() {
+        let toml_str = r#"
+            [mode]
+            type = "iap"
+            identity_header = ""
+        "#;
+        let mut config: AuthConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_api_key_config_defaults() {
+        let config = ApiKeyAuthConfig::default();
+        assert_eq!(config.header_name, "X-API-Key");
+        assert_eq!(config.key_prefix, "gw_");
+        assert_eq!(config.cache_ttl_secs, 60);
+    }
+
+    #[test]
+    fn test_api_key_config_from_auth_config_default() {
+        let config = AuthConfig::default();
+        let api_key = config.api_key_config();
+        assert_eq!(api_key.key_prefix, "gw_");
+        assert_eq!(api_key.header_name, "X-API-Key");
     }
 }

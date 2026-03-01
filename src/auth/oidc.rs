@@ -598,8 +598,9 @@ pub async fn fetch_jwks_uri(
     discovery_url: &str,
     http_client: &reqwest::Client,
     allow_loopback: bool,
+    allow_private: bool,
 ) -> Result<String, AuthError> {
-    super::fetch_jwks_uri(discovery_url, http_client, allow_loopback).await
+    super::fetch_jwks_uri(discovery_url, http_client, allow_loopback, allow_private).await
 }
 
 #[cfg(test)]

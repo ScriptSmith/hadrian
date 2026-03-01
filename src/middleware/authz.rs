@@ -571,7 +571,7 @@ fn extract_client_ip(
 ///
 /// This middleware always inserts an AuthzContext with RBAC disabled,
 /// which means all authorization checks will pass. This is used when
-/// `auth.admin` is not configured (development mode or external auth proxy).
+/// auth is not configured (development mode or external auth proxy).
 ///
 /// SECURITY NOTE: Only use this for development or when an external auth
 /// proxy handles authentication/authorization.

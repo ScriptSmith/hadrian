@@ -310,17 +310,11 @@ pub async fn get(
     }
 
     // Get SSO connection info from config
-    // Note: Global OIDC is no longer supported. SSO connections are per-org.
-    // For Session auth, the connection info comes from the session's org.
-    let sso_connection = match &state.config.auth.admin {
-        Some(crate::config::AdminAuthConfig::Session(_)) => {
-            // With per-org SSO, connection info is stored in the session
-            // Return None here - the frontend can get org-specific SSO info via the SSO API
-            None
-        }
-        Some(crate::config::AdminAuthConfig::ProxyAuth(_)) => Some(SsoConnectionInfo {
+    // SSO connections are per-org. For IAP mode, expose the connection type.
+    let sso_connection = match &state.config.auth.mode {
+        crate::config::AuthMode::Iap(_) => Some(SsoConnectionInfo {
             name: "default".to_string(),
-            connection_type: "proxy_auth".to_string(),
+            connection_type: "iap".to_string(),
             issuer: None,
             groups_claim: None,
             jit_enabled: false,
@@ -329,10 +323,12 @@ pub async fn get(
     };
 
     // Determine auth method
-    let auth_method = match &state.config.auth.admin {
-        Some(crate::config::AdminAuthConfig::Session(_)) => "session".to_string(),
-        Some(crate::config::AdminAuthConfig::ProxyAuth(_)) => "proxy_auth".to_string(),
-        Some(crate::config::AdminAuthConfig::None) | None => "none".to_string(),
+    let auth_method = match &state.config.auth.mode {
+        crate::config::AuthMode::None => "none".to_string(),
+        crate::config::AuthMode::ApiKey => "api_key".to_string(),
+        #[cfg(feature = "sso")]
+        crate::config::AuthMode::Idp => "idp".to_string(),
+        crate::config::AuthMode::Iap(_) => "iap".to_string(),
     };
 
     Ok(Json(SessionInfoResponse {

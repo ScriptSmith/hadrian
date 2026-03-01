@@ -582,11 +582,11 @@ Hadrian provides administrative control over user browser sessions, enabling the
 Enable enhanced session tracking in your configuration:
 
 ```toml
-[auth.admin.session]
+[auth.session]
 cookie_name = "__gw_session"
 duration_secs = 604800  # 7 days
 
-[auth.admin.session.enhanced]
+[auth.session.enhanced]
 enabled = true                    # Enable session tracking
 track_devices = true              # Store user agent and device info
 max_concurrent_sessions = 3       # Limit sessions per user (0 = unlimited)

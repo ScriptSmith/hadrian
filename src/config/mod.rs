@@ -150,19 +150,19 @@ impl GatewayConfig {
     /// Validate the configuration for consistency and completeness.
     fn validate(&mut self) -> Result<(), ConfigError> {
         // If auth is enabled, we need a database
-        if self.auth.gateway.is_enabled() && self.database.is_none() {
+        if self.auth.is_auth_enabled() && self.database.is_none() {
             return Err(ConfigError::Validation(
-                "API authentication requires a database configuration".into(),
+                "Authentication requires a database configuration".into(),
             ));
         }
 
-        // Proxy auth without trusted_proxies is dangerous — anyone can spoof identity headers.
-        if matches!(self.auth.admin, Some(AdminAuthConfig::ProxyAuth(_)))
+        // IAP without trusted_proxies is dangerous — anyone can spoof identity headers.
+        if matches!(self.auth.mode, AuthMode::Iap(_))
             && !self.server.trusted_proxies.is_configured()
         {
             if !self.server.host.is_loopback() {
                 return Err(ConfigError::Validation(
-                    "Proxy auth (auth.admin.type = \"proxy_auth\") is enabled and the server \
+                    "IAP mode (auth.mode.type = \"iap\") is enabled and the server \
                      binds to a non-localhost address, but server.trusted_proxies is not \
                      configured. This allows any client to spoof identity headers. Either \
                      configure server.trusted_proxies.cidrs with your proxy's IP ranges, \
@@ -171,7 +171,7 @@ impl GatewayConfig {
                 ));
             }
             tracing::warn!(
-                "Proxy auth is enabled without server.trusted_proxies configured. \
+                "IAP mode is enabled without server.trusted_proxies configured. \
                  Identity headers will be accepted from ANY source. This is safe only if \
                  the gateway is exclusively accessible through a trusted reverse proxy. \
                  Configure server.trusted_proxies.cidrs for production deployments."
@@ -194,7 +194,7 @@ impl GatewayConfig {
 
     /// Check if this is a minimal/local configuration (no auth, no database).
     pub fn is_local_mode(&self) -> bool {
-        self.database.is_none() && !self.auth.gateway.is_enabled()
+        self.database.is_none() && !self.auth.is_auth_enabled()
     }
 
     /// Generate the JSON schema for the gateway configuration.
@@ -274,6 +274,9 @@ fn check_disabled_features(raw: &toml::Value) -> Result<(), ConfigError> {
     {
         check_cache_feature(type_val, &mut issues);
     }
+
+    // Check auth mode (IdP requires SSO)
+    check_auth_mode_feature(raw, &mut issues);
 
     // Check RBAC (requires CEL)
     if raw
@@ -433,6 +436,22 @@ fn check_otlp_feature(_issues: &mut Vec<(String, &str)>) {
         "observability.tracing.otlp requires the 'otlp' feature".into(),
         "otlp",
     ));
+}
+
+fn check_auth_mode_feature(_raw: &toml::Value, _issues: &mut Vec<(String, &str)>) {
+    #[cfg(not(feature = "sso"))]
+    if _raw
+        .get("auth")
+        .and_then(|v| v.get("mode"))
+        .and_then(|v| v.get("type"))
+        .and_then(|v| v.as_str())
+        == Some("idp")
+    {
+        _issues.push((
+            "auth.mode type 'idp' requires the 'sso' feature for SSO authentication".into(),
+            "sso",
+        ));
+    }
 }
 
 /// Expand environment variables in the format `${VAR_NAME}`.
@@ -733,15 +752,19 @@ key3 = "literal""#
     }
 
     #[test]
-    fn test_proxy_auth_without_trusted_proxies_non_localhost_errors() {
-        // Proxy auth on 0.0.0.0 without trusted_proxies should fail
+    fn test_iap_without_trusted_proxies_non_localhost_errors() {
+        // IAP on 0.0.0.0 without trusted_proxies should fail
         let err = GatewayConfig::from_str(
             r#"
             [server]
             host = "0.0.0.0"
 
-            [auth.admin]
-            type = "proxy_auth"
+            [database]
+            type = "sqlite"
+            path = ":memory:"
+
+            [auth.mode]
+            type = "iap"
             identity_header = "X-Forwarded-User"
 
             [providers.my-openai]
@@ -757,21 +780,25 @@ key3 = "literal""#
             "should mention trusted_proxies: {msg}"
         );
         assert!(
-            msg.contains("proxy_auth") || msg.contains("Proxy auth"),
-            "should mention proxy auth: {msg}"
+            msg.contains("iap") || msg.contains("IAP"),
+            "should mention IAP: {msg}"
         );
     }
 
     #[test]
-    fn test_proxy_auth_without_trusted_proxies_localhost_warns_but_ok() {
-        // Proxy auth on localhost without trusted_proxies should succeed (just warn)
+    fn test_iap_without_trusted_proxies_localhost_warns_but_ok() {
+        // IAP on localhost without trusted_proxies should succeed (just warn)
         let result = GatewayConfig::from_str(
             r#"
             [server]
             host = "127.0.0.1"
 
-            [auth.admin]
-            type = "proxy_auth"
+            [database]
+            type = "sqlite"
+            path = ":memory:"
+
+            [auth.mode]
+            type = "iap"
             identity_header = "X-Forwarded-User"
 
             [providers.my-openai]
@@ -782,14 +809,14 @@ key3 = "literal""#
 
         assert!(
             result.is_ok(),
-            "proxy auth on localhost without trusted_proxies should be allowed: {:?}",
+            "IAP on localhost without trusted_proxies should be allowed: {:?}",
             result.err()
         );
     }
 
     #[test]
-    fn test_proxy_auth_with_trusted_proxies_non_localhost_ok() {
-        // Proxy auth on 0.0.0.0 with trusted_proxies configured should succeed
+    fn test_iap_with_trusted_proxies_non_localhost_ok() {
+        // IAP on 0.0.0.0 with trusted_proxies configured should succeed
         let result = GatewayConfig::from_str(
             r#"
             [server]
@@ -798,8 +825,12 @@ key3 = "literal""#
             [server.trusted_proxies]
             cidrs = ["10.0.0.0/8"]
 
-            [auth.admin]
-            type = "proxy_auth"
+            [database]
+            type = "sqlite"
+            path = ":memory:"
+
+            [auth.mode]
+            type = "iap"
             identity_header = "X-Forwarded-User"
 
             [providers.my-openai]
@@ -810,14 +841,14 @@ key3 = "literal""#
 
         assert!(
             result.is_ok(),
-            "proxy auth with trusted_proxies should be allowed: {:?}",
+            "IAP with trusted_proxies should be allowed: {:?}",
             result.err()
         );
     }
 
     #[test]
-    fn test_proxy_auth_with_dangerously_trust_all_non_localhost_ok() {
-        // Proxy auth with dangerously_trust_all should also pass validation
+    fn test_iap_with_dangerously_trust_all_non_localhost_ok() {
+        // IAP with dangerously_trust_all should also pass validation
         let result = GatewayConfig::from_str(
             r#"
             [server]
@@ -826,8 +857,12 @@ key3 = "literal""#
             [server.trusted_proxies]
             dangerously_trust_all = true
 
-            [auth.admin]
-            type = "proxy_auth"
+            [database]
+            type = "sqlite"
+            path = ":memory:"
+
+            [auth.mode]
+            type = "iap"
             identity_header = "X-Forwarded-User"
 
             [providers.my-openai]
@@ -838,7 +873,7 @@ key3 = "literal""#
 
         assert!(
             result.is_ok(),
-            "proxy auth with dangerously_trust_all should be allowed: {:?}",
+            "IAP with dangerously_trust_all should be allowed: {:?}",
             result.err()
         );
     }

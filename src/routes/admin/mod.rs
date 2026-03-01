@@ -5646,8 +5646,10 @@ enabled = false
             r#"
 {}
 
-[auth.gateway]
+[auth.mode]
 type = "api_key"
+
+[auth.api_key]
 key_prefix = "gw_"
 "#,
             unique_db_config()
@@ -5668,8 +5670,10 @@ key_prefix = "gw_"
             r#"
 {}
 
-[auth.admin]
-type = "session"
+[auth.mode]
+type = "idp"
+
+[auth.session]
 secure = true
 cookie_name = "__gw_session"
 "#,
@@ -5699,8 +5703,8 @@ cookie_name = "__gw_session"
 [server]
 host = "127.0.0.1"
 
-[auth.admin]
-type = "proxy_auth"
+[auth.mode]
+type = "iap"
 identity_header = "X-Forwarded-User"
 email_header = "X-Forwarded-Email"
 "#,

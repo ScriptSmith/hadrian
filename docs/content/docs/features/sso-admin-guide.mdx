@@ -36,9 +36,8 @@ curl -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." \
 The gateway decodes the `iss` claim from the JWT, matches it to your organization's SSO config, and validates the token against your IdP's JWKS keys. This works alongside API keys — users can authenticate with either method.
 
 <Callout type="info">
-  API JWT validation requires the gateway to be configured with `[auth.gateway]` set to `type =
-  "multi"` or `type = "jwt"`. See [Per-Org JWT Routing](/docs/authentication#per-org-jwt-routing)
-  for details on how token routing works.
+  API JWT validation requires `[auth.mode]` set to `type = "idp"`. See [Per-Org JWT
+  Routing](/docs/api/authentication#per-org-jwt-routing) for details on how token routing works.
 </Callout>
 
 ## Prerequisites
