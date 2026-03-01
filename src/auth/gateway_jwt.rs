@@ -62,6 +62,7 @@ impl GatewayJwtRegistry {
         config: &crate::models::OrgSsoConfig,
         http_client: &reqwest::Client,
         allow_loopback: bool,
+        allow_private: bool,
     ) -> Result<(), super::AuthError> {
         use super::AuthError;
 
@@ -77,7 +78,9 @@ impl GatewayJwtRegistry {
         // Determine the discovery URL
         let discovery_url = config.discovery_url.as_deref().unwrap_or(issuer);
 
-        let jwks_url = super::fetch_jwks_uri(discovery_url, http_client, allow_loopback).await?;
+        let jwks_url =
+            super::fetch_jwks_uri(discovery_url, http_client, allow_loopback, allow_private)
+                .await?;
         let jwt_config = build_jwt_config_from_sso(issuer, client_id, &jwks_url, config);
         let validator = Arc::new(JwtValidator::with_client(jwt_config, http_client.clone()));
 
@@ -130,6 +133,7 @@ impl GatewayJwtRegistry {
         db: &crate::db::DbPool,
         http_client: &reqwest::Client,
         allow_loopback: bool,
+        allow_private: bool,
     ) -> Result<Vec<(Uuid, Arc<JwtValidator>)>, super::AuthError> {
         // Fast path: already cached
         let validators = self.find_validators_by_issuer(issuer).await;
@@ -199,7 +203,7 @@ impl GatewayJwtRegistry {
 
         for config in &configs {
             if let Err(e) = self
-                .register_from_sso_config(config, http_client, allow_loopback)
+                .register_from_sso_config(config, http_client, allow_loopback, allow_private)
                 .await
             {
                 tracing::warn!(

@@ -31,4 +31,4 @@ pub mod url;
 pub use schema::{ResponseType, SchemaId, validate_response};
 #[cfg(feature = "saml")]
 pub use url::require_https;
-pub use url::validate_base_url;
+pub use url::{UrlValidationOptions, validate_base_url, validate_base_url_opts};

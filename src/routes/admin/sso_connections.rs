@@ -2,7 +2,7 @@ use axum::{Extension, Json, extract::State};
 use serde::Serialize;
 
 use super::error::AdminError;
-use crate::{AppState, config::AdminAuthConfig, middleware::AuthzContext};
+use crate::{AppState, config::AuthMode, middleware::AuthzContext};
 
 /// SSO connection info (read-only, from config)
 #[derive(Debug, Serialize)]
@@ -81,50 +81,48 @@ pub async fn list(
     let mut connections = Vec::new();
 
     // Extract SSO connection info from config
-    // Note: Global OIDC config has been removed. SSO connections are now per-org.
-    // This endpoint shows what auth type is configured at the gateway level.
-    if let Some(ref ui_auth) = state.config.auth.admin {
-        match ui_auth {
-            AdminAuthConfig::Session(_) => {
-                // Session-only auth - SSO connections are per-org, not global
-                // Return empty list - clients should use the org-specific SSO API
-                connections.push(SsoConnection {
-                    name: "default".to_string(),
-                    connection_type: "session".to_string(),
-                    issuer: None,
-                    client_id: None,
-                    scopes: None,
-                    identity_claim: None,
-                    groups_claim: None,
-                    jit_enabled: false,
-                    organization_id: None,
-                    default_team_id: None,
-                    default_org_role: None,
-                    default_team_role: None,
-                    sync_memberships_on_login: false,
-                });
-            }
-            AdminAuthConfig::ProxyAuth(_) => {
-                // Proxy auth doesn't have SSO connections in the traditional sense
-                connections.push(SsoConnection {
-                    name: "default".to_string(),
-                    connection_type: "proxy_auth".to_string(),
-                    issuer: None,
-                    client_id: None,
-                    scopes: None,
-                    identity_claim: None,
-                    groups_claim: None,
-                    jit_enabled: false,
-                    organization_id: None,
-                    default_team_id: None,
-                    default_org_role: None,
-                    default_team_role: None,
-                    sync_memberships_on_login: false,
-                });
-            }
-            AdminAuthConfig::None => {
-                // No SSO configured
-            }
+    // SSO connections are now per-org. This endpoint shows what auth mode is configured.
+    match &state.config.auth.mode {
+        #[cfg(feature = "sso")]
+        AuthMode::Idp => {
+            // IdP mode - SSO connections are per-org, not global
+            // Return a placeholder - clients should use the org-specific SSO API
+            connections.push(SsoConnection {
+                name: "default".to_string(),
+                connection_type: "idp".to_string(),
+                issuer: None,
+                client_id: None,
+                scopes: None,
+                identity_claim: None,
+                groups_claim: None,
+                jit_enabled: false,
+                organization_id: None,
+                default_team_id: None,
+                default_org_role: None,
+                default_team_role: None,
+                sync_memberships_on_login: false,
+            });
+        }
+        AuthMode::Iap(_) => {
+            // IAP mode doesn't have SSO connections in the traditional sense
+            connections.push(SsoConnection {
+                name: "default".to_string(),
+                connection_type: "iap".to_string(),
+                issuer: None,
+                client_id: None,
+                scopes: None,
+                identity_claim: None,
+                groups_claim: None,
+                jit_enabled: false,
+                organization_id: None,
+                default_team_id: None,
+                default_org_role: None,
+                default_team_role: None,
+                sync_memberships_on_login: false,
+            });
+        }
+        _ => {
+            // None or ApiKey - no SSO configured
         }
     }
 
@@ -162,46 +160,45 @@ pub async fn get(
     }
 
     // Extract SSO connection info from config
-    // Note: Global OIDC config has been removed. SSO connections are now per-org.
-    if let Some(ref ui_auth) = state.config.auth.admin {
-        match ui_auth {
-            AdminAuthConfig::Session(_) => {
-                return Ok(Json(SsoConnection {
-                    name: "default".to_string(),
-                    connection_type: "session".to_string(),
-                    issuer: None,
-                    client_id: None,
-                    scopes: None,
-                    identity_claim: None,
-                    groups_claim: None,
-                    jit_enabled: false,
-                    organization_id: None,
-                    default_team_id: None,
-                    default_org_role: None,
-                    default_team_role: None,
-                    sync_memberships_on_login: false,
-                }));
-            }
-            AdminAuthConfig::ProxyAuth(_) => {
-                return Ok(Json(SsoConnection {
-                    name: "default".to_string(),
-                    connection_type: "proxy_auth".to_string(),
-                    issuer: None,
-                    client_id: None,
-                    scopes: None,
-                    identity_claim: None,
-                    groups_claim: None,
-                    jit_enabled: false,
-                    organization_id: None,
-                    default_team_id: None,
-                    default_org_role: None,
-                    default_team_role: None,
-                    sync_memberships_on_login: false,
-                }));
-            }
-            AdminAuthConfig::None => {
-                // Fall through to not found
-            }
+    // SSO connections are now per-org. This shows the gateway-level auth mode.
+    match &state.config.auth.mode {
+        #[cfg(feature = "sso")]
+        AuthMode::Idp => {
+            return Ok(Json(SsoConnection {
+                name: "default".to_string(),
+                connection_type: "idp".to_string(),
+                issuer: None,
+                client_id: None,
+                scopes: None,
+                identity_claim: None,
+                groups_claim: None,
+                jit_enabled: false,
+                organization_id: None,
+                default_team_id: None,
+                default_org_role: None,
+                default_team_role: None,
+                sync_memberships_on_login: false,
+            }));
+        }
+        AuthMode::Iap(_) => {
+            return Ok(Json(SsoConnection {
+                name: "default".to_string(),
+                connection_type: "iap".to_string(),
+                issuer: None,
+                client_id: None,
+                scopes: None,
+                identity_claim: None,
+                groups_claim: None,
+                jit_enabled: false,
+                organization_id: None,
+                default_team_id: None,
+                default_org_role: None,
+                default_team_role: None,
+                sync_memberships_on_login: false,
+            }));
+        }
+        _ => {
+            // None or ApiKey - fall through to not found
         }
     }
 

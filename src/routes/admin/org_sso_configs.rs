@@ -321,13 +321,16 @@ pub async fn create(
 
     // SSRF-validate OIDC URLs at input time
     if input.provider_type == SsoProviderType::Oidc {
-        let allow_loopback = state.config.server.allow_loopback_urls;
+        let url_opts = crate::validation::UrlValidationOptions {
+            allow_loopback: state.config.server.allow_loopback_urls,
+            allow_private: state.config.server.allow_private_urls,
+        };
         if let Some(ref issuer) = input.issuer {
-            crate::validation::validate_base_url(issuer, allow_loopback)
+            crate::validation::validate_base_url_opts(issuer, url_opts)
                 .map_err(|e| AdminError::Validation(format!("Invalid issuer URL: {e}")))?;
         }
         if let Some(ref discovery_url) = input.discovery_url {
-            crate::validation::validate_base_url(discovery_url, allow_loopback)
+            crate::validation::validate_base_url_opts(discovery_url, url_opts)
                 .map_err(|e| AdminError::Validation(format!("Invalid discovery URL: {e}")))?;
         }
     }
@@ -415,6 +418,7 @@ pub async fn create(
                 &config,
                 &state.http_client,
                 state.config.server.allow_loopback_urls,
+                state.config.server.allow_private_urls,
             )
             .await
         {
@@ -533,13 +537,16 @@ pub async fn update(
 
     // SSRF-validate OIDC URLs at input time (only check fields being updated)
     if final_provider_type == SsoProviderType::Oidc {
-        let allow_loopback = state.config.server.allow_loopback_urls;
+        let url_opts = crate::validation::UrlValidationOptions {
+            allow_loopback: state.config.server.allow_loopback_urls,
+            allow_private: state.config.server.allow_private_urls,
+        };
         if let Some(ref issuer) = input.issuer {
-            crate::validation::validate_base_url(issuer, allow_loopback)
+            crate::validation::validate_base_url_opts(issuer, url_opts)
                 .map_err(|e| AdminError::Validation(format!("Invalid issuer URL: {e}")))?;
         }
         if let Some(Some(ref discovery_url)) = input.discovery_url {
-            crate::validation::validate_base_url(discovery_url, allow_loopback)
+            crate::validation::validate_base_url_opts(discovery_url, url_opts)
                 .map_err(|e| AdminError::Validation(format!("Invalid discovery URL: {e}")))?;
         }
     }
@@ -586,6 +593,7 @@ pub async fn update(
                     &updated,
                     &state.http_client,
                     state.config.server.allow_loopback_urls,
+                    state.config.server.allow_private_urls,
                 )
                 .await
             {

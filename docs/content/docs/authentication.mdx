@@ -1,58 +1,41 @@
 ---
 title: Authentication
-description: API keys, SSO, OIDC, SAML, JWT, and reverse proxy authentication for the gateway and web UI
+description: Authentication modes, API keys, SSO, JWT, and reverse proxy authentication
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-Hadrian authenticates two independent contexts — **gateway** (API) and **admin** (UI) — each configured separately in `hadrian.toml`.
+Hadrian uses a single `[auth.mode]` setting that determines how all requests are authenticated across both the API and the admin panel.
 
-## Two Auth Contexts
+## Auth Modes
 
-| Context     | Config Section   | Protects                                                       | Used by                       |
-| ----------- | ---------------- | -------------------------------------------------------------- | ----------------------------- |
-| **Gateway** | `[auth.gateway]` | `/v1/*` endpoints (chat completions, embeddings, models, etc.) | SDKs, curl, the chat UI       |
-| **Admin**   | `[auth.admin]`   | `/admin/*` endpoints and the web UI login                      | Browser sessions, admin tools |
+Configure authentication by setting `[auth.mode]` in `hadrian.toml`. Four modes are available:
 
-These are fully independent. A request to `/v1/chat/completions` only checks gateway auth. A request to `/admin/v1/users` only checks admin auth. The web UI uses **both** — admin auth for login, then either a session cookie or an API key for gateway calls depending on the configuration.
+| Mode      | Config             | Description                                                      |
+| --------- | ------------------ | ---------------------------------------------------------------- |
+| `none`    | `type = "none"`    | No authentication. Development only.                             |
+| `api_key` | `type = "api_key"` | API key required for all access (admin panel + API).             |
+| `idp`     | `type = "idp"`     | Per-org SSO with session cookies, JWT validation, and API keys.  |
+| `iap`     | `type = "iap"`     | Reverse proxy headers for admin access, API keys for API access. |
 
-### Gateway Auth Types
+### Supporting Config Sections
 
-| Type       | How it works                                                                                                                    |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `none`     | No credentials required. Requests proceed as an anonymous user. Never use in production.                                        |
-| `api_key`  | Validate API keys created via the Admin UI or API. Keys are sent via `X-API-Key` or `Authorization: Bearer` header.             |
-| `jwt`      | Validate JWT tokens signed by an identity provider. Requires JWKS URL for signature verification.                               |
-| `multi`    | Accept **both** API keys and JWTs. Format-based detection: tokens starting with the key prefix (e.g. `gw_`) are treated as API keys, everything else as JWTs. |
-
-### Admin Auth Types
-
-| Type         | How it works                                                                                                                                                 |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `none`       | No login required. The admin panel and all admin API endpoints are completely unprotected. Only safe on localhost or trusted private networks.                |
-| `oidc`       | Single global OIDC provider. Users log in via browser redirect. A session cookie is set that also authenticates `/v1/*` requests — no API key needed.         |
-| `session`    | Per-organization SSO. Each org configures their own OIDC or SAML provider via the Admin UI. Session cookies authenticate both admin and gateway requests.     |
-| `proxy_auth` | Trust identity headers from a reverse proxy (Cloudflare Access, Tailscale, oauth2-proxy). Only authenticates admin routes — gateway requires separate auth.  |
-
-<Callout type="info">
-  With `oidc` or `session` admin auth, the session cookie authenticates **both** `/admin/*` and `/v1/*`
-  requests. Users log in once and the chat UI works immediately — no API key needed.
-  With `none` or `proxy_auth`, the chat UI requires an API key created through the admin panel.
-</Callout>
+| Section                     | Used by                 | Purpose                                                    |
+| --------------------------- | ----------------------- | ---------------------------------------------------------- |
+| `[auth.api_key]`            | `api_key`, `idp`, `iap` | API key settings (header name, key prefix, cache TTL)      |
+| `[auth.session]`            | `idp`                   | Session cookie settings (cookie name, secure flag, secret) |
+| IAP fields in `[auth.mode]` | `iap`                   | Identity and email header names from the reverse proxy     |
 
 ## Deployment Scenarios
 
 Pick the scenario closest to your deployment. Each includes a minimal working config.
 
-| #   | Scenario                                                            | Gateway        | Admin        | Web UI experience                                               | SDK / API access          |
-| --- | ------------------------------------------------------------------- | -------------- | ------------ | --------------------------------------------------------------- | ------------------------- |
-| 1   | [Local development](#1-local-development)                           | `none`         | `none`       | No login, everything open                                       | No credentials needed     |
-| 2   | [Single-user / internal tool](#2-single-user--internal-tool)        | `api_key`      | `none`       | No login; create an API key in admin panel, paste into settings  | API key                   |
-| 3   | [Production API with single IdP](#3-production-api-with-single-idp) | `jwt`          | `oidc`       | OIDC login, session cookie handles everything                   | JWT from IdP              |
-| 4   | [API keys + SSO admin UI](#4-api-keys--sso-admin-ui)                | `api_key`      | `session`    | Per-org SSO login; create API key for chat                      | API key                   |
-| 5   | [Combined API keys + JWT](#5-combined-api-keys--jwt-single-idp)     | `multi`        | `oidc`       | OIDC login, session cookie handles everything                   | API key or JWT            |
-| 6   | [Multi-org, per-org IdP](#6-multi-org-each-org-with-own-idp)        | `multi`        | `session`    | Per-org SSO login, session cookie handles everything            | API key or per-org JWT    |
-| 7   | [Zero-trust / reverse proxy](#7-zero-trust--reverse-proxy)          | `api_key`      | `proxy_auth` | Proxy handles login; create API key for chat                    | API key                   |
+| #   | Scenario                                    | Mode      | Web UI experience                                    | SDK / API access       |
+| --- | ------------------------------------------- | --------- | ---------------------------------------------------- | ---------------------- |
+| 1   | [Local development](#1-local-development)   | `none`    | No login, everything open                            | No credentials needed  |
+| 2   | [API key](#2-api-key)                       | `api_key` | Enter API key to log in                              | API key                |
+| 3   | [SSO / IdP](#3-sso--idp)                    | `idp`     | Per-org SSO login, session cookie handles everything | API key or per-org JWT |
+| 4   | [Reverse proxy (IAP)](#4-reverse-proxy-iap) | `iap`     | Proxy handles login                                  | API key                |
 
 ---
 
@@ -61,10 +44,7 @@ Pick the scenario closest to your deployment. Each includes a minimal working co
 No authentication. All requests proceed anonymously. The admin panel, chat UI, and API are all open.
 
 ```toml
-[auth.gateway]
-type = "none"
-
-[auth.admin]
+[auth.mode]
 type = "none"
 ```
 
@@ -73,119 +53,37 @@ type = "none"
   attributed to users.
 </Callout>
 
-### 2. Single-user / internal tool
+### 2. API key
 
-API keys for programmatic access, no admin login required. The admin panel is unprotected — anyone with network access can create API keys, users, and organizations.
+API keys required for all access. The admin panel shows an "enter API key" login screen. SDK and API clients send keys via headers.
 
 ```toml
-[auth.gateway]
+[auth.mode]
 type = "api_key"
+
+[auth.api_key]
+header_name = "X-API-Key"
+key_prefix = "gw_"
+cache_ttl_secs = 300
+```
+
+**Getting started:** Use the [bootstrap API key](/docs/configuration/auth#bootstrap-configuration) to create the initial organization and users. Then create API keys via the admin panel for each user. Paste a key into the chat UI settings or pass it to the OpenAI SDK.
+
+### 3. SSO / IdP
+
+Per-org SSO for browser sessions, with API key and JWT support on `/v1/*` endpoints. Each organization configures their own OIDC or SAML provider through the Admin UI at runtime.
+
+```toml
+[auth.mode]
+type = "idp"
+
+[auth.api_key]
 key_prefix = "gw_"
 cache_ttl_secs = 300
 
-[auth.admin]
-type = "none"
-```
-
-**Getting started:** Open the admin panel, create an API key, then use it with the OpenAI SDK or paste it into the chat UI settings.
-
-<Callout type="warn">
-  The admin panel has no authentication in this scenario. Only use this on private networks
-  where you trust all users with admin access.
-</Callout>
-
-### 3. Production API with single IdP
-
-JWT tokens from your identity provider for API access, OIDC login for the web UI. Users log in once via OIDC and the session cookie authenticates both the admin panel and chat UI — no API key needed.
-
-```toml
-[auth.gateway]
-type = "jwt"
-issuer = "https://auth.example.com"
-audience = "hadrian"
-jwks_url = "https://auth.example.com/.well-known/jwks.json"
-
-[auth.admin]
-type = "oidc"
-issuer = "https://auth.example.com"
-client_id = "hadrian"
-client_secret = "${OIDC_CLIENT_SECRET}"
-redirect_uri = "https://gateway.example.com/auth/callback"
-
-[auth.admin.provisioning]
-enabled = true
-create_users = true
-organization_id = "acme-corp"
-```
-
-**Getting started:** Configure your IdP (Okta, Auth0, Keycloak, etc.) with Hadrian as a client. Users are auto-provisioned on first login via JIT provisioning.
-
-### 4. API keys + SSO admin UI
-
-API keys for programmatic access, per-org SSO for the admin panel. Each organization configures their own OIDC or SAML provider through the Admin UI at runtime.
-
-```toml
-[auth.gateway]
-type = "api_key"
-key_prefix = "gw_"
-cache_ttl_secs = 300
-
-[auth.admin]
-type = "session"
-secret = "${SESSION_SECRET}"
-```
-
-**Getting started:** Use the [bootstrap API key](/docs/configuration/auth#bootstrap-configuration) to create the initial organization and SSO config, then org admins log in via SSO and create API keys for their teams. See the [SSO Admin Guide](/docs/features/sso-admin-guide).
-
-<Callout type="info">
-  Since gateway auth is `api_key` only, the chat UI requires users to create an API key in the admin
-  panel and paste it into settings. For a seamless chat experience without API keys, use scenario 5 or 6.
-</Callout>
-
-### 5. Combined API keys + JWT (single IdP)
-
-Support both API keys and JWT tokens on `/v1/*` endpoints. The gateway uses format-based detection to distinguish them. Users log in via OIDC and the session cookie handles the chat UI automatically.
-
-```toml
-[auth.gateway]
-type = "multi"
-
-[auth.gateway.api_key]
-key_prefix = "gw_"
-cache_ttl_secs = 300
-
-[auth.gateway.jwt]
-issuer = "https://auth.example.com"
-audience = "hadrian"
-jwks_url = "https://auth.example.com/.well-known/jwks.json"
-
-[auth.admin]
-type = "oidc"
-issuer = "https://auth.example.com"
-client_id = "hadrian"
-client_secret = "${OIDC_CLIENT_SECRET}"
-redirect_uri = "https://gateway.example.com/auth/callback"
-```
-
-**Getting started:** Same as scenario 3. Additionally, create API keys via the admin panel for CI pipelines, scripts, or OpenAI SDK clients that can't use browser-based OIDC.
-
-### 6. Multi-org, each org with own IdP
-
-Each organization brings their own identity provider. `[auth.gateway.jwt]` is **not needed** in the config — per-org SSO configs automatically provide JWT validation on API endpoints.
-
-```toml
-[auth.gateway]
-type = "multi"
-
-[auth.gateway.api_key]
-key_prefix = "gw_"
-cache_ttl_secs = 300
-
-# No [auth.gateway.jwt] section needed.
-# Per-org SSO configs provide JWT validation automatically.
-
-[auth.admin]
-type = "session"
+[auth.session]
+cookie_name = "hadrian_session"
+secure = true
 secret = "${SESSION_SECRET}"
 
 [auth.bootstrap]
@@ -193,38 +91,42 @@ api_key = "${HADRIAN_BOOTSTRAP_KEY}"
 auto_verify_domains = ["acme.com"]
 ```
 
-When a JWT arrives on `/v1/*`, the gateway decodes the `iss` claim and looks up the matching per-org SSO config. See [Per-Org JWT Routing](#per-org-jwt-routing) for details.
+**Getting started:** Use the [bootstrap API key](/docs/configuration/auth#bootstrap-configuration) to create organizations. Each org admin then configures their IdP via the [SSO Admin Guide](/docs/features/sso-admin-guide). Users are auto-provisioned on first SSO login. Per-org SSO configs automatically enable JWT validation on `/v1/*` endpoints -- no global OIDC configuration needed.
 
-**Getting started:** Use the [bootstrap API key](/docs/configuration/auth#bootstrap-configuration) to create organizations. Each org admin then configures their IdP via the [SSO Admin Guide](/docs/features/sso-admin-guide). Users are auto-provisioned on first SSO login.
+<Callout type="info">
+  There is no global OIDC or SAML config in `hadrian.toml`. All identity provider configurations are
+  per-organization and managed through the Admin UI. This enables multi-tenant deployments where
+  each organization uses a different IdP.
+</Callout>
 
-### 7. Zero-trust / reverse proxy
+### 4. Reverse proxy (IAP)
 
-Trust identity headers from an authenticating reverse proxy (Cloudflare Access, Tailscale, oauth2-proxy, etc.). The proxy authenticates all admin panel access automatically.
+Trust identity headers from an authenticating reverse proxy (Cloudflare Access, Tailscale, oauth2-proxy, etc.) for admin access. API access uses API keys.
 
 ```toml
 [server.trusted_proxies]
 cidrs = ["173.245.48.0/20", "103.21.244.0/22"]
 
-[auth.gateway]
-type = "api_key"
-key_prefix = "gw_"
-
-[auth.admin]
-type = "proxy_auth"
+[auth.mode]
+type = "iap"
 identity_header = "Cf-Access-Authenticated-User-Email"
 email_header = "Cf-Access-Authenticated-User-Email"
+
+[auth.api_key]
+key_prefix = "gw_"
+cache_ttl_secs = 300
 ```
 
-**Getting started:** The proxy handles admin panel authentication. Create API keys via the admin panel for chat UI and SDK access.
+**Getting started:** Configure your reverse proxy to authenticate all traffic to Hadrian and forward identity headers. Create API keys via the admin panel for chat UI and SDK access.
 
 <Callout type="error">
   Always configure `[server.trusted_proxies]` to prevent header spoofing. Without this, attackers
-  can forge identity headers.
+  can forge identity headers and impersonate any user.
 </Callout>
 
 <Callout type="info">
-  Proxy auth only covers the admin panel. The chat UI requires an API key because
-  `/v1/*` uses `api_key` auth, which the proxy headers don't satisfy.
+  In `iap` mode, both proxy headers and API keys work for authentication. The proxy authenticates
+  admin panel access, while API keys authenticate `/v1/*` requests.
 </Callout>
 
 ## Architecture
@@ -236,41 +138,38 @@ flowchart TD
         Browser[Browser / Web UI]
     end
 
-    subgraph API_Auth["API Authentication"]
-        A1[API Keys]
-        A2[JWT Tokens<br/><i>global or per-org</i>]
-        A3[Multi-Auth]
+    subgraph Auth_Mode["Auth Mode"]
+        NONE[None<br/><i>development only</i>]
+        APIKEY[API Keys<br/><i>admin + API</i>]
+        IDP[IdP<br/><i>per-org SSO + JWT + API keys</i>]
+        IAP[IAP<br/><i>reverse proxy + API keys</i>]
     end
 
-    subgraph UI_Auth["UI Authentication"]
-        U2[Reverse Proxy - Cloudflare, etc.]
-        subgraph U3["Session — Per-Org SSO"]
-            U1[OIDC - Okta, Keycloak...]
-            U4[SAML 2.0 - AD FS, Azure AD...]
-        end
+    subgraph IDP_Detail["IdP — Per-Org SSO"]
+        OIDC[OIDC - Okta, Keycloak...]
+        SAML[SAML 2.0 - AD FS, Azure AD...]
     end
 
     AuthZ[Authorization<br/><b>CEL-based RBAC</b>]
 
-    SDK --> API_Auth
-    Browser --> UI_Auth
-    API_Auth --> AuthZ
-    UI_Auth --> AuthZ
-    U3 -.->|per-org JWT<br/>validation| A2
+    SDK --> Auth_Mode
+    Browser --> Auth_Mode
+    Auth_Mode --> AuthZ
+    IDP -.->|per-org SSO config| IDP_Detail
 
 ```
 
-### Default Behavior (No Auth)
+### Default Behavior
 
-By default, both `auth.gateway` and `auth.admin` are set to `type = "none"`, which allows anonymous access. When both are disabled:
+When `[auth.mode]` is omitted from `hadrian.toml`, authentication defaults to `type = "none"`. This means:
 
 - **API requests** proceed without credentials. A default anonymous user and organization are created for usage tracking.
-- **Admin routes** are unprotected — the web UI works without login.
-- **RBAC is permissive** — all authorization checks pass automatically.
+- **Admin routes** are unprotected -- the web UI works without login.
+- **RBAC is permissive** -- all authorization checks pass automatically.
 
 #### Credential Handling in No-Auth Mode
 
-Even when authentication is disabled, the gateway validates credentials that are explicitly provided:
+Even with `type = "none"`, the gateway validates credentials that are explicitly provided:
 
 | Scenario                                                    | Result                                     |
 | ----------------------------------------------------------- | ------------------------------------------ |
@@ -278,15 +177,11 @@ Even when authentication is disabled, the gateway validates credentials that are
 | Valid credentials sent                                      | Request proceeds as the authenticated user |
 | Invalid credentials sent (expired JWT, wrong API key, etc.) | **401 Rejected**                           |
 
-This means you can incrementally adopt authentication — existing anonymous clients continue working while authenticated clients get identity tracking and RBAC. However, clients must not send placeholder or invalid credentials.
+This means you can incrementally adopt authentication -- existing anonymous clients continue working while authenticated clients get identity tracking and RBAC. However, clients must not send placeholder or invalid credentials.
 
-## Gateway Authentication
+## API Key Authentication
 
-Gateway authentication secures programmatic access to `/v1/*` endpoints (chat completions, embeddings, etc.).
-
-### API Keys
-
-The most common method for API access. Keys are created via the Admin UI or API and validated against the database.
+API keys are the primary method for programmatic access to `/v1/*` endpoints. Keys are created via the Admin UI or API and validated against the database.
 
 ```bash
 # Using X-API-Key header
@@ -306,59 +201,45 @@ curl -H "Authorization: Bearer gw_live_abc123..." \
 - Usage tracking per key
 - Owner binding (org, team, project, or user)
 
-### JWT Tokens
+In `api_key` mode, API keys authenticate everything -- including the admin panel. In `idp` and `iap` modes, API keys authenticate `/v1/*` endpoints alongside the mode's primary mechanism.
 
-Validate JWTs signed by an identity provider for service-to-service authentication.
+### Format-Based Detection
 
-```bash
-curl -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." \
-  https://gateway.example.com/v1/chat/completions
-```
-
-**Capabilities:**
-
-- JWKS-based signature verification
-- Configurable issuer and audience validation
-- Custom claim extraction for RBAC
-- Algorithm allowlisting (RS256, ES256, EdDSA, etc.)
-
-### Multi-Auth
-
-Support both API keys and JWT tokens simultaneously. The gateway uses format-based detection:
+When both API keys and JWTs are accepted (in `idp` mode), the gateway uses format-based detection:
 
 - **`X-API-Key` header**: Always validated as an API key
 - **`Authorization: Bearer` header**: Tokens starting with the API key prefix (default `gw_`) are validated as API keys; all others are validated as JWTs
 
-### Per-Org JWT Routing
+## Per-Org JWT Routing
 
-In multi-tenant deployments where each organization has their own identity provider, incoming JWTs are routed to the correct per-org validator automatically:
+In `idp` mode, per-org SSO configurations automatically enable JWT validation on `/v1/*` endpoints. There is no global JWT configuration in the config file -- all JWT validation derives from per-org SSO configs.
 
-1. **Decode `iss` claim** — Extract the issuer from the JWT (without verifying the signature yet)
-2. **Per-org registry lookup** — Search the `GatewayJwtRegistry` for validators matching that issuer
-3. **Lazy-load from DB** — On cache miss, query the database for enabled OIDC SSO configs with that issuer, perform OIDC discovery to fetch the JWKS URI, and build a validator
-4. **Fall back to global** — If no per-org config matches and `[auth.gateway.jwt]` is configured, try the global validator
-5. **Validate** — Verify the signature, expiry, audience, and issuer against the matched validator
+**How it works:**
+
+1. **Decode `iss` claim** -- Extract the issuer from the JWT without verifying the signature yet
+2. **Per-org registry lookup** -- Search the `GatewayJwtRegistry` for validators matching that issuer
+3. **Lazy-load from DB** -- On cache miss, query the database for enabled OIDC SSO configs with that issuer, perform OIDC discovery to fetch the JWKS URI, and build a validator
+4. **Validate** -- Verify the signature, expiry, audience, and issuer against the matched validator
 
 **Key behaviors:**
 
-- Validators are cached across requests — JWKS keys are not re-fetched per request
+- Validators are cached across requests -- JWKS keys are not re-fetched per request
 - Unknown issuers are negatively cached for 60 seconds to prevent DB query amplification
 - When an SSO config is created or updated via the Admin API, the registry is updated immediately
 - Multiple organizations can share the same issuer (each gets its own validator with its own audience)
 
 <Callout type="info">
-  Per-org JWT routing requires `[auth.gateway]` to be `type = "multi"` or `type = "jwt"`. When using
-  `type = "multi"` without a `[auth.gateway.jwt]` section, only per-org SSO configs provide JWT
-  validation — there is no global fallback.
+  Per-org JWT routing only applies in `idp` mode. Per-org SSO configs provide all JWT validation
+  automatically -- no global `[auth.gateway.jwt]` section is needed.
 </Callout>
 
 <Cards>
   <Card title="Gateway Auth Configuration" href="/docs/configuration/auth#gateway-authentication" />
 </Cards>
 
-## Admin Authentication
+## Session-Based Authentication
 
-Admin authentication secures browser sessions for the web interface.
+In `idp` mode, browser sessions use session cookies set during the SSO login flow. The session cookie authenticates both `/admin/*` and `/v1/*` requests, so users log in once and the chat UI works immediately -- no API key needed.
 
 ### OIDC / SSO
 
@@ -373,13 +254,6 @@ Full OpenID Connect flow with browser redirects. Works with any OIDC-compliant i
 | Google Workspace    | Google account authentication             |
 | OneLogin            | Enterprise identity management            |
 
-**Capabilities:**
-
-- Automatic user provisioning (JIT)
-- Group-to-team mapping
-- Configurable claims extraction
-- Session management
-
 ### SAML 2.0
 
 SAML 2.0 authentication for enterprise identity providers that require the Security Assertion Markup Language protocol:
@@ -392,35 +266,15 @@ SAML 2.0 authentication for enterprise identity providers that require the Secur
 | Keycloak            | Self-hosted, open source          |
 | PingFederate        | Enterprise identity federation    |
 
-**Capabilities:**
-
-- XML digital signature verification
-- Configurable attribute mappings
-- SP metadata auto-generation
-- Works with legacy IdPs that only support SAML
-
-<Cards>
-  <Card title="SAML Admin Guide" href="/docs/features/saml" />
-</Cards>
-
-### Per-Organization SSO
-
-In multi-tenant deployments, each organization can configure their own identity provider. This enables:
-
-- **Self-service SSO setup** - Org admins configure their own IdP via the Admin UI
-- **Domain verification** - Prove domain ownership before enabling SSO
-- **Enforcement modes** - Optional, test, or required SSO
-- **Email-based IdP discovery** - Users enter email, redirected to correct IdP
-- **Automatic API authentication** - Per-org SSO configs also enable JWT validation on `/v1/*` endpoints (see [Per-Org JWT Routing](#per-org-jwt-routing))
-
 <Callout type="info">
-  Per-organization SSO is configured through the Admin UI, not the gateway config file. See the [SSO
-  Admin Guide](/docs/features/sso-admin-guide) for setup instructions.
+  Both OIDC and SAML providers are configured per-organization through the Admin UI, not the config
+  file. See the [SSO Admin Guide](/docs/features/sso-admin-guide) and [SAML Admin
+  Guide](/docs/features/saml) for setup instructions.
 </Callout>
 
-### Reverse Proxy Auth
+## Reverse Proxy Authentication
 
-Trust identity headers from an authenticating reverse proxy:
+In `iap` mode, Hadrian trusts identity headers from an authenticating reverse proxy:
 
 | Service              | Headers                                 |
 | -------------------- | --------------------------------------- |
@@ -436,7 +290,7 @@ Trust identity headers from an authenticating reverse proxy:
 </Callout>
 
 <Cards>
-  <Card title="Admin Auth Configuration" href="/docs/configuration/auth#admin-authentication" />
+  <Card title="Auth Configuration Reference" href="/docs/configuration/auth" />
   <Card title="SSO Admin Guide" href="/docs/features/sso-admin-guide" />
 </Cards>
 
@@ -446,10 +300,10 @@ Automatically create users and add them to organizations when they first authent
 
 **How it works:**
 
-1. User authenticates via OIDC
+1. User authenticates via OIDC or SAML
 2. Gateway checks if user exists in database
-3. If not, creates user with attributes from ID token
-4. Adds user to configured organization with default role
+3. If not, creates user with attributes from the identity token
+4. Adds user to the configured organization with default role
 5. Optionally adds user to a default team
 
 **Capabilities:**

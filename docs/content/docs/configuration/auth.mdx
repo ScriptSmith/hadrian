@@ -1,11 +1,11 @@
 ---
 title: Authentication Configuration
-description: API keys, JWT/OIDC, reverse proxy auth, and CEL-based RBAC policies
+description: Auth modes, API keys, IAP, IdP sessions, and CEL-based RBAC policies
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-This page is the **configuration reference** for authentication settings in `hadrian.toml`. For conceptual overviews and guides, see:
+Configure authentication and authorization for Hadrian in `hadrian.toml` using the `[auth]` section. For conceptual overviews and guides, see:
 
 <Cards>
   <Card title="Authentication Overview" href="/docs/authentication" />
@@ -13,49 +13,197 @@ This page is the **configuration reference** for authentication settings in `had
   <Card title="Authorization Guide" href="/docs/features/authorization" />
 </Cards>
 
-The `[auth]` section configures authentication and authorization for both API requests and the web UI.
+## Auth Mode
 
-## Authentication Architecture
+Hadrian uses a single `[auth.mode]` to control authentication for both the API and the web UI. Select exactly one mode.
 
-Hadrian separates authentication into two contexts:
+| Mode      | `type`    | API Keys | IdP Sessions | Identity Headers | Use Case                           |
+| --------- | --------- | -------- | ------------ | ---------------- | ---------------------------------- |
+| None      | `none`    | No       | No           | No               | Local development                  |
+| API Key   | `api_key` | Yes      | No           | No               | Programmatic access only           |
+| IdP       | `idp`     | Yes      | Yes          | No               | Full deployment with SSO + API     |
+| IAP       | `iap`     | Yes      | No           | Yes              | Behind an identity-aware proxy     |
 
-| Context     | Section          | Purpose                                        |
-| ----------- | ---------------- | ---------------------------------------------- |
-| **Gateway** | `[auth.gateway]` | Authenticate programmatic gateway API requests |
-| **Admin**   | `[auth.admin]`   | Authenticate browser sessions for the admin UI |
+### None
 
-You can configure different authentication methods for each context. For example, use API keys for programmatic access and OIDC for the admin UI.
-
-## Gateway Authentication
-
-Configure how gateway API requests (`/v1/*` endpoints) are authenticated.
-
-### No Authentication
-
-Allows any request without credentials. Only suitable for local development.
+Allow all requests without credentials. Only suitable for local development.
 
 ```toml
-[auth.gateway]
+[auth.mode]
 type = "none"
 ```
 
 <Callout type="warn">
-  Never use `type = "none"` in production. All requests will be unauthenticated and usage cannot be
+  Never use `type = "none"` in production. All requests are unauthenticated and usage cannot be
   tracked or billed.
 </Callout>
 
-### API Key Authentication
+### API Key
 
-Validates API keys stored in the database. Keys are created via the Admin API or UI.
+Validate API keys stored in the database. Keys are created via the Admin API or UI. No browser-based login is available in this mode.
 
 ```toml
-[auth.gateway]
+[auth.mode]
 type = "api_key"
+```
+
+API key settings (header name, prefix, caching) are configured separately in `[auth.api_key]`. See [API Key Settings](#api-key-settings).
+
+### IdP
+
+Full identity provider integration with per-organization SSO. Supports both API keys for programmatic access and browser sessions for the web UI. Each organization configures its own OIDC or SAML provider via the Admin UI.
+
+```toml
+[auth.mode]
+type = "idp"
+```
+
+Session settings (cookie name, duration, secret) are configured in `[auth.session]`. See [Session Configuration](#session-configuration).
+
+When a bearer token is presented, Hadrian uses **format-based detection** to determine whether it is an API key or a JWT:
+
+- **`X-API-Key` header**: Always validated as an API key
+- **`Authorization: Bearer` header**: Tokens starting with the configured API key prefix (default: `gw_`) are validated as API keys; all other tokens are validated as JWTs via per-org SSO configuration
+
+<Callout type="warn">
+  Providing both `X-API-Key` and `Authorization` headers simultaneously results in a 400 error
+  (ambiguous credentials). Choose one authentication method per request.
+</Callout>
+
+```bash
+# API key in X-API-Key header
+curl -H "X-API-Key: gw_live_abc123..." https://gateway.example.com/v1/chat/completions
+
+# API key in Authorization: Bearer header (format-based detection)
+curl -H "Authorization: Bearer gw_live_abc123..." https://gateway.example.com/v1/chat/completions
+
+# JWT in Authorization: Bearer header (routed to org's IdP for validation)
+curl -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." https://gateway.example.com/v1/chat/completions
+```
+
+#### Login Flow
+
+1. User navigates to `/auth/login?org=<org-slug>` or uses email discovery via `/auth/discover`
+2. Gateway redirects to the organization's configured IdP
+3. After IdP authentication, callback creates a session cookie
+4. Subsequent requests are authenticated via the session cookie
+
+#### Per-Organization SSO
+
+SSO configurations are stored in the database and managed via the Admin API or UI:
+
+- `POST /admin/v1/organizations/{org_slug}/sso-configs` -- Create SSO configuration
+- `GET /admin/v1/organizations/{org_slug}/sso-configs` -- Get SSO configuration
+- `PUT /admin/v1/organizations/{org_slug}/sso-configs` -- Update SSO configuration
+- `DELETE /admin/v1/organizations/{org_slug}/sso-configs` -- Delete SSO configuration
+
+Each SSO configuration includes:
+
+- Provider type (OIDC or SAML)
+- Issuer URL and discovery settings
+- Client credentials (stored encrypted)
+- Allowed email domains
+- JIT provisioning settings
+
+<Callout type="info">
+  With `idp` mode, SSO is configured **per-organization** via the Admin UI. Each organization can
+  have its own OIDC or SAML identity provider. Users authenticate by entering their email, which
+  discovers their organization's SSO configuration. See the [SSO Admin
+  Guide](/docs/features/sso-admin-guide).
+</Callout>
+
+#### Single-Org Membership
+
+Users can only belong to **one organization**. When a user authenticates via an organization's SSO, they are associated with that organization. If a user tries to authenticate via a different organization's SSO, they receive an error.
+
+To move a user to a different organization, first remove them from their current organization.
+
+### IAP (Identity-Aware Proxy)
+
+Trust identity headers set by an authenticating reverse proxy. Also supports API keys for programmatic access. Works with:
+
+- Cloudflare Access
+- oauth2-proxy
+- Tailscale
+- Authelia / Authentik
+- Keycloak Gatekeeper
+- Pomerium
+
+```toml
+[auth.mode]
+type = "iap"
+identity_header = "X-Forwarded-User"
+email_header = "X-Forwarded-Email"
+name_header = "X-Forwarded-Name"
+groups_header = "X-Forwarded-Groups"
+require_identity = true
+```
+
+| Setting            | Type    | Default | Description                                                                     |
+| ------------------ | ------- | ------- | ------------------------------------------------------------------------------- |
+| `identity_header`  | string  | ---     | Header containing the authenticated user's ID (required).                       |
+| `email_header`     | string  | None    | Header containing the user's email.                                             |
+| `name_header`      | string  | None    | Header containing the user's display name.                                      |
+| `groups_header`    | string  | None    | Header containing groups/roles (comma-separated or JSON array).                 |
+| `require_identity` | boolean | `true`  | Require identity headers on all requests. If `false`, anonymous access allowed. |
+
+<Callout type="error">
+  **Critical Security:** Configure `[server.trusted_proxies]` to prevent header spoofing. Without
+  this, attackers can forge identity headers and impersonate any user.
+</Callout>
+
+#### Cloudflare Access Example
+
+```toml
+[server.trusted_proxies]
+cidrs = ["173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22"]
+
+[auth.mode]
+type = "iap"
+identity_header = "Cf-Access-Authenticated-User-Email"
+email_header = "Cf-Access-Authenticated-User-Email"
+```
+
+#### oauth2-proxy Example
+
+```toml
+[server.trusted_proxies]
+cidrs = ["10.0.0.0/8"]
+
+[auth.mode]
+type = "iap"
+identity_header = "X-Forwarded-User"
+email_header = "X-Forwarded-Email"
+groups_header = "X-Forwarded-Groups"
+```
+
+#### JWT Assertion (Optional)
+
+For additional security, validate a signed JWT from the proxy. Configure `jwt_assertion` inside `[auth.mode]`:
+
+```toml
+[auth.mode]
+type = "iap"
+identity_header = "X-Forwarded-User"
+
+[auth.mode.jwt_assertion]
+header = "Cf-Access-Jwt-Assertion"
+jwks_url = "https://acme-corp.cloudflareaccess.com/cdn-cgi/access/certs"
+issuer = "https://acme-corp.cloudflareaccess.com"
+audience = "your-audience-id"
+```
+
+## API Key Settings
+
+Configure shared API key behavior used by `api_key`, `idp`, and `iap` modes.
+
+```toml
+[auth.api_key]
 header_name = "X-API-Key"
 key_prefix = "gw_"
 generation_prefix = "gw_live_"
 hash_algorithm = "sha256"
-cache_ttl_secs = 60
+cache_ttl_secs = 300
 ```
 
 | Setting             | Type    | Default     | Description                                                                  |
@@ -64,16 +212,16 @@ cache_ttl_secs = 60
 | `key_prefix`        | string  | `gw_`       | Prefix for validating keys. Keys not starting with this prefix are rejected. |
 | `generation_prefix` | string  | `gw_live_`  | Prefix for generating new keys. Distinguishes live keys from test keys.      |
 | `hash_algorithm`    | string  | `sha256`    | Algorithm for hashing stored keys. Options: `sha256`, `argon2`.              |
-| `cache_ttl_secs`    | integer | `60`        | Cache validated keys for this duration. Set to `0` for no caching.           |
+| `cache_ttl_secs`    | integer | `300`       | Cache validated keys for this duration. Set to `0` for no caching.           |
 
-#### Hash Algorithms
+### Hash Algorithms
 
 | Algorithm | Speed | Use Case                                                            |
 | --------- | ----- | ------------------------------------------------------------------- |
 | `sha256`  | Fast  | High-entropy keys (recommended). Minimal latency impact.            |
 | `argon2`  | Slow  | Low-entropy keys or extra security. Adds ~50ms per uncached lookup. |
 
-#### Request Format
+### Request Format
 
 API keys can be sent in two formats:
 
@@ -85,11 +233,11 @@ curl -H "X-API-Key: gw_live_abc123..." https://gateway.example.com/v1/chat/compl
 curl -H "Authorization: Bearer gw_live_abc123..." https://gateway.example.com/v1/chat/completions
 ```
 
-### API Key Scoping
+## API Key Scoping
 
 API keys can be restricted with permission scopes, model restrictions, IP allowlists, and per-key rate limits.
 
-#### Permission Scopes
+### Permission Scopes
 
 Control which API endpoints a key can access:
 
@@ -118,7 +266,7 @@ curl -X POST https://gateway.example.com/admin/v1/api-keys \
 
 When `scopes` is null or omitted, the key has full access to all endpoints.
 
-#### Model Restrictions
+### Model Restrictions
 
 Limit which models a key can use with wildcard patterns:
 
@@ -134,7 +282,7 @@ Pattern rules:
 - **Trailing wildcard:** `"gpt-4*"` matches `gpt-4`, `gpt-4o`, `gpt-4-turbo`
 - **No bare `*`:** Use `null` for unrestricted model access
 
-#### IP Allowlists
+### IP Allowlists
 
 Restrict key usage to specific IP addresses or CIDR ranges:
 
@@ -146,7 +294,7 @@ Restrict key usage to specific IP addresses or CIDR ranges:
 
 Supports both IPv4 and IPv6 addresses and CIDR notation.
 
-#### Per-Key Rate Limits
+### Per-Key Rate Limits
 
 Override global rate limits for specific keys:
 
@@ -164,7 +312,7 @@ Override global rate limits for specific keys:
 
 By default, per-key limits cannot exceed global limits. Set `allow_per_key_above_global = true` in `[limits.rate_limits]` to allow per-key limits higher than global defaults.
 
-#### Key Rotation
+### Key Rotation
 
 Rotate keys with a grace period during which both old and new keys work:
 
@@ -185,270 +333,30 @@ The response includes the new API key (store securely). The old key remains vali
   new key during the grace period, then the old key automatically becomes inactive.
 </Callout>
 
-### JWT Authentication
+## Per-Org JWT Routing
 
-Validates JWTs signed by an identity provider. Tokens are verified against a JWKS endpoint.
+When using `idp` mode, JWT validation is handled per-organization through SSO configurations -- there is no global JWT config in `hadrian.toml`. Each organization's SSO config provides the issuer, audience, and JWKS URL for validating JWTs from that organization's identity provider.
 
-```toml
-[auth.gateway]
-type = "jwt"
-issuer = "https://auth.example.com"
-audience = "hadrian"
-jwks_url = "https://auth.example.com/.well-known/jwks.json"
-jwks_refresh_secs = 3600
-identity_claim = "sub"
-org_claim = "org_id"
-additional_claims = ["email", "name"]
-allowed_algorithms = ["RS256", "ES256"]
-```
+When a JWT is presented on a `/v1/*` endpoint:
 
-| Setting              | Type            | Default                            | Description                                                   |
-| -------------------- | --------------- | ---------------------------------- | ------------------------------------------------------------- |
-| `issuer`             | string          | —                                  | Expected `iss` claim. Tokens from other issuers are rejected. |
-| `audience`           | string or array | —                                  | Expected `aud` claim. Can be a single value or list.          |
-| `jwks_url`           | string          | —                                  | URL to fetch public keys for signature verification.          |
-| `jwks_refresh_secs`  | integer         | `3600`                             | How often to refresh the JWKS (seconds).                      |
-| `identity_claim`     | string          | `sub`                              | Claim to use as the user's identity ID.                       |
-| `org_claim`          | string          | None                               | Claim containing the user's organization ID (optional).       |
-| `additional_claims`  | string[]        | `[]`                               | Extra claims to extract and include in the request context.   |
-| `allow_expired`      | boolean         | `false`                            | Accept expired tokens. **For testing only.**                  |
-| `allowed_algorithms` | string[]        | `["RS256", "RS384", "RS512", ...]` | JWT signing algorithms to accept.                             |
+1. Hadrian decodes the `iss` (issuer) claim from the token
+2. Looks up the organization whose SSO config matches that issuer
+3. Validates the token against that organization's JWKS
+4. Associates the request with the matched organization
 
-#### Allowed Algorithms
-
-<Callout type="warn">
-  Always explicitly specify `allowed_algorithms` to prevent algorithm confusion attacks. Avoid HMAC
-  algorithms (`HS256`, `HS384`, `HS512`) unless you control both signing and verification.
-</Callout>
-
-| Algorithm | Type    | Security Level | Notes                             |
-| --------- | ------- | -------------- | --------------------------------- |
-| `RS256`   | RSA     | Recommended    | Most widely supported             |
-| `RS384`   | RSA     | Recommended    | Stronger hash                     |
-| `RS512`   | RSA     | Recommended    | Strongest RSA option              |
-| `ES256`   | ECDSA   | Recommended    | Compact signatures, P-256 curve   |
-| `ES384`   | ECDSA   | Recommended    | P-384 curve                       |
-| `PS256`   | RSA-PSS | Recommended    | Probabilistic signatures          |
-| `PS384`   | RSA-PSS | Recommended    | Probabilistic signatures          |
-| `PS512`   | RSA-PSS | Recommended    | Probabilistic signatures          |
-| `EdDSA`   | EdDSA   | Recommended    | Ed25519, modern and fast          |
-| `HS256`   | HMAC    | Use with care  | Symmetric, requires shared secret |
-| `HS384`   | HMAC    | Use with care  | Symmetric, requires shared secret |
-| `HS512`   | HMAC    | Use with care  | Symmetric, requires shared secret |
-
-### Multi-Auth (API Key + JWT)
-
-Support both API keys and JWTs. The gateway uses **format-based detection** to determine which authentication method to use:
-
-- **X-API-Key header**: Always validated as an API key
-- **Authorization: Bearer header**: Uses format-based detection:
-  - Tokens starting with the configured API key prefix (default: `gw_`) are validated as API keys
-  - All other tokens are validated as JWTs
-
-<Callout type="warn">
-  Providing both `X-API-Key` and `Authorization` headers simultaneously results in a 400 error
-  (ambiguous credentials). Choose one authentication method per request.
-</Callout>
-
-```toml
-[auth.gateway]
-type = "multi"
-
-[auth.gateway.api_key]
-header_name = "X-API-Key"
-key_prefix = "gw_"
-cache_ttl_secs = 300
-
-[auth.gateway.jwt]
-issuer = "https://auth.example.com"
-audience = "hadrian"
-jwks_url = "https://auth.example.com/.well-known/jwks.json"
-```
+This enables true multi-tenant deployments where each organization uses a different identity provider without any global JWT configuration.
 
 <Callout type="info">
-  The `[auth.gateway.jwt]` section is **optional** in multi-auth mode. When per-organization SSO is
-  configured, each org's SSO config automatically provides JWT validation on `/v1/*` endpoints. If
-  `[auth.gateway.jwt]` is omitted, only per-org SSO configs and API keys are used — there is no
-  global JWT fallback. See [Per-Org JWT Routing](/docs/authentication#per-org-jwt-routing).
+  Configure each organization's SSO via the Admin UI or API. See the [SSO Admin
+  Guide](/docs/features/sso-admin-guide) for setup instructions.
 </Callout>
 
-**Multi-auth with API keys only (per-org JWT):**
+## Session Configuration
+
+Configure browser session settings for `idp` mode. Sessions are created after successful SSO login.
 
 ```toml
-[auth.gateway]
-type = "multi"
-
-[auth.gateway.api_key]
-key_prefix = "gw_"
-cache_ttl_secs = 300
-
-# No [auth.gateway.jwt] — per-org SSO configs provide JWT validation
-```
-
-**Request Examples:**
-
-```bash
-# API key in X-API-Key header
-curl -H "X-API-Key: gw_live_abc123..." https://gateway.example.com/v1/chat/completions
-
-# API key in Authorization: Bearer header (format-based detection)
-curl -H "Authorization: Bearer gw_live_abc123..." https://gateway.example.com/v1/chat/completions
-
-# JWT in Authorization: Bearer header
-curl -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." https://gateway.example.com/v1/chat/completions
-```
-
-## Admin Authentication
-
-Configure how browser sessions for the admin UI are authenticated.
-
-### No Authentication
-
-Allows anonymous access to the UI. Suitable for local development or internal tools.
-
-```toml
-[auth.admin]
-type = "none"
-```
-
-### Reverse Proxy Authentication
-
-Trust identity headers set by an authenticating reverse proxy. Works with:
-
-- Cloudflare Access
-- oauth2-proxy
-- Tailscale
-- Authelia / Authentik
-- Keycloak Gatekeeper
-- Pomerium
-
-```toml
-[auth.admin]
-type = "proxy_auth"
-identity_header = "X-Forwarded-User"
-email_header = "X-Forwarded-Email"
-name_header = "X-Forwarded-Name"
-groups_header = "X-Forwarded-Groups"
-require_identity = true
-```
-
-| Setting            | Type    | Default | Description                                                                     |
-| ------------------ | ------- | ------- | ------------------------------------------------------------------------------- |
-| `identity_header`  | string  | —       | Header containing the authenticated user's ID (required).                       |
-| `email_header`     | string  | None    | Header containing the user's email.                                             |
-| `name_header`      | string  | None    | Header containing the user's display name.                                      |
-| `groups_header`    | string  | None    | Header containing groups/roles (comma-separated or JSON array).                 |
-| `require_identity` | boolean | `true`  | Require identity headers on all requests. If `false`, anonymous access allowed. |
-
-<Callout type="error">
-  **Critical Security:** Configure `[server.trusted_proxies]` to prevent header spoofing. Without
-  this, attackers can forge identity headers and impersonate any user.
-</Callout>
-
-#### Cloudflare Access Example
-
-```toml
-[server.trusted_proxies]
-cidrs = ["173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22"]
-
-[auth.admin]
-type = "proxy_auth"
-identity_header = "Cf-Access-Authenticated-User-Email"
-email_header = "Cf-Access-Authenticated-User-Email"
-```
-
-#### oauth2-proxy Example
-
-```toml
-[server.trusted_proxies]
-cidrs = ["10.0.0.0/8"]
-
-[auth.admin]
-type = "proxy_auth"
-identity_header = "X-Forwarded-User"
-email_header = "X-Forwarded-Email"
-groups_header = "X-Forwarded-Groups"
-```
-
-#### JWT Assertion (Optional)
-
-For additional security, validate a signed JWT from the proxy:
-
-```toml
-[auth.admin]
-type = "proxy_auth"
-identity_header = "X-Forwarded-User"
-
-[auth.admin.jwt_assertion]
-header = "Cf-Access-Jwt-Assertion"
-jwks_url = "https://your-team.cloudflareaccess.com/cdn-cgi/access/certs"
-issuer = "https://your-team.cloudflareaccess.com"
-audience = "your-audience-id"
-```
-
-### Session Authentication
-
-Session-based authentication using per-organization SSO. Each organization configures their own identity provider (OIDC or SAML) via the Admin UI, and users authenticate by discovering their organization via email domain.
-
-```toml
-[auth.admin]
-type = "session"
-cookie_name = "__gw_session"
-duration_secs = 604800     # 7 days
-secure = true
-same_site = "lax"
-secret = "${SESSION_SECRET}"
-```
-
-| Setting         | Type    | Default           | Description                                                                  |
-| --------------- | ------- | ----------------- | ---------------------------------------------------------------------------- |
-| `cookie_name`   | string  | `__gw_session`    | Session cookie name.                                                         |
-| `duration_secs` | integer | `604800` (7 days) | Session duration.                                                            |
-| `secure`        | boolean | `true`            | HTTPS-only cookies. Set to `false` for local development over HTTP.          |
-| `same_site`     | string  | `lax`             | SameSite attribute. Options: `strict`, `lax`, `none`.                        |
-| `secret`        | string  | Auto-generated    | Secret for signing session cookies. Sessions are lost on restart if not set. |
-
-<Callout type="info">
-  With session auth, SSO is configured **per-organization** via the Admin UI. Each organization can
-  have their own OIDC or SAML identity provider. Users authenticate by entering their email, which
-  discovers their organization's SSO configuration. See the [SSO Admin
-  Guide](/docs/features/sso-admin-guide).
-</Callout>
-
-#### Login Flow
-
-1. User navigates to `/auth/login?org=<org-slug>` or uses email discovery via `/auth/discover`
-2. Gateway redirects to the organization's configured IdP
-3. After IdP authentication, callback creates a session cookie
-4. Subsequent requests are authenticated via the session cookie
-
-#### Per-Organization SSO
-
-SSO configurations are stored in the database and managed via the Admin API or UI:
-
-- `POST /admin/v1/organizations/{org_slug}/sso-configs` - Create SSO configuration
-- `GET /admin/v1/organizations/{org_slug}/sso-configs` - Get SSO configuration
-- `PUT /admin/v1/organizations/{org_slug}/sso-configs` - Update SSO configuration
-- `DELETE /admin/v1/organizations/{org_slug}/sso-configs` - Delete SSO configuration
-
-Each SSO configuration includes:
-
-- Provider type (OIDC or SAML)
-- Issuer URL and discovery settings
-- Client credentials (stored encrypted)
-- Allowed email domains
-- JIT provisioning settings
-
-#### Single-Org Membership
-
-Users can only belong to **one organization**. When a user authenticates via an organization's SSO, they are associated with that organization. If a user tries to authenticate via a different organization's SSO, they will receive an error.
-
-To move a user to a different organization, first remove them from their current organization.
-
-#### Session Configuration
-
-```toml
-[auth.admin.session]
+[auth.session]
 cookie_name = "__gw_session"
 duration_secs = 604800     # 7 days
 secure = true
@@ -477,39 +385,27 @@ secret = "${SESSION_SECRET}"
   share them across nodes.
 </Callout>
 
-#### JIT (Just-in-Time) Provisioning
+## JIT Provisioning
 
-Automatically create users and add them to organizations when they first authenticate via OIDC. This eliminates the need to pre-provision users before they can access the system.
-
-```toml
-[auth.admin.provisioning]
-enabled = true
-create_users = true
-organization_id = "acme-corp"       # Required: org slug or UUID
-default_team_id = "engineering"     # Optional: team slug or UUID
-default_org_role = "member"
-default_team_role = "member"
-sync_attributes_on_login = true
-# sync_memberships_on_login = true
-# allowed_email_domains = ["example.com", "acme.org"]
-```
-
-| Setting                     | Type     | Default  | Description                                                               |
-| --------------------------- | -------- | -------- | ------------------------------------------------------------------------- |
-| `enabled`                   | boolean  | `false`  | Enable JIT provisioning.                                                  |
-| `create_users`              | boolean  | `false`  | Create users in the database on first login.                              |
-| `organization_id`           | string   | None     | Organization slug or UUID to provision users into.                        |
-| `default_team_id`           | string   | None     | Team slug or UUID to add users to (requires `organization_id`).           |
-| `default_org_role`          | string   | `member` | Role assigned to users when added to organizations.                       |
-| `default_team_role`         | string   | `member` | Role assigned to users when added to teams.                               |
-| `allowed_email_domains`     | string[] | `[]`     | Restrict provisioning to specific email domains. Empty = allow all.       |
-| `sync_attributes_on_login`  | boolean  | `false`  | Update user name/email from IdP on subsequent logins.                     |
-| `sync_memberships_on_login` | boolean  | `false`  | Remove memberships not in current provisioning config. See warning below. |
+JIT (Just-in-Time) provisioning automatically creates users and adds them to organizations when they first authenticate via SSO. JIT provisioning is configured **per-organization** via the Admin UI or Admin API, not in `hadrian.toml`.
 
 <Callout type="info">
-  The `organization_id` can be either a UUID or a slug. The organization must exist in the database
-  before users can be provisioned into it. Create it via the Admin API or UI first.
+  See the [SSO Admin Guide](/docs/features/sso-admin-guide) for instructions on configuring JIT
+  provisioning per organization.
 </Callout>
+
+Each organization's JIT provisioning settings include:
+
+| Setting                     | Type     | Default  | Description                                                         |
+| --------------------------- | -------- | -------- | ------------------------------------------------------------------- |
+| `enabled`                   | boolean  | `false`  | Enable JIT provisioning for this organization.                      |
+| `create_users`              | boolean  | `false`  | Create users in the database on first login.                        |
+| `default_team_id`           | string   | None     | Team to add users to on first login.                                |
+| `default_org_role`          | string   | `member` | Role assigned when added to the organization.                       |
+| `default_team_role`         | string   | `member` | Role assigned when added to the default team.                       |
+| `allowed_email_domains`     | string[] | `[]`     | Restrict provisioning to specific email domains. Empty = allow all. |
+| `sync_attributes_on_login`  | boolean  | `false`  | Update user name/email from IdP on subsequent logins.               |
+| `sync_memberships_on_login` | boolean  | `false`  | Remove memberships not in current provisioning config.              |
 
 <Callout type="warn">
   **Membership Sync Warning:** When `sync_memberships_on_login` is enabled, users will lose access
@@ -517,46 +413,7 @@ sync_attributes_on_login = true
   logged in the audit log.
 </Callout>
 
-**Example: Basic Setup**
-
-Provision all SSO users into a single organization:
-
-```toml
-[auth.admin.provisioning]
-enabled = true
-create_users = true
-organization_id = "acme-corp"
-default_org_role = "member"
-sync_attributes_on_login = true
-```
-
-**Example: With Default Team**
-
-Provision users into an organization and a default team:
-
-```toml
-[auth.admin.provisioning]
-enabled = true
-create_users = true
-organization_id = "acme-corp"
-default_team_id = "new-employees"
-default_org_role = "member"
-default_team_role = "member"
-```
-
-**Example: Restrict by Email Domain**
-
-Only provision users from specific email domains:
-
-```toml
-[auth.admin.provisioning]
-enabled = true
-create_users = true
-organization_id = "acme-corp"
-allowed_email_domains = ["acme.com", "acme.org"]
-```
-
-#### SSO Group Mappings
+### SSO Group Mappings
 
 Map IdP groups to Hadrian teams for automatic team assignment during JIT provisioning.
 
@@ -615,11 +472,11 @@ A user in the `Engineering` group is added to all three teams with `member` role
 
 Group mappings can also be managed programmatically via the Admin API:
 
-- `GET /admin/v1/organizations/{org_slug}/sso-group-mappings` - List mappings
-- `POST /admin/v1/organizations/{org_slug}/sso-group-mappings` - Create mapping
-- `PATCH /admin/v1/organizations/{org_slug}/sso-group-mappings/{id}` - Update mapping
-- `DELETE /admin/v1/organizations/{org_slug}/sso-group-mappings/{id}` - Delete mapping
-- `POST /admin/v1/organizations/{org_slug}/sso-group-mappings/test` - Test mappings against IdP groups
+- `GET /admin/v1/organizations/{org_slug}/sso-group-mappings` -- List mappings
+- `POST /admin/v1/organizations/{org_slug}/sso-group-mappings` -- Create mapping
+- `PATCH /admin/v1/organizations/{org_slug}/sso-group-mappings/{id}` -- Update mapping
+- `DELETE /admin/v1/organizations/{org_slug}/sso-group-mappings/{id}` -- Delete mapping
+- `POST /admin/v1/organizations/{org_slug}/sso-group-mappings/test` -- Test mappings against IdP groups
 
 See the [API Reference](/docs/api) for full documentation.
 
@@ -629,11 +486,11 @@ For large mapping sets, use the import/export feature in the Admin UI:
 
 - **Export**: Download mappings as CSV or JSON for backup or migration
 - **Import**: Upload a JSON file with mappings and choose conflict resolution:
-  - `skip` - Skip mappings that already exist
-  - `overwrite` - Update existing mappings with imported values
-  - `error` - Fail if any mapping already exists
+  - `skip` -- Skip mappings that already exist
+  - `overwrite` -- Update existing mappings with imported values
+  - `error` -- Fail if any mapping already exists
 
-#### SCIM Provisioning
+### SCIM Provisioning
 
 SCIM (System for Cross-domain Identity Management) provides real-time user provisioning and deprovisioning from your identity provider. Unlike JIT provisioning which only triggers on login, SCIM syncs changes immediately.
 
@@ -662,11 +519,11 @@ SCIM (System for Cross-domain Identity Management) provides real-time user provi
 
 SCIM configuration is managed via the Admin API:
 
-- `GET /admin/v1/organizations/{org_slug}/scim-configs` - Get SCIM configuration
-- `POST /admin/v1/organizations/{org_slug}/scim-configs` - Create SCIM configuration
-- `PUT /admin/v1/organizations/{org_slug}/scim-configs` - Update SCIM configuration
-- `DELETE /admin/v1/organizations/{org_slug}/scim-configs` - Delete SCIM configuration
-- `POST /admin/v1/organizations/{org_slug}/scim-configs/rotate-token` - Rotate bearer token
+- `GET /admin/v1/organizations/{org_slug}/scim-configs` -- Get SCIM configuration
+- `POST /admin/v1/organizations/{org_slug}/scim-configs` -- Create SCIM configuration
+- `PUT /admin/v1/organizations/{org_slug}/scim-configs` -- Update SCIM configuration
+- `DELETE /admin/v1/organizations/{org_slug}/scim-configs` -- Delete SCIM configuration
+- `POST /admin/v1/organizations/{org_slug}/scim-configs/rotate-token` -- Rotate bearer token
 
 ## RBAC Configuration
 
@@ -717,12 +574,12 @@ priority = 100
 
 | Field         | Type    | Default | Description                                                          |
 | ------------- | ------- | ------- | -------------------------------------------------------------------- |
-| `name`        | string  | —       | Unique policy identifier (required).                                 |
+| `name`        | string  | ---     | Unique policy identifier (required).                                 |
 | `description` | string  | None    | Human-readable description.                                          |
 | `resource`    | string  | `*`     | Resource type this policy applies to.                                |
 | `action`      | string  | `*`     | Action this policy applies to.                                       |
-| `condition`   | string  | —       | CEL expression that must evaluate to `true` (required).              |
-| `effect`      | string  | —       | `allow` or `deny` (required).                                        |
+| `condition`   | string  | ---     | CEL expression that must evaluate to `true` (required).              |
+| `effect`      | string  | ---     | `allow` or `deny` (required).                                        |
 | `priority`    | integer | `0`     | Evaluation order. Higher = evaluated first. Ties: deny before allow. |
 
 ### CEL Variables
@@ -857,24 +714,19 @@ default_effect = "allow"
 
 ### Authentication Requirements
 
-Gateway RBAC policies require identity information (roles, org membership) from JWT tokens. Configure multi-auth to support both API keys and JWTs:
+Gateway RBAC policies require identity information (roles, org membership) from JWT tokens. Use `idp` mode to support both API keys and JWTs:
 
 ```toml
-[auth.gateway]
-type = "multi"
+[auth.mode]
+type = "idp"
 
-[auth.gateway.api_key]
+[auth.api_key]
 key_prefix = "gw_"
-
-[auth.gateway.jwt]
-issuer = "https://auth.example.com"
-audience = "hadrian-api"
-jwks_url = "https://auth.example.com/.well-known/jwks.json"
 ```
 
 <Callout type="warn">
-  API key authentication alone does not provide role information. Use JWT authentication or
-  multi-auth for Gateway RBAC policies that check `subject.roles`.
+  API key authentication alone does not provide role information. Use JWT authentication (via
+  per-org SSO) for Gateway RBAC policies that check `subject.roles`.
 </Callout>
 
 ### Policy Examples
@@ -1113,12 +965,12 @@ For scenarios where users will authenticate via IdP before accessing the Admin U
 
 ```toml
 [auth.bootstrap]
-admin_identities = ["alice@example.com", "bob@example.com"]
+admin_identities = ["alice@acme.com", "bob@acme.com"]
 
 [auth.bootstrap.initial_org]
 slug = "acme-corp"
 name = "Acme Corporation"
-admin_identities = ["alice@example.com"]
+admin_identities = ["alice@acme.com"]
 ```
 
 | Setting                        | Type     | Description                               |
@@ -1146,7 +998,7 @@ allowed_ips = ["10.0.0.0/8"]  # Optional: restrict to admin network
 id = "emergency-admin-1"
 name = "Primary Emergency Admin"
 key = "${EMERGENCY_KEY_1}"
-email = "admin@company.com"
+email = "admin@acme.com"
 roles = ["_emergency_admin", "super_admin"]
 
 [auth.emergency.rate_limit]
@@ -1159,10 +1011,10 @@ lockout_secs = 3600
 | ------------------------- | -------- | ------- | -------------------------------------------- |
 | `enabled`                 | boolean  | `false` | Enable emergency access                      |
 | `allowed_ips`             | string[] | `[]`    | Global IP allowlist (CIDR notation)          |
-| `accounts[].id`           | string   | -       | Unique identifier for audit logs             |
-| `accounts[].name`         | string   | -       | Human-readable account name                  |
-| `accounts[].key`          | string   | -       | Emergency access key (secret)                |
-| `accounts[].email`        | string   | -       | Email for audit logging                      |
+| `accounts[].id`           | string   | ---     | Unique identifier for audit logs             |
+| `accounts[].name`         | string   | ---     | Human-readable account name                  |
+| `accounts[].key`          | string   | ---     | Emergency access key (secret)                |
+| `accounts[].email`        | string   | ---     | Email for audit logging                      |
 | `accounts[].roles`        | string[] | `[]`    | Roles granted on authentication              |
 | `accounts[].allowed_ips`  | string[] | `[]`    | Per-account IP restrictions (CIDR)           |
 | `rate_limit.max_attempts` | u32      | `5`     | Failed attempts before lockout               |
@@ -1185,50 +1037,37 @@ curl -H "X-Emergency-Key: $EMERGENCY_KEY" https://gateway.example.com/admin/v1/o
 ### Development (No Auth)
 
 ```toml
-[auth.gateway]
+[auth.mode]
 type = "none"
-
-# No UI auth config = anonymous access
 ```
 
 ### Production API Keys Only
 
 ```toml
-[auth.gateway]
+[auth.mode]
 type = "api_key"
+
+[auth.api_key]
 header_name = "X-API-Key"
 key_prefix = "gw_"
 cache_ttl_secs = 300
 ```
 
-### Keycloak OIDC with JIT Provisioning
+### IdP with Per-Org SSO
+
+Each organization configures their own OIDC or SAML provider via the Admin UI. API keys provide programmatic access.
 
 ```toml
-[auth.admin]
-type = "oidc"
-issuer = "https://keycloak.example.com/realms/hadrian"
-client_id = "hadrian"
-client_secret = "${OIDC_CLIENT_SECRET}"
-redirect_uri = "https://gateway.example.com/auth/callback"
-identity_claim = "preferred_username"
-groups_claim = "groups"  # Required for SSO group mappings
+[auth.mode]
+type = "idp"
 
-[auth.admin.session]
-secure = true
-secret = "${SESSION_SECRET}"
-
-# JIT provisioning - auto-create users and add to organization
-[auth.admin.provisioning]
-enabled = true
-create_users = true
-organization_id = "acme-corp"
-default_org_role = "member"
-sync_attributes_on_login = true
-
-[auth.gateway]
-type = "api_key"
+[auth.api_key]
 key_prefix = "gw_"
 cache_ttl_secs = 300
+
+[auth.session]
+secure = true
+secret = "${SESSION_SECRET}"
 
 [auth.rbac]
 enabled = true
@@ -1251,11 +1090,15 @@ action = "*"
 condition = "context.org_id in subject.org_ids"
 effect = "allow"
 priority = 50
+
+[auth.bootstrap]
+api_key = "${HADRIAN_BOOTSTRAP_KEY}"
+auto_verify_domains = ["acme.com"]
 ```
 
 <Callout type="info">
-  After deploying this configuration, use the Admin UI to set up SSO group mappings that map
-  Keycloak groups to Hadrian teams.
+  After deploying, use the bootstrap API key to create organizations and configure SSO. Once SSO is
+  active, use the Admin UI to set up group mappings that map IdP groups to Hadrian teams.
 </Callout>
 
 ### Cloudflare Access + API Keys
@@ -1264,44 +1107,34 @@ priority = 50
 [server.trusted_proxies]
 cidrs = ["173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22"]
 
-[auth.admin]
-type = "proxy_auth"
+[auth.mode]
+type = "iap"
 identity_header = "Cf-Access-Authenticated-User-Email"
 email_header = "Cf-Access-Authenticated-User-Email"
 
-[auth.admin.jwt_assertion]
+[auth.mode.jwt_assertion]
 header = "Cf-Access-Jwt-Assertion"
-jwks_url = "https://your-team.cloudflareaccess.com/cdn-cgi/access/certs"
-issuer = "https://your-team.cloudflareaccess.com"
+jwks_url = "https://acme-corp.cloudflareaccess.com/cdn-cgi/access/certs"
+issuer = "https://acme-corp.cloudflareaccess.com"
 audience = "your-app-audience-tag"
 
-[auth.gateway]
-type = "api_key"
+[auth.api_key]
 key_prefix = "gw_"
 ```
 
 ### Multi-Tenant with Full RBAC
 
 ```toml
-[auth.admin]
-type = "oidc"
-issuer = "https://auth.example.com"
-client_id = "hadrian"
-client_secret = "${OIDC_CLIENT_SECRET}"
-redirect_uri = "https://gateway.example.com/auth/callback"
-groups_claim = "groups"
+[auth.mode]
+type = "idp"
 
-[auth.gateway]
-type = "multi"
-
-[auth.gateway.api_key]
+[auth.api_key]
 key_prefix = "gw_"
 cache_ttl_secs = 300
 
-[auth.gateway.jwt]
-issuer = "https://auth.example.com"
-audience = "hadrian-api"
-jwks_url = "https://auth.example.com/.well-known/jwks.json"
+[auth.session]
+secure = true
+secret = "${SESSION_SECRET}"
 
 [auth.rbac]
 enabled = true
@@ -1368,37 +1201,37 @@ condition = "context.org_id in subject.org_ids"
 effect = "allow"
 priority = 20
 
+[auth.rbac.gateway]
+enabled = true
+default_effect = "allow"
+
 [auth.bootstrap]
-admin_identities = ["admin@example.com"]
+admin_identities = ["admin@acme.com"]
 
 [auth.bootstrap.initial_org]
-slug = "default"
-name = "Default Organization"
-admin_identities = ["admin@example.com"]
+slug = "acme-corp"
+name = "Acme Corporation"
+admin_identities = ["admin@acme.com"]
 ```
 
 ### Multi-Org with Per-IdP API Authentication
 
-Each organization configures their own identity provider via the Admin UI. No global `[auth.gateway.jwt]` is needed — per-org SSO configs automatically enable JWT validation on `/v1/*` endpoints.
+Each organization configures their own identity provider via the Admin UI. No global JWT config is needed -- per-org SSO configs automatically enable JWT validation on `/v1/*` endpoints.
 
 ```toml
-[auth.gateway]
-type = "multi"
+[auth.mode]
+type = "idp"
 
-[auth.gateway.api_key]
+[auth.api_key]
 key_prefix = "gw_"
 cache_ttl_secs = 300
 
-# No [auth.gateway.jwt] section.
-# Per-org SSO configs provide JWT validation for each org's IdP.
+# No global JWT config -- per-org SSO configs provide JWT validation for each org's IdP.
 
-[auth.admin]
-type = "session"
-secret = "${SESSION_SECRET}"
-
-[auth.admin.session]
+[auth.session]
 secure = true
 same_site = "lax"
+secret = "${SESSION_SECRET}"
 
 [auth.rbac]
 enabled = true

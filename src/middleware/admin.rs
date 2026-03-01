@@ -28,7 +28,6 @@ use super::{ClientInfo, RequestId};
 use crate::{
     AppState,
     auth::{AuthError, AuthenticatedRequest, Identity, IdentityKind},
-    config::AdminAuthConfig,
     observability::metrics,
     services::audit_logs::{AuthEventParams, auth_events},
 };
@@ -612,11 +611,21 @@ async fn try_admin_auth(
     }
 
     // No valid authentication found
-    // If OIDC is configured, return a redirect to start the auth flow
+    // If IdP mode is configured and we have a single org with SSO, redirect to its login
     #[cfg(feature = "sso")]
-    if let Some(authenticator) = &state.oidc_authenticator {
-        let (redirect_url, _) = authenticator.authorization_url(None).await?;
-        return Err(AuthError::OidcAuthRequired { redirect_url });
+    if state.config.auth.requires_session()
+        && let Some(registry) = &state.oidc_registry
+    {
+        let org_ids = registry.list_orgs().await;
+        // Only redirect automatically when there's exactly one org (unambiguous)
+        if let [org_id] = org_ids.as_slice()
+            && let Some(authenticator) = registry.get(*org_id).await
+        {
+            let (redirect_url, _) = authenticator
+                .authorization_url_with_org(None, Some(*org_id))
+                .await?;
+            return Err(AuthError::OidcAuthRequired { redirect_url });
+        }
     }
 
     Err(AuthError::MissingCredentials)
@@ -860,6 +869,7 @@ async fn validate_bearer_token(
         &discovery_url,
         &state.http_client,
         state.config.server.allow_loopback_urls,
+        state.config.server.allow_private_urls,
     )
     .await
     .map_err(|e| {
@@ -929,9 +939,9 @@ async fn try_proxy_auth_auth(
     connecting_ip: Option<IpAddr>,
     state: &AppState,
 ) -> Result<Option<Identity>, AuthError> {
-    let config = match &state.config.auth.admin {
-        Some(AdminAuthConfig::ProxyAuth(config)) => config,
-        _ => return Ok(None),
+    let config = match state.config.auth.iap_config() {
+        Some(config) => config,
+        None => return Ok(None),
     };
 
     // SECURITY: Validate that the request comes from a trusted proxy before trusting headers.
@@ -1037,25 +1047,14 @@ async fn try_oidc_session_auth(
     state: &AppState,
     client_info: &ClientInfo,
 ) -> Result<Option<Identity>, AuthError> {
-    use crate::config::AdminAuthConfig;
-
-    // Get the OIDC authenticator which holds the session store
-    let authenticator = match &state.oidc_authenticator {
-        Some(auth) => auth,
+    // Get the OIDC registry which holds the shared session store
+    let registry = match &state.oidc_registry {
+        Some(reg) => reg,
         None => return Ok(None),
     };
 
-    // Get session config - supports Session variant or default config
-    let session_config = match &state.config.auth.admin {
-        Some(AdminAuthConfig::Session(config)) => config.clone(),
-        _ => {
-            tracing::warn!(
-                "No session config found in auth.admin, using defaults. \
-                 This may indicate misconfiguration if sessions are expected."
-            );
-            crate::config::SessionConfig::default()
-        }
-    };
+    // Get session config from auth config (or use defaults)
+    let session_config = state.config.auth.session_config_or_default();
 
     let cookies = match cookies {
         Some(c) => c,
@@ -1073,8 +1072,25 @@ async fn try_oidc_session_auth(
         .parse()
         .map_err(|_| AuthError::InvalidToken)?;
 
-    // Get session from the OIDC authenticator's session store
-    let session = authenticator.get_session(session_id).await?;
+    // Get session from the registry's shared session store
+    let session = match registry.session_store().get_session(session_id).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return Ok(None),
+        Err(e) => {
+            tracing::warn!(
+                session_id = %session_id,
+                error = %e,
+                "Failed to retrieve OIDC session"
+            );
+            return Ok(None);
+        }
+    };
+
+    // Check if session has expired
+    if session.is_expired() {
+        let _ = registry.session_store().delete_session(session_id).await;
+        return Ok(None);
+    }
 
     // Look up internal user and their memberships from the database
     // The database is the source of truth for org/team/project membership
@@ -2174,20 +2190,20 @@ mod tests {
     use tokio_util::task::TaskTracker;
 
     use super::*;
-    use crate::config::{GatewayConfig, ProxyAuthConfig, TrustedProxiesConfig};
+    use crate::config::{AuthMode, GatewayConfig, IapConfig, TrustedProxiesConfig};
 
     /// Create a minimal AppState for testing with ProxyAuth config
     fn create_test_state(identity_header: &str, trusted_proxies: TrustedProxiesConfig) -> AppState {
         // Create minimal config from empty TOML
         let mut config = GatewayConfig::from_str("").unwrap();
-        config.auth.admin = Some(AdminAuthConfig::ProxyAuth(Box::new(ProxyAuthConfig {
+        config.auth.mode = AuthMode::Iap(Box::new(IapConfig {
             identity_header: identity_header.to_string(),
             email_header: Some("X-Email".to_string()),
             name_header: None,
             groups_header: Some("X-Groups".to_string()),
             jwt_assertion: None,
             require_identity: true,
-        })));
+        }));
         config.server.trusted_proxies = trusted_proxies;
 
         AppState {
@@ -2202,13 +2218,10 @@ mod tests {
             provider_health: crate::jobs::ProviderHealthStateRegistry::new(),
             task_tracker: TaskTracker::new(),
             #[cfg(feature = "sso")]
-            oidc_authenticator: None,
-            #[cfg(feature = "sso")]
             oidc_registry: None,
             #[cfg(feature = "saml")]
             saml_registry: None,
             gateway_jwt_registry: None,
-            global_jwt_validator: None,
             policy_registry: None,
             usage_buffer: None,
             response_cache: None,
@@ -2506,13 +2519,10 @@ mod tests {
             provider_health: crate::jobs::ProviderHealthStateRegistry::new(),
             task_tracker: TaskTracker::new(),
             #[cfg(feature = "sso")]
-            oidc_authenticator: None,
-            #[cfg(feature = "sso")]
             oidc_registry: None,
             #[cfg(feature = "saml")]
             saml_registry: None,
             gateway_jwt_registry: None,
-            global_jwt_validator: None,
             policy_registry: None,
             usage_buffer: None,
             response_cache: None,
