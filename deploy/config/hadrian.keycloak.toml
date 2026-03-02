@@ -2,6 +2,12 @@
 # Development setup with Keycloak for per-org OIDC authentication
 # OIDC SSO is configured via Admin API, not in this config file
 
+[server]
+# Allow Docker-internal private IPs for OIDC discovery (Keycloak runs in Docker)
+allow_private_urls = true
+# Keycloak advertises issuer as http://localhost:8080 (host-mapped port)
+allow_loopback_urls = true
+
 [ui]
 enabled = true
 
@@ -15,13 +21,19 @@ enabled = true
 api_key = "gw_test_bootstrap_key_for_e2e"
 
 # ==============================================================================
-# Session Configuration (for per-org SSO)
+# Auth Mode: IdP (per-org SSO + API keys)
 # ==============================================================================
 # OIDC authentication is configured per-organization via the Admin API.
-# This section only configures session management for authenticated users.
-# The test setup creates the SSO connection with OIDC settings.
-[auth.admin]
-type = "session"
+# Session management for authenticated users is configured below.
+[auth.mode]
+type = "idp"
+
+[auth.api_key]
+header_name = "X-API-Key"
+key_prefix = "gw_"
+cache_ttl_secs = 300
+
+[auth.session]
 secure = false  # For local dev over HTTP
 
 [database]
@@ -31,12 +43,6 @@ path = "/app/data/hadrian.db"
 [cache]
 type = "redis"
 url = "${REDIS_URL}"
-
-[auth.gateway]
-type = "api_key"
-header_name = "X-API-Key"
-key_prefix = "gw_"
-cache_ttl_secs = 300
 
 # RBAC is disabled for this basic keycloak test to allow unauthenticated admin API access.
 # For comprehensive RBAC testing with OIDC authentication, see the university deployment tests.

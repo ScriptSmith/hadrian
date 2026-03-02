@@ -11,11 +11,8 @@ read_url = "${DATABASE_READ_URL}"
 type = "redis"
 url = "${REDIS_URL}"
 
-[auth.gateway]
-type = "api_key"
-header_name = "X-API-Key"
-key_prefix = "gw_"
-cache_ttl_secs = 300
+[auth.mode]
+type = "none"
 
 [providers]
 default_provider = "test"

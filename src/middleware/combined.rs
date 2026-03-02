@@ -591,8 +591,21 @@ pub async fn api_middleware(
     };
     req.extensions_mut().insert(client_info.clone());
 
+    // Extract cookies for session-based auth (set by CookieManagerLayer)
+    let cookies = req.extensions().get::<tower_cookies::Cookies>().cloned();
+
     // 2. Try to authenticate (optional - doesn't fail if no auth)
-    let auth_result = try_authenticate(&headers, connecting_ip, &state).await;
+    // Short-circuit: in None mode with no credential headers, skip auth entirely.
+    // This makes anonymous access explicit rather than relying on MissingCredentials
+    // being caught downstream. Credentials present in None mode are still validated.
+    let has_credentials = headers
+        .contains_key(state.config.auth.api_key_config().header_name.as_str())
+        || headers.contains_key(axum::http::header::AUTHORIZATION);
+    let auth_result = if !state.config.auth.is_auth_enabled() && !has_credentials {
+        Err(AuthError::MissingCredentials)
+    } else {
+        try_authenticate(&headers, cookies.as_ref(), connecting_ip, &state).await
+    };
 
     // Budget reservation (if applicable)
     let mut budget_reservation: Option<BudgetCheckResult> = None;
@@ -1184,58 +1197,93 @@ fn track_usage_async(ctx: UsageTrackingContext<'_>) {
     }
 }
 
-/// Try to authenticate from headers.
+/// Try to authenticate from headers based on the configured `AuthMode`.
 ///
-/// In multi-auth mode, uses **format-based detection**:
+/// - `None` — optional auth (try API key if present, don't require it)
+/// - `ApiKey` — require API key
+/// - `Idp` — try session/API key/JWT with format-based detection; rejects ambiguous dual credentials
+/// - `Iap` — try proxy identity headers, also accept API key
+///
+/// In `Idp` mode, **format-based detection** is used:
 /// - Tokens in `Authorization: Bearer` starting with the API key prefix are validated as API keys
 /// - Other Bearer tokens are validated as JWTs
 /// - `X-API-Key` header is always validated as an API key
-///
-/// **Important:** In multi-auth mode, providing both `X-API-Key` and `Authorization`
-/// headers simultaneously is rejected as ambiguous (returns 400 error).
 async fn try_authenticate(
     headers: &axum::http::HeaderMap,
+    cookies: Option<&tower_cookies::Cookies>,
     connecting_ip: Option<IpAddr>,
     state: &AppState,
 ) -> Result<AuthenticatedRequest, AuthError> {
-    use crate::config::GatewayAuthConfig;
+    use crate::config::AuthMode;
 
-    // Get the API key header name from config
-    let api_key_header = match &state.config.auth.gateway {
-        GatewayAuthConfig::ApiKey(config) => config.header_name.as_str(),
-        GatewayAuthConfig::Multi(config) => config.api_key.header_name.as_str(),
-        _ => "X-API-Key",
-    };
+    let api_key_config = state.config.auth.api_key_config();
+    #[cfg(feature = "sso")]
+    let api_key_header = api_key_config.header_name.as_str();
+    #[cfg(not(feature = "sso"))]
+    let _ = (cookies, &api_key_config);
 
-    // In multi-auth mode, reject ambiguous dual credentials
-    // (both X-API-Key and Authorization headers present)
-    if matches!(&state.config.auth.gateway, GatewayAuthConfig::Multi(_)) {
-        let has_api_key_header = headers.contains_key(api_key_header);
-        let has_auth_header = headers.contains_key(axum::http::header::AUTHORIZATION);
-        if has_api_key_header && has_auth_header {
-            return Err(AuthError::AmbiguousCredentials);
+    match &state.config.auth.mode {
+        AuthMode::None => {
+            // Optional auth: try API key if header present, don't require it
+            let api_key = try_api_key_auth(headers, state).await?;
+            match api_key {
+                Some(api_key) => Ok(AuthenticatedRequest::new(IdentityKind::ApiKey(api_key))),
+                None => Err(AuthError::MissingCredentials),
+            }
+        }
+        AuthMode::ApiKey => {
+            // Require API key
+            let api_key = try_api_key_auth(headers, state).await?;
+            match api_key {
+                Some(api_key) => Ok(AuthenticatedRequest::new(IdentityKind::ApiKey(api_key))),
+                None => Err(AuthError::MissingCredentials),
+            }
+        }
+        #[cfg(feature = "sso")]
+        AuthMode::Idp => {
+            // Idp mode: reject ambiguous dual credentials
+            // (both X-API-Key and Authorization headers present)
+            let has_api_key_header = headers.contains_key(api_key_header);
+            let has_auth_header = headers.contains_key(axum::http::header::AUTHORIZATION);
+            if has_api_key_header && has_auth_header {
+                return Err(AuthError::AmbiguousCredentials);
+            }
+
+            // Try session cookie → API key → JWT
+            // Session first because it's cheapest (no JWKS fetch, no DB hash lookup)
+            let api_key = try_api_key_auth(headers, state).await?;
+            let identity = if let Some(id) = try_session_api_auth(cookies, state).await? {
+                Some(id)
+            } else {
+                try_jwt_api_auth(headers, state).await?
+            };
+            let kind = match (api_key, identity) {
+                (Some(api_key), Some(identity)) => IdentityKind::Both {
+                    api_key: Box::new(api_key),
+                    identity,
+                },
+                (Some(api_key), None) => IdentityKind::ApiKey(api_key),
+                (None, Some(identity)) => IdentityKind::Identity(identity),
+                (None, None) => return Err(AuthError::MissingCredentials),
+            };
+            Ok(AuthenticatedRequest::new(kind))
+        }
+        AuthMode::Iap(_) => {
+            // Try proxy headers, also accept API key
+            let api_key = try_api_key_auth(headers, state).await?;
+            let identity = try_identity_auth(headers, connecting_ip, state).await?;
+            let kind = match (api_key, identity) {
+                (Some(api_key), Some(identity)) => IdentityKind::Both {
+                    api_key: Box::new(api_key),
+                    identity,
+                },
+                (Some(api_key), None) => IdentityKind::ApiKey(api_key),
+                (None, Some(identity)) => IdentityKind::Identity(identity),
+                (None, None) => return Err(AuthError::MissingCredentials),
+            };
+            Ok(AuthenticatedRequest::new(kind))
         }
     }
-
-    let api_key = try_api_key_auth(headers, state).await?;
-
-    // Try identity auth from proxy headers first, then JWT auth for API endpoints
-    let identity = match try_identity_auth(headers, connecting_ip, state).await? {
-        Some(id) => Some(id),
-        None => try_jwt_api_auth(headers, state).await?,
-    };
-
-    let kind = match (api_key, identity) {
-        (Some(api_key), Some(identity)) => IdentityKind::Both {
-            api_key: Box::new(api_key),
-            identity,
-        },
-        (Some(api_key), None) => IdentityKind::ApiKey(api_key),
-        (None, Some(identity)) => IdentityKind::Identity(identity),
-        (None, None) => return Err(AuthError::MissingCredentials),
-    };
-
-    Ok(AuthenticatedRequest::new(kind))
 }
 
 /// Try to authenticate via API key.
@@ -1244,26 +1292,19 @@ async fn try_authenticate(
 /// 1. `X-API-Key` header (or configured header name)
 /// 2. `Authorization: Bearer` header (only if token starts with API key prefix)
 ///
-/// In multi-auth mode, format-based detection allows API keys in the Bearer header:
+/// In idp mode, format-based detection allows API keys in the Bearer header:
 /// tokens starting with the configured prefix (e.g., `gw_`) are treated as API keys.
 #[allow(clippy::collapsible_if)]
-async fn try_api_key_auth(
+pub(crate) async fn try_api_key_auth(
     headers: &axum::http::HeaderMap,
     state: &AppState,
 ) -> Result<Option<ApiKeyAuth>, AuthError> {
-    use crate::config::GatewayAuthConfig;
-
     // Get header name and key prefix from config
-    let (header_name, key_prefix) = match &state.config.auth.gateway {
-        GatewayAuthConfig::ApiKey(config) => {
-            (config.header_name.as_str(), config.key_prefix.as_str())
-        }
-        GatewayAuthConfig::Multi(config) => (
-            config.api_key.header_name.as_str(),
-            config.api_key.key_prefix.as_str(),
-        ),
-        _ => ("X-API-Key", "gw_"), // Default values for non-API-key auth modes
-    };
+    let api_key_config = state.config.auth.api_key_config();
+    let (header_name, key_prefix) = (
+        api_key_config.header_name.as_str(),
+        api_key_config.key_prefix.as_str(),
+    );
 
     use std::borrow::Cow;
 
@@ -1469,6 +1510,128 @@ async fn try_api_key_auth(
     Ok(Some(api_key_auth))
 }
 
+/// Try to authenticate via session cookie for API endpoints.
+///
+/// Validates OIDC/SAML session cookies so users who logged in via SSO can
+/// use the chat UI on `/v1/*` endpoints without needing a separate API key.
+/// Session cookies are cheaper to validate than JWTs (no JWKS fetch).
+#[cfg(feature = "sso")]
+async fn try_session_api_auth(
+    cookies: Option<&tower_cookies::Cookies>,
+    state: &AppState,
+) -> Result<Option<Identity>, AuthError> {
+    // Get the OIDC registry which holds the shared session store
+    let registry = match &state.oidc_registry {
+        Some(reg) => reg,
+        None => return Ok(None),
+    };
+
+    let session_config = state.config.auth.session_config_or_default();
+
+    let cookies = match cookies {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+
+    // Get session ID from cookie
+    let session_cookie = match cookies.get(&session_config.cookie_name) {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+
+    let session_id: uuid::Uuid = match session_cookie.value().parse() {
+        Ok(id) => id,
+        Err(_) => return Ok(None),
+    };
+
+    // Validate session (checks expiration, inactivity timeout, updates last_activity)
+    let session = match crate::auth::session_store::validate_and_refresh_session(
+        registry.session_store().as_ref(),
+        session_id,
+        &session_config.enhanced,
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(
+            crate::auth::session_store::SessionError::NotFound
+            | crate::auth::session_store::SessionError::Expired,
+        ) => return Ok(None),
+        Err(e) => {
+            tracing::debug!(session_id = %session_id, error = %e, "Session validation failed");
+            return Ok(None);
+        }
+    };
+
+    // Look up internal user and memberships from the database
+    let (user_id, org_ids, team_ids, project_ids) = if let Some(db) = &state.db {
+        match db
+            .users()
+            .get_by_external_id(&session.external_id)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?
+        {
+            Some(user) => {
+                let user_id = user.id;
+
+                let org_ids: Vec<String> = db
+                    .users()
+                    .get_org_memberships_for_user(user_id)
+                    .await
+                    .map_err(|e| AuthError::Internal(e.to_string()))?
+                    .iter()
+                    .map(|m| m.org_id.to_string())
+                    .collect();
+
+                let team_ids: Vec<String> = db
+                    .users()
+                    .get_team_memberships_for_user(user_id)
+                    .await
+                    .map_err(|e| AuthError::Internal(e.to_string()))?
+                    .iter()
+                    .map(|m| m.team_id.to_string())
+                    .collect();
+
+                let project_ids: Vec<String> = db
+                    .users()
+                    .get_project_memberships_for_user(user_id)
+                    .await
+                    .map_err(|e| AuthError::Internal(e.to_string()))?
+                    .iter()
+                    .map(|m| m.project_id.to_string())
+                    .collect();
+
+                (Some(user_id), org_ids, team_ids, project_ids)
+            }
+            None => {
+                // User not found in DB — they may need to log in via admin first
+                // to trigger JIT provisioning. Don't provision here on API path.
+                return Ok(None);
+            }
+        }
+    } else {
+        return Ok(None);
+    };
+
+    let roles = if session.roles.is_empty() {
+        session.groups.clone()
+    } else {
+        session.roles.clone()
+    };
+
+    Ok(Some(Identity {
+        external_id: session.external_id,
+        email: session.email,
+        name: session.name,
+        user_id,
+        roles,
+        idp_groups: session.groups.clone(),
+        org_ids,
+        team_ids,
+        project_ids,
+    }))
+}
+
 /// Try to authenticate via identity headers
 ///
 /// **Security:** This function validates that the connecting IP is from a trusted
@@ -1479,9 +1642,9 @@ async fn try_identity_auth(
     connecting_ip: Option<IpAddr>,
     state: &AppState,
 ) -> Result<Option<Identity>, AuthError> {
-    let config = match &state.config.auth.admin {
-        Some(crate::config::AdminAuthConfig::ProxyAuth(config)) => config,
-        _ => return Ok(None),
+    let config = match state.config.auth.iap_config() {
+        Some(config) => config,
+        None => return Ok(None),
     };
 
     // SECURITY: Validate that the request comes from a trusted proxy before trusting headers.
@@ -1522,8 +1685,9 @@ async fn try_identity_auth(
         None => return Ok(None),
     };
 
-    let email = extract_header(headers, &state.config.auth.admin, "email");
-    let name = extract_header(headers, &state.config.auth.admin, "name");
+    let iap = state.config.auth.iap_config();
+    let email = extract_header(headers, iap, "email");
+    let name = extract_header(headers, iap, "name");
 
     let user_id = if let Some(db) = &state.db {
         db.users()
@@ -1536,7 +1700,7 @@ async fn try_identity_auth(
     };
 
     // Extract roles from groups header if configured
-    let roles = extract_groups(headers, &state.config.auth.admin);
+    let roles = extract_groups(headers, iap);
 
     // For proxy auth, groups header serves as both roles and raw groups
     Ok(Some(Identity {
@@ -1554,24 +1718,26 @@ async fn try_identity_auth(
 
 /// Try to authenticate via JWT for API endpoints.
 ///
-/// This handles Bearer token authentication when `auth.gateway` is configured
-/// as `jwt` or `multi` mode. Unlike `try_identity_auth` which handles
-/// proxy-forwarded headers, this validates JWT tokens directly.
+/// This handles Bearer token authentication in `Idp` mode, validating JWTs
+/// via per-org SSO configurations in the `GatewayJwtRegistry`.
+/// Unlike `try_identity_auth` which handles proxy-forwarded headers,
+/// this validates JWT tokens directly.
 ///
-/// In multi-auth mode, tokens starting with the API key prefix are skipped
+/// Tokens starting with the API key prefix are skipped
 /// (they're already handled by `try_api_key_auth`).
+#[cfg(feature = "sso")]
 async fn try_jwt_api_auth(
     headers: &axum::http::HeaderMap,
     state: &AppState,
 ) -> Result<Option<Identity>, AuthError> {
-    use crate::config::GatewayAuthConfig;
+    // JWT auth is only available via per-org GatewayJwtRegistry (Idp mode)
+    let is_idp = matches!(state.config.auth.mode, crate::config::AuthMode::Idp);
+    if !is_idp {
+        return Ok(None);
+    }
 
-    // Get API key prefix for format-based detection in multi-auth mode
-    let key_prefix = match &state.config.auth.gateway {
-        GatewayAuthConfig::Jwt(_) => None,
-        GatewayAuthConfig::Multi(config) => Some(config.api_key.key_prefix.as_str()),
-        _ => return Ok(None), // No JWT config for API endpoints
-    };
+    // Use API key prefix for format-based detection to skip API key tokens
+    let key_prefix = Some(state.config.auth.api_key_config().key_prefix.as_str());
 
     // Extract Bearer token from Authorization header
     let auth_header = match headers.get(axum::http::header::AUTHORIZATION) {
@@ -1588,7 +1754,7 @@ async fn try_jwt_api_auth(
         return Ok(None); // Not a Bearer token
     };
 
-    // In multi-auth mode, skip JWT validation if token has API key prefix
+    // In idp mode, skip JWT validation if token has API key prefix
     // (already handled by try_api_key_auth via format-based detection)
     if key_prefix.is_some_and(|prefix| token.starts_with(prefix)) {
         return Ok(None);
@@ -1602,7 +1768,6 @@ async fn try_jwt_api_auth(
             // Look up validators, lazy-loading from DB on cache miss.
             // find_or_load_by_issuer deduplicates concurrent loads and caches
             // negative results to prevent DB query amplification.
-            #[cfg(feature = "sso")]
             let validators = if let Some(db) = &state.db {
                 match registry
                     .find_or_load_by_issuer(
@@ -1610,6 +1775,7 @@ async fn try_jwt_api_auth(
                         db,
                         &state.http_client,
                         state.config.server.allow_loopback_urls,
+                        state.config.server.allow_private_urls,
                     )
                     .await
                 {
@@ -1618,7 +1784,7 @@ async fn try_jwt_api_auth(
                         tracing::warn!(
                             issuer = %iss,
                             error = %e,
-                            "Per-org JWT registry lookup failed, falling through to global"
+                            "Per-org JWT registry lookup failed"
                         );
                         Vec::new()
                     }
@@ -1626,9 +1792,6 @@ async fn try_jwt_api_auth(
             } else {
                 registry.find_validators_by_issuer(&iss).await
             };
-
-            #[cfg(not(feature = "sso"))]
-            let validators = registry.find_validators_by_issuer(&iss).await;
 
             // Try each matching validator; first success wins.
             // Disambiguation for shared-issuer orgs works naturally: each validator
@@ -1653,22 +1816,14 @@ async fn try_jwt_api_auth(
         }
     }
 
-    // Fall back to global JWT config (from [auth.gateway.jwt]).
-    // The global validator is built at startup in main.rs.
-    let Some(validator) = state.global_jwt_validator.clone() else {
-        // No per-org match and no global JWT config — not a JWT we can validate
-        return Ok(None);
-    };
-
-    let claims = validator.validate(token).await?;
-
-    build_jwt_identity(&claims, &validator, state, None)
-        .await
-        .map(Some)
+    // No per-org match — not a JWT we can validate.
+    // In the new AuthMode system, JWT is only available via per-org GatewayJwtRegistry.
+    Ok(None)
 }
 
 /// Decode the `iss` claim from a JWT without verifying the signature.
 /// This is a cheap base64 decode of the payload used for routing to the right validator.
+#[cfg(any(feature = "sso", test))]
 fn decode_jwt_issuer(token: &str) -> Option<String> {
     use base64::Engine;
 
@@ -1687,6 +1842,7 @@ fn decode_jwt_issuer(token: &str) -> Option<String> {
 }
 
 /// Build an `Identity` from validated JWT claims. Shared by per-org and global paths.
+#[cfg(feature = "sso")]
 async fn build_jwt_identity(
     claims: &crate::auth::jwt::JwtClaims,
     validator: &crate::auth::jwt::JwtValidator,
@@ -1772,9 +1928,9 @@ async fn build_jwt_identity(
 
 fn extract_groups(
     headers: &axum::http::HeaderMap,
-    ui_config: &Option<crate::config::AdminAuthConfig>,
+    iap_config: Option<&crate::config::IapConfig>,
 ) -> Vec<String> {
-    if let Some(crate::config::AdminAuthConfig::ProxyAuth(config)) = ui_config
+    if let Some(config) = iap_config
         && let Some(header_name) = &config.groups_header
         && let Some(value) = headers.get(header_name).and_then(|v| v.to_str().ok())
     {
@@ -1788,20 +1944,16 @@ fn extract_groups(
 
 fn extract_header(
     headers: &axum::http::HeaderMap,
-    ui_config: &Option<crate::config::AdminAuthConfig>,
+    iap_config: Option<&crate::config::IapConfig>,
     field: &str,
 ) -> Option<String> {
-    if let Some(crate::config::AdminAuthConfig::ProxyAuth(config)) = ui_config {
-        let header_name = match field {
-            "email" => config.email_header.as_ref()?,
-            "name" => config.name_header.as_ref()?,
-            _ => return None,
-        };
-
-        headers.get(header_name)?.to_str().ok().map(String::from)
-    } else {
-        None
-    }
+    let config = iap_config?;
+    let header_name = match field {
+        "email" => config.email_header.as_ref()?,
+        "name" => config.name_header.as_ref()?,
+        _ => return None,
+    };
+    headers.get(header_name)?.to_str().ok().map(String::from)
 }
 
 /// Log a budget exceeded event to the audit log (fire-and-forget)
@@ -2048,33 +2200,25 @@ mod tests {
     use tokio_util::task::TaskTracker;
 
     use super::*;
-    use crate::config::{
-        ApiKeyAuthConfig, GatewayAuthConfig, GatewayConfig, HashAlgorithm, JwtAuthConfig,
-        MultiAuthConfig, OneOrMany,
-    };
+    use crate::config::{ApiKeyAuthConfig, AuthMode, GatewayConfig, HashAlgorithm};
 
-    /// Create AppState with multi-auth configuration
+    /// Create AppState with Idp configuration
     fn create_multi_auth_state(header_name: &str, key_prefix: &str) -> AppState {
         let mut config = GatewayConfig::from_str("").unwrap();
-        config.auth.gateway = GatewayAuthConfig::Multi(MultiAuthConfig {
-            api_key: ApiKeyAuthConfig {
-                header_name: header_name.to_string(),
-                key_prefix: key_prefix.to_string(),
-                generation_prefix: None,
-                hash_algorithm: HashAlgorithm::default(),
-                cache_ttl_secs: 300,
-            },
-            jwt: Some(JwtAuthConfig {
-                issuer: "https://auth.example.com".to_string(),
-                jwks_url: "https://auth.example.com/.well-known/jwks.json".to_string(),
-                audience: OneOrMany::One("hadrian".to_string()),
-                identity_claim: "sub".to_string(),
-                org_claim: None,
-                additional_claims: Vec::new(),
-                allow_expired: false,
-                allowed_algorithms: Vec::new(),
-                jwks_refresh_secs: 3600,
-            }),
+        #[cfg(feature = "sso")]
+        {
+            config.auth.mode = AuthMode::Idp;
+        }
+        #[cfg(not(feature = "sso"))]
+        {
+            config.auth.mode = AuthMode::ApiKey;
+        }
+        config.auth.api_key = Some(ApiKeyAuthConfig {
+            header_name: header_name.to_string(),
+            key_prefix: key_prefix.to_string(),
+            generation_prefix: None,
+            hash_algorithm: HashAlgorithm::default(),
+            cache_ttl_secs: 300,
         });
 
         AppState {
@@ -2089,13 +2233,10 @@ mod tests {
             provider_health: crate::jobs::ProviderHealthStateRegistry::new(),
             task_tracker: TaskTracker::new(),
             #[cfg(feature = "sso")]
-            oidc_authenticator: None,
-            #[cfg(feature = "sso")]
             oidc_registry: None,
             #[cfg(feature = "saml")]
             saml_registry: None,
             gateway_jwt_registry: None,
-            global_jwt_validator: None,
             policy_registry: None,
             usage_buffer: None,
             response_cache: None,
@@ -2122,7 +2263,8 @@ mod tests {
     /// Create AppState with API key only authentication
     fn create_api_key_only_state(header_name: &str, key_prefix: &str) -> AppState {
         let mut config = GatewayConfig::from_str("").unwrap();
-        config.auth.gateway = GatewayAuthConfig::ApiKey(ApiKeyAuthConfig {
+        config.auth.mode = AuthMode::ApiKey;
+        config.auth.api_key = Some(ApiKeyAuthConfig {
             header_name: header_name.to_string(),
             key_prefix: key_prefix.to_string(),
             generation_prefix: None,
@@ -2142,13 +2284,10 @@ mod tests {
             provider_health: crate::jobs::ProviderHealthStateRegistry::new(),
             task_tracker: TaskTracker::new(),
             #[cfg(feature = "sso")]
-            oidc_authenticator: None,
-            #[cfg(feature = "sso")]
             oidc_registry: None,
             #[cfg(feature = "saml")]
             saml_registry: None,
             gateway_jwt_registry: None,
-            global_jwt_validator: None,
             policy_registry: None,
             usage_buffer: None,
             response_cache: None,
@@ -2183,11 +2322,12 @@ mod tests {
         map
     }
 
-    // ========== Multi-auth ambiguous credentials tests ==========
+    // ========== Idp mode ambiguous credentials tests ==========
 
+    #[cfg(feature = "sso")]
     #[tokio::test]
-    async fn test_multi_auth_ambiguous_credentials_rejected() {
-        // In multi-auth mode, providing both X-API-Key and Authorization headers
+    async fn test_idp_auth_ambiguous_credentials_rejected() {
+        // In Idp mode, providing both X-API-Key and Authorization headers
         // should be rejected as ambiguous
         let state = create_multi_auth_state("X-API-Key", "gw_");
         let headers = make_headers(vec![
@@ -2198,14 +2338,15 @@ mod tests {
             ),
         ]);
 
-        let result = try_authenticate(&headers, None, &state).await;
+        let result = try_authenticate(&headers, None, None, &state).await;
 
         assert!(result.is_err());
         assert!(matches!(result, Err(AuthError::AmbiguousCredentials)));
     }
 
+    #[cfg(feature = "sso")]
     #[tokio::test]
-    async fn test_multi_auth_custom_header_ambiguous_credentials_rejected() {
+    async fn test_idp_auth_custom_header_ambiguous_credentials_rejected() {
         // Ambiguous credentials check should respect custom header name
         let state = create_multi_auth_state("Api-Key", "hadrian_");
         let headers = make_headers(vec![
@@ -2213,15 +2354,15 @@ mod tests {
             ("Authorization", "Bearer some.jwt.token"),
         ]);
 
-        let result = try_authenticate(&headers, None, &state).await;
+        let result = try_authenticate(&headers, None, None, &state).await;
 
         assert!(result.is_err());
         assert!(matches!(result, Err(AuthError::AmbiguousCredentials)));
     }
 
     #[tokio::test]
-    async fn test_non_multi_auth_allows_both_headers() {
-        // In non-multi-auth mode (API key only), having both headers is not rejected
+    async fn test_non_idp_allows_both_headers() {
+        // In non-idp mode (API key only), having both headers is not rejected
         // (Authorization header is simply ignored)
         let state = create_api_key_only_state("X-API-Key", "gw_");
         let headers = make_headers(vec![
@@ -2231,7 +2372,7 @@ mod tests {
 
         // This won't return AmbiguousCredentials error
         // (will fail later due to missing DB, but that's expected)
-        let result = try_authenticate(&headers, None, &state).await;
+        let result = try_authenticate(&headers, None, None, &state).await;
 
         // Should not be AmbiguousCredentials - it should be a different error
         // (InvalidApiKey since DB lookup fails)
@@ -2299,6 +2440,7 @@ mod tests {
         assert!(result.unwrap().is_none());
     }
 
+    #[cfg(feature = "sso")]
     #[tokio::test]
     async fn test_try_jwt_api_auth_skips_api_key_format() {
         // JWT handler should skip tokens that have API key prefix
@@ -2402,7 +2544,7 @@ mod tests {
         let state = create_multi_auth_state("X-API-Key", "gw_");
         let headers = make_headers(vec![]);
 
-        let result = try_authenticate(&headers, None, &state).await;
+        let result = try_authenticate(&headers, None, None, &state).await;
 
         assert!(result.is_err());
         assert!(matches!(result, Err(AuthError::MissingCredentials)));
@@ -2417,7 +2559,7 @@ mod tests {
             ("Accept", "application/json"),
         ]);
 
-        let result = try_authenticate(&headers, None, &state).await;
+        let result = try_authenticate(&headers, None, None, &state).await;
 
         assert!(result.is_err());
         assert!(matches!(result, Err(AuthError::MissingCredentials)));

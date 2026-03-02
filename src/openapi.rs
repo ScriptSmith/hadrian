@@ -21,7 +21,7 @@ use crate::{
 
 The gateway provides two main API surfaces:
 
-- **Public API** (`/api/v1/*`) - OpenAI-compatible endpoints for LLM inference. Use these endpoints to create chat completions, text completions, embeddings, and list available models. Requires API key authentication.
+- **Public API** (`/api/v1/*`) - OpenAI-compatible endpoints for LLM inference. Use these endpoints to create chat completions, text completions, embeddings, and list available models. Authentication depends on the configured `auth.mode` (API key, IdP, IAP, or none).
 
 - **Admin API** (`/admin/v1/*`) - RESTful management endpoints for multi-tenant configuration. Manage organizations, projects, users, API keys, dynamic providers, usage tracking, and model pricing.
 
@@ -108,36 +108,34 @@ curl -H \"Authorization: Bearer eyJhbGciOiJSUzI1NiIs...\" https://gateway.exampl
 
 **API Key Authentication:**
 ```toml
-[auth.gateway]
+[auth.mode]
 type = \"api_key\"
+
+[auth.api_key]
 header_name = \"X-API-Key\"    # Header to read API key from
 key_prefix = \"gw_\"           # Valid key prefix
 cache_ttl_secs = 60           # Cache key lookups for 60 seconds
 ```
 
-**JWT Authentication:**
+**IdP Authentication (SSO + API keys + JWT):**
 ```toml
-[auth.gateway]
-type = \"jwt\"
-issuer = \"https://auth.example.com\"
-audience = \"gateway-api\"
-jwks_url = \"https://auth.example.com/.well-known/jwks.json\"
-identity_claim = \"sub\"       # JWT claim for user identity
-```
+[auth.mode]
+type = \"idp\"
 
-**Multi-Auth (both API key and JWT):**
-```toml
-[auth.gateway]
-type = \"multi\"
-
-[auth.gateway.api_key]
+[auth.api_key]
 header_name = \"X-API-Key\"
 key_prefix = \"gw_\"
 
-[auth.gateway.jwt]
-issuer = \"https://auth.example.com\"
-audience = \"gateway-api\"
-jwks_url = \"https://auth.example.com/.well-known/jwks.json\"
+[auth.session]
+secure = true
+```
+
+**Identity-Aware Proxy (IAP):**
+```toml
+[auth.mode]
+type = \"iap\"
+identity_header = \"X-Forwarded-User\"
+email_header = \"X-Forwarded-Email\"
 ```
 
 ## Pagination

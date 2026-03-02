@@ -51,8 +51,6 @@ use tower_cookies::Cookies;
 #[cfg(feature = "sso")]
 use uuid::Uuid;
 
-#[cfg(feature = "sso")]
-use crate::config::AdminAuthConfig;
 use crate::{
     AppState,
     auth::{AuthError, Identity},
@@ -184,7 +182,7 @@ async fn authenticate_ws(
 
     // Allow unauthenticated connections if require_auth is false
     // (for development or when auth is handled externally)
-    if state.config.auth.admin.is_none() && !state.config.auth.gateway.is_enabled() {
+    if !state.config.auth.is_auth_enabled() {
         return Ok(None);
     }
 
@@ -197,14 +195,8 @@ async fn authenticate_with_api_key(
     token: &str,
     state: &AppState,
 ) -> Result<Option<Identity>, AuthError> {
-    use crate::config::GatewayAuthConfig;
-
     // Get key prefix from config
-    let key_prefix = match &state.config.auth.gateway {
-        GatewayAuthConfig::ApiKey(config) => config.key_prefix.as_str(),
-        GatewayAuthConfig::Multi(config) => config.api_key.key_prefix.as_str(),
-        _ => "gw_", // Default for non-API-key auth modes
-    };
+    let key_prefix = state.config.auth.api_key_config().key_prefix.as_str();
 
     // Validate key prefix
     if !has_valid_prefix(token, key_prefix) {
@@ -307,14 +299,14 @@ async fn try_session_auth(
     cookies: Option<&Cookies>,
     state: &AppState,
 ) -> Result<Option<Identity>, AuthError> {
-    let authenticator = match &state.oidc_authenticator {
-        Some(auth) => auth,
+    let registry = match &state.oidc_registry {
+        Some(registry) => registry,
         None => return Ok(None),
     };
 
-    let session_config = match &state.config.auth.admin {
-        Some(AdminAuthConfig::Session(config)) => config,
-        _ => return Ok(None),
+    let session_config = match state.config.auth.session_config() {
+        Some(config) => config,
+        None => return Ok(None),
     };
 
     let cookies = match cookies {
@@ -332,7 +324,17 @@ async fn try_session_auth(
         .parse()
         .map_err(|_| AuthError::InvalidToken)?;
 
-    let session = authenticator.get_session(session_id).await?;
+    let session = crate::auth::session_store::validate_and_refresh_session(
+        registry.session_store().as_ref(),
+        session_id,
+        &session_config.enhanced,
+    )
+    .await
+    .map_err(|e| match e {
+        crate::auth::session_store::SessionError::NotFound => AuthError::SessionNotFound,
+        crate::auth::session_store::SessionError::Expired => AuthError::SessionExpired,
+        _ => AuthError::Internal(format!("Session error: {}", e)),
+    })?;
 
     // Look up internal user ID
     let user_id = if let Some(db) = &state.db {

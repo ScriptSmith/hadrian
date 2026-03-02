@@ -6,7 +6,9 @@
 
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use tokio::sync::{Mutex, RwLock};
+#[cfg(feature = "sso")]
+use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use super::jwt::JwtValidator;
@@ -15,10 +17,12 @@ use crate::config::JwtAuthConfig;
 
 /// How long to cache "no SSO config exists for this issuer" results.
 /// Prevents repeated DB queries from JWTs with unknown/attacker-controlled issuers.
+#[cfg(feature = "sso")]
 const NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Maximum number of negative cache entries before eviction kicks in.
 /// Prevents unbounded memory growth from attacker-controlled JWT issuers.
+#[cfg(feature = "sso")]
 const MAX_NEGATIVE_CACHE_ENTRIES: usize = 10_000;
 
 /// Internal state behind the single `RwLock`.
@@ -36,6 +40,7 @@ pub struct GatewayJwtRegistry {
     inner: RwLock<RegistryInner>,
     /// Serializes lazy-load operations to prevent thundering herd on cache miss.
     /// Only held during DB query + OIDC discovery for unknown issuers.
+    #[cfg(feature = "sso")]
     load_mutex: Mutex<()>,
 }
 
@@ -48,6 +53,7 @@ impl GatewayJwtRegistry {
                 issuer_index: HashMap::new(),
                 negative_cache: HashMap::new(),
             }),
+            #[cfg(feature = "sso")]
             load_mutex: Mutex::new(()),
         }
     }
@@ -62,6 +68,7 @@ impl GatewayJwtRegistry {
         config: &crate::models::OrgSsoConfig,
         http_client: &reqwest::Client,
         allow_loopback: bool,
+        allow_private: bool,
     ) -> Result<(), super::AuthError> {
         use super::AuthError;
 
@@ -77,7 +84,9 @@ impl GatewayJwtRegistry {
         // Determine the discovery URL
         let discovery_url = config.discovery_url.as_deref().unwrap_or(issuer);
 
-        let jwks_url = super::fetch_jwks_uri(discovery_url, http_client, allow_loopback).await?;
+        let jwks_url =
+            super::fetch_jwks_uri(discovery_url, http_client, allow_loopback, allow_private)
+                .await?;
         let jwt_config = build_jwt_config_from_sso(issuer, client_id, &jwks_url, config);
         let validator = Arc::new(JwtValidator::with_client(jwt_config, http_client.clone()));
 
@@ -130,6 +139,7 @@ impl GatewayJwtRegistry {
         db: &crate::db::DbPool,
         http_client: &reqwest::Client,
         allow_loopback: bool,
+        allow_private: bool,
     ) -> Result<Vec<(Uuid, Arc<JwtValidator>)>, super::AuthError> {
         // Fast path: already cached
         let validators = self.find_validators_by_issuer(issuer).await;
@@ -199,7 +209,7 @@ impl GatewayJwtRegistry {
 
         for config in &configs {
             if let Err(e) = self
-                .register_from_sso_config(config, http_client, allow_loopback)
+                .register_from_sso_config(config, http_client, allow_loopback, allow_private)
                 .await
             {
                 tracing::warn!(

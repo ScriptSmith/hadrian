@@ -319,7 +319,7 @@ fn check_resource_access(
 }
 
 /// Check resource access with optional authentication.
-/// When auth is None (e.g., auth.gateway.type = "none"), access is allowed.
+/// When auth is None (e.g., auth.mode.type = "none"), access is allowed.
 fn check_resource_access_optional(
     auth: Option<&AuthenticatedRequest>,
     owner_type: VectorStoreOwnerType,

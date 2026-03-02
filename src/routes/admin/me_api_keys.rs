@@ -17,11 +17,9 @@ use super::{
 };
 use crate::{
     AppState,
-    config::GatewayAuthConfig,
     middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{
         ApiKey, ApiKeyOwner, CreateApiKey, CreateAuditLog, CreateSelfServiceApiKey, CreatedApiKey,
-        DEFAULT_API_KEY_PREFIX,
     },
     openapi::PaginationMeta,
     services::Services,
@@ -170,11 +168,7 @@ pub async fn create(
     }
 
     // Get the key generation prefix from config
-    let prefix = match &state.config.auth.gateway {
-        GatewayAuthConfig::ApiKey(config) => config.generation_prefix(),
-        GatewayAuthConfig::Multi(config) => config.api_key.generation_prefix(),
-        _ => DEFAULT_API_KEY_PREFIX.to_string(),
-    };
+    let prefix = state.config.auth.api_key_config().generation_prefix();
 
     let create_input = CreateApiKey {
         name: input.name,
@@ -329,11 +323,7 @@ pub async fn rotate(
     }
 
     // Get the key generation prefix from config
-    let prefix = match &state.config.auth.gateway {
-        GatewayAuthConfig::ApiKey(config) => config.generation_prefix(),
-        GatewayAuthConfig::Multi(config) => config.api_key.generation_prefix(),
-        _ => DEFAULT_API_KEY_PREFIX.to_string(),
-    };
+    let prefix = state.config.auth.api_key_config().generation_prefix();
 
     // Perform the rotation
     let created = services

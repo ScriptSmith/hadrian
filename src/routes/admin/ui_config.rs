@@ -4,8 +4,8 @@ use serde::Serialize;
 use crate::{
     AppState,
     config::{
-        AdminAuthConfig, AdminConfig, BrandingConfig, ChatConfig, ColorPalette, CustomFont,
-        FontsConfig, LoginConfig, UiConfig,
+        AdminConfig, AuthMode, BrandingConfig, ChatConfig, ColorPalette, CustomFont, FontsConfig,
+        LoginConfig, UiConfig,
     },
 };
 
@@ -254,25 +254,24 @@ pub async fn get_ui_config(State(state): State<AppState>) -> Json<UiConfigRespon
     // Add auth methods based on configuration
     let mut auth_methods = Vec::new();
 
-    // Add UI auth method if configured
-    // Note: When a dedicated UI auth method is configured (OIDC, ProxyAuth),
-    // we don't expose api_key as a login option. API keys are for programmatic
-    // API access, not for interactive UI login.
-    if let Some(ref ui_auth) = state.config.auth.admin {
-        match ui_auth {
-            AdminAuthConfig::None => {
-                // Explicit no-auth for UI
-                // Fall through to check if API key auth should be offered
-            }
-            #[cfg(feature = "sso")]
-            AdminAuthConfig::Session(_) => {
-                // Session-only auth - users authenticate via per-org SSO
-                // The frontend should show email discovery to determine which org's IdP to use
-                auth_methods.push("session".to_string());
-            }
-            AdminAuthConfig::ProxyAuth(_) => {
-                auth_methods.push("header".to_string());
-            }
+    // Add auth methods based on the configured auth mode
+    match &state.config.auth.mode {
+        AuthMode::None => {
+            // No auth - fall through to "none" below
+        }
+        AuthMode::ApiKey => {
+            // API key mode - offer API key login for admin panel
+            auth_methods.push("api_key".to_string());
+        }
+        #[cfg(feature = "sso")]
+        AuthMode::Idp => {
+            // IdP mode - users authenticate via per-org SSO
+            // The frontend should show email discovery to determine which org's IdP to use
+            auth_methods.push("session".to_string());
+        }
+        AuthMode::Iap(_) => {
+            // IAP mode - reverse proxy handles auth
+            auth_methods.push("header".to_string());
         }
     }
 
@@ -287,12 +286,6 @@ pub async fn get_ui_config(State(state): State<AppState>) -> Json<UiConfigRespon
             .unwrap_or(false)
     {
         auth_methods.push("per_org_sso".to_string());
-    }
-
-    // Only offer API key login if no dedicated UI auth method is configured
-    // API keys are intended for programmatic API access, not interactive UI login
-    if auth_methods.is_empty() && state.config.auth.gateway.is_enabled() {
-        auth_methods.push("api_key".to_string());
     }
 
     // If no auth is configured at all, allow unauthenticated access

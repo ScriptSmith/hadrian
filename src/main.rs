@@ -322,10 +322,6 @@ pub struct AppState {
     /// Task tracker for background tasks (usage logging, etc.)
     /// Ensures all spawned tasks complete during graceful shutdown.
     pub task_tracker: TaskTracker,
-    /// Shared OIDC authenticator (if global OIDC auth is configured in config file).
-    /// This holds the session store which persists across requests.
-    #[cfg(feature = "sso")]
-    pub oidc_authenticator: Option<Arc<auth::OidcAuthenticator>>,
     /// Registry of per-organization OIDC authenticators.
     /// Loaded from org_sso_configs table at startup for multi-tenant SSO.
     #[cfg(feature = "sso")]
@@ -337,9 +333,6 @@ pub struct AppState {
     /// Registry of per-org gateway JWT validators.
     /// Routes incoming JWTs to the correct org-scoped validator by issuer.
     pub gateway_jwt_registry: Option<Arc<auth::GatewayJwtRegistry>>,
-    /// Cached global JWT validator (from [auth.gateway.jwt] config).
-    /// Created once at startup so the JWKS cache is reused across requests.
-    pub global_jwt_validator: Option<Arc<auth::jwt::JwtValidator>>,
     /// Registry of per-organization RBAC policies.
     /// Loaded from org_rbac_policies table at startup for per-org authorization.
     pub policy_registry: Option<Arc<authz::PolicyRegistry>>,
@@ -677,15 +670,12 @@ impl AppState {
         // Get session config from UI auth config
         // Note: Global OIDC config has been removed. Session config is used for per-org SSO.
         #[cfg(feature = "sso")]
-        let session_config = match &config.auth.admin {
-            Some(config::AdminAuthConfig::Session(config)) => config.clone(),
-            _ => config::SessionConfig::default(),
-        };
+        let session_config = config.auth.session.clone().unwrap_or_default();
 
         // Initialize per-org OIDC authenticator registry from database
         // This replaces the global OIDC authenticator
         #[cfg(feature = "sso")]
-        let (oidc_authenticator, oidc_registry) = if let Some(ref svc) = services {
+        let oidc_registry = if let Some(ref svc) = services {
             // Create session store for org authenticators (shared across all orgs)
             let enhanced = session_config.enhanced.enabled;
             let session_store = auth::create_session_store_with_enhanced(cache.clone(), enhanced);
@@ -713,7 +703,7 @@ impl AppState {
                         tracing::debug!("Per-org SSO registry initialized (empty, will lazy load)");
                     }
                     // Always create the registry to support lazy loading from database
-                    (None, Some(Arc::new(registry)))
+                    Some(Arc::new(registry))
                 }
                 Err(e) => {
                     // Create an empty registry instead of None - this allows lazy loading
@@ -728,11 +718,11 @@ impl AppState {
                         default_session_config,
                         default_redirect_uri,
                     );
-                    (None, Some(Arc::new(empty_registry)))
+                    Some(Arc::new(empty_registry))
                 }
             }
         } else {
-            (None, None)
+            None
         };
 
         // Initialize per-org SAML authenticator registry from database
@@ -793,20 +783,6 @@ impl AppState {
             Some(Arc::new(auth::GatewayJwtRegistry::new()))
         } else {
             None
-        };
-
-        // Build the global JWT validator (if [auth.gateway.jwt] is configured)
-        let global_jwt_validator = match &config.auth.gateway {
-            config::GatewayAuthConfig::Jwt(jwt_config) => Some(Arc::new(
-                auth::jwt::JwtValidator::with_client(jwt_config.clone(), http_client.clone()),
-            )),
-            config::GatewayAuthConfig::Multi(multi) => multi.jwt.as_ref().map(|jwt_config| {
-                Arc::new(auth::jwt::JwtValidator::with_client(
-                    jwt_config.clone(),
-                    http_client.clone(),
-                ))
-            }),
-            _ => None,
         };
 
         // Initialize per-org RBAC policy registry from database
@@ -1002,7 +978,7 @@ impl AppState {
         );
 
         // Create default user and organization when auth is disabled (for anonymous access)
-        let (default_user_id, default_org_id) = if config.auth.admin.is_none() {
+        let (default_user_id, default_org_id) = if !config.auth.is_auth_enabled() {
             if let Some(ref svc) = services {
                 let user_id = match Self::ensure_default_user(svc).await {
                     Ok(id) => {
@@ -1090,13 +1066,10 @@ impl AppState {
             provider_health: jobs::ProviderHealthStateRegistry::new(),
             task_tracker,
             #[cfg(feature = "sso")]
-            oidc_authenticator,
-            #[cfg(feature = "sso")]
             oidc_registry,
             #[cfg(feature = "saml")]
             saml_registry,
             gateway_jwt_registry,
-            global_jwt_validator,
             policy_registry,
             usage_buffer,
             response_cache,
@@ -1978,6 +1951,17 @@ enum Command {
     /// Useful for Kubernetes init containers or CI/CD pipelines.
     /// Connects to the database, runs any pending migrations, and exits.
     Migrate,
+    /// Bootstrap organizations, SSO configs, and API keys from config.
+    ///
+    /// Reads [auth.bootstrap] from hadrian.toml and creates the initial org,
+    /// SSO configuration, auto-verified domains, and API key. Idempotent:
+    /// safe to run repeatedly (skips resources that already exist).
+    /// Operates directly against the database (no HTTP server needed).
+    Bootstrap {
+        /// Preview changes without applying them.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Show enabled compile-time features
     Features,
 }
@@ -2142,9 +2126,9 @@ pub fn build_app(config: &config::GatewayConfig, state: AppState) -> Router {
         );
         app = app.nest("/admin", public_admin_routes);
 
-        // Use protected routes if UI auth is configured, otherwise unprotected
-        // (for development or when using external auth proxy)
-        if config.auth.admin.is_some() {
+        // Use protected routes if admin auth is configured (Idp/Iap modes), otherwise
+        // unprotected (for local development with auth.mode = "none")
+        if config.auth.requires_admin_auth() {
             // Apply middleware in order: admin_auth_middleware runs first,
             // then authz_middleware runs second (layers are applied in reverse order)
             // IP rate limiting runs before auth for defense in depth
@@ -2164,7 +2148,7 @@ pub fn build_app(config: &config::GatewayConfig, state: AppState) -> Router {
             app = app.merge(Router::new().nest("/admin", admin_routes));
         } else {
             tracing::warn!(
-                "Admin routes are UNPROTECTED - configure auth.admin for Zero Trust or OIDC authentication"
+                "Admin routes are UNPROTECTED - configure auth.mode type = \"api_key\", \"idp\", or \"iap\" for authentication"
             );
             // Apply permissive authz middleware so handlers can still require AuthzContext
             // (fail-closed pattern) but authorization checks will always pass
@@ -2186,22 +2170,20 @@ pub fn build_app(config: &config::GatewayConfig, state: AppState) -> Router {
     // SSO routes are added when Session auth is configured or per-org SSO registries exist
     #[cfg(feature = "sso")]
     {
-        let has_session_auth = matches!(
-            &config.auth.admin,
-            Some(config::AdminAuthConfig::Session(_))
-        );
+        let has_session_auth = config.auth.requires_session();
         let has_oidc_registry = state.oidc_registry.is_some();
         #[cfg(feature = "saml")]
         let has_saml = state.saml_registry.is_some();
         #[cfg(not(feature = "saml"))]
         let has_saml = false;
 
-        // When auth is fully disabled (no UI auth, API auth is none), always use permissive
-        // middleware for /auth/me. The OIDC registry is always created when a database exists
-        // (to support lazy loading), so has_oidc_registry alone doesn't mean SSO is configured.
-        let auth_disabled = config.auth.admin.is_none() && !config.auth.gateway.is_enabled();
+        // Use admin auth middleware for /auth/me when the auth mode supports
+        // admin authentication (ApiKey/Idp/Iap). Only None mode leaves admin unprotected.
+        // The OIDC registry is always created when a database exists (to support lazy
+        // loading), so has_oidc_registry alone doesn't mean SSO is configured.
+        let has_admin_auth = config.auth.requires_admin_auth();
 
-        if !auth_disabled && (has_session_auth || has_oidc_registry || has_saml) {
+        if has_admin_auth && (has_session_auth || has_oidc_registry || has_saml) {
             // When SSO is configured, /auth/me uses admin middleware
             let me_route =
                 get(routes::auth_routes::me).route_layer(axum::middleware::from_fn_with_state(
@@ -2210,7 +2192,10 @@ pub fn build_app(config: &config::GatewayConfig, state: AppState) -> Router {
                 ));
 
             if has_session_auth || has_oidc_registry {
-                // Build OIDC auth routes with IP rate limiting
+                // Build OIDC auth routes with IP rate limiting.
+                // /me is added AFTER route_layer so it gets admin auth (from me_route)
+                // but NOT rate limiting. This also avoids Axum routing conflicts between
+                // nest("/auth") and route("/auth/me").
                 let auth_routes = Router::new()
                     .route("/login", get(routes::auth_routes::login))
                     .route("/callback", get(routes::auth_routes::callback))
@@ -2218,9 +2203,10 @@ pub fn build_app(config: &config::GatewayConfig, state: AppState) -> Router {
                     .route_layer(axum::middleware::from_fn_with_state(
                         state.clone(),
                         middleware::rate_limit_middleware,
-                    ));
+                    ))
+                    .route("/me", me_route);
 
-                app = app.nest("/auth", auth_routes).route("/auth/me", me_route);
+                app = app.nest("/auth", auth_routes);
             } else {
                 // SAML-only: just add /auth/me with admin middleware
                 app = app.route("/auth/me", me_route);
@@ -2375,6 +2361,9 @@ async fn main() {
         }
         Some(Command::Migrate) => {
             run_migrate(args.config.as_deref()).await;
+        }
+        Some(Command::Bootstrap { dry_run }) => {
+            run_bootstrap(args.config.as_deref(), dry_run).await;
         }
         Some(Command::Features) => {
             run_features();
@@ -2765,26 +2754,26 @@ async fn run_server(explicit_config_path: Option<&str>, no_browser: bool) {
     );
 
     // Emit startup security warnings for insecure configurations
-    if let Some(crate::config::AdminAuthConfig::ProxyAuth(_)) = &config.auth.admin
+    if matches!(config.auth.mode, crate::config::AuthMode::Iap(_))
         && !config.server.trusted_proxies.is_configured()
     {
         tracing::warn!(
-            "SECURITY RISK: Proxy auth is enabled but no trusted_proxies are configured. \
+            "SECURITY RISK: IAP auth is enabled but no trusted_proxies are configured. \
              Anyone can spoof identity headers by connecting directly to the gateway. \
              Configure [server.trusted_proxies] with your reverse proxy's CIDR ranges."
         );
     }
-    if config.auth.admin.is_none() {
+    if !config.auth.is_auth_enabled() {
         tracing::warn!(
-            "No authentication configured for admin routes — admin routes use permissive \
-             authorization. Configure auth.admin in hadrian.toml for production deployments."
+            "No authentication configured — all routes use permissive authorization. \
+             Configure [auth.mode] in hadrian.toml for production deployments."
         );
         if !config.server.host.is_loopback() {
             tracing::error!(
                 bind_address = %config.server.host,
-                "Gateway is bound to a non-localhost address without admin authentication. \
-                 Admin routes are accessible to anyone who can reach this address. \
-                 Configure auth.admin in hadrian.toml or bind to 127.0.0.1 for local-only access."
+                "Gateway is bound to a non-localhost address without authentication. \
+                 All routes are accessible to anyone who can reach this address. \
+                 Configure [auth.mode] in hadrian.toml or bind to 127.0.0.1 for local-only access."
             );
         }
     }
@@ -2847,6 +2836,7 @@ async fn run_server(explicit_config_path: Option<&str>, no_browser: bool) {
     if let (Some(registry), Some(db)) = (state.gateway_jwt_registry.clone(), state.db.clone()) {
         let http_client = state.http_client.clone();
         let allow_loopback = config.server.allow_loopback_urls;
+        let allow_private = config.server.allow_private_urls;
         state.task_tracker.spawn(async move {
             let configs = match db.org_sso_configs().list_enabled().await {
                 Ok(c) => c,
@@ -2877,7 +2867,12 @@ async fn run_server(explicit_config_path: Option<&str>, no_browser: bool) {
                     let http_client = &http_client;
                     async move {
                         if let Err(e) = registry
-                            .register_from_sso_config(&cfg.config, http_client, allow_loopback)
+                            .register_from_sso_config(
+                                &cfg.config,
+                                http_client,
+                                allow_loopback,
+                                allow_private,
+                            )
                             .await
                         {
                             tracing::warn!(
@@ -3041,6 +3036,14 @@ async fn run_server(explicit_config_path: Option<&str>, no_browser: bool) {
 
     // Format to prepend with http://
     tracing::info!("Server listening on http://{}", bind_addr);
+
+    if config.server.allow_loopback_urls || config.server.allow_private_urls {
+        tracing::info!(
+            allow_loopback = config.server.allow_loopback_urls,
+            allow_private = config.server.allow_private_urls,
+            "SSRF validation relaxed for development/Docker"
+        );
+    }
 
     // Open UI if enabled and not disabled via CLI
     #[cfg(feature = "wizard")]
@@ -3335,6 +3338,417 @@ async fn run_migrate(explicit_config_path: Option<&str>) {
             std::process::exit(1);
         }
     }
+}
+
+/// Initialize a secret manager from the config.
+///
+/// Used by `run_bootstrap` (CLI mode) to initialize a secret manager from config.
+#[cfg(feature = "sso")]
+async fn init_secret_manager(
+    config: &config::GatewayConfig,
+) -> Result<Arc<dyn secrets::SecretManager>, String> {
+    match &config.secrets {
+        config::SecretsConfig::None | config::SecretsConfig::Env => {
+            Ok(Arc::new(secrets::MemorySecretManager::new()))
+        }
+        #[cfg(feature = "vault")]
+        config::SecretsConfig::Vault(vault_config) => {
+            use config::VaultAuth;
+            use secrets::SecretManager;
+
+            let vault_cfg = match &vault_config.auth {
+                VaultAuth::Token { token } => {
+                    secrets::VaultConfig::new(&vault_config.address, token)
+                }
+                VaultAuth::AppRole {
+                    role_id,
+                    secret_id,
+                    auth_mount,
+                } => secrets::VaultConfig::with_approle(
+                    &vault_config.address,
+                    role_id,
+                    secret_id,
+                )
+                .with_auth_mount(auth_mount),
+                VaultAuth::Kubernetes {
+                    role,
+                    token_path,
+                    auth_mount,
+                } => {
+                    let jwt = std::fs::read_to_string(token_path).map_err(|e| {
+                        format!(
+                            "Failed to read Kubernetes ServiceAccount token from '{token_path}': {e}"
+                        )
+                    })?;
+                    secrets::VaultConfig::with_kubernetes(
+                        &vault_config.address,
+                        role,
+                        jwt.trim(),
+                    )
+                    .with_auth_mount(auth_mount)
+                }
+            }
+            .with_mount(&vault_config.mount)
+            .with_path_prefix(&vault_config.path_prefix);
+
+            let manager = secrets::VaultSecretManager::new(vault_cfg)
+                .await
+                .map_err(|e| format!("Failed to create Vault client: {e}"))?;
+
+            manager
+                .health_check()
+                .await
+                .map_err(|e| format!("Vault health check failed: {e}"))?;
+
+            Ok(Arc::new(manager))
+        }
+        #[cfg(feature = "secrets-aws")]
+        config::SecretsConfig::Aws(aws_config) => {
+            use secrets::SecretManager;
+
+            let mut cfg = match &aws_config.region {
+                Some(region) => secrets::AwsSecretsManagerConfig::new(region),
+                None => secrets::AwsSecretsManagerConfig::from_env(),
+            }
+            .with_prefix(&aws_config.prefix);
+
+            if let Some(endpoint_url) = &aws_config.endpoint_url {
+                cfg = cfg.with_endpoint_url(endpoint_url);
+            }
+
+            let manager = secrets::AwsSecretsManager::new(cfg)
+                .await
+                .map_err(|e| format!("Failed to create AWS Secrets Manager client: {e}"))?;
+
+            manager
+                .health_check()
+                .await
+                .map_err(|e| format!("AWS Secrets Manager health check failed: {e}"))?;
+
+            Ok(Arc::new(manager))
+        }
+        #[cfg(feature = "secrets-azure")]
+        config::SecretsConfig::Azure(azure_config) => {
+            use secrets::SecretManager;
+
+            let cfg = secrets::AzureKeyVaultConfig::new(&azure_config.vault_url)
+                .with_prefix(&azure_config.prefix);
+
+            let manager = secrets::AzureKeyVaultManager::new(cfg)
+                .await
+                .map_err(|e| format!("Failed to create Azure Key Vault client: {e}"))?;
+
+            manager
+                .health_check()
+                .await
+                .map_err(|e| format!("Azure Key Vault health check failed: {e}"))?;
+
+            Ok(Arc::new(manager))
+        }
+        #[cfg(feature = "secrets-gcp")]
+        config::SecretsConfig::Gcp(gcp_config) => {
+            use secrets::SecretManager;
+
+            let cfg = secrets::GcpSecretManagerConfig::new(&gcp_config.project_id)
+                .with_prefix(&gcp_config.prefix);
+
+            let manager = secrets::GcpSecretManager::new(cfg)
+                .await
+                .map_err(|e| format!("Failed to create GCP Secret Manager client: {e}"))?;
+
+            manager
+                .health_check()
+                .await
+                .map_err(|e| format!("GCP Secret Manager health check failed: {e}"))?;
+
+            Ok(Arc::new(manager))
+        }
+    }
+}
+
+/// Run the bootstrap command: create initial org, SSO config, and API key from config.
+async fn run_bootstrap(explicit_config_path: Option<&str>, dry_run: bool) {
+    // Resolve config path
+    let (config_path, _) = match resolve_config_path(explicit_config_path) {
+        Ok((path, is_new)) => (path, is_new),
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let config = match config::GatewayConfig::from_file(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to load config from {}: {e}", config_path.display());
+            std::process::exit(1);
+        }
+    };
+
+    let _tracing_guard =
+        observability::init_tracing(&config.observability).expect("Failed to initialize tracing");
+
+    let bootstrap = match &config.auth.bootstrap {
+        Some(b) => b.clone(),
+        None => {
+            eprintln!("Error: No [auth.bootstrap] section in config file.");
+            eprintln!("Add an [auth.bootstrap] section with initial_org and/or initial_api_key.");
+            std::process::exit(1);
+        }
+    };
+
+    if config.database.is_none() {
+        eprintln!("Error: Database is not configured. Bootstrap requires a database.");
+        std::process::exit(1);
+    }
+
+    if dry_run {
+        println!("=== Bootstrap Dry Run ===");
+        println!("Config: {}", config_path.display());
+        if let Some(ref org) = bootstrap.initial_org {
+            println!("  Create org: slug={}, name={}", org.slug, org.name);
+            #[cfg(feature = "sso")]
+            if let Some(ref sso) = org.sso {
+                println!(
+                    "  Configure SSO: provider={}, issuer={}",
+                    sso.provider_type,
+                    sso.issuer.as_deref().unwrap_or("(none)")
+                );
+                if !sso.allowed_email_domains.is_empty() {
+                    println!("  Email domains: {:?}", sso.allowed_email_domains);
+                }
+            }
+            if !org.admin_identities.is_empty() {
+                println!("  Admin identities: {:?}", org.admin_identities);
+            }
+        }
+        if !bootstrap.auto_verify_domains.is_empty() {
+            println!("  Auto-verify domains: {:?}", bootstrap.auto_verify_domains);
+        }
+        if let Some(ref key) = bootstrap.initial_api_key {
+            println!("  Create API key: name={}", key.name);
+        }
+        println!("=== No changes applied (dry run) ===");
+        std::process::exit(0);
+    }
+
+    // Connect to database and run migrations
+    let db = match db::DbPool::from_config(&config.database).await {
+        Ok(pool) => {
+            if let Err(e) = pool.run_migrations().await {
+                eprintln!("Error: Database migrations failed: {e}");
+                std::process::exit(1);
+            }
+            std::sync::Arc::new(pool)
+        }
+        Err(e) => {
+            eprintln!("Error: Failed to connect to database: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let file_storage: std::sync::Arc<dyn services::FileStorage> =
+        std::sync::Arc::new(services::DatabaseFileStorage::new(db.clone()));
+    let max_cel = config.auth.rbac.max_expression_length;
+    let services = services::Services::new(db.clone(), file_storage, max_cel);
+
+    let api_key_prefix = config.auth.api_key_config().generation_prefix();
+    let mut summary = Vec::new();
+
+    // 1. Create org if configured
+    let org_id = if let Some(ref org_config) = bootstrap.initial_org {
+        match services
+            .organizations
+            .create(models::CreateOrganization {
+                slug: org_config.slug.clone(),
+                name: org_config.name.clone(),
+            })
+            .await
+        {
+            Ok(org) => {
+                let msg = format!("Created organization: {} ({})", org.slug, org.id);
+                tracing::info!("{msg}");
+                summary.push(msg);
+                Some(org.id)
+            }
+            Err(db::DbError::Conflict(_)) => {
+                let existing = services
+                    .organizations
+                    .get_by_slug(&org_config.slug)
+                    .await
+                    .unwrap_or(None);
+                if let Some(org) = existing {
+                    let msg = format!("Organization already exists: {} ({})", org.slug, org.id);
+                    tracing::info!("{msg}");
+                    summary.push(msg);
+                    Some(org.id)
+                } else {
+                    eprintln!("Error: Organization conflict but not found by slug");
+                    std::process::exit(1);
+                }
+            }
+            Err(e) => {
+                eprintln!("Error creating organization: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
+    // 2. Configure SSO if specified
+    #[cfg(feature = "sso")]
+    if let Some(ref org_config) = bootstrap.initial_org
+        && let (Some(sso_config), Some(oid)) = (&org_config.sso, org_id)
+    {
+        // Check if SSO config already exists
+        let existing = services.org_sso_configs.get_by_org_id(oid).await;
+        if let Ok(Some(_)) = existing {
+            let msg = format!("SSO config already exists for org {oid}");
+            tracing::info!("{msg}");
+            summary.push(msg);
+        } else {
+            // Initialize secret manager for SSO (reuse same logic as AppState)
+            let secret_manager: std::sync::Arc<dyn secrets::SecretManager> =
+                match init_secret_manager(&config).await {
+                    Ok(sm) => sm,
+                    Err(e) => {
+                        eprintln!("Error initializing secret manager for SSO: {e}");
+                        std::process::exit(1);
+                    }
+                };
+
+            let provider_type = match sso_config.provider_type.as_str() {
+                "saml" => models::SsoProviderType::Saml,
+                _ => models::SsoProviderType::Oidc,
+            };
+
+            let create_input = models::CreateOrgSsoConfig {
+                provider_type,
+                issuer: sso_config.issuer.clone(),
+                discovery_url: sso_config.discovery_url.clone(),
+                client_id: sso_config.client_id.clone(),
+                client_secret: sso_config.client_secret.clone(),
+                redirect_uri: sso_config.redirect_uri.clone(),
+                allowed_email_domains: sso_config.allowed_email_domains.clone(),
+                ..Default::default()
+            };
+
+            match services
+                .org_sso_configs
+                .create(oid, create_input, secret_manager.as_ref())
+                .await
+            {
+                Ok(created) => {
+                    let msg = format!("Created SSO config for org {oid} ({})", created.id);
+                    tracing::info!("{msg}");
+                    summary.push(msg);
+
+                    // Auto-verify domains
+                    for domain in &bootstrap.auto_verify_domains {
+                        if sso_config.allowed_email_domains.contains(domain) {
+                            match services
+                                .domain_verifications
+                                .create_auto_verified(created.id, domain)
+                                .await
+                            {
+                                Ok(_) => {
+                                    let msg = format!("Auto-verified domain: {domain}");
+                                    tracing::info!("{msg}");
+                                    summary.push(msg);
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Failed to auto-verify domain {domain}: {e}");
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error creating SSO config: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    // 3. Create API key if configured
+    if let Some(ref key_config) = bootstrap.initial_api_key {
+        let oid = if let Some(oid) = org_id {
+            oid
+        } else {
+            eprintln!("Error: initial_api_key requires initial_org to be configured.");
+            std::process::exit(1);
+        };
+
+        // Check if key already exists (idempotent)
+        match services
+            .api_keys
+            .get_by_name_and_org(oid, &key_config.name)
+            .await
+        {
+            Ok(Some(existing)) => {
+                let msg = format!(
+                    "API key already exists: {} ({})",
+                    existing.name, existing.id
+                );
+                tracing::info!("{msg}");
+                summary.push(msg);
+            }
+            Ok(None) => {
+                let owner = models::ApiKeyOwner::Organization { org_id: oid };
+                match services
+                    .api_keys
+                    .create(
+                        models::CreateApiKey {
+                            name: key_config.name.clone(),
+                            owner,
+                            budget_limit_cents: None,
+                            budget_period: None,
+                            expires_at: None,
+                            scopes: None,
+                            allowed_models: None,
+                            ip_allowlist: None,
+                            rate_limit_rpm: None,
+                            rate_limit_tpm: None,
+                        },
+                        &api_key_prefix,
+                    )
+                    .await
+                {
+                    Ok(created) => {
+                        let msg = format!(
+                            "Created API key: {} ({})",
+                            created.api_key.name, created.api_key.id
+                        );
+                        tracing::info!("{msg}");
+                        summary.push(msg);
+                        // Print the raw key to stdout (only shown once)
+                        println!("{}", created.key);
+                    }
+                    Err(e) => {
+                        eprintln!("Error creating API key: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Error checking for existing API key: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Print summary
+    eprintln!();
+    eprintln!("=== Bootstrap Summary ===");
+    for line in &summary {
+        eprintln!("  {line}");
+    }
+    if summary.is_empty() {
+        eprintln!("  No changes made (nothing configured in [auth.bootstrap])");
+    }
+    eprintln!("=========================");
 }
 
 #[cfg(any(

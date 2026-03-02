@@ -9,12 +9,19 @@
 # - Single organization with department teams
 #
 # Key architecture points:
+# - allow_private_urls is needed for Docker-internal OIDC discovery
 # - OIDC SSO is configured per-organization via Admin API (not in this config file)
 # - One SSO connection = One organization (all users provisioned into "university" org)
 # - Departments are teams within the university org (cs-faculty, med-research, it-platform, etc.)
 # - subject.org_ids and subject.team_ids come from database memberships, not JWT claims
 # - IdP groups are captured for the group mapping feature (raw paths like /cs/faculty)
 # - Group mappings are configured via Admin API, not parsed from group paths
+
+[server]
+# Allow Docker-internal private IPs for OIDC discovery (Keycloak runs in Docker)
+allow_private_urls = true
+# Keycloak advertises issuer as http://localhost:8080 (host-mapped port)
+allow_loopback_urls = true
 
 [ui]
 enabled = true
@@ -31,33 +38,21 @@ api_key = "gw_test_bootstrap_key_for_e2e"
 auto_verify_domains = ["university.edu"]
 
 # ==============================================================================
-# Session Configuration (for per-org SSO)
+# Auth Mode: IdP (per-org SSO + API keys + JWT)
 # ==============================================================================
 # OIDC authentication is configured per-organization via the Admin API.
-# This section only configures session management for authenticated users.
-# The test setup creates the SSO connection with OIDC settings.
-[auth.admin]
-type = "session"
-secure = false  # For local dev over HTTP
+# Session management for authenticated users is configured below.
+# JWT validation is handled per-org via GatewayJwtRegistry (loaded from SSO config).
+[auth.mode]
+type = "idp"
 
-# ==============================================================================
-# Gateway Authentication
-# ==============================================================================
-# Use multi-auth to support both API keys and JWT tokens
-# Gateway RBAC policies require JWT tokens (roles come from OIDC claims)
-[auth.gateway]
-type = "multi"
-
-[auth.gateway.api_key]
+[auth.api_key]
 header_name = "X-API-Key"
 key_prefix = "gw_"
 cache_ttl_secs = 300
 
-[auth.gateway.jwt]
-issuer = "http://localhost:8080/realms/hadrian"
-jwks_url = "http://keycloak:8080/realms/hadrian/protocol/openid-connect/certs"
-audience = "hadrian-gateway"
-identity_claim = "preferred_username"
+[auth.session]
+secure = false  # For local dev over HTTP
 
 # ==============================================================================
 # RBAC Configuration with CEL Policies

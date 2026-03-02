@@ -28,7 +28,6 @@ use super::{ClientInfo, RequestId};
 use crate::{
     AppState,
     auth::{AuthError, AuthenticatedRequest, Identity, IdentityKind},
-    config::AdminAuthConfig,
     observability::metrics,
     services::audit_logs::{AuthEventParams, auth_events},
 };
@@ -588,6 +587,13 @@ async fn try_admin_auth(
         return Ok(identity);
     }
 
+    // Try API key (for ApiKey mode — admin panel sends key via Authorization/X-API-Key)
+    if matches!(state.config.auth.mode, crate::config::AuthMode::ApiKey)
+        && let Some(identity) = try_api_key_admin_auth(headers, state).await?
+    {
+        return Ok(identity);
+    }
+
     // Try Bearer token (for service accounts / automation via per-org SSO)
     #[cfg(feature = "sso")]
     if let Some(identity) = try_bearer_token_auth(headers, state).await? {
@@ -612,14 +618,151 @@ async fn try_admin_auth(
     }
 
     // No valid authentication found
-    // If OIDC is configured, return a redirect to start the auth flow
+    // If IdP mode is configured and we have a single org with SSO, redirect to its login
     #[cfg(feature = "sso")]
-    if let Some(authenticator) = &state.oidc_authenticator {
-        let (redirect_url, _) = authenticator.authorization_url(None).await?;
-        return Err(AuthError::OidcAuthRequired { redirect_url });
+    if state.config.auth.requires_session()
+        && let Some(registry) = &state.oidc_registry
+    {
+        let org_ids = registry.list_orgs().await;
+        // Only redirect automatically when there's exactly one org (unambiguous)
+        if let [org_id] = org_ids.as_slice()
+            && let Some(authenticator) = registry.get(*org_id).await
+        {
+            let (redirect_url, _) = authenticator
+                .authorization_url_with_org(None, Some(*org_id))
+                .await?;
+            return Err(AuthError::OidcAuthRequired { redirect_url });
+        }
     }
 
     Err(AuthError::MissingCredentials)
+}
+
+/// Try to authenticate via API key for admin access (ApiKey mode).
+///
+/// Validates the API key from `Authorization: Bearer` or `X-API-Key` headers
+/// using the same logic as API endpoint authentication. Builds an `Identity`
+/// from the key owner's information (user, service account, or org).
+async fn try_api_key_admin_auth(
+    headers: &axum::http::HeaderMap,
+    state: &AppState,
+) -> Result<Option<Identity>, AuthError> {
+    let api_key_auth = match super::combined::try_api_key_auth(headers, state).await? {
+        Some(auth) => auth,
+        None => return Ok(None),
+    };
+
+    // Build Identity from the API key's owner information.
+    // For user-owned keys, look up the user's memberships from the database.
+    // For service-account-owned keys, use the SA roles.
+    // For org/team/project-owned keys, use the org context.
+    let identity = if let Some(user_id) = api_key_auth.user_id {
+        // User-owned API key — look up user and memberships
+        let db = state
+            .db
+            .as_ref()
+            .ok_or_else(|| AuthError::Internal("Database not configured".to_string()))?;
+
+        let user = db
+            .users()
+            .get_by_id(user_id)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+
+        let (email, name, external_id) = match &user {
+            Some(u) => (u.email.clone(), u.name.clone(), u.external_id.clone()),
+            None => (None, None, format!("api-key:{}", api_key_auth.key.id)),
+        };
+
+        // Look up memberships
+        let org_ids: Vec<String> = if let Some(org_id) = api_key_auth.org_id {
+            vec![org_id.to_string()]
+        } else {
+            db.users()
+                .get_org_memberships_for_user(user_id)
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?
+                .iter()
+                .map(|m| m.org_id.to_string())
+                .collect()
+        };
+
+        let team_ids: Vec<String> = if let Some(team_id) = api_key_auth.team_id {
+            vec![team_id.to_string()]
+        } else {
+            db.users()
+                .get_team_memberships_for_user(user_id)
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?
+                .iter()
+                .map(|m| m.team_id.to_string())
+                .collect()
+        };
+
+        let project_ids: Vec<String> = if let Some(project_id) = api_key_auth.project_id {
+            vec![project_id.to_string()]
+        } else {
+            db.users()
+                .get_project_memberships_for_user(user_id)
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?
+                .iter()
+                .map(|m| m.project_id.to_string())
+                .collect()
+        };
+
+        Identity {
+            external_id,
+            email,
+            name,
+            user_id: Some(user_id),
+            roles: vec![],
+            idp_groups: vec![],
+            org_ids,
+            team_ids,
+            project_ids,
+        }
+    } else if let Some(sa_id) = api_key_auth.service_account_id {
+        // Service-account-owned API key
+        Identity {
+            external_id: format!("service-account:{sa_id}"),
+            email: None,
+            name: Some(format!("Service Account {sa_id}")),
+            user_id: None,
+            roles: api_key_auth.service_account_roles.unwrap_or_default(),
+            idp_groups: vec![],
+            org_ids: api_key_auth
+                .org_id
+                .map(|id| vec![id.to_string()])
+                .unwrap_or_default(),
+            team_ids: vec![],
+            project_ids: vec![],
+        }
+    } else {
+        // Org/team/project-owned API key (machine credential)
+        Identity {
+            external_id: format!("api-key:{}", api_key_auth.key.id),
+            email: None,
+            name: Some(api_key_auth.key.name.clone()),
+            user_id: None,
+            roles: vec![],
+            idp_groups: vec![],
+            org_ids: api_key_auth
+                .org_id
+                .map(|id| vec![id.to_string()])
+                .unwrap_or_default(),
+            team_ids: api_key_auth
+                .team_id
+                .map(|id| vec![id.to_string()])
+                .unwrap_or_default(),
+            project_ids: api_key_auth
+                .project_id
+                .map(|id| vec![id.to_string()])
+                .unwrap_or_default(),
+        }
+    };
+
+    Ok(Some(identity))
 }
 
 /// Try to authenticate via Bearer token (JWT).
@@ -860,6 +1003,7 @@ async fn validate_bearer_token(
         &discovery_url,
         &state.http_client,
         state.config.server.allow_loopback_urls,
+        state.config.server.allow_private_urls,
     )
     .await
     .map_err(|e| {
@@ -929,9 +1073,9 @@ async fn try_proxy_auth_auth(
     connecting_ip: Option<IpAddr>,
     state: &AppState,
 ) -> Result<Option<Identity>, AuthError> {
-    let config = match &state.config.auth.admin {
-        Some(AdminAuthConfig::ProxyAuth(config)) => config,
-        _ => return Ok(None),
+    let config = match state.config.auth.iap_config() {
+        Some(config) => config,
+        None => return Ok(None),
     };
 
     // SECURITY: Validate that the request comes from a trusted proxy before trusting headers.
@@ -1037,25 +1181,14 @@ async fn try_oidc_session_auth(
     state: &AppState,
     client_info: &ClientInfo,
 ) -> Result<Option<Identity>, AuthError> {
-    use crate::config::AdminAuthConfig;
-
-    // Get the OIDC authenticator which holds the session store
-    let authenticator = match &state.oidc_authenticator {
-        Some(auth) => auth,
+    // Get the OIDC registry which holds the shared session store
+    let registry = match &state.oidc_registry {
+        Some(reg) => reg,
         None => return Ok(None),
     };
 
-    // Get session config - supports Session variant or default config
-    let session_config = match &state.config.auth.admin {
-        Some(AdminAuthConfig::Session(config)) => config.clone(),
-        _ => {
-            tracing::warn!(
-                "No session config found in auth.admin, using defaults. \
-                 This may indicate misconfiguration if sessions are expected."
-            );
-            crate::config::SessionConfig::default()
-        }
-    };
+    // Get session config from auth config (or use defaults)
+    let session_config = state.config.auth.session_config_or_default();
 
     let cookies = match cookies {
         Some(c) => c,
@@ -1073,8 +1206,24 @@ async fn try_oidc_session_auth(
         .parse()
         .map_err(|_| AuthError::InvalidToken)?;
 
-    // Get session from the OIDC authenticator's session store
-    let session = authenticator.get_session(session_id).await?;
+    // Validate session (checks expiration, inactivity timeout, updates last_activity)
+    let session = match crate::auth::session_store::validate_and_refresh_session(
+        registry.session_store().as_ref(),
+        session_id,
+        &session_config.enhanced,
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(
+            crate::auth::session_store::SessionError::NotFound
+            | crate::auth::session_store::SessionError::Expired,
+        ) => return Ok(None),
+        Err(e) => {
+            tracing::warn!(session_id = %session_id, error = %e, "Session validation failed");
+            return Ok(None);
+        }
+    };
 
     // Look up internal user and their memberships from the database
     // The database is the source of truth for org/team/project membership
@@ -2174,20 +2323,20 @@ mod tests {
     use tokio_util::task::TaskTracker;
 
     use super::*;
-    use crate::config::{GatewayConfig, ProxyAuthConfig, TrustedProxiesConfig};
+    use crate::config::{AuthMode, GatewayConfig, IapConfig, TrustedProxiesConfig};
 
     /// Create a minimal AppState for testing with ProxyAuth config
     fn create_test_state(identity_header: &str, trusted_proxies: TrustedProxiesConfig) -> AppState {
         // Create minimal config from empty TOML
         let mut config = GatewayConfig::from_str("").unwrap();
-        config.auth.admin = Some(AdminAuthConfig::ProxyAuth(Box::new(ProxyAuthConfig {
+        config.auth.mode = AuthMode::Iap(Box::new(IapConfig {
             identity_header: identity_header.to_string(),
             email_header: Some("X-Email".to_string()),
             name_header: None,
             groups_header: Some("X-Groups".to_string()),
             jwt_assertion: None,
             require_identity: true,
-        })));
+        }));
         config.server.trusted_proxies = trusted_proxies;
 
         AppState {
@@ -2202,13 +2351,10 @@ mod tests {
             provider_health: crate::jobs::ProviderHealthStateRegistry::new(),
             task_tracker: TaskTracker::new(),
             #[cfg(feature = "sso")]
-            oidc_authenticator: None,
-            #[cfg(feature = "sso")]
             oidc_registry: None,
             #[cfg(feature = "saml")]
             saml_registry: None,
             gateway_jwt_registry: None,
-            global_jwt_validator: None,
             policy_registry: None,
             usage_buffer: None,
             response_cache: None,
@@ -2506,13 +2652,10 @@ mod tests {
             provider_health: crate::jobs::ProviderHealthStateRegistry::new(),
             task_tracker: TaskTracker::new(),
             #[cfg(feature = "sso")]
-            oidc_authenticator: None,
-            #[cfg(feature = "sso")]
             oidc_registry: None,
             #[cfg(feature = "saml")]
             saml_registry: None,
             gateway_jwt_registry: None,
-            global_jwt_validator: None,
             policy_registry: None,
             usage_buffer: None,
             response_cache: None,

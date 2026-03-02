@@ -100,8 +100,10 @@ impl OidcAuthenticatorRegistry {
     ) -> Result<Self, RegistryError> {
         let registry = Self::new(session_store, default_session_config, default_redirect_uri);
 
-        // Load all enabled SSO configs with their secrets
-        let configs = service.list_enabled_with_secrets(secret_manager).await?;
+        // Load only OIDC SSO configs (not SAML — those use SamlAuthenticatorRegistry)
+        let configs = service
+            .list_enabled_with_secrets_by_type(secret_manager, crate::models::SsoProviderType::Oidc)
+            .await?;
 
         for config in configs {
             let org_id = config.config.org_id;

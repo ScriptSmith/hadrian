@@ -164,6 +164,17 @@ impl ApiKeyService {
         self.db.api_keys().get_key_hashes_by_user(user_id).await
     }
 
+    /// Find an active (non-revoked) API key by name and owning organization.
+    ///
+    /// Used by bootstrap to check if a key already exists before creating one.
+    pub async fn get_by_name_and_org(
+        &self,
+        org_id: Uuid,
+        name: &str,
+    ) -> DbResult<Option<crate::models::ApiKey>> {
+        self.db.api_keys().get_by_name_and_org(org_id, name).await
+    }
+
     /// Rotate an API key: create a new key with the same settings and set a grace period on the old key.
     ///
     /// During the grace period, both the old and new keys are valid.

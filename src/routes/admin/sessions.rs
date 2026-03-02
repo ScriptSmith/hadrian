@@ -72,11 +72,6 @@ pub fn get_session_store(state: &AppState) -> Result<SharedSessionStore, AdminEr
         return Ok(registry.session_store().clone());
     }
 
-    // Try global OIDC authenticator
-    if let Some(ref authenticator) = state.oidc_authenticator {
-        return Ok(authenticator.session_store().clone());
-    }
-
     // Try SAML registry
     #[cfg(feature = "saml")]
     if let Some(ref registry) = state.saml_registry {

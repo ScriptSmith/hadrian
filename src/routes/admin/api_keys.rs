@@ -12,11 +12,10 @@ use super::{AuditActor, error::AdminError, organizations::ListQuery};
 use crate::{
     AppState,
     cache::CacheKeys,
-    config::GatewayAuthConfig,
     middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{
-        ApiKey, ApiKeyScope, CreateApiKey, CreateAuditLog, CreatedApiKey, DEFAULT_API_KEY_PREFIX,
-        validate_ip_allowlist, validate_model_patterns, validate_scopes,
+        ApiKey, ApiKeyScope, CreateApiKey, CreateAuditLog, CreatedApiKey, validate_ip_allowlist,
+        validate_model_patterns, validate_scopes,
     },
     openapi::PaginationMeta,
     services::Services,
@@ -321,11 +320,7 @@ pub async fn create(
     }
 
     // Get the key generation prefix from config
-    let prefix = match &state.config.auth.gateway {
-        GatewayAuthConfig::ApiKey(config) => config.generation_prefix(),
-        GatewayAuthConfig::Multi(config) => config.api_key.generation_prefix(),
-        _ => DEFAULT_API_KEY_PREFIX.to_string(),
-    };
+    let prefix = state.config.auth.api_key_config().generation_prefix();
 
     // Capture owner info for audit log before consuming input
     let (org_id, project_id) = match &input.owner {
@@ -819,11 +814,7 @@ pub async fn rotate(
     }
 
     // Get the key generation prefix from config
-    let prefix = match &state.config.auth.gateway {
-        GatewayAuthConfig::ApiKey(config) => config.generation_prefix(),
-        GatewayAuthConfig::Multi(config) => config.api_key.generation_prefix(),
-        _ => DEFAULT_API_KEY_PREFIX.to_string(),
-    };
+    let prefix = state.config.auth.api_key_config().generation_prefix();
 
     // Get old key info for audit log before rotating
     let old_key = services.api_keys.get_by_id(key_id).await?;

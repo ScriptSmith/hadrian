@@ -16,6 +16,10 @@
 # - SAML groups are captured for the group mapping feature
 # - Group mappings are configured via Admin API, not parsed from assertion attributes
 
+[server]
+# Allow Docker-internal private IPs for SAML/OIDC discovery (Authentik runs in Docker)
+allow_private_urls = true
+
 [ui]
 enabled = true
 
@@ -31,22 +35,16 @@ api_key = "gw_test_bootstrap_key_for_e2e"
 auto_verify_domains = ["university.edu"]
 
 # ==============================================================================
-# Session Configuration (for per-org SSO)
+# Auth Mode: IdP (per-org SSO)
 # ==============================================================================
 # SAML authentication is configured per-organization via the Admin API.
-# This section configures session management for authenticated users.
-[auth.admin]
-type = "session"
-secure = false  # For local dev over HTTP
+# Session management for authenticated users is configured below.
+# No API key requirement for this test — focuses on SAML SSO flow.
+[auth.mode]
+type = "idp"
 
-# ==============================================================================
-# API Authentication
-# ==============================================================================
-# For SAML E2E tests, we disable API authentication to allow bootstrapping.
-# In production, you would use API keys for programmatic access.
-# The test focuses on SAML SSO flow, not API key management.
-[auth.gateway]
-type = "none"
+[auth.session]
+secure = false  # For local dev over HTTP
 
 # ==============================================================================
 # RBAC Configuration

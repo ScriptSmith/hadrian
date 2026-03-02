@@ -111,10 +111,10 @@ curl http://localhost:8080/v1/chat/completions \
 **Configuration reference:**
 
 ```toml
-[auth.gateway]
+[auth.mode]
 type = "api_key"
 
-[auth.gateway.api_key]
+[auth.api_key]
 header_name = "X-API-Key"  # or "Authorization"
 key_prefix = "gw_"         # Required prefix for all keys
 ```
@@ -144,11 +144,12 @@ echo "eyJhbGciOi..." | cut -d'.' -f2 | base64 -d | jq .
 **Configuration reference:**
 
 ```toml
-[auth.gateway]
-type = "jwt"
-issuer = "https://auth.example.com"
-audience = "hadrian"
-jwks_url = "https://auth.example.com/.well-known/jwks.json"
+[auth.mode]
+type = "idp"
+
+# JWT validation is configured per-organization via the Admin UI (SSO settings).
+# Each org can configure its own OIDC/SAML identity provider with issuer,
+# audience, and JWKS URL. See the SSO Admin Guide for details.
 ```
 
 ### Revoked Key Still Working
@@ -166,7 +167,7 @@ API keys are cached to reduce database load. When a key is revoked:
 - **Adjust TTL**: Lower `cache_ttl_secs` for faster revocation (at cost of more DB queries)
 
 ```toml
-[auth.gateway.api_key]
+[auth.api_key]
 cache_ttl_secs = 60  # Default: 60 seconds
 ```
 

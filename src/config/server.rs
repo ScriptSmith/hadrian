@@ -83,6 +83,16 @@ pub struct ServerConfig {
     /// are always blocked regardless of this setting.
     #[serde(default)]
     pub allow_loopback_urls: bool,
+
+    /// Allow private/internal IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) in
+    /// user-supplied URLs.
+    ///
+    /// When false (default), URLs resolving to private IPs are blocked to prevent SSRF.
+    /// Enable for Docker, Kubernetes, or other environments where services communicate
+    /// over private networks (e.g., Keycloak at `http://keycloak:8080`).
+    /// Cloud metadata endpoints (169.254.169.254) are always blocked.
+    #[serde(default)]
+    pub allow_private_urls: bool,
 }
 
 impl Default for ServerConfig {
@@ -102,6 +112,7 @@ impl Default for ServerConfig {
             security_headers: SecurityHeadersConfig::default(),
             http_client: HttpClientConfig::default(),
             allow_loopback_urls: false,
+            allow_private_urls: false,
         }
     }
 }

@@ -33,7 +33,7 @@ use validator::ValidateEmail;
 use crate::{
     AppState,
     auth::AuthError,
-    config::{AdminAuthConfig, SameSite, TrustedProxiesConfig},
+    config::{SameSite, TrustedProxiesConfig},
     middleware::AdminAuth,
     models::{DomainVerificationStatus, SsoEnforcementMode, SsoProviderType},
     services::audit_logs::{AuthEventParams, auth_events},
@@ -401,17 +401,11 @@ pub async fn login(
         );
     }
 
-    // Fall back to global OIDC authenticator (deprecated - use per-org SSO)
-    let authenticator = state.oidc_authenticator.as_ref().ok_or_else(|| {
-        AuthError::Forbidden(
-            "OIDC authentication not configured. Use per-org SSO with ?org=<slug> parameter."
-                .to_string(),
-        )
-    })?;
-
-    let (auth_url, _) = authenticator.authorization_url(query.return_to).await?;
-
-    Ok(Redirect::to(&auth_url))
+    // No global OIDC authenticator — all SSO is per-org
+    Err(AuthError::Forbidden(
+        "OIDC authentication not configured. Use per-org SSO with ?org=<slug> parameter."
+            .to_string(),
+    ))
 }
 
 /// Callback endpoint - handles IdP response.
@@ -473,80 +467,57 @@ pub async fn callback(
         )));
     }
 
-    // Get session config - use Session config for cookie settings
-    let session_config = match &state.config.auth.admin {
-        Some(AdminAuthConfig::Session(config)) => config.clone(),
-        _ => {
-            tracing::warn!(
-                "No session config found in auth.admin, using defaults for callback. \
-                 This may indicate misconfiguration if sessions are expected."
-            );
-            crate::config::SessionConfig::default()
-        }
-    };
+    // Get session config for cookie settings
+    let session_config = state.config.auth.session_config_or_default().into_owned();
 
     // Determine which authenticator to use by peeking at the auth state.
-    // SECURITY: We must fail explicitly if org-specific SSO was requested but
-    // the authenticator is unavailable, rather than silently falling back to global.
-    let authenticator: Arc<OidcAuthenticator> = if let Some(registry) = &state.oidc_registry {
-        match registry.peek_auth_state(&query.state).await {
-            Ok(Some(auth_state)) => {
-                if let Some(org_id) = auth_state.org_id {
-                    // Org-specific SSO was requested - MUST use org authenticator
-                    match registry.get(org_id).await {
-                        Some(org_auth) => {
-                            tracing::info!(
-                                org_id = %org_id,
-                                "Using org-specific authenticator for callback"
-                            );
-                            org_auth
-                        }
-                        None => {
-                            // This can happen if the org's SSO config was deleted during the auth flow
-                            tracing::error!(
-                                org_id = %org_id,
-                                "Org SSO config deleted during auth flow"
-                            );
-                            return Err(AuthError::Internal(format!(
-                                "SSO configuration for organization {} is no longer available",
-                                org_id
-                            )));
-                        }
+    // All SSO is per-org — there is no global authenticator.
+    let registry = state.oidc_registry.as_ref().ok_or_else(|| {
+        tracing::warn!("OIDC callback received but no OIDC registry available");
+        AuthError::SessionNotFound
+    })?;
+
+    let authenticator: Arc<OidcAuthenticator> = match registry.peek_auth_state(&query.state).await {
+        Ok(Some(auth_state)) => {
+            if let Some(org_id) = auth_state.org_id {
+                // Org-specific SSO was requested - MUST use org authenticator
+                match registry.get(org_id).await {
+                    Some(org_auth) => {
+                        tracing::info!(
+                            org_id = %org_id,
+                            "Using org-specific authenticator for callback"
+                        );
+                        org_auth
                     }
-                } else {
-                    // No org_id in state - use global authenticator
-                    state.oidc_authenticator.clone().ok_or_else(|| {
-                        AuthError::Internal("OIDC authentication not configured".to_string())
-                    })?
+                    None => {
+                        tracing::error!(
+                            org_id = %org_id,
+                            "Org SSO config deleted during auth flow"
+                        );
+                        return Err(AuthError::Internal(format!(
+                            "SSO configuration for organization {} is no longer available",
+                            org_id
+                        )));
+                    }
                 }
-            }
-            Ok(None) => {
-                // State not found in registry's session store.
-                // With per-org SSO, all auth flows should have state in the registry.
-                // If not found, try global authenticator (if configured) or return 401.
-                if let Some(global_auth) = state.oidc_authenticator.clone() {
-                    global_auth
-                } else {
-                    tracing::warn!("Invalid or expired authentication state");
-                    return Err(AuthError::SessionNotFound);
-                }
-            }
-            Err(e) => {
-                // Fail explicitly on state lookup errors rather than silently falling back
-                tracing::error!(error = %e, "Failed to peek auth state during callback");
-                return Err(AuthError::Internal(format!(
-                    "Failed to validate authentication state: {}",
-                    e
-                )));
+            } else {
+                // No org_id in state — all SSO is per-org, this shouldn't happen
+                tracing::warn!("Auth state has no org_id — cannot determine authenticator");
+                return Err(AuthError::Internal(
+                    "Authentication state missing organization. Use per-org SSO.".to_string(),
+                ));
             }
         }
-    } else {
-        // No registry configured - use global authenticator if available
-        if let Some(global_auth) = state.oidc_authenticator.clone() {
-            global_auth
-        } else {
-            tracing::warn!("OIDC callback received but no authenticator available");
+        Ok(None) => {
+            tracing::warn!("Invalid or expired authentication state");
             return Err(AuthError::SessionNotFound);
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to peek auth state during callback");
+            return Err(AuthError::Internal(format!(
+                "Failed to validate authentication state: {}",
+                e
+            )));
         }
     };
 
@@ -667,26 +638,25 @@ pub async fn logout(
         .get(axum::http::header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
-    let session_config = match &state.config.auth.admin {
-        Some(AdminAuthConfig::Session(config)) => config.clone(),
-        _ => {
-            tracing::warn!(
-                "No session config found in auth.admin, using defaults for logout. \
-                 This may indicate misconfiguration if sessions are expected."
-            );
-            crate::config::SessionConfig::default()
-        }
-    };
+    let session_config = state.config.auth.session_config_or_default().into_owned();
 
-    // Get session ID from cookie and logout using the shared authenticator
+    // Get session ID from cookie and logout using the shared session store
     if let Some(session_cookie) = cookies.get(&session_config.cookie_name)
         && let Ok(session_id) = session_cookie.value().parse::<Uuid>()
-        && let Some(authenticator) = &state.oidc_authenticator
+        && let Some(registry) = &state.oidc_registry
     {
-        // Get session info before logging out (for audit log)
-        let session_info = authenticator.get_session(session_id).await.ok();
+        let session_store = registry.session_store();
 
-        let _ = authenticator.logout(session_id).await;
+        // Get session info before logging out (for audit log)
+        let session_info = crate::auth::session_store::validate_and_refresh_session(
+            session_store.as_ref(),
+            session_id,
+            &session_config.enhanced,
+        )
+        .await
+        .ok();
+
+        let _ = session_store.delete_session(session_id).await;
 
         // Log logout to audit log
         if let Some(services) = &state.services {
@@ -964,13 +934,7 @@ pub async fn saml_slo(
         .saml_registry
         .as_ref()
         .map(|r| r.default_session_config().clone())
-        .or_else(|| {
-            if let Some(AdminAuthConfig::Session(config)) = &state.config.auth.admin {
-                Some(config.clone())
-            } else {
-                None
-            }
-        })
+        .or_else(|| state.config.auth.session_config().cloned())
         .unwrap_or_default();
 
     // Try to get IdP SLO redirect URL before clearing session
@@ -1050,8 +1014,11 @@ pub async fn saml_slo(
         }
 
         // Also try OIDC session store (sessions are shared)
-        if let Some(oidc_auth) = &state.oidc_authenticator {
-            let _ = oidc_auth.logout(session_id).await;
+        if let Some(oidc_registry) = &state.oidc_registry {
+            let _ = oidc_registry
+                .session_store()
+                .delete_session(session_id)
+                .await;
         }
     }
 
@@ -1448,8 +1415,10 @@ run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
 
-[auth.admin]
-type = "session"
+[auth.mode]
+type = "idp"
+
+[auth.session]
 secure = false
 cookie_name = "__test_session"
 
@@ -1719,7 +1688,7 @@ type = "test"
 
         let response = app.oneshot(request).await.unwrap();
 
-        // Auth routes are NOT registered when auth is fully disabled (no auth.admin, no auth.gateway)
+        // Auth routes are NOT registered when auth is fully disabled (auth.mode.type = "none" or omitted)
         // So /auth/login returns 404 Not Found
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
@@ -2126,7 +2095,7 @@ type = "test"
 
         let response = app.oneshot(request).await.unwrap();
 
-        // Auth routes are NOT registered when auth is fully disabled (no auth.admin, no auth.gateway)
+        // Auth routes are NOT registered when auth is fully disabled (auth.mode.type = "none" or omitted)
         // So /auth/logout returns 404 Not Found
         assert_eq!(
             response.status(),
@@ -2163,8 +2132,10 @@ run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
 
-[auth.admin]
-type = "session"
+[auth.mode]
+type = "idp"
+
+[auth.session]
 secure = false
 cookie_name = "__test_session"
 

@@ -14,14 +14,19 @@ struct DiscoveryDocument {
 /// Fetch the `jwks_uri` from an OIDC discovery endpoint.
 ///
 /// Validates both `discovery_url` and the returned `jwks_uri` against SSRF
-/// using [`crate::validation::validate_base_url`].
+/// using [`crate::validation::validate_base_url_opts`].
 pub async fn fetch_jwks_uri(
     discovery_url: &str,
     http_client: &reqwest::Client,
     allow_loopback: bool,
+    allow_private: bool,
 ) -> Result<String, AuthError> {
+    let url_opts = crate::validation::UrlValidationOptions {
+        allow_loopback,
+        allow_private,
+    };
     // SSRF-validate the discovery URL before fetching
-    crate::validation::validate_base_url(discovery_url, allow_loopback)
+    crate::validation::validate_base_url_opts(discovery_url, url_opts)
         .map_err(|e| AuthError::Internal(format!("Discovery URL failed SSRF validation: {e}")))?;
 
     let url = if discovery_url.ends_with("/.well-known/openid-configuration") {
@@ -54,7 +59,7 @@ pub async fn fetch_jwks_uri(
         .map_err(|e| AuthError::Internal(format!("Failed to parse OIDC discovery: {e}")))?;
 
     // SSRF-validate the returned JWKS URI before returning it
-    crate::validation::validate_base_url(&doc.jwks_uri, allow_loopback)
+    crate::validation::validate_base_url_opts(&doc.jwks_uri, url_opts)
         .map_err(|e| AuthError::Internal(format!("JWKS URI failed SSRF validation: {e}")))?;
 
     Ok(doc.jwks_uri)

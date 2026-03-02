@@ -21,26 +21,36 @@ pub enum UrlValidationError {
     BlockedAddress,
 }
 
+/// Options controlling which IP ranges are permitted in SSRF validation.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UrlValidationOptions {
+    /// Allow loopback addresses (127.0.0.0/8, ::1).
+    pub allow_loopback: bool,
+    /// Allow private/internal IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16).
+    pub allow_private: bool,
+}
+
 /// Check if an IP address is in a private/reserved range that should not be accessed
 /// by server-side requests.
-fn is_blocked_ip(ip: IpAddr, allow_loopback: bool) -> bool {
+fn is_blocked_ip(ip: IpAddr, opts: UrlValidationOptions) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             // Loopback (127.0.0.0/8)
             if v4.is_loopback() {
-                return !allow_loopback;
+                return !opts.allow_loopback;
             }
-            // Private ranges
-            if v4.is_private() {
-                return true;
-            }
-            // Link-local (169.254.0.0/16)
-            if v4.is_link_local() {
-                return true;
-            }
-            // Cloud metadata endpoint (169.254.169.254)
+            // Cloud metadata endpoint (169.254.169.254) — always blocked
             if v4 == Ipv4Addr::new(169, 254, 169, 254) {
-                return true; // Always block, even if allow_loopback
+                return true;
+            }
+            // Link-local (169.254.0.0/16) — blocked unless allow_private
+            // (cloud metadata 169.254.169.254 is always blocked above)
+            if v4.is_link_local() {
+                return !opts.allow_private;
+            }
+            // Private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+            if v4.is_private() {
+                return !opts.allow_private;
             }
             // Broadcast
             if v4.is_broadcast() {
@@ -63,24 +73,24 @@ fn is_blocked_ip(ip: IpAddr, allow_loopback: bool) -> bool {
         IpAddr::V6(v6) => {
             // Loopback (::1)
             if v6.is_loopback() {
-                return !allow_loopback;
+                return !opts.allow_loopback;
             }
             // Unspecified (::)
             if v6.is_unspecified() {
                 return true;
             }
-            // Link-local (fe80::/10)
+            // Link-local (fe80::/10) — blocked unless allow_private
             let segments = v6.segments();
             if segments[0] & 0xffc0 == 0xfe80 {
-                return true;
+                return !opts.allow_private;
             }
             // Unique local (fc00::/7)
             if segments[0] & 0xfe00 == 0xfc00 {
-                return true;
+                return !opts.allow_private;
             }
             // IPv4-mapped addresses (::ffff:x.x.x.x) — check the embedded IPv4
             if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_blocked_ip(IpAddr::V4(v4), allow_loopback);
+                return is_blocked_ip(IpAddr::V4(v4), opts);
             }
             false
         }
@@ -95,9 +105,23 @@ fn is_blocked_ip(ip: IpAddr, allow_loopback: bool) -> bool {
 /// - Hostnames that resolve to private, loopback, or link-local IPs
 /// - Cloud metadata endpoints (169.254.169.254)
 ///
-/// When `allow_loopback` is true, loopback addresses (127.0.0.1, ::1) are permitted
-/// (useful for development). Private ranges and metadata endpoints are always blocked.
+/// Use `allow_loopback = true` for development (permits 127.0.0.1/::1).
+/// Use `allow_private = true` for Docker/Kubernetes (permits 10.x/172.16.x/192.168.x).
 pub fn validate_base_url(url: &str, allow_loopback: bool) -> Result<(), UrlValidationError> {
+    validate_base_url_opts(
+        url,
+        UrlValidationOptions {
+            allow_loopback,
+            allow_private: false,
+        },
+    )
+}
+
+/// Validate a user-supplied URL with full options control.
+pub fn validate_base_url_opts(
+    url: &str,
+    opts: UrlValidationOptions,
+) -> Result<(), UrlValidationError> {
     let parsed = url::Url::parse(url).map_err(|e| UrlValidationError::InvalidUrl(e.to_string()))?;
 
     // Scheme check
@@ -110,7 +134,7 @@ pub fn validate_base_url(url: &str, allow_loopback: bool) -> Result<(), UrlValid
     let host = parsed.host_str().ok_or(UrlValidationError::MissingHost)?;
 
     // Check for localhost string variants
-    if !allow_loopback
+    if !opts.allow_loopback
         && (host.eq_ignore_ascii_case("localhost")
             || host.eq_ignore_ascii_case("localhost.localdomain"))
     {
@@ -119,7 +143,7 @@ pub fn validate_base_url(url: &str, allow_loopback: bool) -> Result<(), UrlValid
 
     // Try to parse as IP directly first
     if let Ok(ip) = host.parse::<IpAddr>() {
-        if is_blocked_ip(ip, allow_loopback) {
+        if is_blocked_ip(ip, opts) {
             return Err(UrlValidationError::BlockedAddress);
         }
         return Ok(());
@@ -144,7 +168,15 @@ pub fn validate_base_url(url: &str, allow_loopback: bool) -> Result<(), UrlValid
 
     // ALL resolved addresses must be non-blocked (prevents DNS rebinding with mixed results)
     for addr in &socket_addrs {
-        if is_blocked_ip(addr.ip(), allow_loopback) {
+        if is_blocked_ip(addr.ip(), opts) {
+            tracing::warn!(
+                url = %url,
+                blocked_ip = %addr.ip(),
+                all_resolved = ?socket_addrs.iter().map(|a| a.ip()).collect::<Vec<_>>(),
+                allow_loopback = opts.allow_loopback,
+                allow_private = opts.allow_private,
+                "URL blocked by SSRF validation"
+            );
             return Err(UrlValidationError::BlockedAddress);
         }
     }
@@ -261,9 +293,64 @@ mod tests {
     }
 
     #[test]
+    fn test_rejects_metadata_even_with_private_allowed() {
+        // Cloud metadata should always be blocked, even with allow_private
+        let opts = UrlValidationOptions {
+            allow_loopback: true,
+            allow_private: true,
+        };
+        assert!(matches!(
+            validate_base_url_opts("http://169.254.169.254", opts),
+            Err(UrlValidationError::BlockedAddress)
+        ));
+    }
+
+    #[test]
     fn test_rejects_link_local() {
         assert!(matches!(
             validate_base_url("http://169.254.1.1", false),
+            Err(UrlValidationError::BlockedAddress)
+        ));
+    }
+
+    #[test]
+    fn test_allows_link_local_with_private() {
+        // Link-local (non-metadata) allowed when allow_private is set (Docker/k8s)
+        let opts = UrlValidationOptions {
+            allow_loopback: false,
+            allow_private: true,
+        };
+        assert!(validate_base_url_opts("http://169.254.1.1", opts).is_ok());
+    }
+
+    #[test]
+    fn test_allows_private_with_flag() {
+        let opts = UrlValidationOptions {
+            allow_loopback: false,
+            allow_private: true,
+        };
+        assert!(validate_base_url_opts("http://10.0.0.1", opts).is_ok());
+        assert!(validate_base_url_opts("http://172.16.0.1", opts).is_ok());
+        assert!(validate_base_url_opts("http://192.168.1.1", opts).is_ok());
+    }
+
+    #[test]
+    fn test_allows_ipv6_link_local_with_private() {
+        let opts = UrlValidationOptions {
+            allow_loopback: false,
+            allow_private: true,
+        };
+        assert!(validate_base_url_opts("http://[fe80::1]:8080", opts).is_ok());
+    }
+
+    #[test]
+    fn test_rejects_ipv6_link_local_without_private() {
+        let opts = UrlValidationOptions {
+            allow_loopback: true,
+            allow_private: false,
+        };
+        assert!(matches!(
+            validate_base_url_opts("http://[fe80::1]:8080", opts),
             Err(UrlValidationError::BlockedAddress)
         ));
     }

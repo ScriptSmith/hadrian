@@ -104,9 +104,14 @@
       ]
     },
     "overrides": {
-      "glob>minimatch": ">=10.2.1",
-      "filelist>minimatch": ">=10.2.1",
-      "@typescript-eslint/typescript-estree>minimatch": ">=10.2.1",
+      "glob>minimatch": ">=10.2.3",
+      "filelist>minimatch": ">=10.2.3",
+      "@typescript-eslint/typescript-estree>minimatch": ">=10.2.3",
+      "eslint>minimatch": "~3.1.4",
+      "@eslint/config-array>minimatch": "~3.1.4",
+      "@eslint/eslintrc>minimatch": "~3.1.4",
+      "eslint-plugin-jsx-a11y>minimatch": "~3.1.4",
+      "@rollup/plugin-terser>serialize-javascript": ">=7.0.3",
       "qs": ">=6.14.2",
       "workbox-build>ajv": ">=8.18.0",
       "@modelcontextprotocol/sdk>ajv": ">=8.18.0"
