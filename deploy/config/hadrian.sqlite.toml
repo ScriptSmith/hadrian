@@ -9,12 +9,7 @@ path = "/app/data/hadrian.db"
 type = "memory"
 
 [auth.mode]
-type = "api_key"
-
-[auth.api_key]
-header_name = "X-API-Key"
-key_prefix = "gw_"
-cache_ttl_secs = 60
+type = "none"
 
 [providers]
 default_provider = "test"

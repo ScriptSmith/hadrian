@@ -9,14 +9,13 @@ This document describes Hadrian Gateway's security model, covering authenticatio
 
 Hadrian supports multiple authentication methods that can be used independently or combined.
 
-| Method         | Use Case                | Token Location                                |
-| -------------- | ----------------------- | --------------------------------------------- |
-| **API Key**    | Programmatic access     | `X-API-Key` header or `Authorization: Bearer` |
-| **JWT**        | Service-to-service auth | `Authorization: Bearer` header                |
-| **OIDC**       | Browser-based SSO       | Session cookie                                |
-| **IAP**        | Zero-trust networks     | Trusted proxy headers                         |
-| **Multi-Auth** | Flexible access         | Tries multiple methods in order               |
-| **Emergency**  | Break-glass access      | `X-Emergency-Key` header                      |
+| Method        | Use Case                | Token Location                                |
+| ------------- | ----------------------- | --------------------------------------------- |
+| **API Key**   | Programmatic access     | `X-API-Key` header or `Authorization: Bearer` |
+| **JWT**       | Service-to-service auth | `Authorization: Bearer` header                |
+| **OIDC**      | Browser-based SSO       | Session cookie                                |
+| **IAP**       | Zero-trust networks     | Trusted proxy headers                         |
+| **Emergency** | Break-glass access      | `X-Emergency-Key` header                      |
 
 <Callout type="info">
   For disaster recovery when SSO is unavailable, see [Emergency
@@ -54,7 +53,7 @@ type = "api_key"
 header_name = "X-API-Key"         # Header to check (or "Authorization")
 key_prefix = "gw_"                # Required prefix for all keys
 hash_algorithm = "sha256"         # "sha256" or "argon2"
-cache_ttl_secs = 60               # Cache valid keys for 60 seconds
+cache_ttl_secs = 300               # Cache valid keys for 5 minutes
 ```
 
 **API Key Properties:**
@@ -227,21 +226,20 @@ issuer = "https://your-team.cloudflareaccess.com"
 audience = "your-application-audience"
 ```
 
-### Multi-Auth
+### IdP Mode (Multiple Methods)
 
-Combine multiple authentication methods with configurable priority order.
+In `idp` mode, Hadrian automatically supports session cookies, API keys, and JWTs via format-based detection. No additional configuration is needed beyond setting the mode.
 
 ```toml
 [auth.mode]
-type = "api_key"
+type = "idp"
 
 [auth.api_key]
 header_name = "X-API-Key"
 key_prefix = "gw_"
 
-# For JWT validation, configure per-org SSO via the Admin UI.
-# API key authentication and per-org IdP authentication work together
-# automatically — API keys are checked first, then IdP tokens.
+# JWT validation is configured per-organization via the Admin UI.
+# Session cookies, API keys, and JWTs are all accepted automatically.
 ```
 
 ## Authorization

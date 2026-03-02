@@ -85,6 +85,11 @@ pub trait ApiKeyRepo: Send + Sync {
     ///
     /// Used for cache invalidation when a user is removed from an organization.
     async fn get_key_hashes_by_user(&self, user_id: Uuid) -> DbResult<Vec<String>>;
+
+    /// Find an active (non-revoked) API key by name and owning organization.
+    ///
+    /// Used by bootstrap to check if a key already exists before creating one.
+    async fn get_by_name_and_org(&self, org_id: Uuid, name: &str) -> DbResult<Option<ApiKey>>;
 }
 
 impl From<ApiKeyWithOwner> for CachedApiKey {

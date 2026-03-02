@@ -1044,4 +1044,28 @@ impl ApiKeyRepo for PostgresApiKeyRepo {
 
         Ok(hashes)
     }
+
+    async fn get_by_name_and_org(&self, org_id: Uuid, name: &str) -> DbResult<Option<ApiKey>> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                id, key_prefix, name, owner_type::TEXT, owner_id,
+                budget_amount, budget_period::TEXT, expires_at, last_used_at, created_at, revoked_at,
+                scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
+                rotated_from_key_id, rotation_grace_until
+            FROM api_keys
+            WHERE name = $1 AND owner_type = 'organization' AND owner_id = $2 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(name)
+        .bind(org_id)
+        .fetch_optional(&self.read_pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        Ok(Some(Self::parse_api_key(&row)?))
+    }
 }

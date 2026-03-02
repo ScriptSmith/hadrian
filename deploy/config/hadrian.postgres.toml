@@ -10,12 +10,7 @@ type = "redis"
 url = "${REDIS_URL}"
 
 [auth.mode]
-type = "api_key"
-
-[auth.api_key]
-header_name = "X-API-Key"
-key_prefix = "gw_"
-cache_ttl_secs = 300  # 5 minutes with Redis
+type = "none"
 
 # Optional: IAP (Identity-Aware Proxy) authentication
 # Trusts identity headers from an authenticating proxy (Cloudflare Access, oauth2-proxy, etc.)

@@ -17,12 +17,12 @@ Configure authentication and authorization for Hadrian in `hadrian.toml` using t
 
 Hadrian uses a single `[auth.mode]` to control authentication for both the API and the web UI. Select exactly one mode.
 
-| Mode      | `type`    | API Keys | IdP Sessions | Identity Headers | Use Case                           |
-| --------- | --------- | -------- | ------------ | ---------------- | ---------------------------------- |
-| None      | `none`    | No       | No           | No               | Local development                  |
-| API Key   | `api_key` | Yes      | No           | No               | Programmatic access only           |
-| IdP       | `idp`     | Yes      | Yes          | No               | Full deployment with SSO + API     |
-| IAP       | `iap`     | Yes      | No           | Yes              | Behind an identity-aware proxy     |
+| Mode    | `type`    | API Keys | IdP Sessions | Identity Headers | Use Case                       |
+| ------- | --------- | -------- | ------------ | ---------------- | ------------------------------ |
+| None    | `none`    | No       | No           | No               | Local development              |
+| API Key | `api_key` | Yes      | No           | No               | Programmatic access only       |
+| IdP     | `idp`     | Yes      | Yes          | No               | Full deployment with SSO + API |
+| IAP     | `iap`     | Yes      | No           | Yes              | Behind an identity-aware proxy |
 
 ### None
 
@@ -985,6 +985,93 @@ admin_identities = ["alice@acme.com"]
   and organizations are not modified.
 </Callout>
 
+### Bootstrap API Key Generation
+
+Create an API key during bootstrap for programmatic access:
+
+```toml
+[auth.bootstrap]
+api_key = "${HADRIAN_BOOTSTRAP_KEY}"
+auto_verify_domains = ["acme.com"]
+
+[auth.bootstrap.initial_org]
+slug = "acme-corp"
+name = "Acme Corporation"
+admin_identities = ["admin@acme.com"]
+
+[auth.bootstrap.initial_api_key]
+name = "production-api-key"
+```
+
+| Setting                | Type   | Description                                                   |
+| ---------------------- | ------ | ------------------------------------------------------------- |
+| `initial_api_key.name` | string | Name for the auto-created API key (scoped to the initial org) |
+
+The generated API key is printed to stdout on first creation. Subsequent runs skip creation if a key with the same name already exists.
+
+### Bootstrap SSO Configuration
+
+Pre-configure SSO for the initial organization directly in the config file, avoiding manual Admin UI setup:
+
+```toml
+[auth.bootstrap.initial_org]
+slug = "acme-corp"
+name = "Acme Corporation"
+admin_identities = ["admin@acme.com"]
+
+[auth.bootstrap.initial_org.sso]
+provider_type = "oidc"
+issuer = "https://accounts.google.com"
+client_id = "${OIDC_CLIENT_ID}"
+client_secret = "${OIDC_CLIENT_SECRET}"
+redirect_uri = "https://gateway.example.com/auth/callback"
+discovery_url = "https://accounts.google.com/.well-known/openid-configuration"
+allowed_email_domains = ["acme.com"]
+```
+
+| Setting                     | Type     | Description                                     |
+| --------------------------- | -------- | ----------------------------------------------- |
+| `sso.provider_type`         | string   | `"oidc"` or `"saml"`                            |
+| `sso.issuer`                | string   | IdP issuer URL                                  |
+| `sso.client_id`             | string   | OAuth client ID                                 |
+| `sso.client_secret`         | string   | OAuth client secret (stored in secrets manager) |
+| `sso.redirect_uri`          | string   | OAuth redirect URI                              |
+| `sso.discovery_url`         | string   | OIDC discovery endpoint (optional)              |
+| `sso.allowed_email_domains` | string[] | Restrict SSO login to these email domains       |
+
+Domains listed in both `auto_verify_domains` and `sso.allowed_email_domains` are automatically verified during bootstrap.
+
+### Bootstrap CLI
+
+Run bootstrap as a standalone CLI command instead of at server startup. This is the recommended approach for GitOps and IaC workflows:
+
+```bash
+# Run bootstrap against the database
+hadrian bootstrap --config hadrian.toml
+
+# Preview what would be created without making changes
+hadrian bootstrap --config hadrian.toml --dry-run
+```
+
+The `hadrian bootstrap` command:
+
+- Connects directly to the database (no HTTP server started)
+- Runs pending migrations before bootstrapping
+- Creates the initial organization, SSO config, and API key as specified in `[auth.bootstrap]`
+- Is fully idempotent — safe to run repeatedly (skips resources that already exist)
+- Prints the generated API key to stdout on first creation (pipe to a secret manager or file)
+
+```bash
+# Example: capture the generated API key
+API_KEY=$(hadrian bootstrap --config hadrian.toml 2>/dev/null)
+echo "Generated key: $API_KEY"
+```
+
+<Callout type="info">
+  Use `--dry-run` to verify your bootstrap configuration before applying it to a production
+  database.
+</Callout>
+
 ## Emergency Access Configuration
 
 Emergency access provides break-glass admin access when SSO is unavailable. Unlike bootstrap mode, emergency access remains available indefinitely (when enabled) and is designed for disaster recovery scenarios.
@@ -1212,6 +1299,9 @@ admin_identities = ["admin@acme.com"]
 slug = "acme-corp"
 name = "Acme Corporation"
 admin_identities = ["admin@acme.com"]
+
+[auth.bootstrap.initial_api_key]
+name = "admin-key"
 ```
 
 ### Multi-Org with Per-IdP API Authentication

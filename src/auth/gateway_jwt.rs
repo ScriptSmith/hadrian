@@ -6,7 +6,9 @@
 
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
+#[cfg(feature = "sso")]
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::jwt::JwtValidator;
@@ -15,10 +17,12 @@ use crate::config::JwtAuthConfig;
 
 /// How long to cache "no SSO config exists for this issuer" results.
 /// Prevents repeated DB queries from JWTs with unknown/attacker-controlled issuers.
+#[cfg(feature = "sso")]
 const NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Maximum number of negative cache entries before eviction kicks in.
 /// Prevents unbounded memory growth from attacker-controlled JWT issuers.
+#[cfg(feature = "sso")]
 const MAX_NEGATIVE_CACHE_ENTRIES: usize = 10_000;
 
 /// Internal state behind the single `RwLock`.
@@ -36,6 +40,7 @@ pub struct GatewayJwtRegistry {
     inner: RwLock<RegistryInner>,
     /// Serializes lazy-load operations to prevent thundering herd on cache miss.
     /// Only held during DB query + OIDC discovery for unknown issuers.
+    #[cfg(feature = "sso")]
     load_mutex: Mutex<()>,
 }
 
@@ -48,6 +53,7 @@ impl GatewayJwtRegistry {
                 issuer_index: HashMap::new(),
                 negative_cache: HashMap::new(),
             }),
+            #[cfg(feature = "sso")]
             load_mutex: Mutex::new(()),
         }
     }

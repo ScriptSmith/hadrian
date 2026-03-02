@@ -1045,6 +1045,29 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
 
         Ok(hashes)
     }
+
+    async fn get_by_name_and_org(&self, org_id: Uuid, name: &str) -> DbResult<Option<ApiKey>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
+                   expires_at, last_used_at, created_at, revoked_at,
+                   scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
+                   rotated_from_key_id, rotation_grace_until
+            FROM api_keys
+            WHERE name = ? AND owner_type = 'organization' AND owner_id = ? AND revoked_at IS NULL
+            "#,
+        )
+        .bind(name)
+        .bind(org_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        Ok(Some(Self::parse_api_key(&row)?))
+    }
 }
 
 #[cfg(test)]

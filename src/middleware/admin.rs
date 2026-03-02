@@ -587,6 +587,13 @@ async fn try_admin_auth(
         return Ok(identity);
     }
 
+    // Try API key (for ApiKey mode — admin panel sends key via Authorization/X-API-Key)
+    if matches!(state.config.auth.mode, crate::config::AuthMode::ApiKey)
+        && let Some(identity) = try_api_key_admin_auth(headers, state).await?
+    {
+        return Ok(identity);
+    }
+
     // Try Bearer token (for service accounts / automation via per-org SSO)
     #[cfg(feature = "sso")]
     if let Some(identity) = try_bearer_token_auth(headers, state).await? {
@@ -629,6 +636,133 @@ async fn try_admin_auth(
     }
 
     Err(AuthError::MissingCredentials)
+}
+
+/// Try to authenticate via API key for admin access (ApiKey mode).
+///
+/// Validates the API key from `Authorization: Bearer` or `X-API-Key` headers
+/// using the same logic as API endpoint authentication. Builds an `Identity`
+/// from the key owner's information (user, service account, or org).
+async fn try_api_key_admin_auth(
+    headers: &axum::http::HeaderMap,
+    state: &AppState,
+) -> Result<Option<Identity>, AuthError> {
+    let api_key_auth = match super::combined::try_api_key_auth(headers, state).await? {
+        Some(auth) => auth,
+        None => return Ok(None),
+    };
+
+    // Build Identity from the API key's owner information.
+    // For user-owned keys, look up the user's memberships from the database.
+    // For service-account-owned keys, use the SA roles.
+    // For org/team/project-owned keys, use the org context.
+    let identity = if let Some(user_id) = api_key_auth.user_id {
+        // User-owned API key — look up user and memberships
+        let db = state
+            .db
+            .as_ref()
+            .ok_or_else(|| AuthError::Internal("Database not configured".to_string()))?;
+
+        let user = db
+            .users()
+            .get_by_id(user_id)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+
+        let (email, name, external_id) = match &user {
+            Some(u) => (u.email.clone(), u.name.clone(), u.external_id.clone()),
+            None => (None, None, format!("api-key:{}", api_key_auth.key.id)),
+        };
+
+        // Look up memberships
+        let org_ids: Vec<String> = if let Some(org_id) = api_key_auth.org_id {
+            vec![org_id.to_string()]
+        } else {
+            db.users()
+                .get_org_memberships_for_user(user_id)
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?
+                .iter()
+                .map(|m| m.org_id.to_string())
+                .collect()
+        };
+
+        let team_ids: Vec<String> = if let Some(team_id) = api_key_auth.team_id {
+            vec![team_id.to_string()]
+        } else {
+            db.users()
+                .get_team_memberships_for_user(user_id)
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?
+                .iter()
+                .map(|m| m.team_id.to_string())
+                .collect()
+        };
+
+        let project_ids: Vec<String> = if let Some(project_id) = api_key_auth.project_id {
+            vec![project_id.to_string()]
+        } else {
+            db.users()
+                .get_project_memberships_for_user(user_id)
+                .await
+                .map_err(|e| AuthError::Internal(e.to_string()))?
+                .iter()
+                .map(|m| m.project_id.to_string())
+                .collect()
+        };
+
+        Identity {
+            external_id,
+            email,
+            name,
+            user_id: Some(user_id),
+            roles: vec![],
+            idp_groups: vec![],
+            org_ids,
+            team_ids,
+            project_ids,
+        }
+    } else if let Some(sa_id) = api_key_auth.service_account_id {
+        // Service-account-owned API key
+        Identity {
+            external_id: format!("service-account:{sa_id}"),
+            email: None,
+            name: Some(format!("Service Account {sa_id}")),
+            user_id: None,
+            roles: api_key_auth.service_account_roles.unwrap_or_default(),
+            idp_groups: vec![],
+            org_ids: api_key_auth
+                .org_id
+                .map(|id| vec![id.to_string()])
+                .unwrap_or_default(),
+            team_ids: vec![],
+            project_ids: vec![],
+        }
+    } else {
+        // Org/team/project-owned API key (machine credential)
+        Identity {
+            external_id: format!("api-key:{}", api_key_auth.key.id),
+            email: None,
+            name: Some(api_key_auth.key.name.clone()),
+            user_id: None,
+            roles: vec![],
+            idp_groups: vec![],
+            org_ids: api_key_auth
+                .org_id
+                .map(|id| vec![id.to_string()])
+                .unwrap_or_default(),
+            team_ids: api_key_auth
+                .team_id
+                .map(|id| vec![id.to_string()])
+                .unwrap_or_default(),
+            project_ids: api_key_auth
+                .project_id
+                .map(|id| vec![id.to_string()])
+                .unwrap_or_default(),
+        }
+    };
+
+    Ok(Some(identity))
 }
 
 /// Try to authenticate via Bearer token (JWT).

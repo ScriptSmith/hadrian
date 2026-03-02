@@ -54,6 +54,9 @@ impl AuthConfig {
         }
         self.mode.validate()?;
         self.rbac.validate()?;
+        if let Some(ref bootstrap) = self.bootstrap {
+            bootstrap.validate()?;
+        }
         if let Some(emergency) = &self.emergency {
             emergency.validate()?;
         }
@@ -67,13 +70,14 @@ impl AuthConfig {
 
     /// Whether admin routes should be protected by authentication middleware.
     ///
-    /// Returns true for modes that have an admin auth mechanism (Idp uses sessions/bearer
-    /// tokens, Iap uses proxy headers). Returns false for `ApiKey` mode, where only gateway
-    /// (API) routes require keys and admin routes are unprotected — matching the legacy
-    /// behavior where `[auth.gateway]` could be set without `[auth.admin]`.
+    /// Returns true for all modes except `None`. In `ApiKey` mode, admin routes
+    /// require a valid API key. In `Idp` mode, sessions/bearer tokens are used.
+    /// In `Iap` mode, proxy headers provide identity. Only `None` mode leaves
+    /// admin routes unprotected (for local development).
     pub fn requires_admin_auth(&self) -> bool {
         match self.mode {
-            AuthMode::None | AuthMode::ApiKey => false,
+            AuthMode::None => false,
+            AuthMode::ApiKey => true,
             #[cfg(feature = "sso")]
             AuthMode::Idp => true,
             AuthMode::Iap(_) => true,
@@ -650,7 +654,7 @@ fn default_api_key_prefix() -> String {
 }
 
 fn default_key_cache_ttl() -> u64 {
-    60 // 1 minute
+    300 // 5 minutes
 }
 
 /// Hash algorithm for API keys.
@@ -1238,6 +1242,11 @@ pub struct BootstrapConfig {
     /// Initial organization to create.
     #[serde(default)]
     pub initial_org: Option<BootstrapOrg>,
+
+    /// Initial API key to create (owned by the initial org).
+    /// The raw key is printed to stdout on first creation.
+    #[serde(default)]
+    pub initial_api_key: Option<BootstrapApiKey>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1253,6 +1262,97 @@ pub struct BootstrapOrg {
     /// Identity IDs to add as org admins.
     #[serde(default)]
     pub admin_identities: Vec<String>,
+
+    /// Optional SSO configuration to create for this organization.
+    #[cfg(feature = "sso")]
+    #[serde(default)]
+    pub sso: Option<BootstrapSsoConfig>,
+}
+
+/// SSO configuration for bootstrap.
+///
+/// Creates an OIDC or SAML SSO configuration for the initial organization.
+/// Client secrets are stored via the configured secrets manager.
+#[cfg(feature = "sso")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct BootstrapSsoConfig {
+    /// SSO provider type: "oidc" or "saml".
+    #[serde(default)]
+    pub provider_type: String,
+
+    /// OIDC issuer URL.
+    #[serde(default)]
+    pub issuer: Option<String>,
+
+    /// OIDC client ID.
+    #[serde(default)]
+    pub client_id: Option<String>,
+
+    /// OIDC client secret.
+    #[serde(default)]
+    pub client_secret: Option<String>,
+
+    /// OAuth redirect URI.
+    #[serde(default)]
+    pub redirect_uri: Option<String>,
+
+    /// Allowed email domains for SSO users.
+    #[serde(default)]
+    pub allowed_email_domains: Vec<String>,
+
+    /// OIDC discovery URL (if different from issuer).
+    #[serde(default)]
+    pub discovery_url: Option<String>,
+}
+
+#[cfg(feature = "sso")]
+impl BootstrapSsoConfig {
+    /// Validate the bootstrap SSO configuration.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.provider_type.is_empty() {
+            return Err(ConfigError::Validation(
+                "Bootstrap SSO provider_type cannot be empty".into(),
+            ));
+        }
+        if self.provider_type == "oidc" {
+            fn require_non_empty(value: &Option<String>, field: &str) -> Result<(), ConfigError> {
+                match value.as_deref() {
+                    None | Some("") => Err(ConfigError::Validation(format!(
+                        "Bootstrap SSO OIDC {field} is required and cannot be empty"
+                    ))),
+                    _ => Ok(()),
+                }
+            }
+            require_non_empty(&self.issuer, "issuer")?;
+            require_non_empty(&self.client_id, "client_id")?;
+            require_non_empty(&self.client_secret, "client_secret")?;
+        }
+        Ok(())
+    }
+}
+
+impl BootstrapConfig {
+    /// Validate the bootstrap configuration.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        #[cfg(feature = "sso")]
+        if let Some(ref org) = self.initial_org
+            && let Some(ref sso) = org.sso
+        {
+            sso.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// API key to create during bootstrap.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct BootstrapApiKey {
+    /// Display name for the API key.
+    pub name: String,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1765,6 +1865,7 @@ mod tests {
         let config: AuthConfig = toml::from_str(toml_str).unwrap();
         assert!(matches!(config.mode, AuthMode::ApiKey));
         assert!(config.is_auth_enabled());
+        assert!(config.requires_admin_auth());
         assert!(config.requires_api_keys());
         assert_eq!(config.api_key_config().key_prefix, "sk_");
     }
@@ -1823,7 +1924,7 @@ mod tests {
         let config = ApiKeyAuthConfig::default();
         assert_eq!(config.header_name, "X-API-Key");
         assert_eq!(config.key_prefix, "gw_");
-        assert_eq!(config.cache_ttl_secs, 60);
+        assert_eq!(config.cache_ttl_secs, 300);
     }
 
     #[test]
