@@ -21,7 +21,7 @@ use crate::{
 
 The gateway provides two main API surfaces:
 
-- **Public API** (`/api/v1/*`) - OpenAI-compatible endpoints for LLM inference. Use these endpoints to create chat completions, text completions, embeddings, and list available models. Requires API key authentication.
+- **Public API** (`/api/v1/*`) - OpenAI-compatible endpoints for LLM inference. Use these endpoints to create chat completions, text completions, embeddings, and list available models. Authentication depends on the configured `auth.mode` (API key, IdP, IAP, or none).
 
 - **Admin API** (`/admin/v1/*`) - RESTful management endpoints for multi-tenant configuration. Manage organizations, projects, users, API keys, dynamic providers, usage tracking, and model pricing.
 

@@ -1544,25 +1544,24 @@ async fn try_session_api_auth(
         Err(_) => return Ok(None),
     };
 
-    // Get session from the registry's shared session store
-    let session = match registry.session_store().get_session(session_id).await {
-        Ok(Some(s)) => s,
-        Ok(None) => return Ok(None),
+    // Validate session (checks expiration, inactivity timeout, updates last_activity)
+    let session = match crate::auth::session_store::validate_and_refresh_session(
+        registry.session_store().as_ref(),
+        session_id,
+        &session_config.enhanced,
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(
+            crate::auth::session_store::SessionError::NotFound
+            | crate::auth::session_store::SessionError::Expired,
+        ) => return Ok(None),
         Err(e) => {
-            tracing::debug!(
-                session_id = %session_id,
-                error = %e,
-                "Failed to retrieve session for API auth"
-            );
+            tracing::debug!(session_id = %session_id, error = %e, "Session validation failed");
             return Ok(None);
         }
     };
-
-    // Check if session has expired
-    if session.is_expired() {
-        let _ = registry.session_store().delete_session(session_id).await;
-        return Ok(None);
-    }
 
     // Look up internal user and memberships from the database
     let (user_id, org_ids, team_ids, project_ids) = if let Some(db) = &state.db {

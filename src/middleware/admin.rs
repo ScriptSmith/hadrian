@@ -1206,25 +1206,24 @@ async fn try_oidc_session_auth(
         .parse()
         .map_err(|_| AuthError::InvalidToken)?;
 
-    // Get session from the registry's shared session store
-    let session = match registry.session_store().get_session(session_id).await {
-        Ok(Some(s)) => s,
-        Ok(None) => return Ok(None),
+    // Validate session (checks expiration, inactivity timeout, updates last_activity)
+    let session = match crate::auth::session_store::validate_and_refresh_session(
+        registry.session_store().as_ref(),
+        session_id,
+        &session_config.enhanced,
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(
+            crate::auth::session_store::SessionError::NotFound
+            | crate::auth::session_store::SessionError::Expired,
+        ) => return Ok(None),
         Err(e) => {
-            tracing::warn!(
-                session_id = %session_id,
-                error = %e,
-                "Failed to retrieve OIDC session"
-            );
+            tracing::warn!(session_id = %session_id, error = %e, "Session validation failed");
             return Ok(None);
         }
     };
-
-    // Check if session has expired
-    if session.is_expired() {
-        let _ = registry.session_store().delete_session(session_id).await;
-        return Ok(None);
-    }
 
     // Look up internal user and their memberships from the database
     // The database is the source of truth for org/team/project membership

@@ -6,9 +6,9 @@
 
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use tokio::sync::RwLock;
 #[cfg(feature = "sso")]
 use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use super::jwt::JwtValidator;

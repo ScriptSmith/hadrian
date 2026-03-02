@@ -2127,7 +2127,7 @@ pub fn build_app(config: &config::GatewayConfig, state: AppState) -> Router {
         app = app.nest("/admin", public_admin_routes);
 
         // Use protected routes if admin auth is configured (Idp/Iap modes), otherwise
-        // unprotected (for development, api_key-only, or when using external auth proxy)
+        // unprotected (for local development with auth.mode = "none")
         if config.auth.requires_admin_auth() {
             // Apply middleware in order: admin_auth_middleware runs first,
             // then authz_middleware runs second (layers are applied in reverse order)

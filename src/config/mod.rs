@@ -752,6 +752,7 @@ key3 = "literal""#
     }
 
     #[test]
+    #[cfg(feature = "database-sqlite")]
     fn test_iap_without_trusted_proxies_non_localhost_errors() {
         // IAP on 0.0.0.0 without trusted_proxies should fail
         let err = GatewayConfig::from_str(
@@ -786,6 +787,7 @@ key3 = "literal""#
     }
 
     #[test]
+    #[cfg(feature = "database-sqlite")]
     fn test_iap_without_trusted_proxies_localhost_warns_but_ok() {
         // IAP on localhost without trusted_proxies should succeed (just warn)
         let result = GatewayConfig::from_str(
@@ -815,6 +817,7 @@ key3 = "literal""#
     }
 
     #[test]
+    #[cfg(feature = "database-sqlite")]
     fn test_iap_with_trusted_proxies_non_localhost_ok() {
         // IAP on 0.0.0.0 with trusted_proxies configured should succeed
         let result = GatewayConfig::from_str(
@@ -847,6 +850,7 @@ key3 = "literal""#
     }
 
     #[test]
+    #[cfg(feature = "database-sqlite")]
     fn test_iap_with_dangerously_trust_all_non_localhost_ok() {
         // IAP with dangerously_trust_all should also pass validation
         let result = GatewayConfig::from_str(
