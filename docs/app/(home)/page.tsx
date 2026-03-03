@@ -225,6 +225,13 @@ export default function HomePage() {
       <section className="relative overflow-hidden border-b bg-gradient-to-b from-fd-background to-fd-muted/30 py-16 md:py-24">
         <div className="mx-auto max-w-6xl px-4">
           <div className="text-center">
+            <img
+              src={`${process.env.DOCS_BASE_PATH || ""}/icon.svg`}
+              alt=""
+              width={96}
+              height={96}
+              className="mx-auto mb-6"
+            />
             <h1 className="mb-6 text-4xl font-bold tracking-tight md:text-6xl">Hadrian Gateway</h1>
             <p className="mx-auto mb-0 max-w-2xl text-lg text-fd-muted-foreground md:text-xl">
               A unified AI gateway with every enterprise feature included.

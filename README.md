@@ -1,8 +1,16 @@
-# Hadrian Gateway
+<p align="center">
+  <img src="ui/public/icons/icon.svg" alt="Hadrian" width="128" height="128" />
+</p>
 
-An open-source AI Gateway that provides a unified OpenAI-compatible API for routing requests to multiple LLM providers. All enterprise features included. Dual-licensed under Apache 2.0 and MIT.
+<h1 align="center">Hadrian Gateway</h1>
 
-**[Documentation](https://hadriangateway.com/docs)** | **[API Reference](https://hadriangateway.com/api/docs)**
+<p align="center">
+  An open-source AI Gateway that provides a unified OpenAI-compatible API for routing requests to multiple LLM providers. All enterprise features included. Dual-licensed under Apache 2.0 and MIT.
+</p>
+
+<p align="center">
+  <a href="https://hadriangateway.com/docs"><strong>Documentation</strong></a> | <a href="https://hadriangateway.com/api/docs"><strong>API Reference</strong></a>
+</p>
 
 > [!WARNING]
 > Hadrian is experimental, alpha, vibe-coded software and is not ready for production use. The API, configuration format, and database schema are subject to breaking changes that will lead to data loss. Hadrian has not undergone a security audit. Do not expose it to untrusted networks or use it to handle sensitive data. We are not accepting pull requests at this time, but [issues](https://github.com/ScriptSmith/hadrian/issues) and [discussions](https://github.com/ScriptSmith/hadrian/discussions) are welcome.
