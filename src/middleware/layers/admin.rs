@@ -24,10 +24,10 @@ use axum::{
 use tower_cookies::Cookies;
 use uuid::Uuid;
 
-use super::{ClientInfo, RequestId};
 use crate::{
     AppState,
     auth::{AuthError, AuthenticatedRequest, Identity, IdentityKind},
+    middleware::{ClientInfo, RequestId},
     observability::metrics,
     services::audit_logs::{AuthEventParams, auth_events},
 };
@@ -647,7 +647,7 @@ async fn try_api_key_admin_auth(
     headers: &axum::http::HeaderMap,
     state: &AppState,
 ) -> Result<Option<Identity>, AuthError> {
-    let api_key_auth = match super::combined::try_api_key_auth(headers, state).await? {
+    let api_key_auth = match super::api::try_api_key_auth(headers, state).await? {
         Some(auth) => auth,
         None => return Ok(None),
     };

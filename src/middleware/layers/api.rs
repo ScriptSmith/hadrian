@@ -8,20 +8,22 @@ use axum::{
 use chrono::Utc;
 
 use super::{
-    RequestId,
-    budget::{BudgetCheckResult, BudgetError, adjust_budget_reservation},
     rate_limit::{
         RateLimitError, TokenRateLimitCheckResult, TokenRateLimitResult, TokenReservation,
         add_rate_limit_headers, add_token_rate_limit_headers, adjust_token_reservation,
     },
-    scope::required_scope_for_path,
-    usage::{UsageTracker, extract_full_usage_from_response, tracker_from_headers},
+    request_id::RequestId,
 };
 use crate::{
     AppState,
     auth::{ApiKeyAuth, AuthError, AuthenticatedRequest, Identity, IdentityKind},
     cache::{BudgetCheckParams, Cache, CacheKeys, RateLimitCheckParams, RateLimitResult},
     events::{BudgetType, ServerEvent},
+    middleware::util::{
+        budget::{BudgetCheckResult, BudgetError, adjust_budget_reservation},
+        scope::required_scope_for_path,
+        usage::{UsageTracker, extract_full_usage_from_response, tracker_from_headers},
+    },
     models::{AuditActorType, BudgetPeriod, CreateAuditLog, has_valid_prefix, hash_api_key},
     observability::metrics,
 };
@@ -584,7 +586,7 @@ pub async fn api_middleware(
         .map(|ci| ci.0.ip());
 
     // Insert client info for audit logging
-    let client_info = super::ClientInfo {
+    let client_info = crate::middleware::ClientInfo {
         ip_address: connecting_ip.map(|ip| ip.to_string()),
         user_agent: headers
             .get(axum::http::header::USER_AGENT)

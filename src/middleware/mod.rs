@@ -21,30 +21,23 @@
 //! ## Unprotected admin routes (login, session info)
 //! - [`permissive_authz_middleware`] — Injects allow-all authz context
 
-// ── Middleware layers ──────────────────────────────────────────────────────────
-mod admin;
-mod authz;
-mod combined;
-mod rate_limit;
-mod request_id;
-mod security_headers;
+// ── True middleware (Axum middleware layers) ────────────────────────────────────
+mod layers;
 
-// ── Internal helpers (used only by combined.rs) ────────────────────────────────
-mod budget;
-mod scope;
-mod usage;
+// ── Internal utilities (budget, scope, usage helpers for combined middleware) ──
+pub(crate) mod util;
 
 // ── Middleware layer exports ───────────────────────────────────────────────────
-pub use admin::{AdminAuth, admin_auth_middleware};
-pub use authz::{
-    AuthzContext, api_authz_middleware, authz_middleware, permissive_authz_middleware,
-};
-pub use combined::api_middleware;
 #[cfg(feature = "sso")]
-pub use rate_limit::extract_client_ip_from_parts;
-pub use rate_limit::rate_limit_middleware;
-pub use request_id::{RequestId, request_id_middleware};
-pub use security_headers::security_headers_middleware;
+pub use layers::rate_limit::extract_client_ip_from_parts;
+pub use layers::{
+    admin::{AdminAuth, admin_auth_middleware},
+    api::api_middleware,
+    authz::{AuthzContext, api_authz_middleware, authz_middleware, permissive_authz_middleware},
+    rate_limit::rate_limit_middleware,
+    request_id::{RequestId, request_id_middleware},
+    security_headers::security_headers_middleware,
+};
 
 // ── Types extracted by middleware (used by route handlers via Extension<T>) ────
 
