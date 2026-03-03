@@ -26,8 +26,8 @@ use crate::{
             ResponsesUsageInputTokensDetails, ResponsesUsageOutputTokensDetails,
         },
     },
-    middleware::FileSearchToolArguments,
     providers::image::parse_data_url,
+    services::FileSearchToolArguments,
 };
 
 // ============================================================================

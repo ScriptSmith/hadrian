@@ -28,8 +28,8 @@ use crate::{
             ResponsesUsageOutputTokensDetails,
         },
     },
-    middleware::FileSearchToolArguments,
     providers::image::parse_data_url,
+    services::FileSearchToolArguments,
 };
 
 /// Extract text content from MessageContent
