@@ -809,15 +809,11 @@ impl FileProcessingQueueConfig {
             return Err("Queue name cannot be empty".to_string());
         }
         match self.backend {
-            FileProcessingQueueBackend::Sqs => {
-                if self.region.is_none() {
-                    return Err("SQS backend requires 'region' to be specified".to_string());
-                }
+            FileProcessingQueueBackend::Sqs if self.region.is_none() => {
+                return Err("SQS backend requires 'region' to be specified".to_string());
             }
-            FileProcessingQueueBackend::PubSub => {
-                if self.project_id.is_none() {
-                    return Err("Pub/Sub backend requires 'project_id' to be specified".to_string());
-                }
+            FileProcessingQueueBackend::PubSub if self.project_id.is_none() => {
+                return Err("Pub/Sub backend requires 'project_id' to be specified".to_string());
             }
             _ => {}
         }

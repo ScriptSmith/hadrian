@@ -2,7 +2,7 @@
 //!
 //! This module provides utilities for guardrails audit logging.
 //!
-//! The main entry points for audit logging are in `src/routes/api.rs`:
+//! The main entry points for audit logging are in `src/routes/api/mod.rs`:
 //! - `log_guardrails_evaluation()` - Logs input guardrails evaluations
 //! - `log_output_guardrails_evaluation()` - Logs output guardrails evaluations
 //!

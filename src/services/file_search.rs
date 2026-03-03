@@ -21,13 +21,15 @@ use crate::{
     },
     config::{CircuitBreakerConfig, RerankConfig, RetryConfig},
     db::{DbPool, ListParams},
-    middleware::FileSearchAuthContext,
     models::{AttributeFilter, FileSearchRankingOptions, VectorStore, VectorStoreOwnerType},
     providers::{
         circuit_breaker::CircuitBreaker,
         retry::{is_retryable_database_error, with_circuit_breaker_and_retry_generic},
     },
-    services::reranker::{RerankRequest, Reranker},
+    services::{
+        FileSearchAuthContext,
+        reranker::{RerankRequest, Reranker},
+    },
 };
 
 /// Configuration for the file search service.
@@ -900,10 +902,10 @@ mod access_control_tests {
 
     use crate::{
         db::{DbPool, tests::harness},
-        middleware::FileSearchAuthContext,
         models::{
             CreateUser, CreateVectorStore, MembershipSource, VectorStoreOwner, VectorStoreOwnerType,
         },
+        services::FileSearchAuthContext,
     };
 
     /// Test context for access control tests

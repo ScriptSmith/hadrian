@@ -16,12 +16,12 @@ use crate::providers::vertex;
 use crate::{
     AppState, api_types,
     config::ProviderConfig,
-    middleware::preprocess_file_search_tools,
     observability::metrics,
     providers::{
         FallbackDecision, Provider, ProviderError, anthropic, build_fallback_chain,
         classify_provider_error, open_ai, should_fallback_on_response_status, test,
     },
+    services::preprocess_file_search_tools,
 };
 
 // ============================================================================

@@ -1,6 +1,6 @@
-//! File search middleware for server-side tool interception in the Responses API.
+//! File search tool interception service for the Responses API.
 //!
-//! This middleware intercepts `file_search` tool calls from the LLM and executes
+//! This service intercepts `file_search` tool calls from the LLM and executes
 //! them against the local vector store, feeding results back into the conversation
 //! without exposing the search process to the client.
 //!

@@ -8,18 +8,20 @@ use axum::{
 use chrono::Utc;
 
 use super::{
+    RequestId,
     budget::{BudgetCheckResult, BudgetError, adjust_budget_reservation},
     rate_limit::{
         RateLimitError, TokenRateLimitCheckResult, TokenRateLimitResult, TokenReservation,
         add_rate_limit_headers, add_token_rate_limit_headers, adjust_token_reservation,
     },
+    scope::required_scope_for_path,
+    usage::{UsageTracker, extract_full_usage_from_response, tracker_from_headers},
 };
 use crate::{
     AppState,
     auth::{ApiKeyAuth, AuthError, AuthenticatedRequest, Identity, IdentityKind},
     cache::{BudgetCheckParams, Cache, CacheKeys, RateLimitCheckParams, RateLimitResult},
     events::{BudgetType, ServerEvent},
-    middleware::{RequestId, UsageTracker, tracker_from_headers},
     models::{AuditActorType, BudgetPeriod, CreateAuditLog, has_valid_prefix, hash_api_key},
     observability::metrics,
 };
@@ -648,7 +650,7 @@ pub async fn api_middleware(
 
         // 2.5. Check API key scopes (if API key auth and path requires a scope)
         if let Some(api_key) = auth.api_key()
-            && let Some(required_scope) = super::required_scope_for_path(&path)
+            && let Some(required_scope) = required_scope_for_path(&path)
             && !api_key.key.has_scope(required_scope)
         {
             tracing::warn!(
@@ -892,7 +894,7 @@ pub async fn api_middleware(
         // Skip streaming responses here — UsageTrackingStream handles them
         // with actual token counts after the stream completes.
         if has_model && !is_streaming {
-            let usage = super::extract_full_usage_from_response(&response);
+            let usage = extract_full_usage_from_response(&response);
 
             let model = response
                 .headers()
@@ -994,7 +996,7 @@ fn track_usage_async(ctx: UsageTrackingContext<'_>) {
     let latency_ms = elapsed.as_millis().min(i32::MAX as u128) as i32;
 
     // Extract full usage info from response headers
-    let usage = super::extract_full_usage_from_response(response);
+    let usage = extract_full_usage_from_response(response);
     let input_tokens = usage.input_tokens;
     let output_tokens = usage.output_tokens;
     let cost_microcents = usage.cost_microcents;

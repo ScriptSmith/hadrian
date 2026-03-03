@@ -10,6 +10,7 @@ pub mod document_processor;
 #[cfg(feature = "sso")]
 mod domain_verifications;
 mod file_search;
+pub mod file_search_tool;
 mod file_storage;
 mod files;
 #[cfg(feature = "forecasting")]
@@ -61,6 +62,10 @@ pub use domain_verifications::{DomainVerificationError, DomainVerificationServic
 pub use file_search::{
     FileSearchError, FileSearchRequest, FileSearchResponse, FileSearchResult, FileSearchService,
     FileSearchServiceConfig,
+};
+pub use file_search_tool::{
+    FileSearchAuthContext, FileSearchContext, FileSearchToolArguments, ProviderCallback,
+    preprocess_file_search_tools, wrap_streaming_with_file_search,
 };
 #[cfg(feature = "s3-storage")]
 pub use file_storage::S3FileStorage;
