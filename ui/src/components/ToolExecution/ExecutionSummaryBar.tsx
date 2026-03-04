@@ -38,7 +38,7 @@ function ExecutionSummaryBarComponent({
     (sum, round) => sum + round.executions.filter((e) => e.status === "error").length,
     0
   );
-  const retryCount = rounds.length > 1 ? rounds.length - 1 : 0;
+  const retryCount = rounds.filter((r) => r.hasError).length;
   const totalDuration = rounds.reduce((sum, round) => sum + (round.totalDuration || 0), 0);
 
   // Get unique tool names used
@@ -71,7 +71,10 @@ function ExecutionSummaryBarComponent({
           <>
             {totalExecutions} tool{totalExecutions !== 1 ? "s" : ""}
             {retryCount > 0 && (
-              <span className="text-amber-800 dark:text-amber-400"> · {retryCount} retry</span>
+              <span className="text-amber-800 dark:text-amber-400">
+                {" "}
+                · {retryCount} {retryCount === 1 ? "retry" : "retries"}
+              </span>
             )}
           </>
         )}
