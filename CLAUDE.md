@@ -390,15 +390,10 @@ See `agent_instructions/adding_admin_endpoint.md` for implementation patterns (r
 - `[features.file_processing]` — RAG document ingestion (text extraction, OCR, chunking)
 - `[features.guardrails]` — Input/output guardrails (blocklist, PII detection, moderation APIs)
 - `[features.response_caching]` — Response caching with optional semantic similarity matching
-- `[features.prompt_caching]` — Anthropic prompt caching support
 - `[features.image_fetching]` — Fetch images from URLs for vision models
-- `[features.web_search]` — Web search tool integration
-- `[features.code_execution]` — Server-side code execution
 - `[features.model_catalog]` — Model metadata enrichment from models.dev
 - `[features.websocket]` — WebSocket for real-time events
 - `[features.vector_store_cleanup]` — Background cleanup for soft-deleted vector stores
-- `[features.fallback]` — Fallback and retry configuration
-- `[features.load_balancing]` — Load balancing configuration
 
 ## Caching
 

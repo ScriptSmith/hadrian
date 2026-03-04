@@ -18,11 +18,6 @@ pub struct ServerConfig {
     #[serde(default = "default_port")]
     pub port: u16,
 
-    /// Base path for all API routes (e.g., "/api/v1").
-    /// The UI is always served from "/".
-    #[serde(default)]
-    pub api_base_path: Option<String>,
-
     /// Request body size limit in bytes.
     #[serde(default = "default_body_limit")]
     pub body_limit_bytes: usize,
@@ -50,10 +45,6 @@ pub struct ServerConfig {
     /// Default: 120 seconds (2 minutes)
     #[serde(default = "default_streaming_idle_timeout")]
     pub streaming_idle_timeout_secs: u64,
-
-    /// Enable HTTP/2 (requires TLS or h2c).
-    #[serde(default)]
-    pub http2: bool,
 
     /// TLS configuration. If omitted, serves plain HTTP.
     /// In production, TLS is typically terminated at the load balancer.
@@ -100,12 +91,10 @@ impl Default for ServerConfig {
         Self {
             host: default_host(),
             port: default_port(),
-            api_base_path: None,
             body_limit_bytes: default_body_limit(),
             max_response_body_bytes: default_max_response_body(),
             timeout_secs: default_timeout(),
             streaming_idle_timeout_secs: default_streaming_idle_timeout(),
-            http2: false,
             tls: None,
             trusted_proxies: TrustedProxiesConfig::default(),
             cors: CorsConfig::default(),
@@ -424,7 +413,8 @@ pub struct SecurityHeadersConfig {
     pub content_security_policy: Option<String>,
 
     /// X-XSS-Protection header value.
-    /// Legacy header for older browsers. Default: "1; mode=block"
+    /// Legacy header for older browsers. Disabled by default as CSP provides protection.
+    /// Enable for legacy browser compatibility.
     #[serde(default = "default_xss_protection")]
     pub xss_protection: Option<String>,
 
@@ -488,7 +478,7 @@ fn default_csp() -> Option<String> {
 }
 
 fn default_xss_protection() -> Option<String> {
-    Some("1; mode=block".to_string())
+    None
 }
 
 fn default_referrer_policy() -> Option<String> {

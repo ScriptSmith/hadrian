@@ -63,14 +63,6 @@ pub struct AssetsConfig {
     /// Cache control header for static assets.
     #[serde(default = "default_cache_control")]
     pub cache_control: String,
-
-    /// Enable gzip compression.
-    #[serde(default = "default_true")]
-    pub gzip: bool,
-
-    /// Enable brotli compression.
-    #[serde(default = "default_true")]
-    pub brotli: bool,
 }
 
 impl Default for AssetsConfig {
@@ -78,8 +70,6 @@ impl Default for AssetsConfig {
         Self {
             source: AssetSource::default(),
             cache_control: default_cache_control(),
-            gzip: true,
-            brotli: true,
         }
     }
 }
@@ -122,25 +112,9 @@ pub struct ChatConfig {
     #[serde(default)]
     pub available_models: Vec<String>,
 
-    /// Enable conversation history.
-    #[serde(default = "default_true")]
-    pub history_enabled: bool,
-
-    /// Maximum conversations to store per user.
-    #[serde(default = "default_max_conversations")]
-    pub max_conversations: usize,
-
     /// Enable file uploads.
     #[serde(default)]
     pub file_uploads: FileUploadConfig,
-
-    /// Enable code execution in chat.
-    #[serde(default)]
-    pub code_execution: bool,
-
-    /// Enable web search in chat.
-    #[serde(default)]
-    pub web_search: bool,
 }
 
 impl Default for ChatConfig {
@@ -149,17 +123,9 @@ impl Default for ChatConfig {
             enabled: true,
             default_model: None,
             available_models: vec![],
-            history_enabled: true,
-            max_conversations: default_max_conversations(),
             file_uploads: FileUploadConfig::default(),
-            code_execution: false,
-            web_search: false,
         }
     }
-}
-
-fn default_max_conversations() -> usize {
-    100
 }
 
 /// File upload configuration.
@@ -250,11 +216,6 @@ pub struct AdminConfig {
     /// Path for admin panel.
     #[serde(default = "default_admin_path")]
     pub path: String,
-
-    /// Roles that can access the admin panel.
-    /// If empty, any authenticated user with admin flag can access.
-    #[serde(default)]
-    pub allowed_roles: Vec<String>,
 }
 
 impl Default for AdminConfig {
@@ -262,7 +223,6 @@ impl Default for AdminConfig {
         Self {
             enabled: true,
             path: default_admin_path(),
-            allowed_roles: vec![],
         }
     }
 }

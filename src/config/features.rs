@@ -7,48 +7,19 @@ use super::{CircuitBreakerConfig, RetryConfig};
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct FeaturesConfig {
-    /// Vector search / RAG features.
-    #[serde(default)]
-    pub vector_search: Option<VectorSearchConfig>,
-
     /// File search configuration for the Responses API.
     /// Enables server-side file_search tool execution for RAG.
     #[serde(default)]
     pub file_search: Option<FileSearchConfig>,
 
-    /// Web search features.
-    #[serde(default)]
-    pub web_search: Option<WebSearchConfig>,
-
-    /// Code execution features.
-    #[serde(default)]
-    pub code_execution: Option<CodeExecutionConfig>,
-
-    /// Content moderation (legacy - prefer guardrails for new deployments).
-    #[serde(default)]
-    pub moderation: Option<ModerationConfig>,
-
     /// Guardrails for content filtering, PII detection, and safety.
-    /// More comprehensive than the legacy moderation config, with support
-    /// for multiple providers, execution modes, and fine-grained actions.
+    /// Supports multiple providers, execution modes, and fine-grained actions.
     #[serde(default)]
     pub guardrails: Option<GuardrailsConfig>,
-
-    /// Prompt caching.
-    #[serde(default)]
-    pub prompt_caching: Option<PromptCachingConfig>,
 
     /// Response caching.
     #[serde(default)]
     pub response_caching: Option<ResponseCachingConfig>,
-
-    /// Fallback and retry configuration.
-    #[serde(default)]
-    pub fallback: FallbackConfig,
-
-    /// Load balancing configuration.
-    #[serde(default)]
-    pub load_balancing: LoadBalancingConfig,
 
     /// HTTP image URL fetching configuration.
     /// Controls how non-OpenAI providers (Anthropic, Bedrock, Vertex) handle
@@ -86,80 +57,6 @@ impl FeaturesConfig {
         }
         Ok(())
     }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Vector Search
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Vector search configuration for RAG.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct VectorSearchConfig {
-    /// Enable vector search.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
-    /// Vector database backend.
-    pub backend: VectorBackend,
-
-    /// Default number of results to retrieve.
-    #[serde(default = "default_top_k")]
-    pub default_top_k: usize,
-
-    /// Default similarity threshold (0.0-1.0).
-    #[serde(default = "default_similarity_threshold")]
-    pub similarity_threshold: f64,
-
-    /// Embedding configuration.
-    #[serde(default)]
-    pub embedding: EmbeddingConfig,
-}
-
-fn default_top_k() -> usize {
-    5
-}
-
-fn default_similarity_threshold() -> f64 {
-    0.7
-}
-
-/// Vector database backend.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[serde(deny_unknown_fields)]
-pub enum VectorBackend {
-    /// PostgreSQL with pgvector extension.
-    Pgvector,
-
-    /// Qdrant vector database.
-    Qdrant {
-        url: String,
-        #[serde(default)]
-        api_key: Option<String>,
-    },
-
-    /// Pinecone vector database.
-    Pinecone {
-        api_key: String,
-        environment: String,
-    },
-
-    /// Weaviate vector database.
-    Weaviate {
-        url: String,
-        #[serde(default)]
-        api_key: Option<String>,
-    },
-
-    /// ChromaDB.
-    Chroma {
-        url: String,
-        #[serde(default)]
-        api_key: Option<String>,
-    },
 }
 
 /// Embedding configuration.
@@ -776,10 +673,7 @@ pub struct FileProcessingQueueConfig {
     pub backend: FileProcessingQueueBackend,
 
     /// Connection URL for the queue backend.
-    /// Examples:
-    /// - Redis: "redis://localhost:6379"
-    /// - RabbitMQ: "amqp://guest:guest@localhost:5672"
-    /// - SQS: "https://sqs.us-east-1.amazonaws.com/123456789/queue-name"
+    /// Example: "redis://localhost:6379"
     pub url: String,
 
     /// Queue/topic name for processing jobs.
@@ -789,14 +683,6 @@ pub struct FileProcessingQueueConfig {
     /// Consumer group name (for Redis Streams).
     #[serde(default = "default_file_processing_consumer_group")]
     pub consumer_group: String,
-
-    /// AWS region (for SQS).
-    #[serde(default)]
-    pub region: Option<String>,
-
-    /// GCP project ID (for Pub/Sub).
-    #[serde(default)]
-    pub project_id: Option<String>,
 }
 
 impl FileProcessingQueueConfig {
@@ -807,15 +693,6 @@ impl FileProcessingQueueConfig {
         }
         if self.queue_name.is_empty() {
             return Err("Queue name cannot be empty".to_string());
-        }
-        match self.backend {
-            FileProcessingQueueBackend::Sqs if self.region.is_none() => {
-                return Err("SQS backend requires 'region' to be specified".to_string());
-            }
-            FileProcessingQueueBackend::PubSub if self.project_id.is_none() => {
-                return Err("Pub/Sub backend requires 'project_id' to be specified".to_string());
-            }
-            _ => {}
         }
         Ok(())
     }
@@ -829,18 +706,6 @@ pub enum FileProcessingQueueBackend {
     /// Redis Streams.
     /// Good for simple deployments, supports consumer groups.
     Redis,
-
-    /// RabbitMQ.
-    /// Full-featured message broker with routing capabilities.
-    RabbitMq,
-
-    /// AWS SQS.
-    /// Managed queue service, good for AWS deployments.
-    Sqs,
-
-    /// Google Cloud Pub/Sub.
-    /// Managed pub/sub service, good for GCP deployments.
-    PubSub,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1159,201 +1024,6 @@ fn default_file_processing_queue_name() -> String {
 
 fn default_file_processing_consumer_group() -> String {
     "hadrian_workers".to_string()
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Web Search
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Web search configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct WebSearchConfig {
-    /// Enable web search.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
-    /// Web search providers.
-    pub providers: Vec<WebSearchProvider>,
-
-    /// Default provider.
-    #[serde(default)]
-    pub default_provider: Option<String>,
-
-    /// Maximum results to return.
-    #[serde(default = "default_max_results")]
-    pub max_results: usize,
-}
-
-fn default_max_results() -> usize {
-    10
-}
-
-/// Web search provider configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[serde(deny_unknown_fields)]
-pub enum WebSearchProvider {
-    /// Tavily search API.
-    Tavily { api_key: String },
-
-    /// Brave Search API.
-    Brave { api_key: String },
-
-    /// Google Custom Search.
-    Google {
-        api_key: String,
-        search_engine_id: String,
-    },
-
-    /// Bing Search API.
-    Bing { api_key: String },
-
-    /// SerpAPI.
-    Serp { api_key: String },
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Code Execution
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Code execution configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct CodeExecutionConfig {
-    /// Enable code execution.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
-    /// Execution mode.
-    #[serde(default)]
-    pub mode: CodeExecutionMode,
-
-    /// Allowed languages.
-    #[serde(default = "default_languages")]
-    pub allowed_languages: Vec<String>,
-
-    /// Execution timeout in seconds.
-    #[serde(default = "default_execution_timeout")]
-    pub timeout_secs: u64,
-
-    /// Maximum memory in MB.
-    #[serde(default = "default_max_memory")]
-    pub max_memory_mb: u64,
-}
-
-fn default_languages() -> Vec<String> {
-    vec!["python".into(), "javascript".into()]
-}
-
-fn default_execution_timeout() -> u64 {
-    30
-}
-
-fn default_max_memory() -> u64 {
-    256
-}
-
-/// Code execution mode.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum CodeExecutionMode {
-    /// Execute in browser via WASM (Python via Pyodide, JS native).
-    #[default]
-    Wasm,
-
-    /// Execute on server in sandboxed containers.
-    Sandboxed {
-        /// Container runtime.
-        runtime: ContainerRuntime,
-    },
-
-    /// External code execution service.
-    External {
-        /// Service URL.
-        url: String,
-        /// API key.
-        api_key: Option<String>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum ContainerRuntime {
-    Docker,
-    Firecracker,
-    Gvisor,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Moderation
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Content moderation configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct ModerationConfig {
-    /// Enable moderation.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
-    /// Check input before sending to provider.
-    #[serde(default = "default_true")]
-    pub check_input: bool,
-
-    /// Check output before returning to user.
-    #[serde(default)]
-    pub check_output: bool,
-
-    /// Moderation provider.
-    #[serde(default)]
-    pub provider: ModerationProvider,
-
-    /// Action to take on flagged content.
-    #[serde(default)]
-    pub action: ModerationAction,
-
-    /// Categories to check.
-    #[serde(default)]
-    pub categories: Vec<String>,
-
-    /// Threshold for flagging (0.0-1.0).
-    #[serde(default = "default_moderation_threshold")]
-    pub threshold: f64,
-}
-
-fn default_moderation_threshold() -> f64 {
-    0.8
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum ModerationProvider {
-    #[default]
-    OpenAi,
-    Custom {
-        url: String,
-    },
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum ModerationAction {
-    /// Block the request and return an error.
-    #[default]
-    Block,
-    /// Allow but log the flagged content.
-    Log,
-    /// Add a warning to the response.
-    Warn,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2072,24 +1742,6 @@ fn default_pii_replacement() -> String {
 // Caching
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Prompt caching configuration (provider-level caching like Anthropic's).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct PromptCachingConfig {
-    /// Enable prompt caching.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
-    /// Minimum prompt length to cache (in tokens).
-    #[serde(default = "default_min_cache_tokens")]
-    pub min_tokens: u32,
-}
-
-fn default_min_cache_tokens() -> u32 {
-    1024
-}
-
 /// Response caching configuration (gateway-level caching).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
@@ -2394,181 +2046,6 @@ pub struct CacheKeyComponents {
     /// Include tools in cache key.
     #[serde(default = "default_true")]
     pub tools: bool,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Fallback & Retry
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Fallback and retry configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct FallbackConfig {
-    /// Enable automatic retries.
-    #[serde(default = "default_true")]
-    pub retries_enabled: bool,
-
-    /// Maximum number of retries.
-    #[serde(default = "default_max_retries")]
-    pub max_retries: u32,
-
-    /// Initial retry delay in milliseconds.
-    #[serde(default = "default_retry_delay")]
-    pub initial_delay_ms: u64,
-
-    /// Maximum retry delay in milliseconds.
-    #[serde(default = "default_max_retry_delay")]
-    pub max_delay_ms: u64,
-
-    /// Retry backoff multiplier.
-    #[serde(default = "default_backoff_multiplier")]
-    pub backoff_multiplier: f64,
-
-    /// Enable fallback to alternative providers.
-    #[serde(default)]
-    pub fallback_enabled: bool,
-
-    /// Fallback provider order.
-    #[serde(default)]
-    pub fallback_order: Vec<String>,
-
-    /// Errors that trigger fallback.
-    #[serde(default = "default_fallback_errors")]
-    pub fallback_on: Vec<FallbackTrigger>,
-}
-
-impl Default for FallbackConfig {
-    fn default() -> Self {
-        Self {
-            retries_enabled: true,
-            max_retries: default_max_retries(),
-            initial_delay_ms: default_retry_delay(),
-            max_delay_ms: default_max_retry_delay(),
-            backoff_multiplier: default_backoff_multiplier(),
-            fallback_enabled: false,
-            fallback_order: vec![],
-            fallback_on: default_fallback_errors(),
-        }
-    }
-}
-
-fn default_max_retries() -> u32 {
-    3
-}
-
-fn default_retry_delay() -> u64 {
-    1000
-}
-
-fn default_max_retry_delay() -> u64 {
-    30000
-}
-
-fn default_backoff_multiplier() -> f64 {
-    2.0
-}
-
-fn default_fallback_errors() -> Vec<FallbackTrigger> {
-    vec![
-        FallbackTrigger::RateLimit,
-        FallbackTrigger::ServerError,
-        FallbackTrigger::Timeout,
-    ]
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum FallbackTrigger {
-    RateLimit,
-    ServerError,
-    Timeout,
-    Overloaded,
-    ContextLength,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Load Balancing
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Load balancing configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct LoadBalancingConfig {
-    /// Load balancing strategy.
-    #[serde(default)]
-    pub strategy: LoadBalanceStrategy,
-
-    /// Health check configuration.
-    #[serde(default)]
-    pub health_check: HealthCheckConfig,
-}
-
-/// Load balancing strategy.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum LoadBalanceStrategy {
-    /// Round-robin across providers.
-    #[default]
-    RoundRobin,
-    /// Route to least-loaded provider.
-    LeastConnections,
-    /// Random selection.
-    Random,
-    /// Weighted distribution.
-    Weighted,
-    /// Route based on latency.
-    LatencyBased,
-    /// Route based on cost.
-    CostBased,
-}
-
-/// Health check configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct HealthCheckConfig {
-    /// Enable health checks.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
-    /// Health check interval in seconds.
-    #[serde(default = "default_health_interval")]
-    pub interval_secs: u64,
-
-    /// Unhealthy threshold (consecutive failures).
-    #[serde(default = "default_unhealthy_threshold")]
-    pub unhealthy_threshold: u32,
-
-    /// Healthy threshold (consecutive successes).
-    #[serde(default = "default_healthy_threshold")]
-    pub healthy_threshold: u32,
-}
-
-impl Default for HealthCheckConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            interval_secs: default_health_interval(),
-            unhealthy_threshold: default_unhealthy_threshold(),
-            healthy_threshold: default_healthy_threshold(),
-        }
-    }
-}
-
-fn default_health_interval() -> u64 {
-    30
-}
-
-fn default_unhealthy_threshold() -> u32 {
-    3
-}
-
-fn default_healthy_threshold() -> u32 {
-    2
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4193,73 +3670,6 @@ mod tests {
     }
 
     #[test]
-    fn test_file_processing_config_queue_mode_sqs() {
-        let config: FileProcessingConfig = toml::from_str(
-            r#"
-            mode = "queue"
-
-            [queue]
-            backend = "sqs"
-            url = "https://sqs.us-east-1.amazonaws.com/123456789/my-queue"
-            queue_name = "my-queue"
-            region = "us-east-1"
-            "#,
-        )
-        .unwrap();
-
-        assert_eq!(config.mode, FileProcessingMode::Queue);
-        assert!(config.validate().is_ok());
-
-        let queue = config.queue.unwrap();
-        assert_eq!(queue.backend, FileProcessingQueueBackend::Sqs);
-        assert_eq!(queue.region, Some("us-east-1".to_string()));
-    }
-
-    #[test]
-    fn test_file_processing_config_queue_mode_pubsub() {
-        let config: FileProcessingConfig = toml::from_str(
-            r#"
-            mode = "queue"
-
-            [queue]
-            backend = "pub_sub"
-            url = "https://pubsub.googleapis.com"
-            queue_name = "file-processing-topic"
-            project_id = "my-gcp-project"
-            "#,
-        )
-        .unwrap();
-
-        assert_eq!(config.mode, FileProcessingMode::Queue);
-        assert!(config.validate().is_ok());
-
-        let queue = config.queue.unwrap();
-        assert_eq!(queue.backend, FileProcessingQueueBackend::PubSub);
-        assert_eq!(queue.project_id, Some("my-gcp-project".to_string()));
-    }
-
-    #[test]
-    fn test_file_processing_config_queue_mode_rabbitmq() {
-        let config: FileProcessingConfig = toml::from_str(
-            r#"
-            mode = "queue"
-
-            [queue]
-            backend = "rabbit_mq"
-            url = "amqp://guest:guest@localhost:5672"
-            queue_name = "file_processing"
-            "#,
-        )
-        .unwrap();
-
-        assert_eq!(config.mode, FileProcessingMode::Queue);
-        assert!(config.validate().is_ok());
-
-        let queue = config.queue.unwrap();
-        assert_eq!(queue.backend, FileProcessingQueueBackend::RabbitMq);
-    }
-
-    #[test]
     fn test_file_processing_config_queue_mode_missing_config() {
         let config: FileProcessingConfig = toml::from_str(
             r#"
@@ -4269,40 +3679,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.mode, FileProcessingMode::Queue);
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_file_processing_config_sqs_missing_region() {
-        let config: FileProcessingConfig = toml::from_str(
-            r#"
-            mode = "queue"
-
-            [queue]
-            backend = "sqs"
-            url = "https://sqs.us-east-1.amazonaws.com/123456789/my-queue"
-            queue_name = "my-queue"
-            "#,
-        )
-        .unwrap();
-
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_file_processing_config_pubsub_missing_project() {
-        let config: FileProcessingConfig = toml::from_str(
-            r#"
-            mode = "queue"
-
-            [queue]
-            backend = "pub_sub"
-            url = "https://pubsub.googleapis.com"
-            queue_name = "file-processing-topic"
-            "#,
-        )
-        .unwrap();
-
         assert!(config.validate().is_err());
     }
 

@@ -15,12 +15,8 @@ The `[features]` section enables and configures optional gateway capabilities. A
 | [File Processing](/docs/configuration/features/file-processing)   | `[features.file_processing]`  | Document chunking, OCR, virus scanning            |
 | [Response Caching](/docs/configuration/features/response-caching) | `[features.response_caching]` | Exact and semantic response caching               |
 | [Guardrails](/docs/configuration/features/guardrails)             | `[features.guardrails]`       | Content filtering, PII detection, safety          |
-| [Web Search](/docs/configuration/features/web-search)             | `[features.web_search]`       | Web search tool providers                         |
-| [Code Execution](/docs/configuration/features/code-execution)     | `[features.code_execution]`   | Server-side code execution                        |
 | [Image Fetching](/docs/configuration/features/image-fetching)     | `[features.image_fetching]`   | URL-to-base64 conversion for non-OpenAI providers |
 | [WebSocket](/docs/configuration/features/websocket)               | `[features.websocket]`        | Real-time event subscriptions                     |
-| [Load Balancing](/docs/configuration/features/load-balancing)     | `[features.load_balancing]`   | Provider selection strategies                     |
-| [Fallback](/docs/configuration/features/fallback)                 | `[features.fallback]`         | Retry and provider fallback                       |
 | Model Catalog                                                     | `[features.model_catalog]`    | Enrich models with capabilities and pricing       |
 
 ## Minimal Configuration
@@ -106,21 +102,6 @@ timeout_secs = 30
 [features.websocket]
 enabled = true
 require_auth = true
-
-# Load Balancing
-[features.load_balancing]
-strategy = "round_robin"
-
-[features.load_balancing.health_check]
-enabled = true
-interval_secs = 30
-
-# Fallback & Retry
-[features.fallback]
-retries_enabled = true
-max_retries = 3
-fallback_enabled = true
-fallback_order = ["anthropic", "openai"]
 
 # Model Catalog
 [features.model_catalog]

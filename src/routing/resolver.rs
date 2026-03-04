@@ -600,7 +600,6 @@ pub async fn dynamic_provider_to_config(
                 allowed_models: provider.models.clone(),
                 model_aliases: std::collections::HashMap::new(),
                 headers: std::collections::HashMap::new(),
-                supports_streaming: true,
                 supports_tools: false,
                 supports_vision: false,
                 models: std::collections::HashMap::new(),

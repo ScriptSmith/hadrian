@@ -1357,34 +1357,22 @@ impl AppState {
         // Get embedding configuration with priority:
         // 1. file_search.embedding (explicit RAG config)
         // 2. response_caching.semantic.embedding (semantic cache config)
-        // 3. vector_search.embedding (legacy vector search config)
-        let embedding_config = file_search_config
-            .embedding
-            .as_ref()
-            .or_else(|| {
-                config
-                    .features
-                    .response_caching
-                    .as_ref()
-                    .and_then(|rc| rc.semantic.as_ref())
-                    .map(|sc| &sc.embedding)
-            })
-            .or_else(|| {
-                config
-                    .features
-                    .vector_search
-                    .as_ref()
-                    .map(|vs| &vs.embedding)
-            });
+        let embedding_config = file_search_config.embedding.as_ref().or_else(|| {
+            config
+                .features
+                .response_caching
+                .as_ref()
+                .and_then(|rc| rc.semantic.as_ref())
+                .map(|sc| &sc.embedding)
+        });
 
         let embedding_config = match embedding_config {
             Some(cfg) => cfg,
             None => {
                 tracing::warn!(
                     "File search is enabled but no embedding configuration found. \
-                     Configure [features.file_search.embedding], \
-                     [features.response_caching.semantic.embedding], or \
-                     [features.vector_search.embedding] to enable file search."
+                     Configure [features.file_search.embedding] or \
+                     [features.response_caching.semantic.embedding] to enable file search."
                 );
                 return None;
             }

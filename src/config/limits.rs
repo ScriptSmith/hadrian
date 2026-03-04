@@ -17,10 +17,6 @@ pub struct LimitsConfig {
     #[serde(default)]
     pub budgets: BudgetDefaults,
 
-    /// Token limits.
-    #[serde(default)]
-    pub tokens: TokenLimitDefaults,
-
     /// Resource limits for entity counts.
     #[serde(default)]
     pub resource_limits: ResourceLimits,
@@ -225,15 +221,6 @@ pub struct BudgetDefaults {
     #[serde(default = "default_warning_threshold")]
     pub warning_threshold: f64,
 
-    /// Hard limit action when budget is exceeded.
-    #[serde(default)]
-    pub exceeded_action: BudgetExceededAction,
-
-    /// Allow overage up to this percentage above the budget.
-    /// E.g., 0.1 means 10% overage is allowed.
-    #[serde(default)]
-    pub allowed_overage: f64,
-
     /// Estimated cost per request in cents for budget reservation.
     /// This is reserved before the request is processed to prevent race conditions.
     /// After the request completes, the actual cost replaces the estimate.
@@ -248,8 +235,6 @@ impl Default for BudgetDefaults {
             monthly_budget_usd: None,
             daily_budget_usd: None,
             warning_threshold: default_warning_threshold(),
-            exceeded_action: BudgetExceededAction::default(),
-            allowed_overage: 0.0,
             estimated_cost_cents: default_estimated_cost_cents(),
         }
     }
@@ -261,55 +246,4 @@ fn default_estimated_cost_cents() -> i64 {
 
 fn default_warning_threshold() -> f64 {
     0.8 // 80%
-}
-
-/// Action to take when budget is exceeded.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum BudgetExceededAction {
-    /// Block the request.
-    #[default]
-    Block,
-    /// Allow the request but log a warning.
-    Warn,
-    /// Allow but throttle (reduce rate limits).
-    Throttle,
-}
-
-/// Token limit defaults.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct TokenLimitDefaults {
-    /// Maximum input tokens per request.
-    #[serde(default)]
-    pub max_input_tokens: Option<u32>,
-
-    /// Maximum output tokens per request.
-    #[serde(default)]
-    pub max_output_tokens: Option<u32>,
-
-    /// Maximum total tokens per request (input + output).
-    #[serde(default)]
-    pub max_total_tokens: Option<u32>,
-
-    /// Default max_tokens if not specified in the request.
-    #[serde(default = "default_max_tokens")]
-    pub default_max_tokens: u32,
-}
-
-impl Default for TokenLimitDefaults {
-    fn default() -> Self {
-        Self {
-            max_input_tokens: None,
-            max_output_tokens: None,
-            max_total_tokens: None,
-            default_max_tokens: default_max_tokens(),
-        }
-    }
-}
-
-fn default_max_tokens() -> u32 {
-    4096
 }
