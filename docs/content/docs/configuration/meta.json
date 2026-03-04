@@ -1,4 +1,4 @@
 {
   "title": "Configuration",
-  "pages": ["index", "server", "database", "providers", "auth", "features", "observability"]
+  "pages": ["index", "builder", "server", "database", "providers", "auth", "features", "observability"]
 }
