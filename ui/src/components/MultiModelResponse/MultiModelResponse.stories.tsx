@@ -288,15 +288,15 @@ export const ViewModeToggle: Story = {
     // Should have 2 toggle buttons
     await expect(toggleButtons.length).toBe(2);
 
-    // In grid mode, cards should have min-w-[500px] class (horizontal layout)
-    let gridCards = canvasElement.querySelectorAll('[class*="min-w-[500px]"]');
+    // In grid mode, cards should have basis-[min(500px,85vw)] class (horizontal layout)
+    let gridCards = canvasElement.querySelectorAll('[class*="basis-"]');
     await expect(gridCards.length).toBe(2);
 
     // Click the stacked button (second toggle button)
     await userEvent.click(toggleButtons[1]);
 
-    // After clicking stacked, cards should NOT have min-w-[500px] (vertical layout)
-    gridCards = canvasElement.querySelectorAll('[class*="min-w-[500px]"]');
+    // After clicking stacked, cards should NOT have basis-[min(500px,85vw)] (vertical layout)
+    gridCards = canvasElement.querySelectorAll('[class*="basis-"]');
     await expect(gridCards.length).toBe(0);
 
     // Cards should now be full width (w-full)
