@@ -4,8 +4,6 @@ hadrian.toml
 /coverage
 .kreuzberg
 todo/
-AGENTS.md
-CLAUDE.md
 
 # Model catalog (fetched via scripts/fetch-model-catalog.sh)
 data/models-dev-catalog.json
