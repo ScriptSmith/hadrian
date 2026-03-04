@@ -822,7 +822,6 @@ type = "{}"
 base_url = "{}"
 api_key = "test-api-key"
 timeout_secs = 30
-supports_streaming = true
 supports_tools = true
 supports_vision = true
 
@@ -2459,7 +2458,6 @@ type = "open_ai"
 base_url = "{}"
 api_key = "test-api-key"
 timeout_secs = 30
-supports_streaming = true
 supports_tools = true
 
 # Circuit breaker configuration

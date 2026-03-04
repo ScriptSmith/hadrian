@@ -12,6 +12,10 @@ use std::{
 /// This prevents infinite spinning under extreme contention.
 const MAX_CAS_RETRIES: usize = 100;
 
+/// Number of entries to evict when the cache reaches capacity.
+/// Eviction removes expired entries first, then uses LRU.
+const EVICTION_BATCH_SIZE: usize = 100;
+
 use async_trait::async_trait;
 use dashmap::DashMap;
 
@@ -89,7 +93,6 @@ pub struct MemoryCache {
     counters: Arc<DashMap<String, Arc<AtomicI64>>>,
     sets: Arc<DashMap<String, SetEntry>>,
     max_entries: usize,
-    eviction_batch_size: usize,
 }
 
 impl MemoryCache {
@@ -99,7 +102,6 @@ impl MemoryCache {
             counters: Arc::new(DashMap::new()),
             sets: Arc::new(DashMap::new()),
             max_entries: config.max_entries,
-            eviction_batch_size: config.eviction_batch_size.max(1),
         }
     }
 
@@ -117,8 +119,10 @@ impl MemoryCache {
             return;
         }
 
-        // Calculate how many entries to evict
-        let target_size = self.max_entries.saturating_sub(self.eviction_batch_size);
+        // Calculate how many entries to evict: at least 1, at most EVICTION_BATCH_SIZE.
+        // Use 10% of max_entries for small caches to avoid evicting everything at once.
+        let batch = (self.max_entries / 10).clamp(1, EVICTION_BATCH_SIZE);
+        let target_size = self.max_entries.saturating_sub(batch);
         let to_evict = current_len.saturating_sub(target_size);
 
         if to_evict == 0 {
@@ -487,13 +491,9 @@ mod tests {
         }
     }
 
-    fn test_config_with_eviction(
-        max_entries: usize,
-        eviction_batch_size: usize,
-    ) -> MemoryCacheConfig {
+    fn test_config_with_eviction(max_entries: usize) -> MemoryCacheConfig {
         MemoryCacheConfig {
             max_entries,
-            eviction_batch_size,
             ..Default::default()
         }
     }
@@ -969,8 +969,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_lru_eviction_evicts_oldest() {
-        // max_entries=5, eviction_batch_size=2
-        let cache = MemoryCache::new(&test_config_with_eviction(5, 2));
+        // max_entries=5; eviction batch = max(1, 5/10) = 1, target_size = 4
+        let cache = MemoryCache::new(&test_config_with_eviction(5));
 
         // Fill cache with entries (with delays to ensure distinct access times)
         for i in 0..5 {
@@ -1021,8 +1021,8 @@ mod tests {
         .filter(|&&x| x)
         .count();
 
-        // After eviction, we should have fewer than 5 entries
-        // eviction_batch_size=2 means target is max_entries - 2 = 3 entries after eviction
+        // After eviction: target_size = 4, current_len was 6, so 2 entries are evicted.
+        // key2 and key3 are the least recently accessed, so at most 1 of key2/key3/key4 remains.
         assert!(
             remaining <= 2,
             "Expected at most 2 of key2/key3/key4 to remain, got {}",
@@ -1032,7 +1032,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lru_eviction_prefers_expired_first() {
-        let cache = MemoryCache::new(&test_config_with_eviction(4, 2));
+        let cache = MemoryCache::new(&test_config_with_eviction(4));
 
         // Add entries: some expired, some not
         cache
@@ -1088,7 +1088,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lru_no_eviction_below_capacity() {
-        let cache = MemoryCache::new(&test_config_with_eviction(10, 2));
+        let cache = MemoryCache::new(&test_config_with_eviction(10));
 
         // Add entries below capacity
         for i in 0..5 {
@@ -1114,7 +1114,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_updates_last_accessed() {
-        let cache = MemoryCache::new(&test_config_with_eviction(3, 1));
+        let cache = MemoryCache::new(&test_config_with_eviction(3));
 
         // Add entries
         cache

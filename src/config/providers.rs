@@ -66,6 +66,7 @@ pub struct ModelFallback {
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+// Note: cannot use deny_unknown_fields due to #[serde(flatten)] on `pricing`
 pub struct ModelConfig {
     /// Pricing fields (flattened inline).
     #[serde(flatten)]
@@ -123,6 +124,7 @@ pub struct ModelConfig {
 /// to determine which API protocol to use.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+// Note: cannot use deny_unknown_fields due to #[serde(flatten)] on `providers` HashMap
 pub struct ProvidersConfig {
     /// Default provider name for requests that don't specify one.
     #[serde(default)]
@@ -588,10 +590,6 @@ pub struct OpenAiProviderConfig {
     #[serde(default)]
     pub headers: HashMap<String, String>,
 
-    /// Whether this provider supports streaming (default: true).
-    #[serde(default = "default_true")]
-    pub supports_streaming: bool,
-
     /// Whether this provider supports function/tool calling.
     #[serde(default)]
     pub supports_tools: bool,
@@ -660,7 +658,6 @@ impl std::fmt::Debug for OpenAiProviderConfig {
             .field("allowed_models", &self.allowed_models)
             .field("model_aliases", &self.model_aliases)
             .field("headers", &self.headers)
-            .field("supports_streaming", &self.supports_streaming)
             .field("supports_tools", &self.supports_tools)
             .field("supports_vision", &self.supports_vision)
             .field("models", &self.models)
@@ -2780,7 +2777,6 @@ mod tests {
             allowed_models: vec![],
             model_aliases: HashMap::new(),
             headers: HashMap::new(),
-            supports_streaming: true,
             supports_tools: false,
             supports_vision: false,
             models: HashMap::new(),

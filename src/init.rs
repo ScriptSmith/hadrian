@@ -219,24 +219,14 @@ pub(crate) async fn init_worker_embedding_service(
         }
     };
 
-    let embedding_config = file_search_config
-        .embedding
-        .as_ref()
-        .or_else(|| {
-            config
-                .features
-                .response_caching
-                .as_ref()
-                .and_then(|rc| rc.semantic.as_ref())
-                .map(|sc| &sc.embedding)
-        })
-        .or_else(|| {
-            config
-                .features
-                .vector_search
-                .as_ref()
-                .map(|vs| &vs.embedding)
-        });
+    let embedding_config = file_search_config.embedding.as_ref().or_else(|| {
+        config
+            .features
+            .response_caching
+            .as_ref()
+            .and_then(|rc| rc.semantic.as_ref())
+            .map(|sc| &sc.embedding)
+    });
 
     let embedding_config = match embedding_config {
         Some(cfg) => cfg,

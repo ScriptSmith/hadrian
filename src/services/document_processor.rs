@@ -130,16 +130,6 @@ pub enum QueueBackend {
         queue_name: String,
         consumer_group: String,
     },
-    /// RabbitMQ
-    RabbitMQ {
-        url: String,
-        exchange: String,
-        queue_name: String,
-    },
-    /// AWS SQS
-    Sqs { queue_url: String, region: String },
-    /// Google Cloud Pub/Sub
-    PubSub { project_id: String, topic: String },
 }
 
 /// Configuration for the document processor.
@@ -211,19 +201,6 @@ fn convert_queue_config(queue: &FileProcessingQueueConfig) -> QueueBackend {
             url: queue.url.clone(),
             queue_name: queue.queue_name.clone(),
             consumer_group: queue.consumer_group.clone(),
-        },
-        FileProcessingQueueBackend::RabbitMq => QueueBackend::RabbitMQ {
-            url: queue.url.clone(),
-            exchange: "hadrian".to_string(), // Default exchange name
-            queue_name: queue.queue_name.clone(),
-        },
-        FileProcessingQueueBackend::Sqs => QueueBackend::Sqs {
-            queue_url: queue.url.clone(),
-            region: queue.region.clone().unwrap_or_default(),
-        },
-        FileProcessingQueueBackend::PubSub => QueueBackend::PubSub {
-            project_id: queue.project_id.clone().unwrap_or_default(),
-            topic: queue.queue_name.clone(),
         },
     }
 }
@@ -1495,21 +1472,6 @@ impl DocumentProcessor {
                         .to_string(),
                 ));
             }
-            Some(QueueBackend::RabbitMQ { url, .. }) => {
-                return Err(DocumentProcessorError::Configuration(format!(
-                    "RabbitMQ queue publishing not yet implemented (url: {url})"
-                )));
-            }
-            Some(QueueBackend::Sqs { queue_url, .. }) => {
-                return Err(DocumentProcessorError::Configuration(format!(
-                    "SQS queue publishing not yet implemented (queue: {queue_url})"
-                )));
-            }
-            Some(QueueBackend::PubSub { topic, .. }) => {
-                return Err(DocumentProcessorError::Configuration(format!(
-                    "Pub/Sub queue publishing not yet implemented (topic: {topic})"
-                )));
-            }
             None => {
                 error!("Queue mode enabled but no queue backend configured");
                 otel_span_error!("Queue backend not configured");
@@ -1618,15 +1580,6 @@ pub async fn start_file_processing_worker(
             tracing::error!(
                 "Redis queue configured but the 'redis' feature is not enabled. Rebuild with: cargo build --features redis"
             );
-        }
-        QueueBackend::RabbitMQ { .. } => {
-            tracing::error!("RabbitMQ worker not yet implemented");
-        }
-        QueueBackend::Sqs { .. } => {
-            tracing::error!("SQS worker not yet implemented");
-        }
-        QueueBackend::PubSub { .. } => {
-            tracing::error!("Pub/Sub worker not yet implemented");
         }
     }
 }

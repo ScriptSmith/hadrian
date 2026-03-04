@@ -19,10 +19,6 @@ pub struct ObservabilityConfig {
     #[serde(default)]
     pub metrics: MetricsConfig,
 
-    /// Request/response logging.
-    #[serde(default)]
-    pub request_logging: RequestLoggingConfig,
-
     /// Usage logging configuration.
     #[serde(default)]
     pub usage: UsageConfig,
@@ -384,7 +380,7 @@ pub struct TracingConfig {
 }
 
 fn default_service_name() -> String {
-    "ai-gateway".to_string()
+    "hadrian".to_string()
 }
 
 /// OTLP exporter configuration.
@@ -571,102 +567,6 @@ pub struct PrometheusConfig {
 
 fn default_metrics_path() -> String {
     "/metrics".to_string()
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Request Logging
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Request/response logging configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct RequestLoggingConfig {
-    /// Enable request logging.
-    #[serde(default)]
-    pub enabled: bool,
-
-    /// Log request bodies.
-    #[serde(default)]
-    pub log_request_body: bool,
-
-    /// Log response bodies.
-    #[serde(default)]
-    pub log_response_body: bool,
-
-    /// Maximum body size to log (in bytes).
-    #[serde(default = "default_max_body_log")]
-    pub max_body_size: usize,
-
-    /// Redact sensitive fields.
-    #[serde(default = "default_true")]
-    pub redact_sensitive: bool,
-
-    /// Fields to redact.
-    #[serde(default = "default_redact_fields")]
-    pub redact_fields: Vec<String>,
-
-    /// Log to separate destination.
-    #[serde(default)]
-    pub destination: Option<LogDestination>,
-}
-
-impl Default for RequestLoggingConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            log_request_body: false,
-            log_response_body: false,
-            max_body_size: default_max_body_log(),
-            redact_sensitive: true,
-            redact_fields: default_redact_fields(),
-            destination: None,
-        }
-    }
-}
-
-fn default_max_body_log() -> usize {
-    10 * 1024 // 10 KB
-}
-
-fn default_redact_fields() -> Vec<String> {
-    vec![
-        "api_key".into(),
-        "password".into(),
-        "secret".into(),
-        "authorization".into(),
-    ]
-}
-
-/// Log destination for request logging.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[serde(deny_unknown_fields)]
-pub enum LogDestination {
-    /// Log to file.
-    File {
-        path: String,
-        #[serde(default)]
-        rotation: Option<LogRotation>,
-    },
-    /// Log to stdout/stderr (same as regular logs).
-    Stdout,
-    /// Send to external service.
-    Http {
-        url: String,
-        #[serde(default)]
-        headers: HashMap<String, String>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum LogRotation {
-    Daily,
-    Hourly,
-    Size { max_bytes: usize },
 }
 
 fn default_true() -> bool {

@@ -6,11 +6,7 @@
     "file-processing",
     "response-caching",
     "guardrails",
-    "web-search",
-    "code-execution",
     "image-fetching",
-    "websocket",
-    "load-balancing",
-    "fallback"
+    "websocket"
   ]
 }

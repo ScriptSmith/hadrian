@@ -42,6 +42,7 @@ impl SecretsConfig {
 /// Configuration for Vault/OpenBao secrets manager.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+// Note: cannot use deny_unknown_fields due to #[serde(flatten)] on `auth`
 pub struct VaultSecretsConfig {
     /// Vault server address (e.g., "https://vault.example.com:8200")
     pub address: String,
@@ -153,6 +154,7 @@ fn default_k8s_token_path() -> String {
 /// Configuration for AWS Secrets Manager.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct AwsSecretsConfig {
     /// AWS region (e.g., "us-east-1"). If not set, uses AWS_REGION environment variable.
     #[serde(default)]
@@ -176,6 +178,7 @@ fn default_aws_prefix() -> String {
 /// Configuration for Azure Key Vault.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct AzureKeyVaultSecretsConfig {
     /// Key Vault URL (e.g., "https://myvault.vault.azure.net")
     pub vault_url: String,
@@ -195,6 +198,7 @@ fn default_azure_prefix() -> String {
 /// Configuration for GCP Secret Manager.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct GcpSecretsConfig {
     /// GCP project ID
     pub project_id: String,

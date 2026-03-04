@@ -59,11 +59,6 @@ pub struct MemoryCacheConfig {
     #[serde(default = "default_max_entries")]
     pub max_entries: usize,
 
-    /// Number of entries to evict when cache is full.
-    /// Eviction removes expired entries first, then uses LRU.
-    #[serde(default = "default_eviction_batch_size")]
-    pub eviction_batch_size: usize,
-
     /// Default TTL for cache entries in seconds.
     #[serde(default = "default_ttl")]
     pub default_ttl_secs: u64,
@@ -77,7 +72,6 @@ impl Default for MemoryCacheConfig {
     fn default() -> Self {
         Self {
             max_entries: default_max_entries(),
-            eviction_batch_size: default_eviction_batch_size(),
             default_ttl_secs: default_ttl(),
             ttl: CacheTtlConfig::default(),
         }
@@ -97,10 +91,6 @@ impl MemoryCacheConfig {
 
 fn default_max_entries() -> usize {
     100_000
-}
-
-fn default_eviction_batch_size() -> usize {
-    100 // Evict 100 entries at a time when cache is full
 }
 
 fn default_ttl() -> u64 {
@@ -214,14 +204,6 @@ pub struct CacheTtlConfig {
     /// TTL for dynamic provider cache in seconds.
     #[serde(default = "default_provider_ttl")]
     pub provider_secs: u64,
-
-    /// TTL for daily spend cache in seconds.
-    #[serde(default = "default_daily_spend_ttl")]
-    pub daily_spend_secs: u64,
-
-    /// TTL for monthly spend cache in seconds.
-    #[serde(default = "default_monthly_spend_ttl")]
-    pub monthly_spend_secs: u64,
 }
 
 impl Default for CacheTtlConfig {
@@ -230,8 +212,6 @@ impl Default for CacheTtlConfig {
             api_key_secs: default_api_key_ttl(),
             rate_limit_secs: default_rate_limit_ttl(),
             provider_secs: default_provider_ttl(),
-            daily_spend_secs: default_daily_spend_ttl(),
-            monthly_spend_secs: default_monthly_spend_ttl(),
         }
     }
 }
@@ -246,12 +226,4 @@ fn default_rate_limit_ttl() -> u64 {
 
 fn default_provider_ttl() -> u64 {
     300 // 5 minutes
-}
-
-fn default_daily_spend_ttl() -> u64 {
-    86400 // 1 day
-}
-
-fn default_monthly_spend_ttl() -> u64 {
-    86400 * 32 // ~32 days
 }
