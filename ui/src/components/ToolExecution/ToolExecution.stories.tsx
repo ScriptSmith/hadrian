@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react";
-import { expect, within, userEvent } from "storybook/test";
+import { expect, within, userEvent, waitFor } from "storybook/test";
 import type { ToolExecution, ToolExecutionRound, Artifact } from "@/components/chat-types";
 import { ToolExecutionBlock } from "./ToolExecutionBlock";
 import { ExecutionTimeline } from "./ExecutionTimeline";
@@ -462,9 +462,10 @@ export const StepWithInputExpanded: Story = {
     </div>
   ),
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    // Code should be visible inline
-    await expect(canvas.getByText(/import pandas/)).toBeInTheDocument();
+    // Code should be visible inline (text may be split across syntax highlighting spans)
+    await waitFor(() => {
+      expect(canvasElement.textContent).toMatch(/import pandas/);
+    });
   },
 };
 
@@ -476,8 +477,10 @@ export const StepExpandInput: Story = {
   ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // Code preview should be visible inline
-    await expect(canvas.getByText(/import pandas/)).toBeInTheDocument();
+    // Code preview should be visible inline (text may be split across syntax highlighting spans)
+    await waitFor(() => {
+      expect(canvasElement.textContent).toMatch(/import pandas/);
+    });
     // Click to expand full code
     const expandButton = canvas.getByText("expand");
     await userEvent.click(expandButton);

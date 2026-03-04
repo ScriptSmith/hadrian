@@ -16,6 +16,7 @@ import {
 import type { ToolExecution, Artifact, CodeArtifactData } from "@/components/chat-types";
 import { cn } from "@/utils/cn";
 import { Artifact as ArtifactComponent } from "@/components/Artifact";
+import { HighlightedCode } from "@/components/HighlightedCode/HighlightedCode";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
 
 interface ToolExecutionStepProps {
@@ -44,6 +45,14 @@ const TOOL_NAMES: Record<string, string> = {
   js_code_interpreter: "JavaScript",
   sql_query: "SQL Query",
   chart_render: "Chart",
+};
+
+/** Tool name to language mapping for syntax highlighting */
+const TOOL_LANGUAGES: Record<string, string> = {
+  code_interpreter: "python",
+  js_code_interpreter: "javascript",
+  sql_query: "sql",
+  chart_render: "json",
 };
 
 /** Format duration in human-readable form */
@@ -102,8 +111,10 @@ function ToolExecutionStepComponent({
     const code = getCodeFromArtifact(codeArtifact);
     if (!code) return null;
     const { preview, isTruncated } = getCodePreview(code, 4);
-    return { code, preview, isTruncated, artifact: codeArtifact };
-  }, [execution.inputArtifacts]);
+    const language =
+      (codeArtifact.data as CodeArtifactData)?.language || TOOL_LANGUAGES[execution.toolName];
+    return { code, preview, isTruncated, artifact: codeArtifact, language };
+  }, [execution.inputArtifacts, execution.toolName]);
 
   // Other input artifacts (non-code)
   const otherInputArtifacts = useMemo(
@@ -156,27 +167,48 @@ function ToolExecutionStepComponent({
         {/* Inline code preview - always visible */}
         {inlineCode && (
           <div className="mt-1.5">
-            <button
-              type="button"
-              onClick={() => {
-                if (inlineCode.isTruncated || isFullCodeExpanded) {
-                  setIsFullCodeExpanded(!isFullCodeExpanded);
-                } else {
-                  onArtifactClick?.(inlineCode.artifact);
-                }
-              }}
+            <div
               className={cn(
-                "w-full text-left rounded-md border overflow-hidden",
-                "bg-zinc-50 border-zinc-200 dark:bg-zinc-900 dark:border-zinc-700",
-                "hover:border-zinc-300 dark:hover:border-zinc-600 transition-colors",
-                "group"
+                "relative group/code rounded-lg border overflow-hidden",
+                "bg-muted/30",
+                "border-zinc-200 dark:border-zinc-700",
+                "hover:border-zinc-300 dark:hover:border-zinc-600 transition-colors"
               )}
             >
-              <pre className="px-2.5 py-1.5 text-[11px] font-mono leading-relaxed text-zinc-700 dark:text-zinc-300 overflow-x-auto">
-                <code>{isFullCodeExpanded ? inlineCode.code : inlineCode.preview}</code>
-              </pre>
+              {/* Header - matches Artifact component pattern */}
+              <div className="flex items-center gap-2 px-3 py-1.5 border-b bg-muted/50">
+                <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <span className="text-xs font-medium text-muted-foreground truncate">
+                  {inlineCode.language || displayName}
+                </span>
+                <div className="flex-1" />
+                <button
+                  type="button"
+                  onClick={() => onArtifactClick?.(inlineCode.artifact)}
+                  className={cn(
+                    "p-0.5 rounded",
+                    "text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-200",
+                    "opacity-0 group-hover/code:opacity-100 transition-opacity"
+                  )}
+                  aria-label="Expand"
+                >
+                  <Maximize2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+
+              {/* Code content */}
+              <HighlightedCode
+                code={isFullCodeExpanded ? inlineCode.code : inlineCode.preview}
+                language={inlineCode.language}
+                compact
+                showCopy
+              />
               {inlineCode.isTruncated && (
-                <div className="flex items-center gap-1 px-2.5 py-1 bg-zinc-100 dark:bg-zinc-800 border-t border-zinc-200 dark:border-zinc-700 text-[10px] text-zinc-600 dark:text-zinc-400">
+                <button
+                  type="button"
+                  onClick={() => setIsFullCodeExpanded(!isFullCodeExpanded)}
+                  className="flex items-center gap-1 w-full px-2.5 py-1 bg-zinc-100 dark:bg-zinc-800 border-t border-zinc-200 dark:border-zinc-700 text-[10px] text-zinc-600 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors"
+                >
                   <ChevronDown
                     className={cn(
                       "h-2.5 w-2.5 transition-transform",
@@ -184,9 +216,9 @@ function ToolExecutionStepComponent({
                     )}
                   />
                   {isFullCodeExpanded ? "collapse" : "expand"}
-                </div>
+                </button>
               )}
-            </button>
+            </div>
           </div>
         )}
 
