@@ -5,7 +5,7 @@ import { Check, Copy, Download, X } from "lucide-react";
 
 type Method = "binary" | "docker" | "cargo";
 type OS = "linux-x86_64" | "linux-arm64" | "macos-arm64" | "windows";
-type Profile = "full" | "standard" | "minimal" | "tiny";
+type Profile = "full" | "headless" | "standard" | "minimal" | "tiny";
 type Libc = "gnu" | "musl";
 
 const osLabels: Record<OS, string> = {
@@ -18,6 +18,14 @@ const osLabels: Record<OS, string> = {
 const libcLabels: Record<Libc, string> = {
   gnu: "glibc",
   musl: "musl",
+};
+
+const profileLabels: Record<Profile, string> = {
+  full: "Full",
+  headless: "Headless",
+  standard: "Standard",
+  minimal: "Minimal",
+  tiny: "Tiny",
 };
 
 function getTarget(os: OS, libc: Libc): string {
@@ -35,38 +43,42 @@ function getTarget(os: OS, libc: Libc): string {
 
 const profileSummaries: Record<Profile, string> = {
   full: "Everything",
+  headless: "Full features, no embedded assets (serve frontend separately)",
   standard: "Production deployment",
   minimal: "Development and embedded use",
   tiny: "Stateless proxy",
 };
 
+const allProfiles: Profile[] = ["full", "headless", "standard", "minimal", "tiny"];
+const embeddedAssetProfiles: Profile[] = ["minimal", "standard", "full"];
+
 const featureMatrix: { name: string; profiles: Profile[] }[] = [
-  { name: "OpenAI", profiles: ["tiny", "minimal", "standard", "full"] },
-  { name: "Anthropic", profiles: ["minimal", "standard", "full"] },
-  { name: "AWS Bedrock", profiles: ["minimal", "standard", "full"] },
-  { name: "Google Vertex AI", profiles: ["minimal", "standard", "full"] },
-  { name: "Azure OpenAI", profiles: ["minimal", "standard", "full"] },
-  { name: "SQLite", profiles: ["minimal", "standard", "full"] },
-  { name: "Embedded UI", profiles: ["minimal", "standard", "full"] },
-  { name: "Model catalog", profiles: ["minimal", "standard", "full"] },
-  { name: "Setup wizard", profiles: ["minimal", "standard", "full"] },
-  { name: "PostgreSQL", profiles: ["standard", "full"] },
-  { name: "Redis caching", profiles: ["standard", "full"] },
-  { name: "SSO (OIDC / OAuth)", profiles: ["standard", "full"] },
-  { name: "CEL RBAC", profiles: ["standard", "full"] },
-  { name: "S3 storage", profiles: ["standard", "full"] },
-  { name: "Secrets managers", profiles: ["standard", "full"] },
-  { name: "OTLP & Prometheus", profiles: ["standard", "full"] },
-  { name: "OpenAPI docs", profiles: ["standard", "full"] },
-  { name: "Embedded docs", profiles: ["standard", "full"] },
-  { name: "Doc extraction", profiles: ["standard", "full"] },
-  { name: "Cost forecasting", profiles: ["standard", "full"] },
-  { name: "CSV export", profiles: ["standard", "full"] },
-  { name: "Response validation", profiles: ["standard", "full"] },
-  { name: "JSON schema", profiles: ["standard", "full"] },
-  { name: "SAML SSO", profiles: ["full"] },
-  { name: "Kreuzberg OCR", profiles: ["full"] },
-  { name: "ClamAV scanning", profiles: ["full"] },
+  { name: "OpenAI", profiles: allProfiles },
+  { name: "Anthropic", profiles: ["minimal", "standard", "headless", "full"] },
+  { name: "AWS Bedrock", profiles: ["minimal", "standard", "headless", "full"] },
+  { name: "Google Vertex AI", profiles: ["minimal", "standard", "headless", "full"] },
+  { name: "Azure OpenAI", profiles: ["minimal", "standard", "headless", "full"] },
+  { name: "SQLite", profiles: ["minimal", "standard", "headless", "full"] },
+  { name: "Embedded UI", profiles: embeddedAssetProfiles },
+  { name: "Model catalog", profiles: embeddedAssetProfiles },
+  { name: "Setup wizard", profiles: embeddedAssetProfiles },
+  { name: "PostgreSQL", profiles: ["standard", "headless", "full"] },
+  { name: "Redis caching", profiles: ["standard", "headless", "full"] },
+  { name: "SSO (OIDC / OAuth)", profiles: ["standard", "headless", "full"] },
+  { name: "CEL RBAC", profiles: ["standard", "headless", "full"] },
+  { name: "S3 storage", profiles: ["standard", "headless", "full"] },
+  { name: "Secrets managers", profiles: ["standard", "headless", "full"] },
+  { name: "OTLP & Prometheus", profiles: ["standard", "headless", "full"] },
+  { name: "OpenAPI docs", profiles: ["standard", "headless", "full"] },
+  { name: "Embedded docs", profiles: embeddedAssetProfiles },
+  { name: "Doc extraction", profiles: ["standard", "headless", "full"] },
+  { name: "Cost forecasting", profiles: ["standard", "headless", "full"] },
+  { name: "CSV export", profiles: ["standard", "headless", "full"] },
+  { name: "Response validation", profiles: ["standard", "headless", "full"] },
+  { name: "JSON schema", profiles: ["standard", "headless", "full"] },
+  { name: "SAML SSO", profiles: ["headless", "full"] },
+  { name: "Kreuzberg OCR", profiles: ["headless", "full"] },
+  { name: "ClamAV scanning", profiles: ["headless", "full"] },
 ];
 
 function getInstallCommand(method: Method, os: OS, profile: Profile, libc: Libc): string {
@@ -135,7 +147,7 @@ function ToggleGroup<T extends string>({
             key={opt}
             onClick={() => onChange(opt)}
             disabled={isDisabled}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+            className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors sm:px-3 sm:py-1.5 sm:text-sm ${
               isDisabled
                 ? "cursor-not-allowed bg-fd-muted text-fd-muted-foreground/40"
                 : value === opt
@@ -152,9 +164,10 @@ function ToggleGroup<T extends string>({
 }
 
 function getDisabledProfiles(os: OS, libc: Libc): Set<Profile> | undefined {
-  if (os === "windows") return new Set(["full", "standard"]);
-  if (os === "linux-arm64") return new Set(["full"]);
-  if (os.startsWith("linux-") && libc === "musl") return new Set(["full"]);
+  // headless and full only built for linux-x86_64-gnu and macos-arm64
+  if (os === "windows") return new Set(["full", "headless"]);
+  if (os === "linux-arm64") return new Set(["full", "headless"]);
+  if (os.startsWith("linux-") && libc === "musl") return new Set(["full", "headless"]);
   return undefined;
 }
 
@@ -184,7 +197,7 @@ export function QuickStartSelector() {
 
   const handleLibcChange = (newLibc: Libc) => {
     setLibc(newLibc);
-    if (newLibc === "musl" && profile === "full") {
+    if (newLibc === "musl" && (profile === "full" || profile === "headless")) {
       setProfile("standard");
     }
   };
@@ -193,18 +206,7 @@ export function QuickStartSelector() {
   const downloadUrl = method === "binary" ? getDownloadUrl(os, profile, libc) : null;
 
   const handleCopy = async () => {
-    if (navigator.clipboard) {
-      await navigator.clipboard.writeText(command);
-    } else {
-      const textarea = document.createElement("textarea");
-      textarea.value = command;
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textarea);
-    }
+    await navigator.clipboard.writeText(command);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -212,8 +214,10 @@ export function QuickStartSelector() {
   return (
     <div className="not-prose overflow-hidden rounded-lg border border-fd-border bg-fd-card">
       <div className="space-y-3 border-b border-fd-border bg-fd-muted/50 p-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="w-16 shrink-0 text-sm font-medium text-fd-muted-foreground">Method</span>
+        <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+          <span className="text-sm font-medium text-fd-muted-foreground sm:w-16 sm:shrink-0">
+            Method
+          </span>
           <ToggleGroup
             options={["binary", "docker", "cargo"] as Method[]}
             value={method}
@@ -223,8 +227,10 @@ export function QuickStartSelector() {
         </div>
         {method === "binary" && (
           <>
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="w-16 shrink-0 text-sm font-medium text-fd-muted-foreground">OS</span>
+            <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+              <span className="text-sm font-medium text-fd-muted-foreground sm:w-16 sm:shrink-0">
+                OS
+              </span>
               <ToggleGroup
                 options={["linux-x86_64", "linux-arm64", "macos-arm64", "windows"] as OS[]}
                 value={os}
@@ -233,8 +239,8 @@ export function QuickStartSelector() {
               />
             </div>
             {isLinux && (
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="w-16 shrink-0 text-sm font-medium text-fd-muted-foreground">
+              <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+                <span className="text-sm font-medium text-fd-muted-foreground sm:w-16 sm:shrink-0">
                   Libc
                 </span>
                 <ToggleGroup
@@ -246,14 +252,15 @@ export function QuickStartSelector() {
                 />
               </div>
             )}
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="w-16 shrink-0 text-sm font-medium text-fd-muted-foreground">
+            <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+              <span className="text-sm font-medium text-fd-muted-foreground sm:w-16 sm:shrink-0">
                 Features
               </span>
               <ToggleGroup
-                options={["full", "standard", "minimal", "tiny"] as Profile[]}
+                options={allProfiles}
                 value={profile}
                 onChange={setProfile}
+                labels={profileLabels}
                 disabled={disabledProfiles}
               />
             </div>

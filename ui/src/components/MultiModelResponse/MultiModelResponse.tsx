@@ -626,7 +626,7 @@ const ModelResponseCard = memo(function ModelResponseCard({
         "hover:shadow-md",
         "animate-slide-up-bounce",
         isSelectedBest && "ring-2 ring-success ring-offset-2 ring-offset-background",
-        useHorizontalLayout ? "min-w-[500px] w-[500px] shrink-0" : "w-full"
+        useHorizontalLayout ? "grow shrink-0 basis-[min(500px,85vw)]" : "w-full"
       )}
       style={{ animationDelay: `${index * 100}ms` }}
     >

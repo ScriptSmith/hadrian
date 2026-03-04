@@ -309,8 +309,15 @@ export function ModelSelector({
 
   return (
     <div className="flex items-center gap-2 min-w-0">
-      {/* Horizontally scrollable chip container */}
-      <div className="flex flex-wrap items-center gap-2 min-w-0">
+      {/* Model count badge - mobile only, shown when multiple models selected */}
+      {selectedInstances.length > 1 && (
+        <span className="sm:hidden shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground tabular-nums">
+          {selectedInstances.length}
+        </span>
+      )}
+
+      {/* Chip container - horizontal scroll on mobile, wraps on desktop */}
+      <div className="flex items-center gap-2 min-w-0 overflow-x-auto sm:overflow-x-visible sm:flex-wrap scrollbar-none">
         <TooltipProvider>
           <DndContext
             sensors={sensors}

@@ -75,7 +75,7 @@ function StreamingMarkdownComponent({ content, isStreaming, className }: Streami
     <div
       className={cn(
         "markdown-content prose prose-sm dark:prose-invert",
-        "max-w-[calc(100vw-8rem)] sm:max-w-[500px] md:max-w-[600px] lg:max-w-[700px]",
+        "max-w-none",
         "[&_pre]:overflow-x-auto",
         className
       )}

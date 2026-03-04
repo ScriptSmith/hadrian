@@ -74,9 +74,10 @@ function DemoGallery() {
   return (
     <div className="mx-auto max-w-screen-2xl px-4">
       <div
-        className="mx-auto mb-6 flex max-w-6xl flex-wrap justify-center gap-2"
+        className="scrollbar-none mx-auto mb-6 flex max-w-6xl gap-2 overflow-x-auto px-4 pb-2 sm:flex-wrap sm:justify-center sm:overflow-visible sm:px-0 sm:pb-0"
         role="tablist"
         aria-label="Demo gallery"
+        tabIndex={0}
       >
         {demos.map((demo) => (
           <button
@@ -84,9 +85,8 @@ function DemoGallery() {
             role="tab"
             aria-selected={active === demo.id}
             aria-controls={`demo-panel-${demo.id}`}
-            onMouseEnter={() => setActive(demo.id)}
             onClick={() => setActive(demo.id)}
-            className={`shrink-0 rounded-lg border px-4 py-3 text-left transition-colors ${
+            className={`shrink-0 cursor-pointer rounded-lg border px-4 py-3 text-left transition-colors ${
               active === demo.id
                 ? "border-fd-primary bg-fd-primary/10 text-fd-foreground"
                 : "border-fd-border bg-fd-card text-fd-muted-foreground hover:border-fd-primary/50 hover:text-fd-foreground"
@@ -97,16 +97,16 @@ function DemoGallery() {
           </button>
         ))}
       </div>
-      <div className="relative overflow-hidden rounded-xl border border-fd-border shadow-lg">
+      <div className="relative h-[500px] overflow-hidden rounded-xl border border-fd-border shadow-lg sm:h-[700px] lg:h-[950px]">
         {demos.map((demo) => (
           <div
             key={demo.id}
             id={`demo-panel-${demo.id}`}
             role="tabpanel"
             aria-label={demo.title}
-            className={active === demo.id ? "" : "invisible absolute inset-0"}
+            className={active === demo.id ? "h-full" : "invisible absolute inset-0"}
           >
-            <StoryEmbed storyId={demo.storyId} height={950} />
+            <StoryEmbed storyId={demo.storyId} height="100%" />
           </div>
         ))}
       </div>
