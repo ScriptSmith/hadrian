@@ -6,11 +6,12 @@
  */
 
 import { memo, useState, useRef, useEffect } from "react";
-import { Code2, Eye, Copy, Check, ExternalLink, Maximize2, X } from "lucide-react";
+import { Code2, Eye, ExternalLink, Maximize2, X } from "lucide-react";
 
 import type { Artifact } from "@/components/chat-types";
 import { Button } from "@/components/Button/Button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/Tooltip/Tooltip";
+import { HighlightedCode } from "@/components/HighlightedCode/HighlightedCode";
 import { cn } from "@/utils/cn";
 
 export interface HtmlArtifactProps {
@@ -69,7 +70,6 @@ function wrapHtml(content: string): string {
 
 function HtmlArtifactComponent({ artifact, className }: HtmlArtifactProps) {
   const [viewMode, setViewMode] = useState<"preview" | "source">("preview");
-  const [copied, setCopied] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -86,12 +86,6 @@ function HtmlArtifactComponent({ artifact, className }: HtmlArtifactProps) {
   if (!html) {
     return <div className="p-4 text-sm text-muted-foreground">Invalid HTML artifact data</div>;
   }
-
-  const handleCopy = async () => {
-    await navigator.clipboard.writeText(html);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   const handleOpenInNewTab = () => {
     const blob = new Blob([wrapHtml(html)], { type: "text/html" });
@@ -135,21 +129,6 @@ function HtmlArtifactComponent({ artifact, className }: HtmlArtifactProps) {
                 variant="ghost"
                 size="sm"
                 className="h-6 w-6 p-0"
-                onClick={handleCopy}
-                aria-label={copied ? "Copied" : "Copy HTML"}
-              >
-                {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{copied ? "Copied!" : "Copy HTML"}</TooltipContent>
-          </Tooltip>
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 w-6 p-0"
                 onClick={handleOpenInNewTab}
                 aria-label="Open in new tab"
               >
@@ -184,9 +163,7 @@ function HtmlArtifactComponent({ artifact, className }: HtmlArtifactProps) {
             className="w-full h-[300px] border-0 bg-white"
           />
         ) : (
-          <pre className="p-4 overflow-x-auto text-xs font-mono text-foreground max-h-[300px] overflow-y-auto bg-muted/30">
-            <code>{html}</code>
-          </pre>
+          <HighlightedCode code={html} language="html" showCopy maxHeight="300px" />
         )}
       </div>
 
