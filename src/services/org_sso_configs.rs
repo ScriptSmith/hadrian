@@ -433,6 +433,11 @@ impl OrgSsoConfigService {
         Ok(results)
     }
 
+    /// Count SSO configurations for an organization.
+    pub async fn count_by_org(&self, org_id: Uuid) -> DbResult<i64> {
+        self.db.org_sso_configs().count_by_org(org_id).await
+    }
+
     /// List all enabled SSO configurations of a specific provider type with their secrets.
     ///
     /// Used for initializing the SAML or OIDC authenticator registries on startup.

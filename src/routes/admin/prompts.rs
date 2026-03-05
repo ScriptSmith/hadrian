@@ -57,6 +57,20 @@ pub async fn create(
 
     authz.require("prompt", "create", None, None, None, None)?;
 
+    // Check prompt limit
+    let max = state.config.limits.resource_limits.max_prompts_per_owner;
+    if max > 0 {
+        let count = services
+            .prompts
+            .count_by_owner(input.owner.owner_type(), input.owner.owner_id(), false)
+            .await?;
+        if count >= max as i64 {
+            return Err(AdminError::Conflict(format!(
+                "Owner has reached the maximum number of prompts ({max})"
+            )));
+        }
+    }
+
     let prompt = services.prompts.create(input).await?;
 
     // Extract org_id and project_id from owner for audit log

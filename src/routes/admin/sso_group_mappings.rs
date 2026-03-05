@@ -282,6 +282,21 @@ pub async fn create(
     // Validate role is not a reserved system role
     validate_role_not_reserved(input.role.as_deref())?;
 
+    // Check SSO group mapping limit
+    let max = state
+        .config
+        .limits
+        .resource_limits
+        .max_sso_group_mappings_per_org;
+    if max > 0 {
+        let count = services.sso_group_mappings.count_by_org(org.id).await?;
+        if count >= max as i64 {
+            return Err(AdminError::Conflict(format!(
+                "Organization has reached the maximum number of SSO group mappings ({max})"
+            )));
+        }
+    }
+
     let mapping = services
         .sso_group_mappings
         .create(org.id, input.clone())

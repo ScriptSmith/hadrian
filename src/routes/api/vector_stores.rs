@@ -276,6 +276,26 @@ pub async fn api_v1_vector_stores_create(
         }
     }
 
+    // Check vector store limit per owner
+    let max = state
+        .config
+        .limits
+        .resource_limits
+        .max_vector_stores_per_owner;
+    if max > 0 {
+        let count = services
+            .vector_stores
+            .count_by_owner(input.owner.owner_type(), input.owner.owner_id())
+            .await?;
+        if count >= max as i64 {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "limit_reached",
+                format!("Owner has reached the maximum number of vector stores ({max})"),
+            ));
+        }
+    }
+
     // Extract file_ids and chunking_strategy before creating vector store
     let file_ids = input.file_ids.clone();
     let chunking_strategy = input.chunking_strategy.clone();
@@ -808,6 +828,26 @@ pub async fn api_v1_vector_stores_create_file(
         vector_store.owner_type,
         vector_store.owner_id,
     )?;
+
+    // Check files-per-vector-store limit
+    let max = state
+        .config
+        .limits
+        .resource_limits
+        .max_files_per_vector_store;
+    if max > 0 {
+        let count = services
+            .vector_stores
+            .count_files_in_vector_store(vector_store_id)
+            .await?;
+        if count >= max as i64 {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "limit_reached",
+                format!("Vector store has reached the maximum number of files ({max})"),
+            ));
+        }
+    }
 
     // Verify the file exists and get its content hash for deduplication
     let file = services.files.get(input.file_id).await?.ok_or_else(|| {
@@ -1441,6 +1481,30 @@ pub async fn api_v1_vector_stores_create_file_batch(
         vector_store.owner_type,
         vector_store.owner_id,
     )?;
+
+    // Check files-per-vector-store limit
+    let max = state
+        .config
+        .limits
+        .resource_limits
+        .max_files_per_vector_store;
+    if max > 0 {
+        let current = services
+            .vector_stores
+            .count_files_in_vector_store(vector_store_id)
+            .await?;
+        let new_total = current + input.file_ids.len() as i64;
+        if new_total > max as i64 {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "limit_reached",
+                format!(
+                    "Adding {} files would exceed the vector store file limit ({max}, currently {current})",
+                    input.file_ids.len()
+                ),
+            ));
+        }
+    }
 
     // Validate embedding model compatibility before processing any files.
     // This ensures the gateway's configured embedding model matches the vector store's model,

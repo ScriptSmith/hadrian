@@ -78,6 +78,21 @@ pub async fn create(
         None,
     )?;
 
+    // Check service account limit
+    let max = state
+        .config
+        .limits
+        .resource_limits
+        .max_service_accounts_per_org;
+    if max > 0 {
+        let count = services.service_accounts.count_by_org(org.id).await?;
+        if count >= max as i64 {
+            return Err(AdminError::Conflict(format!(
+                "Organization has reached the maximum number of service accounts ({max})"
+            )));
+        }
+    }
+
     let sa = services
         .service_accounts
         .create(org.id, input.clone())

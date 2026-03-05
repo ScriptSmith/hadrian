@@ -25,29 +25,86 @@ pub struct LimitsConfig {
 /// Resource limits for entity counts.
 ///
 /// These limits prevent unbounded growth of resources that could cause
-/// performance issues or resource exhaustion.
+/// performance issues or resource exhaustion. Set any limit to 0 for unlimited.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ResourceLimits {
-    /// Maximum RBAC policies per organization.
-    /// Set to 0 for unlimited. Default: 100 policies per org.
-    ///
-    /// This limit prevents resource exhaustion from unbounded policy growth.
-    /// Organizations hitting this limit must delete or disable existing policies
-    /// before creating new ones.
+    /// Maximum RBAC policies per organization. Default: 100.
     #[serde(default = "default_max_policies_per_org")]
     pub max_policies_per_org: u32,
 
-    /// Maximum dynamic providers per user (BYOK).
-    /// Set to 0 for unlimited. Default: 10 providers per user.
+    /// Maximum dynamic providers per user (BYOK). Default: 10.
     #[serde(default = "default_max_providers_per_user")]
     pub max_providers_per_user: u32,
 
-    /// Maximum API keys per user (self-service).
-    /// Set to 0 for unlimited. Default: 25 keys per user.
+    /// Maximum dynamic providers per organization. Default: 100.
+    #[serde(default = "default_max_providers_per_org")]
+    pub max_providers_per_org: u32,
+
+    /// Maximum dynamic providers per team. Default: 50.
+    #[serde(default = "default_max_providers_per_team")]
+    pub max_providers_per_team: u32,
+
+    /// Maximum dynamic providers per project. Default: 50.
+    #[serde(default = "default_max_providers_per_project")]
+    pub max_providers_per_project: u32,
+
+    /// Maximum API keys per user (self-service). Default: 25.
     #[serde(default = "default_max_api_keys_per_user")]
     pub max_api_keys_per_user: u32,
+
+    /// Maximum API keys per organization. Default: 500.
+    #[serde(default = "default_max_api_keys_per_org")]
+    pub max_api_keys_per_org: u32,
+
+    /// Maximum API keys per team. Default: 100.
+    #[serde(default = "default_max_api_keys_per_team")]
+    pub max_api_keys_per_team: u32,
+
+    /// Maximum API keys per project. Default: 100.
+    #[serde(default = "default_max_api_keys_per_project")]
+    pub max_api_keys_per_project: u32,
+
+    /// Maximum teams per organization. Default: 100.
+    #[serde(default = "default_max_teams_per_org")]
+    pub max_teams_per_org: u32,
+
+    /// Maximum projects per organization. Default: 1000.
+    #[serde(default = "default_max_projects_per_org")]
+    pub max_projects_per_org: u32,
+
+    /// Maximum service accounts per organization. Default: 50.
+    #[serde(default = "default_max_service_accounts_per_org")]
+    pub max_service_accounts_per_org: u32,
+
+    /// Maximum vector stores per owner (org/team/project/user). Default: 100.
+    #[serde(default = "default_max_vector_stores_per_owner")]
+    pub max_vector_stores_per_owner: u32,
+
+    /// Maximum files per vector store. Default: 10,000.
+    #[serde(default = "default_max_files_per_vector_store")]
+    pub max_files_per_vector_store: u32,
+
+    /// Maximum conversations per owner (project/user). Default: 10,000.
+    #[serde(default = "default_max_conversations_per_owner")]
+    pub max_conversations_per_owner: u32,
+
+    /// Maximum prompts per owner (org/team/project/user). Default: 5,000.
+    #[serde(default = "default_max_prompts_per_owner")]
+    pub max_prompts_per_owner: u32,
+
+    /// Maximum SSO configurations per organization. Default: 5.
+    #[serde(default = "default_max_sso_configs_per_org")]
+    pub max_sso_configs_per_org: u32,
+
+    /// Maximum domain verifications per SSO configuration. Default: 50.
+    #[serde(default = "default_max_domains_per_sso_config")]
+    pub max_domains_per_sso_config: u32,
+
+    /// Maximum SSO group mappings per organization. Default: 500.
+    #[serde(default = "default_max_sso_group_mappings_per_org")]
+    pub max_sso_group_mappings_per_org: u32,
 }
 
 impl Default for ResourceLimits {
@@ -55,7 +112,23 @@ impl Default for ResourceLimits {
         Self {
             max_policies_per_org: default_max_policies_per_org(),
             max_providers_per_user: default_max_providers_per_user(),
+            max_providers_per_org: default_max_providers_per_org(),
+            max_providers_per_team: default_max_providers_per_team(),
+            max_providers_per_project: default_max_providers_per_project(),
             max_api_keys_per_user: default_max_api_keys_per_user(),
+            max_api_keys_per_org: default_max_api_keys_per_org(),
+            max_api_keys_per_team: default_max_api_keys_per_team(),
+            max_api_keys_per_project: default_max_api_keys_per_project(),
+            max_teams_per_org: default_max_teams_per_org(),
+            max_projects_per_org: default_max_projects_per_org(),
+            max_service_accounts_per_org: default_max_service_accounts_per_org(),
+            max_vector_stores_per_owner: default_max_vector_stores_per_owner(),
+            max_files_per_vector_store: default_max_files_per_vector_store(),
+            max_conversations_per_owner: default_max_conversations_per_owner(),
+            max_prompts_per_owner: default_max_prompts_per_owner(),
+            max_sso_configs_per_org: default_max_sso_configs_per_org(),
+            max_domains_per_sso_config: default_max_domains_per_sso_config(),
+            max_sso_group_mappings_per_org: default_max_sso_group_mappings_per_org(),
         }
     }
 }
@@ -68,8 +141,72 @@ fn default_max_providers_per_user() -> u32 {
     10
 }
 
+fn default_max_providers_per_org() -> u32 {
+    100
+}
+
+fn default_max_providers_per_team() -> u32 {
+    50
+}
+
+fn default_max_providers_per_project() -> u32 {
+    50
+}
+
 fn default_max_api_keys_per_user() -> u32 {
     25
+}
+
+fn default_max_api_keys_per_org() -> u32 {
+    500
+}
+
+fn default_max_api_keys_per_team() -> u32 {
+    100
+}
+
+fn default_max_api_keys_per_project() -> u32 {
+    100
+}
+
+fn default_max_teams_per_org() -> u32 {
+    100
+}
+
+fn default_max_projects_per_org() -> u32 {
+    1000
+}
+
+fn default_max_service_accounts_per_org() -> u32 {
+    50
+}
+
+fn default_max_vector_stores_per_owner() -> u32 {
+    100
+}
+
+fn default_max_files_per_vector_store() -> u32 {
+    10_000
+}
+
+fn default_max_conversations_per_owner() -> u32 {
+    10_000
+}
+
+fn default_max_prompts_per_owner() -> u32 {
+    5_000
+}
+
+fn default_max_sso_configs_per_org() -> u32 {
+    5
+}
+
+fn default_max_domains_per_sso_config() -> u32 {
+    50
+}
+
+fn default_max_sso_group_mappings_per_org() -> u32 {
+    500
 }
 
 /// Rate limiting defaults.
