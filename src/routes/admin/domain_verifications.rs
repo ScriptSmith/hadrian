@@ -186,6 +186,24 @@ pub async fn create(
             ))
         })?;
 
+    // Check domain verification limit
+    let max = state
+        .config
+        .limits
+        .resource_limits
+        .max_domains_per_sso_config;
+    if max > 0 {
+        let count = services
+            .domain_verifications
+            .count_by_config(sso_config.id)
+            .await?;
+        if count >= max as i64 {
+            return Err(AdminError::Conflict(format!(
+                "SSO configuration has reached the maximum number of domain verifications ({max})"
+            )));
+        }
+    }
+
     // Create the domain verification
     let verification = services
         .domain_verifications

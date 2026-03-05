@@ -521,4 +521,12 @@ impl OrgSsoConfigRepo for PostgresOrgSsoConfigRepo {
                 .await?;
         Ok(result.0)
     }
+
+    async fn count_by_org(&self, org_id: Uuid) -> DbResult<i64> {
+        let row = sqlx::query("SELECT COUNT(*) as count FROM org_sso_configs WHERE org_id = $1")
+            .bind(org_id)
+            .fetch_one(&self.read_pool)
+            .await?;
+        Ok(row.get::<i64, _>("count"))
+    }
 }

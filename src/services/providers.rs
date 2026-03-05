@@ -295,6 +295,11 @@ impl DynamicProviderService {
         self.db.providers().count_by_org(org_id).await
     }
 
+    /// Count providers for a team
+    pub async fn count_by_team(&self, team_id: Uuid) -> DbResult<i64> {
+        self.db.providers().count_by_team(team_id).await
+    }
+
     /// List providers for a project
     pub async fn list_by_project(
         &self,

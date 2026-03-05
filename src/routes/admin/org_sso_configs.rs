@@ -282,8 +282,16 @@ pub async fn create(
         None,
     )?;
 
-    // Check if org already has an SSO config
-    if services
+    // Check SSO config limit (DB also enforces one-per-org via UNIQUE constraint)
+    let max = state.config.limits.resource_limits.max_sso_configs_per_org;
+    if max > 0 {
+        let count = services.org_sso_configs.count_by_org(org.id).await?;
+        if count >= max as i64 {
+            return Err(AdminError::Conflict(format!(
+                "Organization has reached the maximum number of SSO configurations ({max})"
+            )));
+        }
+    } else if services
         .org_sso_configs
         .get_by_org_id(org.id)
         .await?
