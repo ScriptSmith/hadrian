@@ -4,6 +4,7 @@ import { APIPage } from "@/components/api-page";
 import { StoryEmbed } from "@/components/story-embed";
 import { Mermaid } from "@/components/mdx/mermaid";
 import { QuickStartSelector } from "@/components/quick-start-selector";
+import { ConfigBuilder } from "@/components/ConfigBuilder/ConfigBuilder";
 
 export function getMDXComponents(components?: MDXComponents): MDXComponents {
   return {
@@ -12,6 +13,7 @@ export function getMDXComponents(components?: MDXComponents): MDXComponents {
     StoryEmbed,
     Mermaid,
     QuickStartSelector,
+    ConfigBuilder,
     ...components,
   };
 }
