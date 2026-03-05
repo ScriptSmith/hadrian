@@ -114,7 +114,9 @@
       "@rollup/plugin-terser>serialize-javascript": ">=7.0.3",
       "qs": ">=6.14.2",
       "workbox-build>ajv": ">=8.18.0",
-      "@modelcontextprotocol/sdk>ajv": ">=8.18.0"
+      "@modelcontextprotocol/sdk>ajv": ">=8.18.0",
+      "@modelcontextprotocol/sdk>hono": ">=4.12.4",
+      "@modelcontextprotocol/sdk>@hono/node-server": ">=1.19.10"
     }
   }
 }
