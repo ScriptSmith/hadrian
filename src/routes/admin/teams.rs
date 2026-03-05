@@ -91,6 +91,17 @@ pub async fn create(
         None,
     )?;
 
+    // Check team limit
+    let max = state.config.limits.resource_limits.max_teams_per_org;
+    if max > 0 {
+        let count = services.teams.count_by_org(org.id, false).await?;
+        if count >= max as i64 {
+            return Err(AdminError::Conflict(format!(
+                "Organization has reached the maximum number of teams ({max})"
+            )));
+        }
+    }
+
     let team = services.teams.create(org.id, input).await?;
 
     // Log audit event (fire-and-forget)

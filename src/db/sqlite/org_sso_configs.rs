@@ -588,6 +588,14 @@ impl OrgSsoConfigRepo for SqliteOrgSsoConfigRepo {
                 .await?;
         Ok(row.col::<i32>("has_any") != 0)
     }
+
+    async fn count_by_org(&self, org_id: Uuid) -> DbResult<i64> {
+        let row = sqlx::query("SELECT COUNT(*) as count FROM org_sso_configs WHERE org_id = ?")
+            .bind(org_id.to_string())
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.get::<i64, _>("count"))
+    }
 }
 
 #[cfg(test)]

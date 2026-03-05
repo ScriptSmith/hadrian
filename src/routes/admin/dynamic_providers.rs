@@ -111,6 +111,55 @@ pub async fn create(
     )?;
     let actor = AuditActor::from(&admin_auth);
 
+    // Check per-scope provider limits
+    let limits = &state.config.limits.resource_limits;
+    match &input.owner {
+        crate::models::ProviderOwner::Organization { org_id } => {
+            let max = limits.max_providers_per_org;
+            if max > 0 {
+                let count = services.providers.count_by_org(*org_id).await?;
+                if count >= max as i64 {
+                    return Err(AdminError::Conflict(format!(
+                        "Organization has reached the maximum number of providers ({max})"
+                    )));
+                }
+            }
+        }
+        crate::models::ProviderOwner::Team { team_id } => {
+            let max = limits.max_providers_per_team;
+            if max > 0 {
+                let count = services.providers.count_by_team(*team_id).await?;
+                if count >= max as i64 {
+                    return Err(AdminError::Conflict(format!(
+                        "Team has reached the maximum number of providers ({max})"
+                    )));
+                }
+            }
+        }
+        crate::models::ProviderOwner::Project { project_id } => {
+            let max = limits.max_providers_per_project;
+            if max > 0 {
+                let count = services.providers.count_by_project(*project_id).await?;
+                if count >= max as i64 {
+                    return Err(AdminError::Conflict(format!(
+                        "Project has reached the maximum number of providers ({max})"
+                    )));
+                }
+            }
+        }
+        crate::models::ProviderOwner::User { user_id } => {
+            let max = limits.max_providers_per_user;
+            if max > 0 {
+                let count = services.providers.count_by_user(*user_id).await?;
+                if count >= max as i64 {
+                    return Err(AdminError::Conflict(format!(
+                        "User has reached the maximum number of providers ({max})"
+                    )));
+                }
+            }
+        }
+    }
+
     // Validate provider type
     crate::services::validate_provider_type(&input.provider_type)?;
 

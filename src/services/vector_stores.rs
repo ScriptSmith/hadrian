@@ -316,6 +316,26 @@ impl VectorStoresService {
             .await
     }
 
+    /// Count vector stores by owner (excluding soft-deleted).
+    pub async fn count_by_owner(
+        &self,
+        owner_type: VectorStoreOwnerType,
+        owner_id: Uuid,
+    ) -> DbResult<i64> {
+        self.db
+            .vector_stores()
+            .count_by_owner(owner_type, owner_id)
+            .await
+    }
+
+    /// Count active (non-deleted) files in a vector store.
+    pub async fn count_files_in_vector_store(&self, vector_store_id: Uuid) -> DbResult<i64> {
+        self.db
+            .vector_stores()
+            .count_files_in_vector_store(vector_store_id)
+            .await
+    }
+
     /// Recalculate and update vector store statistics.
     ///
     /// This updates `usage_bytes` and `file_counts` based on current file state.

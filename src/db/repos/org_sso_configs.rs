@@ -99,4 +99,7 @@ pub trait OrgSsoConfigRepo: Send + Sync {
     ///
     /// Used to determine if email discovery should be shown on the login page.
     async fn any_enabled(&self) -> DbResult<bool>;
+
+    /// Count SSO configurations for an organization.
+    async fn count_by_org(&self, org_id: Uuid) -> DbResult<i64>;
 }
