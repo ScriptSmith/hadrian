@@ -217,4 +217,3 @@ fn classify_js_error(e: &JsValue) -> WasmDbError {
         WasmDbError::Query(msg)
     }
 }
-

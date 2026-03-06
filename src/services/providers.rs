@@ -475,7 +475,7 @@ impl DynamicProviderService {
         state: &AppState,
         secrets: Option<&Arc<dyn SecretManager>>,
     ) -> ConnectivityTestResponse {
-        let start = std::time::Instant::now();
+        let start = now_ms();
 
         let config_result =
             crate::routing::resolver::dynamic_provider_to_config(provider, secrets).await;
@@ -492,7 +492,7 @@ impl DynamicProviderService {
                 return ConnectivityTestResponse {
                     status: "error".to_string(),
                     message: "Failed to resolve provider configuration".to_string(),
-                    latency_ms: Some(start.elapsed().as_millis() as u64),
+                    latency_ms: Some(elapsed_ms(start)),
                 };
             }
         };
@@ -505,7 +505,7 @@ impl DynamicProviderService {
         )
         .await;
 
-        let latency_ms = start.elapsed().as_millis() as u64;
+        let latency_ms = elapsed_ms(start);
 
         match result {
             Ok(models) => ConnectivityTestResponse {
@@ -531,4 +531,23 @@ impl DynamicProviderService {
             }
         }
     }
+}
+
+/// Get current time in milliseconds (cross-platform: works on both native and wasm32).
+#[cfg(not(target_arch = "wasm32"))]
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+#[cfg(target_arch = "wasm32")]
+fn now_ms() -> u64 {
+    js_sys::Date::now() as u64
+}
+
+/// Compute elapsed milliseconds since a `now_ms()` timestamp.
+fn elapsed_ms(start: u64) -> u64 {
+    now_ms().saturating_sub(start)
 }

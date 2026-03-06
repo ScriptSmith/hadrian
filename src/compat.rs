@@ -42,11 +42,33 @@ where
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mutex
+// Axum handler compatibility (wasm32 only)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Wrap a `!Send` async block so it satisfies Axum's `Send` requirement on wasm32.
+///
+/// Axum requires handler futures to be `Send`, but on wasm32 `reqwest`/`wasm-bindgen`
+/// futures are `!Send`. This macro bridges the gap using `spawn_local` + `oneshot`:
+/// the `!Send` work runs inside `spawn_local`, and the handler returns the `Send`-safe
+/// `oneshot::Receiver` future.
+#[cfg(target_arch = "wasm32")]
+macro_rules! wasm_compat {
+    ($body:expr) => {{
+        let (tx, rx) = ::oneshot::channel();
+        ::wasm_bindgen_futures::spawn_local(async move {
+            let _ = tx.send($body.await);
+        });
+        rx.await.unwrap()
+    }};
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mutex
+// ─────────────────────────────────────────────────────────────────────────────
 #[cfg(feature = "concurrency")]
 pub use parking_lot::Mutex;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use wasm_compat;
 
 /// A Mutex wrapper around `std::sync::Mutex` that panics-on-poison (matching
 /// `parking_lot::Mutex` semantics). Safe on single-threaded WASM.
