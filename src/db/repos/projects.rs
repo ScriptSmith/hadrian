@@ -7,7 +7,8 @@ use crate::{
     models::{CreateProject, Project, UpdateProject},
 };
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait ProjectRepo: Send + Sync {
     async fn create(&self, org_id: Uuid, input: CreateProject) -> DbResult<Project>;
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<Project>>;

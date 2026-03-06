@@ -125,7 +125,8 @@ impl SqliteConversationRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl ConversationRepo for SqliteConversationRepo {
     async fn create(&self, input: CreateConversation) -> DbResult<Conversation> {
         let id = Uuid::new_v4();

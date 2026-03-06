@@ -8,7 +8,8 @@ use crate::{
 };
 
 /// Repository trait for files (OpenAI Files API) operations
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait FilesRepo: Send + Sync {
     /// Create a new file
     async fn create_file(&self, input: CreateFile) -> DbResult<File>;

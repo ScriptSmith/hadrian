@@ -24,7 +24,8 @@ pub struct UsageStats {
     pub sample_days: i32,
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait UsageRepo: Send + Sync {
     /// Log a single usage entry.
     async fn log(&self, entry: UsageLogEntry) -> DbResult<()>;

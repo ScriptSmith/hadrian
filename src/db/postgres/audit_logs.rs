@@ -34,7 +34,8 @@ impl PostgresAuditLogRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl AuditLogRepo for PostgresAuditLogRepo {
     async fn create(&self, input: CreateAuditLog) -> DbResult<AuditLog> {
         let id = Uuid::new_v4();

@@ -5,11 +5,10 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use super::types::{CatalogCost, CatalogModel, ModelCatalog};
-use crate::pricing::ModelPricing;
+use crate::{compat::RwLock, pricing::ModelPricing};
 
 /// Model capabilities extracted from the catalog.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

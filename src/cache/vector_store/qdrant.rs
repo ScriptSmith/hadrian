@@ -59,10 +59,10 @@ impl QdrantStore {
         dimensions: usize,
         distance_metric: DistanceMetric,
     ) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .expect("Failed to create HTTP client");
+        let builder = Client::builder();
+        #[cfg(not(target_arch = "wasm32"))]
+        let builder = builder.timeout(Duration::from_secs(30));
+        let client = builder.build().expect("Failed to create HTTP client");
 
         // Remove trailing slash from base_url
         let base_url = base_url.trim_end_matches('/').to_string();
@@ -668,7 +668,8 @@ struct ChunkSearchResultData {
     payload: Option<HashMap<String, serde_json::Value>>,
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl VectorBackend for QdrantStore {
     #[instrument(
         skip(self, embedding, metadata),

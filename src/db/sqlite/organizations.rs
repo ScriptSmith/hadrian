@@ -90,7 +90,8 @@ impl SqliteOrganizationRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl OrganizationRepo for SqliteOrganizationRepo {
     async fn create(&self, input: CreateOrganization) -> DbResult<Organization> {
         let id = Uuid::new_v4();

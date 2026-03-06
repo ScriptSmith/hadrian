@@ -9,6 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::json;
+#[cfg(feature = "server")]
 use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 
@@ -36,6 +37,7 @@ pub struct AuthzContext {
     /// Audit log service for logging authorization decisions (optional)
     audit_service: Option<AuditLogService>,
     /// Task tracker for async logging
+    #[cfg(feature = "server")]
     task_tracker: Option<TaskTracker>,
     /// Request metadata for audit logs
     request_ip: Option<String>,
@@ -160,81 +162,97 @@ impl AuthzContext {
         project_id: Option<&str>,
         result: &AuthzResult,
     ) {
-        // Only log if audit service is available
-        let (Some(audit_service), Some(task_tracker)) =
-            (self.audit_service.clone(), self.task_tracker.clone())
-        else {
+        // Only log if audit service and task tracker are available
+        #[cfg(not(feature = "server"))]
+        {
+            let _ = (
+                resource,
+                action,
+                resource_id,
+                org_id,
+                team_id,
+                project_id,
+                result,
+            );
             return;
-        };
-
-        // Build audit log entry
-        let actor_type = if self.subject.user_id.is_some() {
-            AuditActorType::User
-        } else {
-            AuditActorType::System
-        };
-
-        let actor_id = self
-            .subject
-            .user_id
-            .as_ref()
-            .and_then(|id| Uuid::parse_str(id).ok());
-
-        // Use provided resource_id or generate a nil UUID for the audit log
-        let audit_resource_id = resource_id
-            .and_then(|id| Uuid::parse_str(id).ok())
-            .unwrap_or_else(Uuid::nil);
-
-        let parsed_org_id = org_id.and_then(|id| Uuid::parse_str(id).ok());
-        let parsed_project_id = project_id.and_then(|id| Uuid::parse_str(id).ok());
-
-        // Build details JSON with authorization context
-        let details = json!({
-            "decision": if result.allowed { "allow" } else { "deny" },
-            "policy_name": result.policy_name,
-            "reason": result.reason,
-            "resource": resource,
-            "action": action,
-            "org_id": org_id,
-            "team_id": team_id,
-            "project_id": project_id,
-            "resource_id": resource_id,
-            "subject": {
-                "user_id": self.subject.user_id,
-                "external_id": self.subject.external_id,
-                "email": self.subject.email,
-                "roles": self.subject.roles,
-                "team_ids": self.subject.team_ids,
-            }
-        });
-
-        let audit_action = format!("authz.{}", if result.allowed { "allow" } else { "deny" });
-        let ip_address = self.request_ip.clone();
-        let user_agent = self.request_user_agent.clone();
-        let resource_type = resource.to_string();
-
-        // Spawn async task to write audit log (non-blocking)
-        task_tracker.spawn(async move {
-            let entry = CreateAuditLog {
-                actor_type,
-                actor_id,
-                action: audit_action,
-                resource_type,
-                resource_id: audit_resource_id,
-                org_id: parsed_org_id,
-                project_id: parsed_project_id,
-                details,
-                ip_address,
-                user_agent,
+        }
+        #[cfg(feature = "server")]
+        {
+            let (Some(audit_service), Some(task_tracker)) =
+                (self.audit_service.clone(), self.task_tracker.clone())
+            else {
+                return;
             };
 
-            if let Err(e) = audit_service.create(entry).await {
-                tracing::warn!(
-                    error = %e,
-                    "Failed to log authorization decision to audit log"
-                );
-            }
-        });
+            // Build audit log entry
+            let actor_type = if self.subject.user_id.is_some() {
+                AuditActorType::User
+            } else {
+                AuditActorType::System
+            };
+
+            let actor_id = self
+                .subject
+                .user_id
+                .as_ref()
+                .and_then(|id| Uuid::parse_str(id).ok());
+
+            // Use provided resource_id or generate a nil UUID for the audit log
+            let audit_resource_id = resource_id
+                .and_then(|id| Uuid::parse_str(id).ok())
+                .unwrap_or_else(Uuid::nil);
+
+            let parsed_org_id = org_id.and_then(|id| Uuid::parse_str(id).ok());
+            let parsed_project_id = project_id.and_then(|id| Uuid::parse_str(id).ok());
+
+            // Build details JSON with authorization context
+            let details = json!({
+                "decision": if result.allowed { "allow" } else { "deny" },
+                "policy_name": result.policy_name,
+                "reason": result.reason,
+                "resource": resource,
+                "action": action,
+                "org_id": org_id,
+                "team_id": team_id,
+                "project_id": project_id,
+                "resource_id": resource_id,
+                "subject": {
+                    "user_id": self.subject.user_id,
+                    "external_id": self.subject.external_id,
+                    "email": self.subject.email,
+                    "roles": self.subject.roles,
+                    "team_ids": self.subject.team_ids,
+                }
+            });
+
+            let audit_action = format!("authz.{}", if result.allowed { "allow" } else { "deny" });
+            let ip_address = self.request_ip.clone();
+            let user_agent = self.request_user_agent.clone();
+            let resource_type = resource.to_string();
+
+            // Spawn async task to write audit log (non-blocking)
+            task_tracker.spawn(async move {
+                let entry = CreateAuditLog {
+                    actor_type,
+                    actor_id,
+                    action: audit_action,
+                    resource_type,
+                    resource_id: audit_resource_id,
+                    org_id: parsed_org_id,
+                    project_id: parsed_project_id,
+                    details,
+                    ip_address,
+                    user_agent,
+                };
+
+                if let Err(e) = audit_service.create(entry).await {
+                    tracing::warn!(
+                        error = %e,
+                        "Failed to log authorization decision to audit log"
+                    );
+                }
+            });
+        }
     }
 
     /// Check if the subject has a specific role.
@@ -399,80 +417,88 @@ impl AuthzContext {
         project_id: Option<&str>,
         result: &AuthzResult,
     ) {
-        let (Some(audit_service), Some(task_tracker)) =
-            (self.audit_service.clone(), self.task_tracker.clone())
-        else {
+        #[cfg(not(feature = "server"))]
+        {
+            let _ = (resource, action, model, request, org_id, project_id, result);
             return;
-        };
-
-        let actor_type = if self.subject.user_id.is_some() {
-            AuditActorType::User
-        } else {
-            AuditActorType::System
-        };
-
-        let actor_id = self
-            .subject
-            .user_id
-            .as_ref()
-            .and_then(|id| Uuid::parse_str(id).ok());
-
-        let parsed_org_id = org_id.and_then(|id| Uuid::parse_str(id).ok());
-        let parsed_project_id = project_id.and_then(|id| Uuid::parse_str(id).ok());
-
-        let details = json!({
-            "decision": if result.allowed { "allow" } else { "deny" },
-            "policy_name": result.policy_name,
-            "reason": result.reason,
-            "resource": resource,
-            "action": action,
-            "model": model,
-            "request": request.map(|r| json!({
-                "max_tokens": r.max_tokens,
-                "messages_count": r.messages_count,
-                "has_tools": r.has_tools,
-                "has_file_search": r.has_file_search,
-                "stream": r.stream,
-            })),
-            "org_id": org_id,
-            "project_id": project_id,
-            "subject": {
-                "user_id": self.subject.user_id,
-                "external_id": self.subject.external_id,
-                "email": self.subject.email,
-                "roles": self.subject.roles,
-            }
-        });
-
-        let audit_action = format!(
-            "api_authz.{}",
-            if result.allowed { "allow" } else { "deny" }
-        );
-        let ip_address = self.request_ip.clone();
-        let user_agent = self.request_user_agent.clone();
-        let resource_type = resource.to_string();
-
-        task_tracker.spawn(async move {
-            let entry = CreateAuditLog {
-                actor_type,
-                actor_id,
-                action: audit_action,
-                resource_type,
-                resource_id: Uuid::nil(), // API requests don't have a single resource ID
-                org_id: parsed_org_id,
-                project_id: parsed_project_id,
-                details,
-                ip_address,
-                user_agent,
+        }
+        #[cfg(feature = "server")]
+        {
+            let (Some(audit_service), Some(task_tracker)) =
+                (self.audit_service.clone(), self.task_tracker.clone())
+            else {
+                return;
             };
 
-            if let Err(e) = audit_service.create(entry).await {
-                tracing::warn!(
-                    error = %e,
-                    "Failed to log API authorization decision to audit log"
-                );
-            }
-        });
+            let actor_type = if self.subject.user_id.is_some() {
+                AuditActorType::User
+            } else {
+                AuditActorType::System
+            };
+
+            let actor_id = self
+                .subject
+                .user_id
+                .as_ref()
+                .and_then(|id| Uuid::parse_str(id).ok());
+
+            let parsed_org_id = org_id.and_then(|id| Uuid::parse_str(id).ok());
+            let parsed_project_id = project_id.and_then(|id| Uuid::parse_str(id).ok());
+
+            let details = json!({
+                "decision": if result.allowed { "allow" } else { "deny" },
+                "policy_name": result.policy_name,
+                "reason": result.reason,
+                "resource": resource,
+                "action": action,
+                "model": model,
+                "request": request.map(|r| json!({
+                    "max_tokens": r.max_tokens,
+                    "messages_count": r.messages_count,
+                    "has_tools": r.has_tools,
+                    "has_file_search": r.has_file_search,
+                    "stream": r.stream,
+                })),
+                "org_id": org_id,
+                "project_id": project_id,
+                "subject": {
+                    "user_id": self.subject.user_id,
+                    "external_id": self.subject.external_id,
+                    "email": self.subject.email,
+                    "roles": self.subject.roles,
+                }
+            });
+
+            let audit_action = format!(
+                "api_authz.{}",
+                if result.allowed { "allow" } else { "deny" }
+            );
+            let ip_address = self.request_ip.clone();
+            let user_agent = self.request_user_agent.clone();
+            let resource_type = resource.to_string();
+
+            task_tracker.spawn(async move {
+                let entry = CreateAuditLog {
+                    actor_type,
+                    actor_id,
+                    action: audit_action,
+                    resource_type,
+                    resource_id: Uuid::nil(), // API requests don't have a single resource ID
+                    org_id: parsed_org_id,
+                    project_id: parsed_project_id,
+                    details,
+                    ip_address,
+                    user_agent,
+                };
+
+                if let Err(e) = audit_service.create(entry).await {
+                    tracing::warn!(
+                        error = %e,
+                        "Failed to log API authorization decision to audit log"
+                    );
+                }
+            });
+        }
     }
 }
 
@@ -549,6 +575,7 @@ pub async fn authz_middleware(
         engine,
         registry: state.policy_registry.clone(),
         audit_service,
+        #[cfg(feature = "server")]
         task_tracker: Some(state.task_tracker.clone()),
         request_ip,
         request_user_agent,
@@ -627,6 +654,7 @@ pub async fn permissive_authz_middleware(
         engine,
         registry: None,      // No registry in permissive mode
         audit_service: None, // No audit logging in permissive mode
+        #[cfg(feature = "server")]
         task_tracker: None,
         request_ip: None,
         request_user_agent: None,
@@ -717,6 +745,7 @@ pub async fn api_authz_middleware(
         engine,
         registry: state.policy_registry.clone(),
         audit_service,
+        #[cfg(feature = "server")]
         task_tracker: Some(state.task_tracker.clone()),
         request_ip,
         request_user_agent,

@@ -566,6 +566,7 @@ fn log_guardrails_evaluation(
         })
         .collect();
 
+    #[cfg(feature = "server")]
     state.task_tracker.spawn(async move {
         let result = db
             .audit_logs()
@@ -685,6 +686,7 @@ fn log_output_guardrails_evaluation(
         })
         .collect();
 
+    #[cfg(feature = "server")]
     state.task_tracker.spawn(async move {
         let mut details = serde_json::json!({
             "provider": provider,
@@ -747,28 +749,37 @@ fn get_services(state: &AppState) -> Result<&Services, ApiError> {
 }
 
 pub fn get_api_routes(state: AppState) -> Router<AppState> {
-    Router::new()
+    let router = Router::new()
         .route("/v1/chat/completions", post(api_v1_chat_completions))
         .route("/v1/responses", post(api_v1_responses))
         .route("/v1/completions", post(api_v1_completions))
         .route("/v1/embeddings", post(api_v1_embeddings))
         .route("/v1/models", get(api_v1_models))
         // Images API (OpenAI-compatible)
-        .route("/v1/images/generations", post(api_v1_images_generations))
+        .route("/v1/images/generations", post(api_v1_images_generations));
+    #[cfg(feature = "server")]
+    let router = router
         .route("/v1/images/edits", post(api_v1_images_edits))
-        .route("/v1/images/variations", post(api_v1_images_variations))
+        .route("/v1/images/variations", post(api_v1_images_variations));
+    let router = router
         // Audio API (OpenAI-compatible)
-        .route("/v1/audio/speech", post(api_v1_audio_speech))
+        .route("/v1/audio/speech", post(api_v1_audio_speech));
+    #[cfg(feature = "server")]
+    let router = router
         .route(
             "/v1/audio/transcriptions",
             post(api_v1_audio_transcriptions),
         )
-        .route("/v1/audio/translations", post(api_v1_audio_translations))
-        // Files API (OpenAI-compatible)
-        .route(
-            "/v1/files",
-            post(api_v1_files_upload).get(api_v1_files_list),
-        )
+        .route("/v1/audio/translations", post(api_v1_audio_translations));
+    // Files API (OpenAI-compatible)
+    #[cfg(feature = "server")]
+    let router = router.route(
+        "/v1/files",
+        post(api_v1_files_upload).get(api_v1_files_list),
+    );
+    #[cfg(not(feature = "server"))]
+    let router = router.route("/v1/files", get(api_v1_files_list));
+    router
         .route(
             "/v1/files/{file_id}",
             get(api_v1_files_get).delete(api_v1_files_delete),

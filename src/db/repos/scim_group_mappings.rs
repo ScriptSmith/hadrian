@@ -15,7 +15,8 @@ use crate::{
 /// SCIM group mappings link SCIM groups (from the IdP) to Hadrian teams.
 /// When the IdP pushes group membership changes via SCIM, we update
 /// team memberships in Hadrian accordingly.
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait ScimGroupMappingRepo: Send + Sync {
     /// Create a new SCIM group mapping.
     ///

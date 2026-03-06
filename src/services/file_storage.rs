@@ -51,7 +51,8 @@ pub type FileStorageResult<T> = Result<T, FileStorageError>;
 /// Trait for pluggable file storage backends.
 ///
 /// Implementations must be `Send + Sync` to support async contexts.
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait FileStorage: Send + Sync {
     /// Store file content and return the storage path/key.
     ///
@@ -89,7 +90,8 @@ impl DatabaseFileStorage {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl FileStorage for DatabaseFileStorage {
     #[instrument(skip(self, content), fields(size = content.len()))]
     async fn store(&self, file_id: &str, content: &[u8]) -> FileStorageResult<Option<String>> {
@@ -151,10 +153,12 @@ impl FileStorage for DatabaseFileStorage {
 ///
 /// Stores file content on the local filesystem.
 /// Files are stored as `{base_path}/{file_id}`.
+#[cfg(feature = "server")]
 pub struct FilesystemFileStorage {
     config: FilesystemStorageConfig,
 }
 
+#[cfg(feature = "server")]
 impl FilesystemFileStorage {
     pub fn new(config: FilesystemStorageConfig) -> FileStorageResult<Self> {
         let storage = Self { config };
@@ -186,7 +190,9 @@ impl FilesystemFileStorage {
     }
 }
 
-#[async_trait]
+#[cfg(feature = "server")]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl FileStorage for FilesystemFileStorage {
     #[instrument(skip(self, content), fields(size = content.len()))]
     async fn store(&self, file_id: &str, content: &[u8]) -> FileStorageResult<Option<String>> {
@@ -348,7 +354,8 @@ impl S3FileStorage {
 }
 
 #[cfg(feature = "s3-storage")]
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl FileStorage for S3FileStorage {
     #[instrument(skip(self, content), fields(size = content.len(), bucket = %self.config.bucket))]
     async fn store(&self, file_id: &str, content: &[u8]) -> FileStorageResult<Option<String>> {
@@ -497,13 +504,22 @@ pub async fn create_file_storage(
             Ok(Arc::new(DatabaseFileStorage::new(db)))
         }
         FileStorageBackend::Filesystem => {
-            let fs_config = config.filesystem.clone().ok_or_else(|| {
-                FileStorageError::Config(
-                    "Filesystem backend requires [storage.files.filesystem] config".to_string(),
-                )
-            })?;
-            info!(path = %fs_config.path, "Using filesystem file storage backend");
-            Ok(Arc::new(FilesystemFileStorage::new(fs_config)?))
+            #[cfg(feature = "server")]
+            {
+                let fs_config = config.filesystem.clone().ok_or_else(|| {
+                    FileStorageError::Config(
+                        "Filesystem backend requires [storage.files.filesystem] config".to_string(),
+                    )
+                })?;
+                info!(path = %fs_config.path, "Using filesystem file storage backend");
+                Ok(Arc::new(FilesystemFileStorage::new(fs_config)?))
+            }
+            #[cfg(not(feature = "server"))]
+            {
+                Err(FileStorageError::Config(
+                    "Filesystem backend requires the 'server' feature.".to_string(),
+                ))
+            }
         }
         #[cfg(feature = "s3-storage")]
         FileStorageBackend::S3 => {

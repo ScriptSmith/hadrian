@@ -11,6 +11,7 @@ import { ConversationsProvider } from "@/components/ConversationsProvider/Conver
 import { ErrorBoundary } from "@/components/ErrorBoundary/ErrorBoundary";
 import { AppLayout } from "@/components/AppLayout/AppLayout";
 import { AdminLayout } from "@/components/AdminLayout/AdminLayout";
+import { WasmSetupGuard } from "@/components/WasmSetup/WasmSetupGuard";
 
 // Pages - lazy loaded for code splitting
 import { lazy, Suspense } from "react";
@@ -84,382 +85,384 @@ export default function App() {
                 <ToastProvider>
                   <ConfirmDialogProvider>
                     <CommandPaletteProvider>
-                      <ConversationsProvider>
-                        <BrowserRouter>
-                          <Routes>
-                            {/* Root redirect */}
-                            <Route path="/" element={<Navigate to="/chat" replace />} />
+                      <WasmSetupGuard>
+                        <ConversationsProvider>
+                          <BrowserRouter>
+                            <Routes>
+                              {/* Root redirect */}
+                              <Route path="/" element={<Navigate to="/chat" replace />} />
 
-                            {/* Login route */}
-                            <Route
-                              path="/login"
-                              element={
-                                <Suspense fallback={<PageLoader />}>
-                                  <LoginPage />
-                                </Suspense>
-                              }
-                            />
-
-                            {/* Auth callback route for OIDC */}
-                            <Route
-                              path="/auth/callback"
-                              element={
-                                <Suspense fallback={<PageLoader />}>
-                                  <LoginPage />
-                                </Suspense>
-                              }
-                            />
-
-                            {/* Protected routes with main AppLayout (chat sidebar) */}
-                            <Route
-                              element={
-                                <RequireAuth>
-                                  <AppLayout />
-                                </RequireAuth>
-                              }
-                            >
-                              {/* Chat routes */}
+                              {/* Login route */}
                               <Route
-                                path="/chat"
+                                path="/login"
                                 element={
                                   <Suspense fallback={<PageLoader />}>
-                                    <ChatPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/chat/:conversationId"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <ChatPage />
+                                    <LoginPage />
                                   </Suspense>
                                 }
                               />
 
-                              {/* Projects route */}
+                              {/* Auth callback route for OIDC */}
                               <Route
-                                path="/projects"
+                                path="/auth/callback"
                                 element={
                                   <Suspense fallback={<PageLoader />}>
-                                    <ProjectsPage />
+                                    <LoginPage />
                                   </Suspense>
                                 }
                               />
 
-                              {/* Project detail route */}
+                              {/* Protected routes with main AppLayout (chat sidebar) */}
                               <Route
-                                path="/projects/:orgSlug/:projectSlug"
                                 element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <SelfServiceProjectDetailPage />
-                                  </Suspense>
+                                  <RequireAuth>
+                                    <AppLayout />
+                                  </RequireAuth>
                                 }
-                              />
+                              >
+                                {/* Chat routes */}
+                                <Route
+                                  path="/chat"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <ChatPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/chat/:conversationId"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <ChatPage />
+                                    </Suspense>
+                                  }
+                                />
 
-                              {/* Teams route */}
-                              <Route
-                                path="/teams"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <TeamsPage />
-                                  </Suspense>
-                                }
-                              />
+                                {/* Projects route */}
+                                <Route
+                                  path="/projects"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <ProjectsPage />
+                                    </Suspense>
+                                  }
+                                />
 
-                              {/* Knowledge Bases route */}
-                              <Route
-                                path="/knowledge-bases"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <KnowledgeBasesPage />
-                                  </Suspense>
-                                }
-                              />
+                                {/* Project detail route */}
+                                <Route
+                                  path="/projects/:orgSlug/:projectSlug"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <SelfServiceProjectDetailPage />
+                                    </Suspense>
+                                  }
+                                />
 
-                              {/* API Keys routes */}
-                              <Route
-                                path="/api-keys"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <ApiKeysPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/api-keys/:keyId"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <ApiKeyDetailPage />
-                                  </Suspense>
-                                }
-                              />
+                                {/* Teams route */}
+                                <Route
+                                  path="/teams"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <TeamsPage />
+                                    </Suspense>
+                                  }
+                                />
 
-                              {/* Providers route (self-service) */}
-                              <Route
-                                path="/providers"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <MyProvidersPage />
-                                  </Suspense>
-                                }
-                              />
+                                {/* Knowledge Bases route */}
+                                <Route
+                                  path="/knowledge-bases"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <KnowledgeBasesPage />
+                                    </Suspense>
+                                  }
+                                />
 
-                              {/* Usage route (self-service) */}
-                              <Route
-                                path="/usage"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <MyUsagePage />
-                                  </Suspense>
-                                }
-                              />
+                                {/* API Keys routes */}
+                                <Route
+                                  path="/api-keys"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <ApiKeysPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/api-keys/:keyId"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <ApiKeyDetailPage />
+                                    </Suspense>
+                                  }
+                                />
 
-                              {/* Studio route */}
-                              <Route
-                                path="/studio"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <StudioPage />
-                                  </Suspense>
-                                }
-                              />
+                                {/* Providers route (self-service) */}
+                                <Route
+                                  path="/providers"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <MyProvidersPage />
+                                    </Suspense>
+                                  }
+                                />
 
-                              {/* Account settings route */}
-                              <Route
-                                path="/account"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <AccountPage />
-                                  </Suspense>
-                                }
-                              />
+                                {/* Usage route (self-service) */}
+                                <Route
+                                  path="/usage"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <MyUsagePage />
+                                    </Suspense>
+                                  }
+                                />
 
-                              {/* Session info route (debugging) */}
-                              <Route
-                                path="/session"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <SessionInfoPage />
-                                  </Suspense>
-                                }
-                              />
-                            </Route>
+                                {/* Studio route */}
+                                <Route
+                                  path="/studio"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <StudioPage />
+                                    </Suspense>
+                                  }
+                                />
 
-                            {/* Admin routes with AdminLayout (admin sidebar) */}
-                            <Route
-                              element={
-                                <RequireAdmin>
-                                  <AdminLayout />
-                                </RequireAdmin>
-                              }
-                            >
-                              <Route
-                                path="/admin"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <AdminDashboardPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/organizations"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <OrganizationsPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/organizations/:slug"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <OrganizationDetailPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/organizations/:orgSlug/projects/:projectSlug"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <ProjectDetailPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/users"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <UsersPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/users/:userId"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <UserDetailPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/sso"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <SsoConnectionsPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/organizations/:orgSlug/sso-group-mappings"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <SsoGroupMappingsPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/organizations/:orgSlug/sso-config"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <OrgSsoConfigPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/organizations/:orgSlug/scim-config"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <ScimConfigPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/organizations/:orgSlug/rbac-policies"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <OrgRbacPoliciesPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/api-keys"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <AdminApiKeysPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/providers"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <ProvidersPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/provider-health"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <ProviderHealthPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/provider-health/:providerName"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <ProviderDetailPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/pricing"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <PricingPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/usage"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <UsagePage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/projects"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <AdminProjectsPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/teams"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <AdminTeamsPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/service-accounts"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <ServiceAccountsPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/organizations/:orgSlug/teams/:teamSlug"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <TeamDetailPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/settings"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <SettingsPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/audit-logs"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <AuditLogsPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/vector-stores"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <VectorStoresPage />
-                                  </Suspense>
-                                }
-                              />
-                              <Route
-                                path="/admin/vector-stores/:vectorStoreId"
-                                element={
-                                  <Suspense fallback={<PageLoader />}>
-                                    <VectorStoreDetailPage />
-                                  </Suspense>
-                                }
-                              />
-                            </Route>
+                                {/* Account settings route */}
+                                <Route
+                                  path="/account"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <AccountPage />
+                                    </Suspense>
+                                  }
+                                />
 
-                            {/* Catch all - redirect to chat */}
-                            <Route path="*" element={<Navigate to="/chat" replace />} />
-                          </Routes>
-                        </BrowserRouter>
-                      </ConversationsProvider>
+                                {/* Session info route (debugging) */}
+                                <Route
+                                  path="/session"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <SessionInfoPage />
+                                    </Suspense>
+                                  }
+                                />
+                              </Route>
+
+                              {/* Admin routes with AdminLayout (admin sidebar) */}
+                              <Route
+                                element={
+                                  <RequireAdmin>
+                                    <AdminLayout />
+                                  </RequireAdmin>
+                                }
+                              >
+                                <Route
+                                  path="/admin"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <AdminDashboardPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/organizations"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <OrganizationsPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/organizations/:slug"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <OrganizationDetailPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/organizations/:orgSlug/projects/:projectSlug"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <ProjectDetailPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/users"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <UsersPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/users/:userId"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <UserDetailPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/sso"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <SsoConnectionsPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/organizations/:orgSlug/sso-group-mappings"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <SsoGroupMappingsPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/organizations/:orgSlug/sso-config"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <OrgSsoConfigPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/organizations/:orgSlug/scim-config"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <ScimConfigPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/organizations/:orgSlug/rbac-policies"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <OrgRbacPoliciesPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/api-keys"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <AdminApiKeysPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/providers"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <ProvidersPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/provider-health"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <ProviderHealthPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/provider-health/:providerName"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <ProviderDetailPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/pricing"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <PricingPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/usage"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <UsagePage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/projects"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <AdminProjectsPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/teams"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <AdminTeamsPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/service-accounts"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <ServiceAccountsPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/organizations/:orgSlug/teams/:teamSlug"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <TeamDetailPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/settings"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <SettingsPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/audit-logs"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <AuditLogsPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/vector-stores"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <VectorStoresPage />
+                                    </Suspense>
+                                  }
+                                />
+                                <Route
+                                  path="/admin/vector-stores/:vectorStoreId"
+                                  element={
+                                    <Suspense fallback={<PageLoader />}>
+                                      <VectorStoreDetailPage />
+                                    </Suspense>
+                                  }
+                                />
+                              </Route>
+
+                              {/* Catch all - redirect to chat */}
+                              <Route path="*" element={<Navigate to="/chat" replace />} />
+                            </Routes>
+                          </BrowserRouter>
+                        </ConversationsProvider>
+                      </WasmSetupGuard>
                     </CommandPaletteProvider>
                   </ConfirmDialogProvider>
                 </ToastProvider>

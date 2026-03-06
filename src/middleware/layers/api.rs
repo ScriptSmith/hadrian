@@ -1,7 +1,9 @@
 use std::{net::IpAddr, sync::Arc, time::Duration};
 
+#[cfg(feature = "server")]
+use axum::extract::ConnectInfo;
 use axum::{
-    extract::{ConnectInfo, Request, State},
+    extract::{Request, State},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -580,10 +582,13 @@ pub async fn api_middleware(
     req.extensions_mut().insert(tracker.clone());
 
     // Extract connecting IP for trusted proxy validation
+    #[cfg(feature = "server")]
     let connecting_ip = req
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0.ip());
+    #[cfg(not(feature = "server"))]
+    let connecting_ip: Option<std::net::IpAddr> = None;
 
     // Insert client info for audit logging
     let client_info = crate::middleware::ClientInfo {
@@ -877,94 +882,97 @@ pub async fn api_middleware(
             token_reservation,
             header_project_id,
         });
-    } else if let Some(buffer) = &state.usage_buffer {
-        // Track anonymous usage when auth is disabled (local dev / no-auth mode).
-        // Attribute to the default anonymous user/org created on startup.
-        let has_model = response.headers().contains_key("X-Model");
-        let is_streaming = response
-            .headers()
-            .get(http::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|s| s.contains("text/event-stream"))
-            || response
+    } else {
+        #[cfg(feature = "concurrency")]
+        if let Some(buffer) = &state.usage_buffer {
+            // Track anonymous usage when auth is disabled (local dev / no-auth mode).
+            // Attribute to the default anonymous user/org created on startup.
+            let has_model = response.headers().contains_key("X-Model");
+            let is_streaming = response
                 .headers()
-                .get("Transfer-Encoding")
+                .get(http::header::CONTENT_TYPE)
                 .and_then(|v| v.to_str().ok())
-                .is_some_and(|s| s.contains("chunked"));
+                .is_some_and(|s| s.contains("text/event-stream"))
+                || response
+                    .headers()
+                    .get("Transfer-Encoding")
+                    .and_then(|v| v.to_str().ok())
+                    .is_some_and(|s| s.contains("chunked"));
 
-        // Only track LLM requests (those with X-Model header).
-        // Skip streaming responses here — UsageTrackingStream handles them
-        // with actual token counts after the stream completes.
-        if has_model && !is_streaming {
-            let usage = extract_full_usage_from_response(&response);
+            // Only track LLM requests (those with X-Model header).
+            // Skip streaming responses here — UsageTrackingStream handles them
+            // with actual token counts after the stream completes.
+            if has_model && !is_streaming {
+                let usage = extract_full_usage_from_response(&response);
 
-            let model = response
-                .headers()
-                .get("X-Model")
-                .and_then(|v| v.to_str().ok())
-                .map(String::from)
-                .or(tracker.model)
-                .unwrap_or_else(|| "unknown".to_string());
-            let provider = response
-                .headers()
-                .get("X-Provider")
-                .and_then(|v| v.to_str().ok())
-                .map(String::from)
-                .or(tracker.provider)
-                .unwrap_or_else(|| "unknown".to_string());
+                let model = response
+                    .headers()
+                    .get("X-Model")
+                    .and_then(|v| v.to_str().ok())
+                    .map(String::from)
+                    .or(tracker.model)
+                    .unwrap_or_else(|| "unknown".to_string());
+                let provider = response
+                    .headers()
+                    .get("X-Provider")
+                    .and_then(|v| v.to_str().ok())
+                    .map(String::from)
+                    .or(tracker.provider)
+                    .unwrap_or_else(|| "unknown".to_string());
 
-            let elapsed = tracker.start_time.elapsed();
-            let latency_ms = elapsed.as_millis().min(i32::MAX as u128) as i32;
+                let elapsed = tracker.start_time.elapsed();
+                let latency_ms = elapsed.as_millis().min(i32::MAX as u128) as i32;
 
-            let status = if response.status().is_success() {
-                "success"
-            } else {
-                "error"
-            };
-            metrics::record_llm_request(metrics::LlmRequestMetrics {
-                provider: &provider,
-                model: &model,
-                status,
-                status_code: Some(response.status().as_u16()),
-                duration_secs: elapsed.as_secs_f64(),
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
-                cost_microcents: usage.cost_microcents,
-            });
+                let status = if response.status().is_success() {
+                    "success"
+                } else {
+                    "error"
+                };
+                metrics::record_llm_request(metrics::LlmRequestMetrics {
+                    provider: &provider,
+                    model: &model,
+                    status,
+                    status_code: Some(response.status().as_u16()),
+                    duration_secs: elapsed.as_secs_f64(),
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
+                    cost_microcents: usage.cost_microcents,
+                });
 
-            let header_project_id = headers
-                .get("X-Hadrian-Project")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| uuid::Uuid::parse_str(v).ok());
+                let header_project_id = headers
+                    .get("X-Hadrian-Project")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| uuid::Uuid::parse_str(v).ok());
 
-            buffer.push(crate::models::UsageLogEntry {
-                request_id: request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-                api_key_id: None,
-                user_id: state.default_user_id,
-                org_id: state.default_org_id,
-                project_id: header_project_id,
-                team_id: None,
-                service_account_id: None,
-                model,
-                provider,
-                input_tokens: saturate_i64_to_i32(usage.input_tokens.unwrap_or(0)),
-                output_tokens: saturate_i64_to_i32(usage.output_tokens.unwrap_or(0)),
-                cost_microcents: usage.cost_microcents,
-                http_referer: tracker.referer.clone(),
-                request_at: chrono::Utc::now(),
-                streamed: tracker.streamed,
-                cached_tokens: 0,
-                reasoning_tokens: 0,
-                finish_reason: None,
-                latency_ms: Some(latency_ms),
-                cancelled: false,
-                status_code: Some(response.status().as_u16() as i16),
-                pricing_source: usage.pricing_source,
-                image_count: usage.image_count,
-                audio_seconds: usage.audio_seconds,
-                character_count: usage.character_count,
-                provider_source: tracker.provider_source.clone(),
-            });
+                buffer.push(crate::models::UsageLogEntry {
+                    request_id: request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                    api_key_id: None,
+                    user_id: state.default_user_id,
+                    org_id: state.default_org_id,
+                    project_id: header_project_id,
+                    team_id: None,
+                    service_account_id: None,
+                    model,
+                    provider,
+                    input_tokens: saturate_i64_to_i32(usage.input_tokens.unwrap_or(0)),
+                    output_tokens: saturate_i64_to_i32(usage.output_tokens.unwrap_or(0)),
+                    cost_microcents: usage.cost_microcents,
+                    http_referer: tracker.referer.clone(),
+                    request_at: chrono::Utc::now(),
+                    streamed: tracker.streamed,
+                    cached_tokens: 0,
+                    reasoning_tokens: 0,
+                    finish_reason: None,
+                    latency_ms: Some(latency_ms),
+                    cancelled: false,
+                    status_code: Some(response.status().as_u16() as i16),
+                    pricing_source: usage.pricing_source,
+                    image_count: usage.image_count,
+                    audio_seconds: usage.audio_seconds,
+                    character_count: usage.character_count,
+                    provider_source: tracker.provider_source.clone(),
+                });
+            }
         }
     }
 
@@ -1125,6 +1133,7 @@ fn track_usage_async(ctx: UsageTrackingContext<'_>) {
     // Push to usage buffer for batched writes (if available).
     // Skip for streaming responses (UsageTrackingStream writes correct values)
     // and non-LLM requests (no X-Model header means this isn't an LLM call).
+    #[cfg(feature = "concurrency")]
     if has_model && !is_streaming {
         if let Some(buffer) = &state.usage_buffer {
             tracing::debug!(
@@ -1148,6 +1157,7 @@ fn track_usage_async(ctx: UsageTrackingContext<'_>) {
     if api_key.is_some() {
         if let Some(cache) = state.cache {
             // Use task_tracker to ensure this task completes during graceful shutdown
+            #[cfg(feature = "server")]
             state.task_tracker.spawn(async move {
                 // Adjust budget reservation with actual cost (for successful responses)
                 // This replaces the estimated cost that was reserved before the request
@@ -1997,6 +2007,7 @@ fn log_budget_exceeded(event: BudgetExceededEvent<'_>) {
 
     // Fire-and-forget: spawn a task to log the audit event
     // This ensures we don't block the response on audit logging
+    #[cfg(feature = "server")]
     state.task_tracker.spawn(async move {
         let result = db
             .audit_logs()
@@ -2083,6 +2094,7 @@ fn log_budget_warning(event: BudgetWarningEvent<'_>) {
     let req_id = request_id.map(String::from);
 
     // Fire-and-forget: spawn a task to log the audit event
+    #[cfg(feature = "server")]
     state.task_tracker.spawn(async move {
         // Check if we've already logged a warning for this API key in this budget period
         // Cache key format: budget_warning_logged:{api_key_id}:{period}

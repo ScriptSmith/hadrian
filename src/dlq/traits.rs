@@ -210,7 +210,8 @@ impl DlqListParams {
 /// Dead-letter queue trait for storing failed operations.
 ///
 /// Implementations must be thread-safe and support concurrent access.
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait DeadLetterQueue: Send + Sync {
     /// Push an entry to the dead-letter queue.
     async fn push(&self, entry: DlqEntry) -> DlqResult<()>;

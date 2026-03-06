@@ -116,7 +116,8 @@ impl GcpSecretManager {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl SecretManager for GcpSecretManager {
     async fn get(&self, key: &str) -> SecretResult<Option<String>> {
         let name = self.secret_version_name(key);

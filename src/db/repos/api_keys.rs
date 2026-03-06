@@ -8,7 +8,8 @@ use crate::{
     models::{ApiKey, ApiKeyWithOwner, CachedApiKey, CreateApiKey},
 };
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait ApiKeyRepo: Send + Sync {
     async fn create(&self, input: CreateApiKey, key_hash: &str) -> DbResult<ApiKey>;
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<ApiKey>>;

@@ -12,7 +12,8 @@ use crate::{
 /// SSO group mappings define how IdP groups are mapped to Hadrian teams and roles
 /// during JIT (Just-in-Time) provisioning. When a user logs in via SSO, their
 /// IdP groups are looked up in this table to determine team memberships.
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait SsoGroupMappingRepo: Send + Sync {
     /// Create a new SSO group mapping.
     async fn create(&self, org_id: Uuid, input: CreateSsoGroupMapping)

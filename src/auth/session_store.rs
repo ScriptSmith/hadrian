@@ -242,7 +242,8 @@ impl AuthorizationState {
 /// Trait for OIDC session storage.
 ///
 /// Implementations must be thread-safe and handle concurrent access.
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait SessionStore: Send + Sync {
     /// Store a new session.
     async fn create_session(&self, session: OidcSession) -> SessionResult<Uuid>;
@@ -319,7 +320,8 @@ impl Default for MemorySessionStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl SessionStore for MemorySessionStore {
     async fn create_session(&self, session: OidcSession) -> SessionResult<Uuid> {
         let id = session.id;
@@ -462,7 +464,8 @@ impl CacheSessionStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl SessionStore for CacheSessionStore {
     async fn create_session(&self, session: OidcSession) -> SessionResult<Uuid> {
         let id = session.id;

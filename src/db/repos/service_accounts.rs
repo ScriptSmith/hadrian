@@ -7,7 +7,8 @@ use crate::{
     models::{CreateServiceAccount, ServiceAccount, UpdateServiceAccount},
 };
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait ServiceAccountRepo: Send + Sync {
     /// Create a new service account within an organization.
     async fn create(&self, org_id: Uuid, input: CreateServiceAccount) -> DbResult<ServiceAccount>;

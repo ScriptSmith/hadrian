@@ -17,7 +17,8 @@ use crate::{
 /// - Looking up Hadrian users by SCIM ID during provisioning
 /// - Tracking SCIM "active" status separately from user existence
 /// - Supporting the same user in multiple organizations with different SCIM IDs
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait ScimUserMappingRepo: Send + Sync {
     /// Create a new SCIM user mapping.
     ///

@@ -39,7 +39,8 @@ use crate::{
 /// Trait for usage data sinks.
 ///
 /// Implementations can write usage data to various backends.
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait UsageSink: Send + Sync {
     /// Write a batch of usage entries.
     ///
@@ -79,7 +80,8 @@ impl DatabaseSink {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl UsageSink for DatabaseSink {
     async fn write_batch(&self, entries: &[UsageLogEntry]) -> Result<usize, UsageSinkError> {
         if entries.is_empty() {
@@ -275,7 +277,8 @@ impl OtlpSink {
 }
 
 #[cfg(feature = "otlp")]
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl UsageSink for OtlpSink {
     async fn write_batch(&self, entries: &[UsageLogEntry]) -> Result<usize, UsageSinkError> {
         use opentelemetry::{
@@ -487,7 +490,8 @@ impl CompositeSink {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl UsageSink for CompositeSink {
     async fn write_batch(&self, entries: &[UsageLogEntry]) -> Result<usize, UsageSinkError> {
         if entries.is_empty() {

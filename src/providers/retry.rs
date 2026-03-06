@@ -21,9 +21,12 @@ use crate::{
 /// Connection errors, timeouts, and other transient issues are retryable.
 pub fn is_retryable_error(error: &reqwest::Error) -> bool {
     // Connection errors, timeouts, and other transient issues
-    error.is_connect()
-        || error.is_timeout()
-        || error.is_request()
+    let mut retryable = error.is_timeout() || error.is_request();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        retryable = retryable || error.is_connect();
+    }
+    retryable
         // Status errors where we got a response but it was a server error
         || error
             .status()

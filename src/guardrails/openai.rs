@@ -108,7 +108,8 @@ impl OpenAIModerationProvider {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl GuardrailsProvider for OpenAIModerationProvider {
     fn name(&self) -> &str {
         "openai_moderation"

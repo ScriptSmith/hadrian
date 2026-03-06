@@ -46,7 +46,8 @@ pub enum SecretError {
 pub type SecretResult<T> = Result<T, SecretError>;
 
 /// Trait for managing secrets (provider API keys, etc.)
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait SecretManager: Send + Sync {
     /// Get a secret by key. Returns None if not found.
     async fn get(&self, key: &str) -> SecretResult<Option<String>>;
@@ -82,7 +83,8 @@ impl Default for MemorySecretManager {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl SecretManager for MemorySecretManager {
     async fn get(&self, key: &str) -> SecretResult<Option<String>> {
         Ok(self.secrets.get(key).map(|v| v.value().clone()))
@@ -114,7 +116,8 @@ impl Default for EnvSecretManager {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl SecretManager for EnvSecretManager {
     async fn get(&self, key: &str) -> SecretResult<Option<String>> {
         Ok(std::env::var(key).ok())

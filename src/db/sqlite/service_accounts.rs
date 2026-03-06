@@ -96,7 +96,8 @@ impl SqliteServiceAccountRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl ServiceAccountRepo for SqliteServiceAccountRepo {
     async fn create(&self, org_id: Uuid, input: CreateServiceAccount) -> DbResult<ServiceAccount> {
         let id = Uuid::new_v4();

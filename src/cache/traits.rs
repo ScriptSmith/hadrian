@@ -61,7 +61,8 @@ pub struct BatchLimitResult {
     pub rate_limit_results: Vec<RateLimitResult>,
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait Cache: Send + Sync {
     /// Get raw bytes from cache
     async fn get_bytes(&self, key: &str) -> CacheResult<Option<Vec<u8>>>;

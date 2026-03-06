@@ -115,7 +115,8 @@ impl PostgresPromptRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl PromptRepo for PostgresPromptRepo {
     async fn create(&self, input: CreatePrompt) -> DbResult<Prompt> {
         let id = Uuid::new_v4();

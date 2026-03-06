@@ -280,7 +280,8 @@ impl PostgresDynamicProviderRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl DynamicProviderRepo for PostgresDynamicProviderRepo {
     async fn create(&self, id: Uuid, input: CreateDynamicProvider) -> DbResult<DynamicProvider> {
         let (owner_type, owner_id) = Self::owner_to_parts(&input.owner);

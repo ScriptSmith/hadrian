@@ -281,7 +281,8 @@ impl RerankResponse {
 ///     }
 /// }
 /// ```
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait Reranker: Send + Sync {
     /// Re-rank the given search results based on relevance to the query.
     ///
@@ -319,7 +320,8 @@ impl fmt::Debug for dyn Reranker {
 /// Useful as a fallback or for testing.
 pub struct NoOpReranker;
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl Reranker for NoOpReranker {
     async fn rerank(&self, request: RerankRequest) -> Result<RerankResponse, RerankError> {
         if request.results.is_empty() {
@@ -665,7 +667,8 @@ struct LlmScore {
     score: f64,
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl Reranker for LlmReranker {
     #[instrument(skip(self, request), fields(
         query_len = request.query.len(),

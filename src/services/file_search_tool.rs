@@ -1536,7 +1536,7 @@ pub fn wrap_streaming_with_file_search(
     let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
 
     // Spawn a task to process the stream, propagating the span context
-    tokio::spawn(
+    crate::compat::spawn_detached(
         async move {
             let mut iteration = 0;
             let mut current_body = body;

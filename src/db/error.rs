@@ -25,6 +25,10 @@ pub enum DbError {
     #[error("JSON serialization error: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[cfg(feature = "database-wasm-sqlite")]
+    #[error("WASM SQLite error: {0}")]
+    WasmSqlite(#[from] crate::db::wasm_sqlite::WasmDbError),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

@@ -101,7 +101,8 @@ impl ScanResult {
 /// Trait for virus scanning backends.
 ///
 /// Implementations must be `Send + Sync` to support async contexts.
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait VirusScanner: Send + Sync {
     /// Scan file content for viruses/malware.
     ///
@@ -170,7 +171,8 @@ impl ClamAvScanner {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl VirusScanner for ClamAvScanner {
     #[instrument(skip(self, content), fields(size = content.len()))]
     async fn scan(&self, content: &[u8]) -> VirusScanResult<ScanResult> {
@@ -256,7 +258,8 @@ impl VirusScanner for ClamAvScanner {
 /// Used when virus scanning is disabled.
 pub struct NoOpScanner;
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl VirusScanner for NoOpScanner {
     async fn scan(&self, content: &[u8]) -> VirusScanResult<ScanResult> {
         Ok(ScanResult::clean(content.len(), 0))

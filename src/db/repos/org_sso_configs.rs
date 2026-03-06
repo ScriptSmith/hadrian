@@ -14,7 +14,8 @@ use crate::{
 ///
 /// Note: Client secrets are stored separately in a secret manager.
 /// The `client_secret_key` field contains a reference to the secret.
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait OrgSsoConfigRepo: Send + Sync {
     /// Create a new SSO configuration for an organization.
     ///

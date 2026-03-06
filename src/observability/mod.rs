@@ -7,9 +7,12 @@
 //! - SIEM integration for enterprise security monitoring
 
 pub mod metrics;
+#[cfg(feature = "server")]
 pub mod siem;
+#[cfg(feature = "server")]
 mod tracing_init;
 
+#[cfg(feature = "server")]
 pub use tracing_init::*;
 
 /// Set the current span's OpenTelemetry status to `Ok`.

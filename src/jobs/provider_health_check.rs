@@ -376,6 +376,7 @@ impl ProviderHealthChecker {
     /// until all tasks complete (which is never under normal operation).
     ///
     /// If no providers are registered, this returns immediately.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn start(self) {
         if self.providers.is_empty() {
             tracing::info!("No providers registered for health checks");

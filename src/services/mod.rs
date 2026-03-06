@@ -67,11 +67,12 @@ pub use file_search_tool::{
     FileSearchAuthContext, FileSearchContext, FileSearchToolArguments, ProviderCallback,
     preprocess_file_search_tools, wrap_streaming_with_file_search,
 };
+#[cfg(feature = "server")]
+pub use file_storage::FilesystemFileStorage;
 #[cfg(feature = "s3-storage")]
 pub use file_storage::S3FileStorage;
 pub use file_storage::{
-    DatabaseFileStorage, FileStorage, FileStorageError, FileStorageResult, FilesystemFileStorage,
-    create_file_storage,
+    DatabaseFileStorage, FileStorage, FileStorageError, FileStorageResult, create_file_storage,
 };
 pub use files::{FilesService, FilesServiceError, FilesServiceResult};
 pub use model_pricing::ModelPricingService;
@@ -85,9 +86,10 @@ pub use provider_metrics::{
     ProviderMetricsError, ProviderMetricsService, ProviderStats, ProviderStatsHistorical,
     StatsGranularity, TimeBucketStats,
 };
+pub use providers::{DynamicProviderError, DynamicProviderService};
+#[cfg(feature = "server")]
 pub use providers::{
-    DynamicProviderError, DynamicProviderService, validate_provider_config,
-    validate_provider_config_with_url, validate_provider_type,
+    validate_provider_config, validate_provider_config_with_url, validate_provider_type,
 };
 pub use reranker::{
     LlmReranker, NoOpReranker, RankedResult, RerankError, RerankRequest, RerankResponse,

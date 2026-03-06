@@ -95,7 +95,8 @@ impl SqliteProjectRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl ProjectRepo for SqliteProjectRepo {
     async fn create(&self, org_id: Uuid, input: CreateProject) -> DbResult<Project> {
         let id = Uuid::new_v4();

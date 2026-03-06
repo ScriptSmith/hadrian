@@ -256,7 +256,8 @@ impl PiiRegexProvider {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl GuardrailsProvider for PiiRegexProvider {
     fn name(&self) -> &str {
         "pii_regex"

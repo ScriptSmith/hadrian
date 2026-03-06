@@ -51,7 +51,8 @@ impl PostgresDomainVerificationRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl DomainVerificationRepo for PostgresDomainVerificationRepo {
     async fn create(
         &self,

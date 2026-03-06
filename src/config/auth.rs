@@ -742,6 +742,7 @@ pub enum JwtAlgorithm {
     EdDSA,
 }
 
+#[cfg(feature = "jwt")]
 impl JwtAlgorithm {
     /// Convert to jsonwebtoken Algorithm.
     pub fn to_jwt_algorithm(self) -> jsonwebtoken::Algorithm {

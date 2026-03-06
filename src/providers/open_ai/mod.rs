@@ -144,7 +144,8 @@ impl OpenAICompatibleProvider {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl Provider for OpenAICompatibleProvider {
     fn default_health_check_model(&self) -> Option<&str> {
         Some("gpt-4o-mini")

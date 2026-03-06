@@ -7,7 +7,8 @@ use crate::{
     models::{CreateDynamicProvider, DynamicProvider, ProviderOwner, UpdateDynamicProvider},
 };
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait DynamicProviderRepo: Send + Sync {
     async fn create(&self, id: Uuid, input: CreateDynamicProvider) -> DbResult<DynamicProvider>;
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<DynamicProvider>>;

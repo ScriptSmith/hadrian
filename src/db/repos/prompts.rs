@@ -7,7 +7,8 @@ use crate::{
     models::{CreatePrompt, Prompt, PromptOwnerType, UpdatePrompt},
 };
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait PromptRepo: Send + Sync {
     /// Create a new prompt.
     async fn create(&self, input: CreatePrompt) -> DbResult<Prompt>;

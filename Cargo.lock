@@ -3541,6 +3541,7 @@ dependencies = [
  "flate2",
  "futures",
  "futures-util",
+ "getrandom 0.2.17",
  "google-cloud-auth 0.17.2",
  "google-cloud-secretmanager-v1",
  "google-cloud-token",
@@ -3550,6 +3551,7 @@ dependencies = [
  "http 1.4.0",
  "http-body-util",
  "ipnet",
+ "js-sys",
  "jsonschema",
  "jsonwebtoken",
  "kreuzberg",
@@ -3573,6 +3575,7 @@ dependencies = [
  "samael",
  "schemars 0.8.22",
  "serde",
+ "serde-wasm-bindgen",
  "serde_json",
  "serial_test",
  "sha2",
@@ -3595,6 +3598,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "tracing-wasm",
  "unicode-normalization",
  "url",
  "utoipa",
@@ -3602,6 +3606,10 @@ dependencies = [
  "uuid",
  "validator",
  "vaultrs",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-streams",
+ "web-sys",
  "wiremock",
 ]
 
@@ -7909,6 +7917,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-wasm-bindgen"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
+dependencies = [
+ "js-sys",
+ "serde",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "serde_core"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9478,6 +9497,17 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-serde",
+]
+
+[[package]]
+name = "tracing-wasm"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4575c663a174420fa2d78f4108ff68f65bf2fbb7dd89f33749b6e826b3626e07"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
+ "wasm-bindgen",
 ]
 
 [[package]]

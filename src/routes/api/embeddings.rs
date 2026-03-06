@@ -238,6 +238,7 @@ pub async fn api_v1_embeddings(
                     let provider_clone = provider_name.clone();
                     let content_type_clone = content_type;
                     let body_clone = body_vec.clone();
+                    #[cfg(feature = "server")]
                     state.task_tracker.spawn(async move {
                         cache
                             .store_embeddings(
@@ -277,6 +278,7 @@ pub async fn api_v1_embeddings(
             pricing: &state.pricing,
             db: state.db.as_ref(),
             usage_entry: None,
+            #[cfg(feature = "server")]
             task_tracker: Some(&state.task_tracker),
             max_response_body_bytes: state.config.server.max_response_body_bytes,
             streaming_idle_timeout_secs: 0, // Embeddings don't stream

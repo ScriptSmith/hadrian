@@ -1,9 +1,6 @@
-use axum::{
-    Extension, Json,
-    body::Bytes,
-    extract::{Multipart, State},
-    response::Response,
-};
+#[cfg(feature = "server")]
+use axum::extract::Multipart;
+use axum::{Extension, Json, body::Bytes, extract::State, response::Response};
 use axum_valid::Valid;
 use http::StatusCode;
 
@@ -185,6 +182,7 @@ pub async fn api_v1_audio_speech(
             pricing: &state.pricing,
             db: state.db.as_ref(),
             api_key_id,
+            #[cfg(feature = "server")]
             task_tracker: &state.task_tracker,
             usage: crate::pricing::TokenUsage::for_tts_characters(character_count),
         })
@@ -214,6 +212,7 @@ pub async fn api_v1_audio_speech(
     Ok(response)
 }
 
+#[cfg(feature = "server")]
 /// Transcribe audio to text
 ///
 /// POST /v1/audio/transcriptions
@@ -523,6 +522,7 @@ pub async fn api_v1_audio_transcriptions(
             pricing: &state.pricing,
             db: state.db.as_ref(),
             api_key_id,
+            #[cfg(feature = "server")]
             task_tracker: &state.task_tracker,
             usage: crate::pricing::TokenUsage::for_audio_seconds(estimated_seconds),
         })
@@ -552,6 +552,7 @@ pub async fn api_v1_audio_transcriptions(
     Ok(response)
 }
 
+#[cfg(feature = "server")]
 /// Translate audio to English text
 ///
 /// POST /v1/audio/translations
@@ -819,6 +820,7 @@ pub async fn api_v1_audio_translations(
             pricing: &state.pricing,
             db: state.db.as_ref(),
             api_key_id,
+            #[cfg(feature = "server")]
             task_tracker: &state.task_tracker,
             usage: crate::pricing::TokenUsage::for_audio_seconds(estimated_seconds),
         })

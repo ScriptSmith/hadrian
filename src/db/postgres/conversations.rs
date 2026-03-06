@@ -127,7 +127,8 @@ impl PostgresConversationRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl ConversationRepo for PostgresConversationRepo {
     async fn create(&self, input: CreateConversation) -> DbResult<Conversation> {
         let owner_type = input.owner.owner_type();

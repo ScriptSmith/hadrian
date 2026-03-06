@@ -16,8 +16,10 @@
 
 use std::net::IpAddr;
 
+#[cfg(feature = "server")]
+use axum::extract::ConnectInfo;
 use axum::{
-    extract::{ConnectInfo, Request, State},
+    extract::{Request, State},
     middleware::Next,
     response::Response,
 };
@@ -59,10 +61,13 @@ pub async fn admin_auth_middleware(
     let cookies = req.extensions().get::<Cookies>().cloned();
 
     // Extract connecting IP for trusted proxy validation
+    #[cfg(feature = "server")]
     let connecting_ip = req
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0.ip());
+    #[cfg(not(feature = "server"))]
+    let connecting_ip: Option<IpAddr> = None;
 
     let client_info = ClientInfo {
         ip_address: connecting_ip.map(|ip| ip.to_string()),

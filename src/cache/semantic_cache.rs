@@ -128,6 +128,7 @@ impl SemanticCache {
     ///
     /// # Returns
     /// A tuple of (SemanticCache, background task handle)
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(
         cache: Arc<dyn Cache>,
         vector_store: Arc<dyn VectorBackend>,

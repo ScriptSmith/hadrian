@@ -900,6 +900,7 @@ pub async fn api_v1_chat_completions(
                         .and_then(|a| a.project_id())
                         .map(|id| id.to_string());
 
+                    #[cfg(feature = "server")]
                     state.task_tracker.spawn(async move {
                         let params = StoreParams {
                             payload: &payload_clone,
@@ -925,6 +926,7 @@ pub async fn api_v1_chat_completions(
                     let provider_clone = provider_name.clone();
                     let content_type_clone = content_type;
                     let body_clone = body_vec.clone();
+                    #[cfg(feature = "server")]
                     state.task_tracker.spawn(async move {
                         cache
                             .store(
@@ -975,6 +977,7 @@ pub async fn api_v1_chat_completions(
             pricing: &state.pricing,
             db: state.db.as_ref(),
             usage_entry,
+            #[cfg(feature = "server")]
             task_tracker: Some(&state.task_tracker),
             max_response_body_bytes: state.config.server.max_response_body_bytes,
             streaming_idle_timeout_secs: state.config.server.streaming_idle_timeout_secs,
@@ -1526,6 +1529,7 @@ pub async fn api_v1_responses(
                     let provider_clone = provider_name.clone();
                     let content_type_clone = content_type;
                     let body_clone = body_vec.clone();
+                    #[cfg(feature = "server")]
                     state.task_tracker.spawn(async move {
                         cache
                             .store_responses(
@@ -1576,6 +1580,7 @@ pub async fn api_v1_responses(
             pricing: &state.pricing,
             db: state.db.as_ref(),
             usage_entry,
+            #[cfg(feature = "server")]
             task_tracker: Some(&state.task_tracker),
             max_response_body_bytes: state.config.server.max_response_body_bytes,
             streaming_idle_timeout_secs: state.config.server.streaming_idle_timeout_secs,
@@ -2112,6 +2117,7 @@ pub async fn api_v1_completions(
                     let provider_clone = provider_name.clone();
                     let content_type_clone = content_type;
                     let body_clone = body_vec.clone();
+                    #[cfg(feature = "server")]
                     state.task_tracker.spawn(async move {
                         cache
                             .store_completions(
@@ -2162,6 +2168,7 @@ pub async fn api_v1_completions(
             pricing: &state.pricing,
             db: state.db.as_ref(),
             usage_entry,
+            #[cfg(feature = "server")]
             task_tracker: Some(&state.task_tracker),
             max_response_body_bytes: state.config.server.max_response_body_bytes,
             streaming_idle_timeout_secs: state.config.server.streaming_idle_timeout_secs,

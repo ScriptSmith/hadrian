@@ -1,7 +1,9 @@
+#[cfg(feature = "server")]
+use axum::extract::Multipart;
 use axum::{
     Extension, Json,
     body::Bytes,
-    extract::{Multipart, Path, Query, State},
+    extract::{Path, Query, State},
     http::header,
     response::{IntoResponse, Response},
 };
@@ -79,6 +81,7 @@ pub struct DeleteFileResponse {
     pub deleted: bool,
 }
 
+#[cfg(feature = "server")]
 /// Upload a file
 ///
 /// Uploads a file that can be used with vector stores for RAG.
