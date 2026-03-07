@@ -29,17 +29,10 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthError, AuthenticatedRequest, Identity, IdentityKind},
-    middleware::{ClientInfo, RequestId},
+    middleware::{AdminAuth, ClientInfo, RequestId},
     observability::metrics,
     services::audit_logs::{AuthEventParams, auth_events},
 };
-
-/// Admin authentication result.
-#[derive(Debug, Clone)]
-pub struct AdminAuth {
-    /// The authenticated identity
-    pub identity: Identity,
-}
 
 /// Middleware that requires admin authentication.
 /// This will reject requests without valid Proxy auth headers or OIDC session.

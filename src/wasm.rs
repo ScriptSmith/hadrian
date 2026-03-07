@@ -15,6 +15,13 @@
 //!   the browser's `fetch()` API on wasm32
 //! - SQLite database via sql.js (in-memory) through JS FFI bridge
 //!
+//! # Route Handler Reuse
+//!
+//! Most route handlers are shared with the native server (`routes/admin/`, `routes/api/`).
+//! The WASM router injects `Extension<AdminAuth>`, `Extension<AuthzContext>`, and
+//! `Extension<ClientInfo>` layers so handlers can extract them identically.
+//! Only handlers with genuinely different WASM behavior are defined here.
+//!
 //! # Axum Send compatibility
 //!
 //! Axum requires handler futures to be `Send`, but on wasm32 `reqwest`/`wasm-bindgen`
@@ -24,7 +31,7 @@
 use std::sync::Arc;
 
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{Path, State},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -32,8 +39,13 @@ use axum::{
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    catalog, compat::wasm_compat, config, db, events, jobs, models, pricing, providers, secrets,
-    services,
+    auth::Identity,
+    authz::AuthzEngine,
+    catalog,
+    compat::wasm_compat,
+    config, db, events, jobs,
+    middleware::{AdminAuth, AuthzContext, ClientInfo},
+    models, pricing, providers, secrets, services,
 };
 
 /// Browser-based Hadrian gateway.
@@ -144,7 +156,7 @@ impl HadrianGateway {
             model_catalog: catalog::ModelCatalogRegistry::new(),
         };
 
-        let router = build_wasm_router(state);
+        let router = build_wasm_router(state, default_user_id, default_org_id);
 
         tracing::info!("Hadrian WASM gateway initialized (with database)");
         Ok(HadrianGateway { router })
@@ -168,151 +180,173 @@ impl HadrianGateway {
 // Router
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn build_wasm_router(state: crate::app::AppState) -> Router {
+fn build_wasm_router(
+    state: crate::app::AppState,
+    default_user_id: Option<uuid::Uuid>,
+    default_org_id: Option<uuid::Uuid>,
+) -> Router {
+    // Build permissive authz context for WASM (no RBAC in browser)
+    let engine = Arc::new(
+        AuthzEngine::new(config::RbacConfig {
+            enabled: false,
+            ..Default::default()
+        })
+        .expect("Failed to create disabled RBAC engine"),
+    );
+    let authz = AuthzContext::permissive(engine);
+
+    let admin_auth = AdminAuth {
+        identity: Identity {
+            external_id: "anonymous".to_string(),
+            email: Some("anonymous@localhost".to_string()),
+            name: Some("Anonymous User".to_string()),
+            user_id: default_user_id,
+            roles: vec!["admin".to_string()],
+            idp_groups: Vec::new(),
+            org_ids: default_org_id
+                .map(|id| vec![id.to_string()])
+                .unwrap_or_default(),
+            team_ids: Vec::new(),
+            project_ids: Vec::new(),
+        },
+    };
+
+    use crate::routes::admin::ui_config;
+
     Router::new()
+        // WASM-specific handlers (genuinely different behavior)
         .route("/health", get(health_check))
-        .route("/v1/models", get(list_models))
-        .route("/admin/v1/ui/config", get(get_ui_config))
         .route("/auth/me", get(auth_me))
-        .route("/admin/v1/organizations", get(list_organizations))
-        .route(
-            "/admin/v1/organizations/{slug}/projects",
-            get(list_org_projects),
-        )
-        .route(
-            "/admin/v1/organizations/{slug}/prompts",
-            get(list_org_prompts),
-        )
-        .route(
-            "/admin/v1/me/providers",
-            get(list_my_providers).post(create_my_provider),
-        )
-        .route(
-            "/admin/v1/me/providers/test-credentials",
-            post(test_provider_credentials),
-        )
         .route(
             "/admin/v1/users/{user_id}/conversations/accessible",
             get(list_conversations),
         )
+        // Native handlers (shared with server, injected via Extension layers)
+        .route("/v1/models", get(wasm_api_v1_models))
+        .route("/admin/v1/ui/config", get(ui_config::get_ui_config))
+        .route("/admin/v1/organizations", get(wasm_list_organizations))
+        .route(
+            "/admin/v1/organizations/{slug}/projects",
+            get(wasm_list_org_projects),
+        )
+        .route(
+            "/admin/v1/organizations/{slug}/prompts",
+            get(wasm_list_org_prompts),
+        )
+        .route(
+            "/admin/v1/me/providers",
+            get(wasm_list_my_providers).post(wasm_create_my_provider),
+        )
+        .route(
+            "/admin/v1/me/providers/test-credentials",
+            post(wasm_test_provider_credentials),
+        )
+        // Inject middleware extensions for native handlers
+        .layer(Extension(admin_auth))
+        .layer(Extension(authz))
+        .layer(Extension(ClientInfo::default()))
         .fallback(fallback_handler)
         .with_state(state)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Handlers
+// Thin wrappers: delegate to native handlers via wasm_compat!
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn wasm_list_organizations(
+    state: State<crate::app::AppState>,
+    authz: Extension<AuthzContext>,
+    query: axum::extract::Query<crate::routes::admin::organizations::ListQuery>,
+) -> Response {
+    wasm_compat!(async move {
+        crate::routes::admin::organizations::list(state, authz, query)
+            .await
+            .into_response()
+    })
+}
+
+async fn wasm_list_org_projects(
+    state: State<crate::app::AppState>,
+    authz: Extension<AuthzContext>,
+    path: Path<String>,
+    query: axum::extract::Query<crate::routes::admin::organizations::ListQuery>,
+) -> Response {
+    wasm_compat!(async move {
+        crate::routes::admin::projects::list(state, authz, path, query)
+            .await
+            .into_response()
+    })
+}
+
+async fn wasm_list_org_prompts(
+    state: State<crate::app::AppState>,
+    authz: Extension<AuthzContext>,
+    path: Path<String>,
+    query: axum::extract::Query<crate::routes::admin::organizations::ListQuery>,
+) -> Response {
+    wasm_compat!(async move {
+        crate::routes::admin::prompts::list_by_org(state, authz, path, query)
+            .await
+            .into_response()
+    })
+}
+
+async fn wasm_list_my_providers(
+    state: State<crate::app::AppState>,
+    admin_auth: Extension<AdminAuth>,
+    authz: Extension<AuthzContext>,
+    query: axum::extract::Query<crate::routes::admin::organizations::ListQuery>,
+) -> Response {
+    wasm_compat!(async move {
+        crate::routes::admin::me_providers::list(state, admin_auth, authz, query)
+            .await
+            .into_response()
+    })
+}
+
+async fn wasm_create_my_provider(
+    state: State<crate::app::AppState>,
+    admin_auth: Extension<AdminAuth>,
+    authz: Extension<AuthzContext>,
+    client_info: Extension<ClientInfo>,
+    input: axum_valid::Valid<Json<models::CreateSelfServiceProvider>>,
+) -> Response {
+    wasm_compat!(async move {
+        crate::routes::admin::me_providers::create(state, admin_auth, authz, client_info, input)
+            .await
+            .into_response()
+    })
+}
+
+async fn wasm_test_provider_credentials(
+    state: State<crate::app::AppState>,
+    authz: Extension<AuthzContext>,
+    input: axum_valid::Valid<Json<models::CreateSelfServiceProvider>>,
+) -> Response {
+    wasm_compat!(async move {
+        crate::routes::admin::me_providers::test_credentials(state, authz, input)
+            .await
+            .into_response()
+    })
+}
+
+async fn wasm_api_v1_models(
+    state: State<crate::app::AppState>,
+    auth: Option<Extension<crate::auth::AuthenticatedRequest>>,
+) -> Response {
+    wasm_compat!(async move {
+        crate::routes::api::api_v1_models(state, auth)
+            .await
+            .into_response()
+    })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WASM-specific handlers (genuinely different behavior)
 // ─────────────────────────────────────────────────────────────────────────────
 
 async fn health_check() -> Response {
     Json(serde_json::json!({"status": "ok", "mode": "wasm"})).into_response()
-}
-
-async fn list_models(State(state): State<crate::app::AppState>) -> Response {
-    wasm_compat!(async move {
-        let (svc, user_id) = match services_and_user(&state) {
-            Ok(v) => v,
-            Err(r) => return r,
-        };
-
-        // Collect all enabled providers for this user (paginate through all pages)
-        let mut providers = Vec::new();
-        let mut params = db::ListParams {
-            limit: Some(100),
-            ..Default::default()
-        };
-        loop {
-            match svc
-                .providers
-                .list_enabled_by_user(user_id, params.clone())
-                .await
-            {
-                Ok(page) => {
-                    let has_more = page.has_more;
-                    let next = page.cursors.next;
-                    providers.extend(page.items);
-                    if !has_more {
-                        break;
-                    }
-                    match next {
-                        Some(cursor) => params.cursor = Some(cursor),
-                        None => break,
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "Failed to list providers");
-                    return error_response(500, "Failed to list models");
-                }
-            }
-        }
-
-        // Look up user's org for scoped model IDs
-        let org_slug = svc
-            .users
-            .get_org_memberships_for_user(user_id)
-            .await
-            .ok()
-            .and_then(|m| m.into_iter().next())
-            .map(|m| m.org_slug);
-
-        // Resolve models for each provider (fetching from API when stored list is empty)
-        let mut all_models = Vec::new();
-        for provider in &providers {
-            let model_names = resolve_provider_models(provider, &state).await;
-            for model_name in &model_names {
-                let scoped_id = if let Some(ref slug) = org_slug {
-                    format!(":org/{slug}/:user/{user_id}/{}/{model_name}", provider.name)
-                } else {
-                    format!(":user/{user_id}/{}/{model_name}", provider.name)
-                };
-                all_models.push(serde_json::json!({
-                    "id": scoped_id,
-                    "object": "model",
-                    "owned_by": provider.name,
-                    "source": "dynamic",
-                    "provider_name": provider.name,
-                }));
-            }
-        }
-
-        Json(serde_json::json!({"object": "list", "data": all_models})).into_response()
-    })
-}
-
-async fn get_ui_config(State(state): State<crate::app::AppState>) -> Response {
-    let config = &state.config;
-    Json(serde_json::json!({
-        "branding": {
-            "title": config.ui.branding.title,
-            "tagline": config.ui.branding.tagline,
-            "logo_url": config.ui.branding.logo_url,
-            "logo_dark_url": config.ui.branding.logo_dark_url,
-            "favicon_url": config.ui.branding.favicon_url,
-            "colors": {},
-            "colors_dark": null,
-            "fonts": null,
-            "footer_text": config.ui.branding.footer_text,
-            "footer_links": [],
-            "show_version": config.ui.branding.show_version,
-            "version": null,
-            "login": null,
-        },
-        "chat": {
-            "enabled": config.ui.chat.enabled,
-            "default_model": config.ui.chat.default_model,
-            "available_models": config.ui.chat.available_models,
-            "file_uploads_enabled": config.ui.chat.file_uploads.enabled,
-            "max_file_size_bytes": config.ui.chat.file_uploads.max_size_bytes,
-            "allowed_file_types": config.ui.chat.file_uploads.allowed_types,
-        },
-        "admin": {
-            "enabled": config.ui.admin.enabled,
-        },
-        "auth": {
-            "methods": ["none"],
-            "oidc": null,
-        },
-    }))
-    .into_response()
 }
 
 async fn auth_me(State(state): State<crate::app::AppState>) -> Response {
@@ -327,191 +361,18 @@ async fn auth_me(State(state): State<crate::app::AppState>) -> Response {
     .into_response()
 }
 
-async fn list_organizations(State(state): State<crate::app::AppState>) -> Response {
-    wasm_compat!(async move {
-        let svc = match services(&state) {
-            Ok(s) => s,
-            Err(r) => return r,
-        };
-        match svc.organizations.list(db::ListParams::default()).await {
-            Ok(result) => paginated(result),
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to list organizations");
-                error_response(500, "Failed to list organizations")
-            }
-        }
-    })
-}
-
-async fn list_org_projects(
-    State(state): State<crate::app::AppState>,
-    Path(slug): Path<String>,
-) -> Response {
-    wasm_compat!(async move {
-        let svc = match services(&state) {
-            Ok(s) => s,
-            Err(r) => return r,
-        };
-        let org = match resolve_org(svc, &slug).await {
-            Ok(org) => org,
-            Err(r) => return r,
-        };
-        match svc
-            .projects
-            .list_by_org(org.id, db::ListParams::default())
-            .await
-        {
-            Ok(result) => paginated(result),
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to list projects");
-                error_response(500, "Failed to list projects")
-            }
-        }
-    })
-}
-
-async fn list_org_prompts(
-    State(state): State<crate::app::AppState>,
-    Path(slug): Path<String>,
-) -> Response {
-    wasm_compat!(async move {
-        let svc = match services(&state) {
-            Ok(s) => s,
-            Err(r) => return r,
-        };
-        let org = match resolve_org(svc, &slug).await {
-            Ok(org) => org,
-            Err(r) => return r,
-        };
-        match svc
-            .prompts
-            .list_by_owner(
-                models::PromptOwnerType::Organization,
-                org.id,
-                db::ListParams::default(),
-            )
-            .await
-        {
-            Ok(result) => paginated(result),
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to list prompts");
-                error_response(500, "Failed to list prompts")
-            }
-        }
-    })
-}
-
-async fn list_my_providers(State(state): State<crate::app::AppState>) -> Response {
-    wasm_compat!(async move {
-        let (svc, user_id) = match services_and_user(&state) {
-            Ok(v) => v,
-            Err(r) => return r,
-        };
-        match svc
-            .providers
-            .list_by_user(user_id, db::ListParams::default())
-            .await
-        {
-            Ok(result) => {
-                let items: Vec<models::DynamicProviderResponse> =
-                    result.items.into_iter().map(Into::into).collect();
-                paginated(db::ListResult {
-                    items,
-                    has_more: result.has_more,
-                    cursors: result.cursors,
-                })
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to list providers");
-                error_response(500, "Failed to list providers")
-            }
-        }
-    })
-}
-
-async fn create_my_provider(
-    State(state): State<crate::app::AppState>,
-    Json(input): Json<models::CreateSelfServiceProvider>,
-) -> Response {
-    wasm_compat!(async move {
-        let (svc, user_id) = match services_and_user(&state) {
-            Ok(v) => v,
-            Err(r) => return r,
-        };
-
-        if !is_supported_provider_type(&input.provider_type) {
-            return error_response(
-                422,
-                &format!("Unsupported provider type '{}'", input.provider_type),
-            );
-        }
-
-        let create_input = models::CreateDynamicProvider {
-            name: input.name,
-            owner: models::ProviderOwner::User { user_id },
-            provider_type: input.provider_type,
-            base_url: input.base_url,
-            api_key: input.api_key,
-            config: input.config,
-            models: input.models,
-        };
-
-        // No secrets manager in WASM — key stored directly in DB
-        match svc.providers.create(create_input, None).await {
-            Ok(provider) => {
-                let resp: models::DynamicProviderResponse = provider.into();
-                (axum::http::StatusCode::CREATED, Json(resp)).into_response()
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to create provider");
-                error_response(500, &format!("Failed to create provider: {e}"))
-            }
-        }
-    })
-}
-
-async fn test_provider_credentials(
-    State(state): State<crate::app::AppState>,
-    Json(input): Json<models::CreateSelfServiceProvider>,
-) -> Response {
-    wasm_compat!(async move {
-        if !is_supported_provider_type(&input.provider_type) {
-            return error_response(
-                422,
-                &format!("Unsupported provider type '{}'", input.provider_type),
-            );
-        }
-
-        let provider = models::DynamicProvider {
-            id: uuid::Uuid::nil(),
-            name: input.name,
-            owner: models::ProviderOwner::User {
-                user_id: uuid::Uuid::nil(),
-            },
-            provider_type: input.provider_type,
-            base_url: input.base_url,
-            api_key_secret_ref: input.api_key,
-            config: input.config,
-            models: input.models.unwrap_or_default(),
-            is_enabled: true,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        };
-
-        // None for secrets → raw key used as-is
-        let result =
-            services::DynamicProviderService::run_connectivity_test(&provider, &state, None).await;
-        Json(result).into_response()
-    })
-}
-
 async fn list_conversations() -> Response {
     // Conversations are stored client-side in IndexedDB — return empty list
-    paginated(db::ListResult::<serde_json::Value> {
-        items: vec![],
-        has_more: false,
-        cursors: db::PageCursors::default(),
-    })
+    Json(serde_json::json!({
+        "data": [],
+        "pagination": {
+            "limit": 100,
+            "has_more": false,
+            "next_cursor": null,
+            "prev_cursor": null
+        }
+    }))
+    .into_response()
 }
 
 async fn fallback_handler() -> Response {
@@ -634,87 +495,6 @@ async fn convert_response(response: Response) -> Result<web_sys::Response, JsErr
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
-
-fn services(state: &crate::app::AppState) -> Result<&services::Services, Response> {
-    state
-        .services
-        .as_ref()
-        .ok_or_else(|| error_response(503, "Services not initialized"))
-}
-
-fn services_and_user(
-    state: &crate::app::AppState,
-) -> Result<(&services::Services, uuid::Uuid), Response> {
-    let svc = services(state)?;
-    let user_id = state
-        .default_user_id
-        .ok_or_else(|| error_response(503, "Default user not available"))?;
-    Ok((svc, user_id))
-}
-
-async fn resolve_org(
-    svc: &services::Services,
-    slug: &str,
-) -> Result<models::Organization, Response> {
-    match svc.organizations.get_by_slug(slug).await {
-        Ok(Some(org)) => Ok(org),
-        Ok(None) => Err(error_response(404, "Organization not found")),
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to look up organization");
-            Err(error_response(500, "Failed to look up organization"))
-        }
-    }
-}
-
-/// Resolve model names for a dynamic provider.
-///
-/// If the provider has an explicit models list, use it. Otherwise, fetch from the
-/// provider's API (matching the native server's behavior in `routes/api/models.rs`).
-async fn resolve_provider_models(
-    provider: &models::DynamicProvider,
-    state: &crate::app::AppState,
-) -> Vec<String> {
-    if !provider.models.is_empty() {
-        return provider.models.clone();
-    }
-
-    let Ok(config) =
-        crate::routing::resolver::dynamic_provider_to_config(provider, state.secrets.as_ref())
-            .await
-    else {
-        return Vec::new();
-    };
-
-    crate::providers::list_models_for_config(
-        &config,
-        &provider.name,
-        &state.http_client,
-        &state.circuit_breakers,
-    )
-    .await
-    .map(|r| r.data.into_iter().map(|m| m.id).collect())
-    .unwrap_or_default()
-}
-
-fn is_supported_provider_type(pt: &str) -> bool {
-    matches!(
-        pt,
-        "openai" | "open_ai" | "openai_compatible" | "anthropic" | "test"
-    )
-}
-
-fn paginated<T: serde::Serialize>(result: db::ListResult<T>) -> Response {
-    Json(serde_json::json!({
-        "data": result.items,
-        "pagination": {
-            "limit": 100,
-            "has_more": result.has_more,
-            "next_cursor": result.cursors.next.as_ref().map(|c| c.encode()),
-            "prev_cursor": result.cursors.prev.as_ref().map(|c| c.encode()),
-        }
-    }))
-    .into_response()
-}
 
 fn error_response(status: u16, message: &str) -> Response {
     let code = axum::http::StatusCode::from_u16(status)

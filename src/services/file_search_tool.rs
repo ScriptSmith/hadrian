@@ -431,12 +431,20 @@ impl FileSearchAuthContext {
 ///
 /// This callback is used to send continuation requests to the provider
 /// after executing file_search tool calls.
+#[cfg(not(target_arch = "wasm32"))]
 pub type ProviderCallback = Arc<
     dyn Fn(
             CreateResponsesPayload,
         ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, ProviderError>> + Send>>
         + Send
         + Sync,
+>;
+
+#[cfg(target_arch = "wasm32")]
+pub type ProviderCallback = Arc<
+    dyn Fn(
+        CreateResponsesPayload,
+    ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, ProviderError>>>>,
 >;
 
 /// Errors that can occur during file search middleware processing.

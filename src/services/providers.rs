@@ -2,8 +2,6 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-#[cfg(feature = "server")]
-use crate::routes::admin::AdminError;
 use crate::{
     AppState,
     db::{
@@ -14,6 +12,7 @@ use crate::{
         ConnectivityTestResponse, CreateDynamicProvider, DynamicProvider, ProviderOwner,
         UpdateDynamicProvider,
     },
+    routes::admin::AdminError,
     secrets::SecretManager,
 };
 
@@ -34,7 +33,6 @@ pub const SUPPORTED_PROVIDER_TYPES: &[&str] = &[
     "test",
 ];
 
-#[cfg(feature = "server")]
 /// Validate that a provider type is supported.
 pub fn validate_provider_type(provider_type: &str) -> Result<(), AdminError> {
     if SUPPORTED_PROVIDER_TYPES.contains(&provider_type) {
@@ -51,12 +49,11 @@ pub fn validate_provider_type(provider_type: &str) -> Result<(), AdminError> {
 /// Credential types that source from the server's environment or filesystem.
 /// These must not be allowed for dynamic (user-created) providers because they
 /// would let users access the gateway's own cloud credentials.
-#[cfg(all(feature = "server", feature = "provider-bedrock"))]
+#[cfg(feature = "provider-bedrock")]
 const FORBIDDEN_AWS_CREDENTIAL_TYPES: &[&str] = &["default", "profile", "assume_role"];
-#[cfg(all(feature = "server", feature = "provider-vertex"))]
+#[cfg(feature = "provider-vertex")]
 const FORBIDDEN_GCP_CREDENTIAL_TYPES: &[&str] = &["default", "service_account"];
 
-#[cfg(feature = "server")]
 /// Validate provider-specific configuration.
 ///
 /// Different provider types require different config fields:
@@ -77,7 +74,6 @@ pub fn validate_provider_config(
     validate_provider_config_inner(provider_type, config, api_key, false)
 }
 
-#[cfg(feature = "server")]
 /// Validate provider-specific configuration with SSRF protection.
 pub fn validate_provider_config_with_url(
     provider_type: &str,
@@ -94,7 +90,6 @@ pub fn validate_provider_config_with_url(
     validate_provider_config_inner(provider_type, config, api_key, allow_loopback)
 }
 
-#[cfg(feature = "server")]
 fn validate_provider_config_inner(
     provider_type: &str,
     config: Option<&serde_json::Value>,
@@ -199,7 +194,6 @@ pub enum DynamicProviderError {
     NotFound,
 }
 
-#[cfg(feature = "server")]
 impl From<DynamicProviderError> for AdminError {
     fn from(err: DynamicProviderError) -> Self {
         match err {

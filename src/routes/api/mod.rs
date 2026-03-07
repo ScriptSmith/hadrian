@@ -1,12 +1,17 @@
 use axum::{
-    Extension, Json, Router,
+    Extension, Json,
     http::HeaderMap,
-    middleware::from_fn_with_state,
     response::{IntoResponse, Response},
+};
+#[cfg(feature = "server")]
+use axum::{
+    Router,
+    middleware::from_fn_with_state,
     routing::{get, post},
 };
 use http::StatusCode;
 use serde::Deserialize;
+#[cfg(feature = "server")]
 use tower::ServiceBuilder;
 use uuid::Uuid;
 
@@ -748,6 +753,7 @@ fn get_services(state: &AppState) -> Result<&Services, ApiError> {
     })
 }
 
+#[cfg(feature = "server")]
 pub fn get_api_routes(state: AppState) -> Router<AppState> {
     let router = Router::new()
         .route("/v1/chat/completions", post(api_v1_chat_completions))

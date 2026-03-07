@@ -11,43 +11,11 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use http_body_util::BodyExt;
-use uuid::Uuid;
+
+use crate::middleware::RequestId;
 
 /// Header name for the request ID.
 pub const REQUEST_ID_HEADER: &str = "X-Request-Id";
-
-/// Extension containing the request ID for the current request.
-#[derive(Debug, Clone)]
-pub struct RequestId(pub String);
-
-impl RequestId {
-    /// Generate a new request ID.
-    pub fn new() -> Self {
-        Self(Uuid::new_v4().to_string())
-    }
-
-    /// Create from an existing ID.
-    pub fn from_string(id: String) -> Self {
-        Self(id)
-    }
-
-    /// Get the ID as a string slice.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Default for RequestId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl std::fmt::Display for RequestId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
 
 /// Middleware that adds a request ID to each request.
 ///

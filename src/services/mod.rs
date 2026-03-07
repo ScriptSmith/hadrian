@@ -86,10 +86,9 @@ pub use provider_metrics::{
     ProviderMetricsError, ProviderMetricsService, ProviderStats, ProviderStatsHistorical,
     StatsGranularity, TimeBucketStats,
 };
-pub use providers::{DynamicProviderError, DynamicProviderService};
-#[cfg(feature = "server")]
 pub use providers::{
-    validate_provider_config, validate_provider_config_with_url, validate_provider_type,
+    DynamicProviderError, DynamicProviderService, validate_provider_config_with_url,
+    validate_provider_type,
 };
 pub use reranker::{
     LlmReranker, NoOpReranker, RankedResult, RerankError, RerankRequest, RerankResponse,

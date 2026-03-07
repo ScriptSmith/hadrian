@@ -14,7 +14,6 @@ pub mod events;
 pub mod guardrails;
 pub mod init;
 pub mod jobs;
-#[cfg(feature = "server")]
 pub mod middleware;
 pub mod models;
 pub mod observability;
@@ -23,7 +22,6 @@ pub mod openapi;
 pub mod pricing;
 pub mod providers;
 pub mod retention;
-#[cfg(feature = "server")]
 pub mod routes;
 pub mod routing;
 #[cfg(feature = "sso")]

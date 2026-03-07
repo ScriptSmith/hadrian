@@ -7,6 +7,7 @@ mod csv_export;
 pub mod dlq;
 #[cfg(feature = "sso")]
 pub mod domain_verifications;
+#[cfg(feature = "server")]
 pub mod dynamic_providers;
 mod error;
 pub mod me;
@@ -35,14 +36,18 @@ pub mod teams;
 pub mod ui_config;
 pub mod usage;
 pub mod users;
+
+#[cfg(feature = "server")]
 use axum::{
     Router,
     routing::{delete, get, patch, post, put},
 };
 pub use error::{AdminError, AuditActor};
 
+#[cfg(feature = "server")]
 use crate::AppState;
 
+#[cfg(feature = "server")]
 pub fn get_admin_routes() -> Router<AppState> {
     Router::new().nest("/v1", admin_v1_routes())
 }
@@ -50,6 +55,7 @@ pub fn get_admin_routes() -> Router<AppState> {
 /// Get admin routes with authentication middleware applied.
 /// This requires UI auth (Zero Trust or OIDC) to be configured.
 /// Note: The middleware layer is applied in main.rs where state is available.
+#[cfg(feature = "server")]
 pub fn get_protected_admin_routes() -> Router<AppState> {
     // The protection is applied in build_app via route_layer
     Router::new().nest("/v1", admin_v1_routes())
@@ -57,16 +63,19 @@ pub fn get_protected_admin_routes() -> Router<AppState> {
 
 /// Get public admin routes that don't require authentication.
 /// These are needed for frontend bootstrap before the user logs in.
+#[cfg(feature = "server")]
 pub fn get_public_admin_routes() -> Router<AppState> {
     Router::new().nest("/v1", public_admin_v1_routes())
 }
 
+#[cfg(feature = "server")]
 fn public_admin_v1_routes() -> Router<AppState> {
     Router::new()
         // UI Configuration (unauthenticated - needed for frontend bootstrap)
         .route("/ui/config", get(ui_config::get_ui_config))
 }
 
+#[cfg(feature = "server")]
 fn admin_v1_routes() -> Router<AppState> {
     let router = Router::new()
         // Self-service endpoints (current user)
@@ -755,7 +764,7 @@ fn admin_v1_routes() -> Router<AppState> {
     router
 }
 
-#[cfg(all(test, feature = "database-sqlite"))]
+#[cfg(all(test, feature = "database-sqlite", feature = "server"))]
 mod tests {
     use axum::{
         body::Body,
