@@ -1,13 +1,13 @@
+#[cfg(any(feature = "server", feature = "wasm"))]
+use axum::Router;
+#[cfg(feature = "server")]
+use axum::middleware::from_fn_with_state;
+#[cfg(feature = "server")]
+use axum::routing::{delete, get, post};
 use axum::{
     Extension, Json,
     http::HeaderMap,
     response::{IntoResponse, Response},
-};
-#[cfg(feature = "server")]
-use axum::{
-    Router,
-    middleware::from_fn_with_state,
-    routing::{get, post},
 };
 use http::StatusCode;
 use serde::Deserialize;
@@ -15,6 +15,8 @@ use serde::Deserialize;
 use tower::ServiceBuilder;
 use uuid::Uuid;
 
+#[cfg(feature = "wasm")]
+use crate::compat::wasm_routing::{delete, get, post};
 use crate::{
     AppState, api_types,
     auth::AuthenticatedRequest,
@@ -753,8 +755,12 @@ fn get_services(state: &AppState) -> Result<&Services, ApiError> {
     })
 }
 
-#[cfg(feature = "server")]
-pub fn get_api_routes(state: AppState) -> Router<AppState> {
+/// Route definitions for the OpenAI-compatible API.
+///
+/// Shared between server and WASM builds. The server wraps these with auth/rate-limit
+/// middleware in [`get_api_routes`]; the WASM build uses them directly.
+#[cfg(any(feature = "server", feature = "wasm"))]
+pub(crate) fn api_v1_routes() -> Router<AppState> {
     let router = Router::new()
         .route("/v1/chat/completions", post(api_v1_chat_completions))
         .route("/v1/responses", post(api_v1_responses))
@@ -781,34 +787,34 @@ pub fn get_api_routes(state: AppState) -> Router<AppState> {
     #[cfg(feature = "server")]
     let router = router.route(
         "/v1/files",
-        post(api_v1_files_upload).get(api_v1_files_list),
+        post(api_v1_files_upload).merge(get(api_v1_files_list)),
     );
     #[cfg(not(feature = "server"))]
     let router = router.route("/v1/files", get(api_v1_files_list));
     router
         .route(
             "/v1/files/{file_id}",
-            get(api_v1_files_get).delete(api_v1_files_delete),
+            get(api_v1_files_get).merge(delete(api_v1_files_delete)),
         )
         .route("/v1/files/{file_id}/content", get(api_v1_files_get_content))
         // Vector Stores API (OpenAI-compatible)
         .route(
             "/v1/vector_stores",
-            post(api_v1_vector_stores_create).get(api_v1_vector_stores_list),
+            post(api_v1_vector_stores_create).merge(get(api_v1_vector_stores_list)),
         )
         .route(
             "/v1/vector_stores/{vector_store_id}",
             get(api_v1_vector_stores_get)
-                .post(api_v1_vector_stores_modify)
-                .delete(api_v1_vector_stores_delete),
+                .merge(post(api_v1_vector_stores_modify))
+                .merge(delete(api_v1_vector_stores_delete)),
         )
         .route(
             "/v1/vector_stores/{vector_store_id}/files",
-            post(api_v1_vector_stores_create_file).get(api_v1_vector_stores_list_files),
+            post(api_v1_vector_stores_create_file).merge(get(api_v1_vector_stores_list_files)),
         )
         .route(
             "/v1/vector_stores/{vector_store_id}/files/{file_id}",
-            get(api_v1_vector_stores_get_file).delete(api_v1_vector_stores_delete_file),
+            get(api_v1_vector_stores_get_file).merge(delete(api_v1_vector_stores_delete_file)),
         )
         // Hadrian extension: chunk inspection (not in OpenAI API)
         .route(
@@ -827,12 +833,19 @@ pub fn get_api_routes(state: AppState) -> Router<AppState> {
         )
         .route(
             "/v1/vector_stores/{vector_store_id}/file_batches/{batch_id}",
-            get(api_v1_vector_stores_get_file_batch).delete(api_v1_vector_stores_cancel_file_batch),
+            get(api_v1_vector_stores_get_file_batch)
+                .merge(delete(api_v1_vector_stores_cancel_file_batch)),
         )
         .route(
             "/v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/files",
             get(api_v1_vector_stores_list_batch_files),
         )
+}
+
+/// Server-only: wraps [`api_v1_routes`] with auth, rate-limit, and authz middleware.
+#[cfg(feature = "server")]
+pub fn get_api_routes(state: AppState) -> Router<AppState> {
+    api_v1_routes()
         // Apply middleware layers in order (ServiceBuilder runs top-to-bottom):
         // 1. Rate limiting - reject requests early before auth overhead
         // 2. Auth, budget, usage - authenticates and sets AuthenticatedRequest

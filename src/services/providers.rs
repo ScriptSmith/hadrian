@@ -75,6 +75,9 @@ pub fn validate_provider_config(
 }
 
 /// Validate provider-specific configuration with SSRF protection.
+///
+/// On wasm32 SSRF validation is skipped — the browser enforces its own CORS/security,
+/// and `std::net::ToSocketAddrs` (DNS resolution) is not available.
 pub fn validate_provider_config_with_url(
     provider_type: &str,
     base_url: &str,
@@ -82,7 +85,9 @@ pub fn validate_provider_config_with_url(
     api_key: Option<&str>,
     allow_loopback: bool,
 ) -> Result<(), AdminError> {
-    // Validate base URL against SSRF if non-empty
+    // Validate base URL against SSRF if non-empty.
+    // Skip on wasm32: browser enforces CORS and DNS resolution is unavailable.
+    #[cfg(not(target_arch = "wasm32"))]
     if !base_url.is_empty() {
         crate::validation::validate_base_url(base_url, allow_loopback)
             .map_err(|e| AdminError::Validation(format!("Invalid base URL: {e}")))?;

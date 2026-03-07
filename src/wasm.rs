@@ -17,24 +17,25 @@
 //!
 //! # Route Handler Reuse
 //!
-//! Most route handlers are shared with the native server (`routes/admin/`, `routes/api/`).
-//! The WASM router injects `Extension<AdminAuth>`, `Extension<AuthzContext>`, and
-//! `Extension<ClientInfo>` layers so handlers can extract them identically.
-//! Only handlers with genuinely different WASM behavior are defined here.
+//! Route handlers are shared with the native server via [`admin_v1_routes()`] and
+//! [`api_v1_routes()`]. The WASM router injects `Extension<AdminAuth>`,
+//! `Extension<AuthzContext>`, and `Extension<ClientInfo>` layers so handlers can
+//! extract them identically. Only handlers with genuinely different WASM behavior
+//! (health check, auth stub, conversations stub) are defined here.
 //!
 //! # Axum Send compatibility
 //!
 //! Axum requires handler futures to be `Send`, but on wasm32 `reqwest`/`wasm-bindgen`
-//! futures are `!Send`. Each handler wraps its async body with [`wasm_compat!`] which
-//! runs the `!Send` work inside `spawn_local` and returns a `Send`-safe oneshot future.
+//! futures are `!Send`. The [`crate::compat::wasm_routing`] module provides drop-in
+//! replacements for `axum::routing::{get, post, ...}` that wrap handlers in
+//! [`crate::compat::WasmHandler`], asserting `Send` since wasm32 is single-threaded.
 
 use std::sync::Arc;
 
 use axum::{
     Extension, Json, Router,
-    extract::{Path, State},
+    extract::State,
     response::{IntoResponse, Response},
-    routing::{get, post},
 };
 use wasm_bindgen::prelude::*;
 
@@ -42,10 +43,10 @@ use crate::{
     auth::Identity,
     authz::AuthzEngine,
     catalog,
-    compat::wasm_compat,
+    compat::wasm_routing::get,
     config, db, events, jobs,
     middleware::{AdminAuth, AuthzContext, ClientInfo},
-    models, pricing, providers, secrets, services,
+    pricing, providers, secrets, services,
 };
 
 /// Browser-based Hadrian gateway.
@@ -211,134 +212,25 @@ fn build_wasm_router(
         },
     };
 
-    use crate::routes::admin::ui_config;
+    // Shared route builders from the actual server code.
+    // Merge public admin routes (ui config) into the admin router so we can nest once.
+    let admin_routes = crate::routes::admin::admin_v1_routes()
+        .merge(crate::routes::admin::public_admin_v1_routes());
+    let api_routes = crate::routes::api::api_v1_routes();
 
     Router::new()
         // WASM-specific handlers (genuinely different behavior)
         .route("/health", get(health_check))
         .route("/auth/me", get(auth_me))
-        .route(
-            "/admin/v1/users/{user_id}/conversations/accessible",
-            get(list_conversations),
-        )
-        // Native handlers (shared with server, injected via Extension layers)
-        .route("/v1/models", get(wasm_api_v1_models))
-        .route("/admin/v1/ui/config", get(ui_config::get_ui_config))
-        .route("/admin/v1/organizations", get(wasm_list_organizations))
-        .route(
-            "/admin/v1/organizations/{slug}/projects",
-            get(wasm_list_org_projects),
-        )
-        .route(
-            "/admin/v1/organizations/{slug}/prompts",
-            get(wasm_list_org_prompts),
-        )
-        .route(
-            "/admin/v1/me/providers",
-            get(wasm_list_my_providers).post(wasm_create_my_provider),
-        )
-        .route(
-            "/admin/v1/me/providers/test-credentials",
-            post(wasm_test_provider_credentials),
-        )
-        // Inject middleware extensions for native handlers
+        // Shared routes from actual server code
+        .nest("/admin/v1", admin_routes)
+        .merge(api_routes)
+        // Inject extensions that middleware would normally provide
         .layer(Extension(admin_auth))
         .layer(Extension(authz))
         .layer(Extension(ClientInfo::default()))
         .fallback(fallback_handler)
         .with_state(state)
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Thin wrappers: delegate to native handlers via wasm_compat!
-// ─────────────────────────────────────────────────────────────────────────────
-
-async fn wasm_list_organizations(
-    state: State<crate::app::AppState>,
-    authz: Extension<AuthzContext>,
-    query: axum::extract::Query<crate::routes::admin::organizations::ListQuery>,
-) -> Response {
-    wasm_compat!(async move {
-        crate::routes::admin::organizations::list(state, authz, query)
-            .await
-            .into_response()
-    })
-}
-
-async fn wasm_list_org_projects(
-    state: State<crate::app::AppState>,
-    authz: Extension<AuthzContext>,
-    path: Path<String>,
-    query: axum::extract::Query<crate::routes::admin::organizations::ListQuery>,
-) -> Response {
-    wasm_compat!(async move {
-        crate::routes::admin::projects::list(state, authz, path, query)
-            .await
-            .into_response()
-    })
-}
-
-async fn wasm_list_org_prompts(
-    state: State<crate::app::AppState>,
-    authz: Extension<AuthzContext>,
-    path: Path<String>,
-    query: axum::extract::Query<crate::routes::admin::organizations::ListQuery>,
-) -> Response {
-    wasm_compat!(async move {
-        crate::routes::admin::prompts::list_by_org(state, authz, path, query)
-            .await
-            .into_response()
-    })
-}
-
-async fn wasm_list_my_providers(
-    state: State<crate::app::AppState>,
-    admin_auth: Extension<AdminAuth>,
-    authz: Extension<AuthzContext>,
-    query: axum::extract::Query<crate::routes::admin::organizations::ListQuery>,
-) -> Response {
-    wasm_compat!(async move {
-        crate::routes::admin::me_providers::list(state, admin_auth, authz, query)
-            .await
-            .into_response()
-    })
-}
-
-async fn wasm_create_my_provider(
-    state: State<crate::app::AppState>,
-    admin_auth: Extension<AdminAuth>,
-    authz: Extension<AuthzContext>,
-    client_info: Extension<ClientInfo>,
-    input: axum_valid::Valid<Json<models::CreateSelfServiceProvider>>,
-) -> Response {
-    wasm_compat!(async move {
-        crate::routes::admin::me_providers::create(state, admin_auth, authz, client_info, input)
-            .await
-            .into_response()
-    })
-}
-
-async fn wasm_test_provider_credentials(
-    state: State<crate::app::AppState>,
-    authz: Extension<AuthzContext>,
-    input: axum_valid::Valid<Json<models::CreateSelfServiceProvider>>,
-) -> Response {
-    wasm_compat!(async move {
-        crate::routes::admin::me_providers::test_credentials(state, authz, input)
-            .await
-            .into_response()
-    })
-}
-
-async fn wasm_api_v1_models(
-    state: State<crate::app::AppState>,
-    auth: Option<Extension<crate::auth::AuthenticatedRequest>>,
-) -> Response {
-    wasm_compat!(async move {
-        crate::routes::api::api_v1_models(state, auth)
-            .await
-            .into_response()
-    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -357,20 +249,6 @@ async fn auth_me(State(state): State<crate::app::AppState>) -> Response {
         "user_id": state.default_user_id,
         "roles": ["super_admin"],
         "idp_groups": [],
-    }))
-    .into_response()
-}
-
-async fn list_conversations() -> Response {
-    // Conversations are stored client-side in IndexedDB — return empty list
-    Json(serde_json::json!({
-        "data": [],
-        "pagination": {
-            "limit": 100,
-            "has_more": false,
-            "next_cursor": null,
-            "prev_cursor": null
-        }
     }))
     .into_response()
 }
@@ -515,7 +393,14 @@ fn error_response(status: u16, message: &str) -> Response {
 /// Create a minimal config suitable for WASM browser operation.
 fn wasm_default_config() -> config::GatewayConfig {
     config::GatewayConfig {
-        server: config::ServerConfig::default(),
+        server: config::ServerConfig {
+            // SSRF protection is irrelevant in the browser — the browser enforces
+            // its own CORS/security. Allow all URLs so users can point providers
+            // at localhost (e.g. Ollama) or private network addresses.
+            allow_loopback_urls: true,
+            allow_private_urls: true,
+            ..Default::default()
+        },
         database: config::DatabaseConfig::None,
         cache: config::CacheConfig::None,
         auth: config::AuthConfig {

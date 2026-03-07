@@ -37,17 +37,18 @@ pub mod ui_config;
 pub mod usage;
 pub mod users;
 
+#[cfg(any(feature = "server", feature = "wasm"))]
+use axum::Router;
 #[cfg(feature = "server")]
-use axum::{
-    Router,
-    routing::{delete, get, patch, post, put},
-};
+use axum::routing::{delete, get, patch, post, put};
 pub use error::{AdminError, AuditActor};
 
-#[cfg(feature = "server")]
+#[cfg(any(feature = "server", feature = "wasm"))]
 use crate::AppState;
+#[cfg(feature = "wasm")]
+use crate::compat::wasm_routing::{delete, get, patch, post, put};
 
-#[cfg(feature = "server")]
+#[cfg(any(feature = "server", feature = "wasm"))]
 pub fn get_admin_routes() -> Router<AppState> {
     Router::new().nest("/v1", admin_v1_routes())
 }
@@ -55,7 +56,7 @@ pub fn get_admin_routes() -> Router<AppState> {
 /// Get admin routes with authentication middleware applied.
 /// This requires UI auth (Zero Trust or OIDC) to be configured.
 /// Note: The middleware layer is applied in main.rs where state is available.
-#[cfg(feature = "server")]
+#[cfg(any(feature = "server", feature = "wasm"))]
 pub fn get_protected_admin_routes() -> Router<AppState> {
     // The protection is applied in build_app via route_layer
     Router::new().nest("/v1", admin_v1_routes())
@@ -63,33 +64,33 @@ pub fn get_protected_admin_routes() -> Router<AppState> {
 
 /// Get public admin routes that don't require authentication.
 /// These are needed for frontend bootstrap before the user logs in.
-#[cfg(feature = "server")]
+#[cfg(any(feature = "server", feature = "wasm"))]
 pub fn get_public_admin_routes() -> Router<AppState> {
     Router::new().nest("/v1", public_admin_v1_routes())
 }
 
-#[cfg(feature = "server")]
-fn public_admin_v1_routes() -> Router<AppState> {
+#[cfg(any(feature = "server", feature = "wasm"))]
+pub(crate) fn public_admin_v1_routes() -> Router<AppState> {
     Router::new()
         // UI Configuration (unauthenticated - needed for frontend bootstrap)
         .route("/ui/config", get(ui_config::get_ui_config))
 }
 
-#[cfg(feature = "server")]
-fn admin_v1_routes() -> Router<AppState> {
+#[cfg(any(feature = "server", feature = "wasm"))]
+pub(crate) fn admin_v1_routes() -> Router<AppState> {
     let router = Router::new()
         // Self-service endpoints (current user)
         .route("/me", delete(me::delete))
         .route("/me/export", get(me::export))
         .route(
             "/me/providers",
-            get(me_providers::list).post(me_providers::create),
+            get(me_providers::list).merge(post(me_providers::create)),
         )
         .route(
             "/me/providers/{id}",
             get(me_providers::get)
-                .patch(me_providers::update)
-                .delete(me_providers::delete),
+                .merge(patch(me_providers::update))
+                .merge(delete(me_providers::delete)),
         )
         .route(
             "/me/providers/test-credentials",
@@ -105,88 +106,92 @@ fn admin_v1_routes() -> Router<AppState> {
         )
         .route(
             "/me/api-keys",
-            get(me_api_keys::list).post(me_api_keys::create),
+            get(me_api_keys::list).merge(post(me_api_keys::create)),
         )
         .route(
             "/me/api-keys/{key_id}",
-            get(me_api_keys::get).delete(me_api_keys::revoke),
+            get(me_api_keys::get).merge(delete(me_api_keys::revoke)),
         )
         .route("/me/api-keys/{key_id}/rotate", post(me_api_keys::rotate))
         // Organizations
         .route(
             "/organizations",
-            post(organizations::create).get(organizations::list),
+            post(organizations::create).merge(get(organizations::list)),
         )
         .route(
             "/organizations/{slug}",
             get(organizations::get)
-                .patch(organizations::update)
-                .delete(organizations::delete),
+                .merge(patch(organizations::update))
+                .merge(delete(organizations::delete)),
         )
         // Projects
         .route(
             "/organizations/{org_slug}/projects",
-            post(projects::create).get(projects::list),
+            post(projects::create).merge(get(projects::list)),
         )
         .route(
             "/organizations/{org_slug}/projects/{project_slug}",
             get(projects::get)
-                .patch(projects::update)
-                .delete(projects::delete),
+                .merge(patch(projects::update))
+                .merge(delete(projects::delete)),
         )
         // Teams
         .route(
             "/organizations/{org_slug}/teams",
-            post(teams::create).get(teams::list),
+            post(teams::create).merge(get(teams::list)),
         )
         .route(
             "/organizations/{org_slug}/teams/{team_slug}",
-            get(teams::get).patch(teams::update).delete(teams::delete),
+            get(teams::get)
+                .merge(patch(teams::update))
+                .merge(delete(teams::delete)),
         )
         // Team memberships
         .route(
             "/organizations/{org_slug}/teams/{team_slug}/members",
-            get(teams::list_members).post(teams::add_member),
+            get(teams::list_members).merge(post(teams::add_member)),
         )
         .route(
             "/organizations/{org_slug}/teams/{team_slug}/members/{user_id}",
-            patch(teams::update_member).delete(teams::remove_member),
+            patch(teams::update_member).merge(delete(teams::remove_member)),
         )
         // Service Accounts
         .route(
             "/organizations/{org_slug}/service-accounts",
-            post(service_accounts::create).get(service_accounts::list),
+            post(service_accounts::create).merge(get(service_accounts::list)),
         )
         .route(
             "/organizations/{org_slug}/service-accounts/{sa_slug}",
             get(service_accounts::get)
-                .patch(service_accounts::update)
-                .delete(service_accounts::delete),
+                .merge(patch(service_accounts::update))
+                .merge(delete(service_accounts::delete)),
         )
         // Users (top-level)
-        .route("/users", post(users::create).get(users::list))
+        .route("/users", post(users::create).merge(get(users::list)))
         .route(
             "/users/{user_id}",
-            get(users::get).patch(users::update).delete(users::delete),
+            get(users::get)
+                .merge(patch(users::update))
+                .merge(delete(users::delete)),
         )
         .route("/users/{user_id}/export", get(users::export))
         // Organization memberships
         .route(
             "/organizations/{org_slug}/members",
-            get(users::list_org_members).post(users::add_org_member),
+            get(users::list_org_members).merge(post(users::add_org_member)),
         )
         .route(
             "/organizations/{org_slug}/members/{user_id}",
-            delete(users::remove_org_member).patch(users::update_org_member),
+            delete(users::remove_org_member).merge(patch(users::update_org_member)),
         )
         // Project memberships
         .route(
             "/organizations/{org_slug}/projects/{project_slug}/members",
-            get(users::list_project_members).post(users::add_project_member),
+            get(users::list_project_members).merge(post(users::add_project_member)),
         )
         .route(
             "/organizations/{org_slug}/projects/{project_slug}/members/{user_id}",
-            delete(users::remove_project_member).patch(users::update_project_member),
+            delete(users::remove_project_member).merge(patch(users::update_project_member)),
         )
         // API Keys
         .route("/api-keys", post(api_keys::create))
@@ -204,8 +209,10 @@ fn admin_v1_routes() -> Router<AppState> {
         .route(
             "/organizations/{org_slug}/service-accounts/{sa_slug}/api-keys",
             get(api_keys::list_by_service_account),
-        )
-        // Dynamic Providers
+        );
+    // Dynamic Providers (requires server feature — module is cfg-gated)
+    #[cfg(feature = "server")]
+    let router = router
         .route("/dynamic-providers", post(dynamic_providers::create))
         .route(
             "/dynamic-providers/{id}",
@@ -232,8 +239,9 @@ fn admin_v1_routes() -> Router<AppState> {
         .route(
             "/users/{user_id}/dynamic-providers",
             get(dynamic_providers::list_by_user),
-        )
-        // Usage endpoints - API Key level
+        );
+    // Usage endpoints - API Key level
+    let router = router
         .route("/api-keys/{key_id}/usage", get(usage::get_summary))
         .route("/api-keys/{key_id}/usage/by-date", get(usage::get_by_date))
         .route(
@@ -525,15 +533,15 @@ fn admin_v1_routes() -> Router<AppState> {
         // Model Pricing
         .route(
             "/model-pricing",
-            post(model_pricing::create).get(model_pricing::list_global),
+            post(model_pricing::create).merge(get(model_pricing::list_global)),
         )
         .route("/model-pricing/upsert", post(model_pricing::upsert))
         .route("/model-pricing/bulk", post(model_pricing::bulk_upsert))
         .route(
             "/model-pricing/{id}",
             get(model_pricing::get)
-                .patch(model_pricing::update)
-                .delete(model_pricing::delete),
+                .merge(patch(model_pricing::update))
+                .merge(delete(model_pricing::delete)),
         )
         .route(
             "/model-pricing/provider/{provider}",
@@ -556,8 +564,8 @@ fn admin_v1_routes() -> Router<AppState> {
         .route(
             "/conversations/{id}",
             get(conversations::get)
-                .patch(conversations::update)
-                .delete(conversations::delete),
+                .merge(patch(conversations::update))
+                .merge(delete(conversations::delete)),
         )
         .route(
             "/conversations/{id}/messages",
@@ -581,8 +589,8 @@ fn admin_v1_routes() -> Router<AppState> {
         .route(
             "/prompts/{id}",
             get(prompts::get)
-                .patch(prompts::update)
-                .delete(prompts::delete),
+                .merge(patch(prompts::update))
+                .merge(delete(prompts::delete)),
         )
         .route(
             "/organizations/{org_slug}/prompts",
@@ -622,10 +630,10 @@ fn admin_v1_routes() -> Router<AppState> {
             get(providers::get_provider_stats_history),
         )
         // Dead Letter Queue
-        .route("/dlq", get(dlq::list).delete(dlq::purge))
+        .route("/dlq", get(dlq::list).merge(delete(dlq::purge)))
         .route("/dlq/stats", get(dlq::stats))
         .route("/dlq/prune", post(dlq::prune))
-        .route("/dlq/{id}", get(dlq::get).delete(dlq::delete))
+        .route("/dlq/{id}", get(dlq::get).merge(delete(dlq::delete)))
         .route("/dlq/{id}/retry", post(dlq::retry))
         // Audit Logs
         .route("/audit-logs", get(audit_logs::list))
@@ -650,13 +658,13 @@ fn admin_v1_routes() -> Router<AppState> {
         // Organization RBAC Policies
         .route(
             "/organizations/{org_slug}/rbac-policies",
-            get(org_rbac_policies::list).post(org_rbac_policies::create),
+            get(org_rbac_policies::list).merge(post(org_rbac_policies::create)),
         )
         .route(
             "/organizations/{org_slug}/rbac-policies/{policy_id}",
             get(org_rbac_policies::get)
-                .patch(org_rbac_policies::update)
-                .delete(org_rbac_policies::delete),
+                .merge(patch(org_rbac_policies::update))
+                .merge(delete(org_rbac_policies::delete)),
         )
         .route(
             "/organizations/{org_slug}/rbac-policies/{policy_id}/versions",
