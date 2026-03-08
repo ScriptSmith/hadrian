@@ -43,6 +43,14 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+// Allow clients to request re-claim (e.g. after hard refresh where
+// the activate event doesn't fire again).
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "CLAIM") {
+    self.clients.claim();
+  }
+});
+
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 

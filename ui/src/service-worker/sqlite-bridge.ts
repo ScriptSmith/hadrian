@@ -8,6 +8,8 @@
  * - `query(sql, params)` — run a SELECT, return `Array<Record<string, unknown>>`
  * - `execute(sql, params)` — run INSERT/UPDATE/DELETE, return `{ changes, last_insert_rowid }`
  *
+ * The database is persisted to IndexedDB so state survives hard refreshes.
+ *
  * This must be imported *before* the Hadrian WASM module so the bridge exists
  * when the Rust constructor calls `init_database()`.
  */
@@ -17,6 +19,51 @@
 import initSqlJs, { type Database } from "sql.js";
 
 let db: Database | null = null;
+
+// ---------------------------------------------------------------------------
+// IndexedDB persistence
+// ---------------------------------------------------------------------------
+
+const IDB_NAME = "hadrian-wasm";
+const IDB_STORE = "data";
+const IDB_KEY = "db";
+
+async function loadFromIndexedDB(): Promise<Uint8Array | null> {
+  return new Promise((resolve) => {
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+    req.onsuccess = () => {
+      const tx = req.result.transaction(IDB_STORE, "readonly");
+      const get = tx.objectStore(IDB_STORE).get(IDB_KEY);
+      get.onsuccess = () => resolve(get.result ?? null);
+      get.onerror = () => resolve(null);
+    };
+    req.onerror = () => resolve(null);
+  });
+}
+
+function saveToIndexedDB(data: Uint8Array): void {
+  const req = indexedDB.open(IDB_NAME, 1);
+  req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+  req.onsuccess = () => {
+    const tx = req.result.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).put(data, IDB_KEY);
+  };
+}
+
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+function debouncedSave(): void {
+  if (!db) return;
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const data = db!.export();
+    saveToIndexedDB(new Uint8Array(data));
+  }, 500);
+}
+
+// ---------------------------------------------------------------------------
+// Parameter binding
+// ---------------------------------------------------------------------------
 
 /**
  * Bind values into a prepared statement.
@@ -50,14 +97,19 @@ const bridge = {
       return r.arrayBuffer();
     });
     const SQL = await initSqlJs({ wasmBinary });
-    db = new SQL.Database();
+
+    // Try to restore from IndexedDB, otherwise create fresh
+    const saved = await loadFromIndexedDB();
+    db = saved ? new SQL.Database(saved) : new SQL.Database();
 
     // Enable WAL-like pragmas for better performance
     db.run("PRAGMA journal_mode = MEMORY");
     db.run("PRAGMA synchronous = OFF");
     db.run("PRAGMA foreign_keys = ON");
 
-    console.log("[sqlite-bridge] In-memory database initialized");
+    console.log(
+      `[sqlite-bridge] Database initialized${saved ? " (restored from IndexedDB)" : " (fresh)"}`
+    );
   },
 
   async query(sql: string, params: unknown[]): Promise<Record<string, unknown>[]> {
@@ -77,7 +129,7 @@ const bridge = {
 
   async execute(
     sql: string,
-    params: unknown[],
+    params: unknown[]
   ): Promise<{ changes: number; last_insert_rowid: number }> {
     if (!db) throw new Error("Database not initialized — call init_database() first");
 
@@ -88,12 +140,14 @@ const bridge = {
     const changes = (db.exec("SELECT changes()")[0]?.values[0]?.[0] as number) ?? 0;
     const lastId = (db.exec("SELECT last_insert_rowid()")[0]?.values[0]?.[0] as number) ?? 0;
 
+    debouncedSave();
     return { changes, last_insert_rowid: lastId };
   },
 
   async execute_script(sql: string): Promise<void> {
     if (!db) throw new Error("Database not initialized — call init_database() first");
     db.exec(sql);
+    debouncedSave();
   },
 };
 

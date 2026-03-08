@@ -1,8 +1,7 @@
 import { useNavigate } from "react-router-dom";
-import { User, LogOut, Settings, Bug, Sparkles } from "lucide-react";
+import { User, LogOut, Settings, Bug } from "lucide-react";
 
 import { useAuth } from "@/auth";
-import { useWasmSetup } from "@/components/WasmSetup/WasmSetupGuard";
 import {
   Dropdown,
   DropdownContent,
@@ -20,7 +19,6 @@ interface UserMenuProps {
 export function UserMenu({ className }: UserMenuProps) {
   const { user, logout, isAuthenticated } = useAuth();
   const navigate = useNavigate();
-  const { isWasm, openSetupWizard } = useWasmSetup();
 
   if (!isAuthenticated) {
     return null;
@@ -69,12 +67,6 @@ export function UserMenu({ className }: UserMenuProps) {
           <Bug className="mr-2 h-4 w-4" />
           Session Info
         </DropdownItem>
-        {isWasm && (
-          <DropdownItem onClick={openSetupWizard}>
-            <Sparkles className="mr-2 h-4 w-4" />
-            Setup Wizard
-          </DropdownItem>
-        )}
         <DropdownSeparator />
         <DropdownItem onClick={logout} className="text-destructive">
           <LogOut className="mr-2 h-4 w-4" />

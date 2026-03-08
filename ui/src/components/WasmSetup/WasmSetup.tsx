@@ -15,6 +15,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   meProvidersCreateMutation,
   meProvidersListQueryKey,
+  apiV1ModelsQueryKey,
 } from "@/api/generated/@tanstack/react-query.gen";
 import { meProvidersTestCredentials } from "@/api/generated/sdk.gen";
 import type { ConnectivityTestResponse } from "@/api/generated/types.gen";
@@ -43,11 +44,11 @@ interface ProviderTemplate {
 const PROVIDER_TEMPLATES: ProviderTemplate[] = [
   {
     id: "openai",
-    label: "OpenAI",
+    label: "OpenAI Compatible",
     providerType: "open_ai",
     defaultBaseUrl: "https://api.openai.com/v1",
     placeholder: "sk-...",
-    description: "GPT-4o, GPT-4.1, o3, and more",
+    description: "OpenAI, OpenRouter, Ollama, and other compatible APIs",
     docsUrl: "https://platform.openai.com/api-keys",
   },
   {
@@ -126,7 +127,7 @@ export function WasmSetup({ open, onComplete }: { open: boolean; onComplete: () 
   const handleTest = useCallback(
     async (key: string) => {
       const entry = entries.find((e) => e.key === key);
-      if (!entry || !entry.apiKey.trim()) return;
+      if (!entry) return;
 
       updateEntry(key, { isTesting: true, testResult: null, error: null });
 
@@ -153,7 +154,7 @@ export function WasmSetup({ open, onComplete }: { open: boolean; onComplete: () 
   const handleSave = useCallback(
     async (key: string) => {
       const entry = entries.find((e) => e.key === key);
-      if (!entry || !entry.apiKey.trim()) return;
+      if (!entry) return;
 
       updateEntry(key, { isSaving: true, error: null });
 
@@ -167,6 +168,7 @@ export function WasmSetup({ open, onComplete }: { open: boolean; onComplete: () 
           },
         });
         queryClient.invalidateQueries({ queryKey: meProvidersListQueryKey() });
+        queryClient.invalidateQueries({ queryKey: apiV1ModelsQueryKey() });
         updateEntry(key, { isSaving: false, saved: true });
       } catch (err) {
         updateEntry(key, { isSaving: false, error: String(err) });
@@ -398,7 +400,7 @@ function ProviderKeyEntry({
       </div>
 
       <div className="space-y-2">
-        <FormField label="API Key" htmlFor={`${id}-key`}>
+        <FormField label="API Key (optional for local models)" htmlFor={`${id}-key`}>
           <Input
             id={`${id}-key`}
             type="password"
@@ -426,15 +428,11 @@ function ProviderKeyEntry({
           variant="outline"
           size="sm"
           onClick={onTest}
-          disabled={!entry.apiKey.trim() || entry.isTesting || entry.isSaving}
+          disabled={entry.isTesting || entry.isSaving}
         >
           {entry.isTesting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Test"}
         </Button>
-        <Button
-          size="sm"
-          onClick={onSave}
-          disabled={!entry.apiKey.trim() || entry.isSaving || entry.isTesting}
-        >
+        <Button size="sm" onClick={onSave} disabled={entry.isSaving || entry.isTesting}>
           {entry.isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
         </Button>
       </div>
