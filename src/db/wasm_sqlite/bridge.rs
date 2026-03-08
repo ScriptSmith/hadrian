@@ -45,9 +45,35 @@ extern "C" {
 #[derive(Debug, Clone)]
 pub struct WasmSqlitePool;
 
+/// A no-op "connection" handle for WASM SQLite.
+///
+/// In native SQLite, `pool.acquire()` returns a real connection handle used
+/// for transactions (`BEGIN IMMEDIATE` … `COMMIT`). In WASM (single-threaded),
+/// all queries go through the same JS bridge, so this is just a thin wrapper
+/// that derefs back to `WasmSqlitePool`.
+pub struct WasmPoolConnection(WasmSqlitePool);
+
+impl std::ops::Deref for WasmPoolConnection {
+    type Target = WasmSqlitePool;
+    fn deref(&self) -> &WasmSqlitePool {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for WasmPoolConnection {
+    fn deref_mut(&mut self) -> &mut WasmSqlitePool {
+        &mut self.0
+    }
+}
+
 impl WasmSqlitePool {
     pub fn new() -> Self {
         Self
+    }
+
+    /// Acquire a "connection" (no-op in WASM — mirrors `sqlx::SqlitePool::acquire()`).
+    pub async fn acquire(&self) -> Result<WasmPoolConnection, WasmDbError> {
+        Ok(WasmPoolConnection(self.clone()))
     }
 
     /// Initialize the database (called once at startup).

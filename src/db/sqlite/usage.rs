@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
+use super::backend::{Pool, RowExt, query};
 use crate::{
     db::{
         error::DbResult,
@@ -23,19 +23,19 @@ const MEDIA_AGGREGATE_COLS: &str = "\
     COALESCE(SUM(character_count), 0) as character_count";
 
 pub struct SqliteUsageRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteUsageRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
-    fn media_fields(row: &sqlx::sqlite::SqliteRow) -> (i64, i64, i64) {
+    fn media_fields(row: &super::backend::Row) -> (i64, i64, i64) {
         (
-            row.get("image_count"),
-            row.get("audio_seconds"),
-            row.get("character_count"),
+            row.col("image_count"),
+            row.col("audio_seconds"),
+            row.col("character_count"),
         )
     }
 }
@@ -48,7 +48,7 @@ impl UsageRepo for SqliteUsageRepo {
         let total_tokens = entry.input_tokens + entry.output_tokens;
 
         // Use INSERT OR IGNORE for idempotency - duplicate request_ids are silently skipped
-        sqlx::query(
+        query(
             r#"
             INSERT OR IGNORE INTO usage_records (
                 id, request_id, api_key_id, user_id, org_id, project_id, team_id,
@@ -107,82 +107,165 @@ impl UsageRepo for SqliteUsageRepo {
 
         let mut total_inserted = 0;
 
-        // Wrap all chunks in a single transaction for atomicity.
-        // On failure, the caller can safely retry the entire batch since
-        // INSERT OR IGNORE makes re-insertion idempotent.
-        let mut tx = self.pool.begin().await?;
+        // Native SQLite uses pool.begin() for transaction.
+        #[cfg(feature = "database-sqlite")]
+        {
+            let mut tx = self.pool.begin().await?;
 
-        // Process in chunks to stay within SQLite's parameter limit
-        for chunk in entries.chunks(MAX_ENTRIES_PER_BATCH) {
-            // Build dynamic multi-row INSERT query
-            let placeholders: Vec<&str> = chunk
-                .iter()
-                .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .collect();
+            for chunk in entries.chunks(MAX_ENTRIES_PER_BATCH) {
+                let placeholders: Vec<&str> = chunk
+                    .iter()
+                    .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                    .collect();
 
-            let query = format!(
-                r#"
-                INSERT OR IGNORE INTO usage_records (
-                    id, request_id, api_key_id, user_id, org_id, project_id, team_id,
-                    service_account_id, model, provider, input_tokens, output_tokens,
-                    total_tokens, cost_microcents, http_referer, recorded_at,
-                    streamed, cached_tokens, reasoning_tokens, finish_reason,
-                    latency_ms, cancelled, status_code, pricing_source,
-                    image_count, audio_seconds, character_count, provider_source
-                )
-                VALUES {}
-                "#,
-                placeholders.join(", ")
-            );
+                let sql = format!(
+                    r#"
+                    INSERT OR IGNORE INTO usage_records (
+                        id, request_id, api_key_id, user_id, org_id, project_id, team_id,
+                        service_account_id, model, provider, input_tokens, output_tokens,
+                        total_tokens, cost_microcents, http_referer, recorded_at,
+                        streamed, cached_tokens, reasoning_tokens, finish_reason,
+                        latency_ms, cancelled, status_code, pricing_source,
+                        image_count, audio_seconds, character_count, provider_source
+                    )
+                    VALUES {}
+                    "#,
+                    placeholders.join(", ")
+                );
 
-            let mut query_builder = sqlx::query(&query);
+                let mut query_builder = sqlx::query(&sql);
 
-            for entry in chunk {
-                let id = Uuid::new_v4();
-                let total_tokens = entry.input_tokens + entry.output_tokens;
+                for entry in chunk {
+                    let id = Uuid::new_v4();
+                    let total_tokens = entry.input_tokens + entry.output_tokens;
 
-                query_builder = query_builder
-                    .bind(id.to_string())
-                    .bind(&entry.request_id)
-                    .bind(entry.api_key_id.map(|id| id.to_string()))
-                    .bind(entry.user_id.map(|id| id.to_string()))
-                    .bind(entry.org_id.map(|id| id.to_string()))
-                    .bind(entry.project_id.map(|id| id.to_string()))
-                    .bind(entry.team_id.map(|id| id.to_string()))
-                    .bind(entry.service_account_id.map(|id| id.to_string()))
-                    .bind(&entry.model)
-                    .bind(&entry.provider)
-                    .bind(entry.input_tokens)
-                    .bind(entry.output_tokens)
-                    .bind(total_tokens)
-                    .bind(entry.cost_microcents.unwrap_or(0))
-                    .bind(&entry.http_referer)
-                    .bind(entry.request_at)
-                    .bind(entry.streamed)
-                    .bind(entry.cached_tokens)
-                    .bind(entry.reasoning_tokens)
-                    .bind(&entry.finish_reason)
-                    .bind(entry.latency_ms)
-                    .bind(entry.cancelled)
-                    .bind(entry.status_code)
-                    .bind(entry.pricing_source.as_str())
-                    .bind(entry.image_count)
-                    .bind(entry.audio_seconds)
-                    .bind(entry.character_count)
-                    .bind(&entry.provider_source);
+                    query_builder = query_builder
+                        .bind(id.to_string())
+                        .bind(&entry.request_id)
+                        .bind(entry.api_key_id.map(|id| id.to_string()))
+                        .bind(entry.user_id.map(|id| id.to_string()))
+                        .bind(entry.org_id.map(|id| id.to_string()))
+                        .bind(entry.project_id.map(|id| id.to_string()))
+                        .bind(entry.team_id.map(|id| id.to_string()))
+                        .bind(entry.service_account_id.map(|id| id.to_string()))
+                        .bind(&entry.model)
+                        .bind(&entry.provider)
+                        .bind(entry.input_tokens)
+                        .bind(entry.output_tokens)
+                        .bind(total_tokens)
+                        .bind(entry.cost_microcents.unwrap_or(0))
+                        .bind(&entry.http_referer)
+                        .bind(entry.request_at)
+                        .bind(entry.streamed)
+                        .bind(entry.cached_tokens)
+                        .bind(entry.reasoning_tokens)
+                        .bind(&entry.finish_reason)
+                        .bind(entry.latency_ms)
+                        .bind(entry.cancelled)
+                        .bind(entry.status_code)
+                        .bind(entry.pricing_source.as_str())
+                        .bind(entry.image_count)
+                        .bind(entry.audio_seconds)
+                        .bind(entry.character_count)
+                        .bind(&entry.provider_source);
+                }
+
+                let result = query_builder.execute(&mut *tx).await?;
+                total_inserted += result.rows_affected() as usize;
             }
 
-            let result = query_builder.execute(&mut *tx).await?;
-            total_inserted += result.rows_affected() as usize;
+            tx.commit().await?;
         }
 
-        tx.commit().await?;
+        // WASM SQLite uses manual BEGIN/COMMIT for transaction.
+        #[cfg(feature = "database-wasm-sqlite")]
+        {
+            query("BEGIN").execute(&self.pool).await?;
+
+            let result = async {
+                for chunk in entries.chunks(MAX_ENTRIES_PER_BATCH) {
+                    let placeholders: Vec<&str> = chunk
+                        .iter()
+                        .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                        .collect();
+
+                    let sql = format!(
+                        r#"
+                        INSERT OR IGNORE INTO usage_records (
+                            id, request_id, api_key_id, user_id, org_id, project_id, team_id,
+                            service_account_id, model, provider, input_tokens, output_tokens,
+                            total_tokens, cost_microcents, http_referer, recorded_at,
+                            streamed, cached_tokens, reasoning_tokens, finish_reason,
+                            latency_ms, cancelled, status_code, pricing_source,
+                            image_count, audio_seconds, character_count, provider_source
+                        )
+                        VALUES {}
+                        "#,
+                        placeholders.join(", ")
+                    );
+
+                    let mut query_builder = query(&sql);
+
+                    for entry in chunk {
+                        let id = Uuid::new_v4();
+                        let total_tokens = entry.input_tokens + entry.output_tokens;
+
+                        query_builder = query_builder
+                            .bind(id.to_string())
+                            .bind(&entry.request_id)
+                            .bind(entry.api_key_id.map(|id| id.to_string()))
+                            .bind(entry.user_id.map(|id| id.to_string()))
+                            .bind(entry.org_id.map(|id| id.to_string()))
+                            .bind(entry.project_id.map(|id| id.to_string()))
+                            .bind(entry.team_id.map(|id| id.to_string()))
+                            .bind(entry.service_account_id.map(|id| id.to_string()))
+                            .bind(&entry.model)
+                            .bind(&entry.provider)
+                            .bind(entry.input_tokens)
+                            .bind(entry.output_tokens)
+                            .bind(total_tokens)
+                            .bind(entry.cost_microcents.unwrap_or(0))
+                            .bind(&entry.http_referer)
+                            .bind(entry.request_at)
+                            .bind(entry.streamed)
+                            .bind(entry.cached_tokens)
+                            .bind(entry.reasoning_tokens)
+                            .bind(&entry.finish_reason)
+                            .bind(entry.latency_ms)
+                            .bind(entry.cancelled)
+                            .bind(entry.status_code)
+                            .bind(entry.pricing_source.as_str())
+                            .bind(entry.image_count)
+                            .bind(entry.audio_seconds)
+                            .bind(entry.character_count)
+                            .bind(&entry.provider_source);
+                    }
+
+                    let result = query_builder.execute(&self.pool).await?;
+                    total_inserted += result.rows_affected() as usize;
+                }
+                Ok::<_, crate::db::error::DbError>(total_inserted)
+            }
+            .await;
+
+            match result {
+                Ok(count) => {
+                    query("COMMIT").execute(&self.pool).await?;
+                    total_inserted = count;
+                }
+                Err(e) => {
+                    let _ = query("ROLLBACK").execute(&self.pool).await;
+                    return Err(e);
+                }
+            }
+        }
+
         Ok(total_inserted)
     }
 
     async fn get_summary(&self, api_key_id: Uuid, range: DateRange) -> DbResult<UsageSummary> {
         // Use range query instead of date casting to allow index usage on recorded_at
-        let row = sqlx::query(&format!(
+        let row = query(&format!(
             r#"
             SELECT
                 COALESCE(SUM(cost_microcents), 0) as total_cost_microcents,
@@ -207,13 +290,13 @@ impl UsageRepo for SqliteUsageRepo {
 
         let (image_count, audio_seconds, character_count) = Self::media_fields(&row);
         Ok(UsageSummary {
-            total_cost_microcents: row.get("total_cost_microcents"),
-            input_tokens: row.get("input_tokens"),
-            output_tokens: row.get("output_tokens"),
-            total_tokens: row.get("total_tokens"),
-            request_count: row.get("request_count"),
-            first_request_at: row.get("first_request_at"),
-            last_request_at: row.get("last_request_at"),
+            total_cost_microcents: row.col("total_cost_microcents"),
+            input_tokens: row.col("input_tokens"),
+            output_tokens: row.col("output_tokens"),
+            total_tokens: row.col("total_tokens"),
+            request_count: row.col("request_count"),
+            first_request_at: row.col("first_request_at"),
+            last_request_at: row.col("last_request_at"),
             image_count,
             audio_seconds,
             character_count,
@@ -222,7 +305,7 @@ impl UsageRepo for SqliteUsageRepo {
 
     async fn get_by_date(&self, api_key_id: Uuid, range: DateRange) -> DbResult<Vec<DailySpend>> {
         // Use range query in WHERE for index usage; date cast only needed in SELECT/GROUP BY
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -251,12 +334,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailySpend {
-                    date: row.get("date"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -266,7 +349,7 @@ impl UsageRepo for SqliteUsageRepo {
     }
 
     async fn get_by_model(&self, api_key_id: Uuid, range: DateRange) -> DbResult<Vec<ModelSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 model,
@@ -295,12 +378,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 ModelSpend {
-                    model: row.get("model"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    model: row.col("model"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -314,7 +397,7 @@ impl UsageRepo for SqliteUsageRepo {
         api_key_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<RefererSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 http_referer as referer,
@@ -343,12 +426,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 RefererSpend {
-                    referer: row.get("referer"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    referer: row.col("referer"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -360,7 +443,7 @@ impl UsageRepo for SqliteUsageRepo {
     async fn get_usage_stats(&self, api_key_id: Uuid, range: DateRange) -> DbResult<UsageStats> {
         // Get daily totals first, then compute stats in Rust
         // This avoids SQLite's lack of native STDDEV function
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT
                 COALESCE(SUM(cost_microcents), 0) as daily_cost
@@ -382,7 +465,7 @@ impl UsageRepo for SqliteUsageRepo {
 
     async fn get_current_period_spend(&self, api_key_id: Uuid, period: &str) -> DbResult<i64> {
         // Use range queries to allow index usage on recorded_at
-        let query = match period {
+        let sql = match period {
             "daily" => {
                 r#"
                 SELECT COALESCE(SUM(cost_microcents), 0) as total
@@ -406,12 +489,12 @@ impl UsageRepo for SqliteUsageRepo {
             }
         };
 
-        let row = sqlx::query(query)
+        let row = query(sql)
             .bind(api_key_id.to_string())
             .fetch_one(&self.pool)
             .await?;
 
-        Ok(row.get("total"))
+        Ok(row.col("total"))
     }
 
     // ==================== Aggregated Usage Queries ====================
@@ -421,7 +504,7 @@ impl UsageRepo for SqliteUsageRepo {
         org_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailySpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -450,12 +533,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailySpend {
-                    date: row.get("date"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -469,7 +552,7 @@ impl UsageRepo for SqliteUsageRepo {
         project_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailySpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -498,12 +581,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailySpend {
-                    date: row.get("date"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -517,7 +600,7 @@ impl UsageRepo for SqliteUsageRepo {
         user_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailySpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -546,12 +629,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailySpend {
-                    date: row.get("date"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -565,7 +648,7 @@ impl UsageRepo for SqliteUsageRepo {
         team_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailySpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -594,12 +677,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailySpend {
-                    date: row.get("date"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -613,7 +696,7 @@ impl UsageRepo for SqliteUsageRepo {
         provider: &str,
         range: DateRange,
     ) -> DbResult<Vec<DailySpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -642,12 +725,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailySpend {
-                    date: row.get("date"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -661,7 +744,7 @@ impl UsageRepo for SqliteUsageRepo {
         provider: &str,
         range: DateRange,
     ) -> DbResult<UsageSummary> {
-        let row = sqlx::query(&format!(
+        let row = query(&format!(
             r#"
             SELECT
                 COALESCE(SUM(cost_microcents), 0) as total_cost_microcents,
@@ -686,13 +769,13 @@ impl UsageRepo for SqliteUsageRepo {
 
         let (image_count, audio_seconds, character_count) = Self::media_fields(&row);
         Ok(UsageSummary {
-            total_cost_microcents: row.get("total_cost_microcents"),
-            input_tokens: row.get("input_tokens"),
-            output_tokens: row.get("output_tokens"),
-            total_tokens: row.get("total_tokens"),
-            request_count: row.get("request_count"),
-            first_request_at: row.get("first_request_at"),
-            last_request_at: row.get("last_request_at"),
+            total_cost_microcents: row.col("total_cost_microcents"),
+            input_tokens: row.col("input_tokens"),
+            output_tokens: row.col("output_tokens"),
+            total_tokens: row.col("total_tokens"),
+            request_count: row.col("request_count"),
+            first_request_at: row.col("first_request_at"),
+            last_request_at: row.col("last_request_at"),
             image_count,
             audio_seconds,
             character_count,
@@ -704,7 +787,7 @@ impl UsageRepo for SqliteUsageRepo {
         provider: &str,
         range: DateRange,
     ) -> DbResult<Vec<ModelSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 model,
@@ -733,12 +816,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 ModelSpend {
-                    model: row.get("model"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    model: row.col("model"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -752,7 +835,7 @@ impl UsageRepo for SqliteUsageRepo {
         provider: &str,
         range: DateRange,
     ) -> DbResult<UsageStats> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT
                 COALESCE(SUM(cost_microcents), 0) as daily_cost
@@ -777,7 +860,7 @@ impl UsageRepo for SqliteUsageRepo {
         org_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<ModelSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 model,
@@ -806,12 +889,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 ModelSpend {
-                    model: row.get("model"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    model: row.col("model"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -825,7 +908,7 @@ impl UsageRepo for SqliteUsageRepo {
         project_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<ModelSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 model,
@@ -854,12 +937,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 ModelSpend {
-                    model: row.get("model"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    model: row.col("model"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -873,7 +956,7 @@ impl UsageRepo for SqliteUsageRepo {
         user_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<ModelSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 model,
@@ -902,12 +985,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 ModelSpend {
-                    model: row.get("model"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    model: row.col("model"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -921,7 +1004,7 @@ impl UsageRepo for SqliteUsageRepo {
         team_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<ModelSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 model,
@@ -950,12 +1033,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 ModelSpend {
-                    model: row.get("model"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    model: row.col("model"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -969,7 +1052,7 @@ impl UsageRepo for SqliteUsageRepo {
         org_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<ProviderSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 provider,
@@ -998,12 +1081,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 ProviderSpend {
-                    provider: row.get("provider"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    provider: row.col("provider"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -1017,7 +1100,7 @@ impl UsageRepo for SqliteUsageRepo {
         team_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<ProviderSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 provider,
@@ -1046,12 +1129,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 ProviderSpend {
-                    provider: row.get("provider"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    provider: row.col("provider"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -1061,7 +1144,7 @@ impl UsageRepo for SqliteUsageRepo {
     }
 
     async fn get_summary_by_org(&self, org_id: Uuid, range: DateRange) -> DbResult<UsageSummary> {
-        let row = sqlx::query(&format!(
+        let row = query(&format!(
             r#"
             SELECT
                 COALESCE(SUM(cost_microcents), 0) as total_cost_microcents,
@@ -1086,13 +1169,13 @@ impl UsageRepo for SqliteUsageRepo {
 
         let (image_count, audio_seconds, character_count) = Self::media_fields(&row);
         Ok(UsageSummary {
-            total_cost_microcents: row.get("total_cost_microcents"),
-            input_tokens: row.get("input_tokens"),
-            output_tokens: row.get("output_tokens"),
-            total_tokens: row.get("total_tokens"),
-            request_count: row.get("request_count"),
-            first_request_at: row.get("first_request_at"),
-            last_request_at: row.get("last_request_at"),
+            total_cost_microcents: row.col("total_cost_microcents"),
+            input_tokens: row.col("input_tokens"),
+            output_tokens: row.col("output_tokens"),
+            total_tokens: row.col("total_tokens"),
+            request_count: row.col("request_count"),
+            first_request_at: row.col("first_request_at"),
+            last_request_at: row.col("last_request_at"),
             image_count,
             audio_seconds,
             character_count,
@@ -1104,7 +1187,7 @@ impl UsageRepo for SqliteUsageRepo {
         project_id: Uuid,
         range: DateRange,
     ) -> DbResult<UsageSummary> {
-        let row = sqlx::query(&format!(
+        let row = query(&format!(
             r#"
             SELECT
                 COALESCE(SUM(cost_microcents), 0) as total_cost_microcents,
@@ -1129,13 +1212,13 @@ impl UsageRepo for SqliteUsageRepo {
 
         let (image_count, audio_seconds, character_count) = Self::media_fields(&row);
         Ok(UsageSummary {
-            total_cost_microcents: row.get("total_cost_microcents"),
-            input_tokens: row.get("input_tokens"),
-            output_tokens: row.get("output_tokens"),
-            total_tokens: row.get("total_tokens"),
-            request_count: row.get("request_count"),
-            first_request_at: row.get("first_request_at"),
-            last_request_at: row.get("last_request_at"),
+            total_cost_microcents: row.col("total_cost_microcents"),
+            input_tokens: row.col("input_tokens"),
+            output_tokens: row.col("output_tokens"),
+            total_tokens: row.col("total_tokens"),
+            request_count: row.col("request_count"),
+            first_request_at: row.col("first_request_at"),
+            last_request_at: row.col("last_request_at"),
             image_count,
             audio_seconds,
             character_count,
@@ -1143,7 +1226,7 @@ impl UsageRepo for SqliteUsageRepo {
     }
 
     async fn get_summary_by_user(&self, user_id: Uuid, range: DateRange) -> DbResult<UsageSummary> {
-        let row = sqlx::query(&format!(
+        let row = query(&format!(
             r#"
             SELECT
                 COALESCE(SUM(cost_microcents), 0) as total_cost_microcents,
@@ -1168,13 +1251,13 @@ impl UsageRepo for SqliteUsageRepo {
 
         let (image_count, audio_seconds, character_count) = Self::media_fields(&row);
         Ok(UsageSummary {
-            total_cost_microcents: row.get("total_cost_microcents"),
-            input_tokens: row.get("input_tokens"),
-            output_tokens: row.get("output_tokens"),
-            total_tokens: row.get("total_tokens"),
-            request_count: row.get("request_count"),
-            first_request_at: row.get("first_request_at"),
-            last_request_at: row.get("last_request_at"),
+            total_cost_microcents: row.col("total_cost_microcents"),
+            input_tokens: row.col("input_tokens"),
+            output_tokens: row.col("output_tokens"),
+            total_tokens: row.col("total_tokens"),
+            request_count: row.col("request_count"),
+            first_request_at: row.col("first_request_at"),
+            last_request_at: row.col("last_request_at"),
             image_count,
             audio_seconds,
             character_count,
@@ -1182,7 +1265,7 @@ impl UsageRepo for SqliteUsageRepo {
     }
 
     async fn get_summary_by_team(&self, team_id: Uuid, range: DateRange) -> DbResult<UsageSummary> {
-        let row = sqlx::query(&format!(
+        let row = query(&format!(
             r#"
             SELECT
                 COALESCE(SUM(cost_microcents), 0) as total_cost_microcents,
@@ -1207,13 +1290,13 @@ impl UsageRepo for SqliteUsageRepo {
 
         let (image_count, audio_seconds, character_count) = Self::media_fields(&row);
         Ok(UsageSummary {
-            total_cost_microcents: row.get("total_cost_microcents"),
-            input_tokens: row.get("input_tokens"),
-            output_tokens: row.get("output_tokens"),
-            total_tokens: row.get("total_tokens"),
-            request_count: row.get("request_count"),
-            first_request_at: row.get("first_request_at"),
-            last_request_at: row.get("last_request_at"),
+            total_cost_microcents: row.col("total_cost_microcents"),
+            input_tokens: row.col("input_tokens"),
+            output_tokens: row.col("output_tokens"),
+            total_tokens: row.col("total_tokens"),
+            request_count: row.col("request_count"),
+            first_request_at: row.col("first_request_at"),
+            last_request_at: row.col("last_request_at"),
             image_count,
             audio_seconds,
             character_count,
@@ -1221,7 +1304,7 @@ impl UsageRepo for SqliteUsageRepo {
     }
 
     async fn get_usage_stats_by_org(&self, org_id: Uuid, range: DateRange) -> DbResult<UsageStats> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT
                 COALESCE(SUM(cost_microcents), 0) as daily_cost
@@ -1246,7 +1329,7 @@ impl UsageRepo for SqliteUsageRepo {
         project_id: Uuid,
         range: DateRange,
     ) -> DbResult<UsageStats> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT
                 COALESCE(SUM(cost_microcents), 0) as daily_cost
@@ -1271,7 +1354,7 @@ impl UsageRepo for SqliteUsageRepo {
         user_id: Uuid,
         range: DateRange,
     ) -> DbResult<UsageStats> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT
                 COALESCE(SUM(cost_microcents), 0) as daily_cost
@@ -1296,7 +1379,7 @@ impl UsageRepo for SqliteUsageRepo {
         team_id: Uuid,
         range: DateRange,
     ) -> DbResult<UsageStats> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT
                 COALESCE(SUM(cost_microcents), 0) as daily_cost
@@ -1321,7 +1404,7 @@ impl UsageRepo for SqliteUsageRepo {
         api_key_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<ProviderSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 provider,
@@ -1350,12 +1433,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 ProviderSpend {
-                    provider: row.get("provider"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    provider: row.col("provider"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -1369,7 +1452,7 @@ impl UsageRepo for SqliteUsageRepo {
         project_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<ProviderSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 provider,
@@ -1398,12 +1481,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 ProviderSpend {
-                    provider: row.get("provider"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    provider: row.col("provider"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -1417,7 +1500,7 @@ impl UsageRepo for SqliteUsageRepo {
         user_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<ProviderSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 provider,
@@ -1446,12 +1529,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 ProviderSpend {
-                    provider: row.get("provider"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    provider: row.col("provider"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -1465,7 +1548,7 @@ impl UsageRepo for SqliteUsageRepo {
         api_key_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyModelSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -1495,13 +1578,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyModelSpend {
-                    date: row.get("date"),
-                    model: row.get("model"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    model: row.col("model"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -1515,7 +1598,7 @@ impl UsageRepo for SqliteUsageRepo {
         org_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyModelSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -1545,13 +1628,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyModelSpend {
-                    date: row.get("date"),
-                    model: row.get("model"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    model: row.col("model"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -1565,7 +1648,7 @@ impl UsageRepo for SqliteUsageRepo {
         project_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyModelSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -1595,13 +1678,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyModelSpend {
-                    date: row.get("date"),
-                    model: row.get("model"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    model: row.col("model"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -1615,7 +1698,7 @@ impl UsageRepo for SqliteUsageRepo {
         user_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyModelSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -1645,13 +1728,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyModelSpend {
-                    date: row.get("date"),
-                    model: row.get("model"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    model: row.col("model"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -1665,7 +1748,7 @@ impl UsageRepo for SqliteUsageRepo {
         team_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyModelSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -1695,13 +1778,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyModelSpend {
-                    date: row.get("date"),
-                    model: row.get("model"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    model: row.col("model"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -1715,7 +1798,7 @@ impl UsageRepo for SqliteUsageRepo {
         api_key_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyProviderSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -1745,13 +1828,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyProviderSpend {
-                    date: row.get("date"),
-                    provider: row.get("provider"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    provider: row.col("provider"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -1765,7 +1848,7 @@ impl UsageRepo for SqliteUsageRepo {
         org_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyProviderSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -1795,13 +1878,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyProviderSpend {
-                    date: row.get("date"),
-                    provider: row.get("provider"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    provider: row.col("provider"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -1815,7 +1898,7 @@ impl UsageRepo for SqliteUsageRepo {
         project_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyProviderSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -1845,13 +1928,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyProviderSpend {
-                    date: row.get("date"),
-                    provider: row.get("provider"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    provider: row.col("provider"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -1865,7 +1948,7 @@ impl UsageRepo for SqliteUsageRepo {
         user_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyProviderSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -1895,13 +1978,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyProviderSpend {
-                    date: row.get("date"),
-                    provider: row.get("provider"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    provider: row.col("provider"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -1915,7 +1998,7 @@ impl UsageRepo for SqliteUsageRepo {
         team_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyProviderSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -1945,13 +2028,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyProviderSpend {
-                    date: row.get("date"),
-                    provider: row.get("provider"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    provider: row.col("provider"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -1967,7 +2050,7 @@ impl UsageRepo for SqliteUsageRepo {
         api_key_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<PricingSourceSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 pricing_source,
@@ -1996,12 +2079,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 PricingSourceSpend {
-                    pricing_source: row.get("pricing_source"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    pricing_source: row.col("pricing_source"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2015,7 +2098,7 @@ impl UsageRepo for SqliteUsageRepo {
         org_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<PricingSourceSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 pricing_source,
@@ -2044,12 +2127,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 PricingSourceSpend {
-                    pricing_source: row.get("pricing_source"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    pricing_source: row.col("pricing_source"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2063,7 +2146,7 @@ impl UsageRepo for SqliteUsageRepo {
         project_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<PricingSourceSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 pricing_source,
@@ -2092,12 +2175,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 PricingSourceSpend {
-                    pricing_source: row.get("pricing_source"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    pricing_source: row.col("pricing_source"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2111,7 +2194,7 @@ impl UsageRepo for SqliteUsageRepo {
         user_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<PricingSourceSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 pricing_source,
@@ -2140,12 +2223,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 PricingSourceSpend {
-                    pricing_source: row.get("pricing_source"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    pricing_source: row.col("pricing_source"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2159,7 +2242,7 @@ impl UsageRepo for SqliteUsageRepo {
         team_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<PricingSourceSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 pricing_source,
@@ -2188,12 +2271,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 PricingSourceSpend {
-                    pricing_source: row.get("pricing_source"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    pricing_source: row.col("pricing_source"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2207,7 +2290,7 @@ impl UsageRepo for SqliteUsageRepo {
         api_key_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyPricingSourceSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -2237,13 +2320,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyPricingSourceSpend {
-                    date: row.get("date"),
-                    pricing_source: row.get("pricing_source"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    pricing_source: row.col("pricing_source"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2257,7 +2340,7 @@ impl UsageRepo for SqliteUsageRepo {
         org_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyPricingSourceSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -2287,13 +2370,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyPricingSourceSpend {
-                    date: row.get("date"),
-                    pricing_source: row.get("pricing_source"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    pricing_source: row.col("pricing_source"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2307,7 +2390,7 @@ impl UsageRepo for SqliteUsageRepo {
         project_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyPricingSourceSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -2337,13 +2420,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyPricingSourceSpend {
-                    date: row.get("date"),
-                    pricing_source: row.get("pricing_source"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    pricing_source: row.col("pricing_source"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2357,7 +2440,7 @@ impl UsageRepo for SqliteUsageRepo {
         user_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyPricingSourceSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -2387,13 +2470,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyPricingSourceSpend {
-                    date: row.get("date"),
-                    pricing_source: row.get("pricing_source"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    pricing_source: row.col("pricing_source"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2407,7 +2490,7 @@ impl UsageRepo for SqliteUsageRepo {
         team_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyPricingSourceSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -2437,13 +2520,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyPricingSourceSpend {
-                    date: row.get("date"),
-                    pricing_source: row.get("pricing_source"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    pricing_source: row.col("pricing_source"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2461,7 +2544,7 @@ impl UsageRepo for SqliteUsageRepo {
         project_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<UserSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT u.user_id, users.name as user_name, users.email as user_email,
                 COALESCE(SUM(u.cost_microcents), 0) as total_cost_microcents,
@@ -2493,15 +2576,15 @@ impl UsageRepo for SqliteUsageRepo {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 UserSpend {
                     user_id: row
-                        .get::<Option<String>, _>("user_id")
+                        .col::<Option<String>>("user_id")
                         .and_then(|s| s.parse().ok()),
-                    user_name: row.get("user_name"),
-                    user_email: row.get("user_email"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    user_name: row.col("user_name"),
+                    user_email: row.col("user_email"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2515,7 +2598,7 @@ impl UsageRepo for SqliteUsageRepo {
         project_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyUserSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT date(u.recorded_at) as date,
                 u.user_id, users.name as user_name, users.email as user_email,
@@ -2547,17 +2630,17 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyUserSpend {
-                    date: row.get("date"),
+                    date: row.col("date"),
                     user_id: row
-                        .get::<Option<String>, _>("user_id")
+                        .col::<Option<String>>("user_id")
                         .and_then(|s| s.parse().ok()),
-                    user_name: row.get("user_name"),
-                    user_email: row.get("user_email"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    user_name: row.col("user_name"),
+                    user_email: row.col("user_email"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2573,7 +2656,7 @@ impl UsageRepo for SqliteUsageRepo {
         team_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<UserSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT u.user_id, users.name as user_name, users.email as user_email,
                 COALESCE(SUM(u.cost_microcents), 0) as total_cost_microcents,
@@ -2605,15 +2688,15 @@ impl UsageRepo for SqliteUsageRepo {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 UserSpend {
                     user_id: row
-                        .get::<Option<String>, _>("user_id")
+                        .col::<Option<String>>("user_id")
                         .and_then(|s| s.parse().ok()),
-                    user_name: row.get("user_name"),
-                    user_email: row.get("user_email"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    user_name: row.col("user_name"),
+                    user_email: row.col("user_email"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2627,7 +2710,7 @@ impl UsageRepo for SqliteUsageRepo {
         team_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyUserSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT date(u.recorded_at) as date,
                 u.user_id, users.name as user_name, users.email as user_email,
@@ -2659,17 +2742,17 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyUserSpend {
-                    date: row.get("date"),
+                    date: row.col("date"),
                     user_id: row
-                        .get::<Option<String>, _>("user_id")
+                        .col::<Option<String>>("user_id")
                         .and_then(|s| s.parse().ok()),
-                    user_name: row.get("user_name"),
-                    user_email: row.get("user_email"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    user_name: row.col("user_name"),
+                    user_email: row.col("user_email"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2683,7 +2766,7 @@ impl UsageRepo for SqliteUsageRepo {
         team_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<ProjectSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT u.project_id, projects.name as project_name,
                 COALESCE(SUM(u.cost_microcents), 0) as total_cost_microcents,
@@ -2715,14 +2798,14 @@ impl UsageRepo for SqliteUsageRepo {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 ProjectSpend {
                     project_id: row
-                        .get::<Option<String>, _>("project_id")
+                        .col::<Option<String>>("project_id")
                         .and_then(|s| s.parse().ok()),
-                    project_name: row.get("project_name"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    project_name: row.col("project_name"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2736,7 +2819,7 @@ impl UsageRepo for SqliteUsageRepo {
         team_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyProjectSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT date(u.recorded_at) as date,
                 u.project_id, projects.name as project_name,
@@ -2768,16 +2851,16 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyProjectSpend {
-                    date: row.get("date"),
+                    date: row.col("date"),
                     project_id: row
-                        .get::<Option<String>, _>("project_id")
+                        .col::<Option<String>>("project_id")
                         .and_then(|s| s.parse().ok()),
-                    project_name: row.get("project_name"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    project_name: row.col("project_name"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2793,7 +2876,7 @@ impl UsageRepo for SqliteUsageRepo {
         org_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<UserSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT u.user_id, users.name as user_name, users.email as user_email,
                 COALESCE(SUM(u.cost_microcents), 0) as total_cost_microcents,
@@ -2825,15 +2908,15 @@ impl UsageRepo for SqliteUsageRepo {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 UserSpend {
                     user_id: row
-                        .get::<Option<String>, _>("user_id")
+                        .col::<Option<String>>("user_id")
                         .and_then(|s| s.parse().ok()),
-                    user_name: row.get("user_name"),
-                    user_email: row.get("user_email"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    user_name: row.col("user_name"),
+                    user_email: row.col("user_email"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2847,7 +2930,7 @@ impl UsageRepo for SqliteUsageRepo {
         org_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyUserSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT date(u.recorded_at) as date,
                 u.user_id, users.name as user_name, users.email as user_email,
@@ -2879,17 +2962,17 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyUserSpend {
-                    date: row.get("date"),
+                    date: row.col("date"),
                     user_id: row
-                        .get::<Option<String>, _>("user_id")
+                        .col::<Option<String>>("user_id")
                         .and_then(|s| s.parse().ok()),
-                    user_name: row.get("user_name"),
-                    user_email: row.get("user_email"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    user_name: row.col("user_name"),
+                    user_email: row.col("user_email"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2903,7 +2986,7 @@ impl UsageRepo for SqliteUsageRepo {
         org_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<ProjectSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT u.project_id, projects.name as project_name,
                 COALESCE(SUM(u.cost_microcents), 0) as total_cost_microcents,
@@ -2935,14 +3018,14 @@ impl UsageRepo for SqliteUsageRepo {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 ProjectSpend {
                     project_id: row
-                        .get::<Option<String>, _>("project_id")
+                        .col::<Option<String>>("project_id")
                         .and_then(|s| s.parse().ok()),
-                    project_name: row.get("project_name"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    project_name: row.col("project_name"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -2956,7 +3039,7 @@ impl UsageRepo for SqliteUsageRepo {
         org_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyProjectSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT date(u.recorded_at) as date,
                 u.project_id, projects.name as project_name,
@@ -2988,16 +3071,16 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyProjectSpend {
-                    date: row.get("date"),
+                    date: row.col("date"),
                     project_id: row
-                        .get::<Option<String>, _>("project_id")
+                        .col::<Option<String>>("project_id")
                         .and_then(|s| s.parse().ok()),
-                    project_name: row.get("project_name"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    project_name: row.col("project_name"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3011,7 +3094,7 @@ impl UsageRepo for SqliteUsageRepo {
         org_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<TeamSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT u.team_id, teams.name as team_name,
                 COALESCE(SUM(u.cost_microcents), 0) as total_cost_microcents,
@@ -3043,14 +3126,14 @@ impl UsageRepo for SqliteUsageRepo {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 TeamSpend {
                     team_id: row
-                        .get::<Option<String>, _>("team_id")
+                        .col::<Option<String>>("team_id")
                         .and_then(|s| s.parse().ok()),
-                    team_name: row.get("team_name"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    team_name: row.col("team_name"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3064,7 +3147,7 @@ impl UsageRepo for SqliteUsageRepo {
         org_id: Uuid,
         range: DateRange,
     ) -> DbResult<Vec<DailyTeamSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT date(u.recorded_at) as date,
                 u.team_id, teams.name as team_name,
@@ -3096,16 +3179,16 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyTeamSpend {
-                    date: row.get("date"),
+                    date: row.col("date"),
                     team_id: row
-                        .get::<Option<String>, _>("team_id")
+                        .col::<Option<String>>("team_id")
                         .and_then(|s| s.parse().ok()),
-                    team_name: row.get("team_name"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    team_name: row.col("team_name"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3117,7 +3200,7 @@ impl UsageRepo for SqliteUsageRepo {
     // --- Global scope: base queries ---
 
     async fn get_summary_global(&self, range: DateRange) -> DbResult<UsageSummary> {
-        let row = sqlx::query(&format!(
+        let row = query(&format!(
             r#"
             SELECT
                 COALESCE(SUM(cost_microcents), 0) as total_cost_microcents,
@@ -3140,13 +3223,13 @@ impl UsageRepo for SqliteUsageRepo {
 
         let (image_count, audio_seconds, character_count) = Self::media_fields(&row);
         Ok(UsageSummary {
-            total_cost_microcents: row.get("total_cost_microcents"),
-            input_tokens: row.get("input_tokens"),
-            output_tokens: row.get("output_tokens"),
-            total_tokens: row.get("total_tokens"),
-            request_count: row.get("request_count"),
-            first_request_at: row.get("first_request_at"),
-            last_request_at: row.get("last_request_at"),
+            total_cost_microcents: row.col("total_cost_microcents"),
+            input_tokens: row.col("input_tokens"),
+            output_tokens: row.col("output_tokens"),
+            total_tokens: row.col("total_tokens"),
+            request_count: row.col("request_count"),
+            first_request_at: row.col("first_request_at"),
+            last_request_at: row.col("last_request_at"),
             image_count,
             audio_seconds,
             character_count,
@@ -3154,7 +3237,7 @@ impl UsageRepo for SqliteUsageRepo {
     }
 
     async fn get_daily_usage_global(&self, range: DateRange) -> DbResult<Vec<DailySpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -3181,12 +3264,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailySpend {
-                    date: row.get("date"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3196,7 +3279,7 @@ impl UsageRepo for SqliteUsageRepo {
     }
 
     async fn get_model_usage_global(&self, range: DateRange) -> DbResult<Vec<ModelSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 model,
@@ -3223,12 +3306,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 ModelSpend {
-                    model: row.get("model"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    model: row.col("model"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3238,7 +3321,7 @@ impl UsageRepo for SqliteUsageRepo {
     }
 
     async fn get_provider_usage_global(&self, range: DateRange) -> DbResult<Vec<ProviderSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 provider,
@@ -3265,12 +3348,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 ProviderSpend {
-                    provider: row.get("provider"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    provider: row.col("provider"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3283,7 +3366,7 @@ impl UsageRepo for SqliteUsageRepo {
         &self,
         range: DateRange,
     ) -> DbResult<Vec<PricingSourceSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 pricing_source,
@@ -3310,12 +3393,12 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 PricingSourceSpend {
-                    pricing_source: row.get("pricing_source"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    pricing_source: row.col("pricing_source"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3328,7 +3411,7 @@ impl UsageRepo for SqliteUsageRepo {
         &self,
         range: DateRange,
     ) -> DbResult<Vec<DailyModelSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -3356,13 +3439,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyModelSpend {
-                    date: row.get("date"),
-                    model: row.get("model"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    model: row.col("model"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3375,7 +3458,7 @@ impl UsageRepo for SqliteUsageRepo {
         &self,
         range: DateRange,
     ) -> DbResult<Vec<DailyProviderSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -3403,13 +3486,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyProviderSpend {
-                    date: row.get("date"),
-                    provider: row.get("provider"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    provider: row.col("provider"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3422,7 +3505,7 @@ impl UsageRepo for SqliteUsageRepo {
         &self,
         range: DateRange,
     ) -> DbResult<Vec<DailyPricingSourceSpend>> {
-        let rows = sqlx::query(&format!(
+        let rows = query(&format!(
             r#"
             SELECT
                 date(recorded_at) as date,
@@ -3450,13 +3533,13 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyPricingSourceSpend {
-                    date: row.get("date"),
-                    pricing_source: row.get("pricing_source"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    date: row.col("date"),
+                    pricing_source: row.col("pricing_source"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3466,7 +3549,7 @@ impl UsageRepo for SqliteUsageRepo {
     }
 
     async fn get_usage_stats_global(&self, range: DateRange) -> DbResult<UsageStats> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT
                 COALESCE(SUM(cost_microcents), 0) as daily_cost
@@ -3487,7 +3570,7 @@ impl UsageRepo for SqliteUsageRepo {
     // --- Global scope: entity breakdowns ---
 
     async fn get_user_usage_global(&self, range: DateRange) -> DbResult<Vec<UserSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT u.user_id, users.name as user_name, users.email as user_email,
                 COALESCE(SUM(u.cost_microcents), 0) as total_cost_microcents,
@@ -3517,15 +3600,15 @@ impl UsageRepo for SqliteUsageRepo {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 UserSpend {
                     user_id: row
-                        .get::<Option<String>, _>("user_id")
+                        .col::<Option<String>>("user_id")
                         .and_then(|s| s.parse().ok()),
-                    user_name: row.get("user_name"),
-                    user_email: row.get("user_email"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    user_name: row.col("user_name"),
+                    user_email: row.col("user_email"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3535,7 +3618,7 @@ impl UsageRepo for SqliteUsageRepo {
     }
 
     async fn get_daily_user_usage_global(&self, range: DateRange) -> DbResult<Vec<DailyUserSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT date(u.recorded_at) as date,
                 u.user_id, users.name as user_name, users.email as user_email,
@@ -3565,17 +3648,17 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyUserSpend {
-                    date: row.get("date"),
+                    date: row.col("date"),
                     user_id: row
-                        .get::<Option<String>, _>("user_id")
+                        .col::<Option<String>>("user_id")
                         .and_then(|s| s.parse().ok()),
-                    user_name: row.get("user_name"),
-                    user_email: row.get("user_email"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    user_name: row.col("user_name"),
+                    user_email: row.col("user_email"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3585,7 +3668,7 @@ impl UsageRepo for SqliteUsageRepo {
     }
 
     async fn get_project_usage_global(&self, range: DateRange) -> DbResult<Vec<ProjectSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT u.project_id, projects.name as project_name,
                 COALESCE(SUM(u.cost_microcents), 0) as total_cost_microcents,
@@ -3615,14 +3698,14 @@ impl UsageRepo for SqliteUsageRepo {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 ProjectSpend {
                     project_id: row
-                        .get::<Option<String>, _>("project_id")
+                        .col::<Option<String>>("project_id")
                         .and_then(|s| s.parse().ok()),
-                    project_name: row.get("project_name"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    project_name: row.col("project_name"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3635,7 +3718,7 @@ impl UsageRepo for SqliteUsageRepo {
         &self,
         range: DateRange,
     ) -> DbResult<Vec<DailyProjectSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT date(u.recorded_at) as date,
                 u.project_id, projects.name as project_name,
@@ -3665,16 +3748,16 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyProjectSpend {
-                    date: row.get("date"),
+                    date: row.col("date"),
                     project_id: row
-                        .get::<Option<String>, _>("project_id")
+                        .col::<Option<String>>("project_id")
                         .and_then(|s| s.parse().ok()),
-                    project_name: row.get("project_name"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    project_name: row.col("project_name"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3684,7 +3767,7 @@ impl UsageRepo for SqliteUsageRepo {
     }
 
     async fn get_team_usage_global(&self, range: DateRange) -> DbResult<Vec<TeamSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT u.team_id, teams.name as team_name,
                 COALESCE(SUM(u.cost_microcents), 0) as total_cost_microcents,
@@ -3714,14 +3797,14 @@ impl UsageRepo for SqliteUsageRepo {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 TeamSpend {
                     team_id: row
-                        .get::<Option<String>, _>("team_id")
+                        .col::<Option<String>>("team_id")
                         .and_then(|s| s.parse().ok()),
-                    team_name: row.get("team_name"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    team_name: row.col("team_name"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3731,7 +3814,7 @@ impl UsageRepo for SqliteUsageRepo {
     }
 
     async fn get_daily_team_usage_global(&self, range: DateRange) -> DbResult<Vec<DailyTeamSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT date(u.recorded_at) as date,
                 u.team_id, teams.name as team_name,
@@ -3761,16 +3844,16 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyTeamSpend {
-                    date: row.get("date"),
+                    date: row.col("date"),
                     team_id: row
-                        .get::<Option<String>, _>("team_id")
+                        .col::<Option<String>>("team_id")
                         .and_then(|s| s.parse().ok()),
-                    team_name: row.get("team_name"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    team_name: row.col("team_name"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3780,7 +3863,7 @@ impl UsageRepo for SqliteUsageRepo {
     }
 
     async fn get_org_usage_global(&self, range: DateRange) -> DbResult<Vec<OrgSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT u.org_id, organizations.name as org_name,
                 COALESCE(SUM(u.cost_microcents), 0) as total_cost_microcents,
@@ -3810,14 +3893,14 @@ impl UsageRepo for SqliteUsageRepo {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 OrgSpend {
                     org_id: row
-                        .get::<Option<String>, _>("org_id")
+                        .col::<Option<String>>("org_id")
                         .and_then(|s| s.parse().ok()),
-                    org_name: row.get("org_name"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    org_name: row.col("org_name"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3827,7 +3910,7 @@ impl UsageRepo for SqliteUsageRepo {
     }
 
     async fn get_daily_org_usage_global(&self, range: DateRange) -> DbResult<Vec<DailyOrgSpend>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT date(u.recorded_at) as date,
                 u.org_id, organizations.name as org_name,
@@ -3857,16 +3940,16 @@ impl UsageRepo for SqliteUsageRepo {
             .map(|row| {
                 let (image_count, audio_seconds, character_count) = Self::media_fields(row);
                 DailyOrgSpend {
-                    date: row.get("date"),
+                    date: row.col("date"),
                     org_id: row
-                        .get::<Option<String>, _>("org_id")
+                        .col::<Option<String>>("org_id")
                         .and_then(|s| s.parse().ok()),
-                    org_name: row.get("org_name"),
-                    total_cost_microcents: row.get("total_cost_microcents"),
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                    request_count: row.get("request_count"),
+                    org_name: row.col("org_name"),
+                    total_cost_microcents: row.col("total_cost_microcents"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    total_tokens: row.col("total_tokens"),
+                    request_count: row.col("request_count"),
                     image_count,
                     audio_seconds,
                     character_count,
@@ -3896,7 +3979,7 @@ impl UsageRepo for SqliteUsageRepo {
             let limit = std::cmp::min(batch_size as u64, remaining) as i64;
 
             // Delete a batch using subquery to select IDs (SQLite doesn't support LIMIT in DELETE directly)
-            let result = sqlx::query(
+            let result = query(
                 r#"
                 DELETE FROM usage_records
                 WHERE id IN (
@@ -3942,7 +4025,7 @@ impl UsageRepo for SqliteUsageRepo {
             let limit = std::cmp::min(batch_size as u64, remaining) as i64;
 
             // daily_spend uses composite primary key (api_key_id, date, model), use rowid for deletion
-            let result = sqlx::query(
+            let result = query(
                 r#"
                 DELETE FROM daily_spend
                 WHERE rowid IN (
@@ -3971,8 +4054,8 @@ impl UsageRepo for SqliteUsageRepo {
 
 /// Helper function to compute usage stats from daily cost rows.
 /// This avoids duplicating the statistics calculation logic.
-fn compute_stats_from_daily_costs(rows: &[sqlx::sqlite::SqliteRow]) -> DbResult<UsageStats> {
-    let daily_costs: Vec<i64> = rows.iter().map(|row| row.get("daily_cost")).collect();
+fn compute_stats_from_daily_costs(rows: &[super::backend::Row]) -> DbResult<UsageStats> {
+    let daily_costs: Vec<i64> = rows.iter().map(|row| row.col("daily_cost")).collect();
     let sample_days = daily_costs.len() as i32;
 
     if sample_days == 0 {

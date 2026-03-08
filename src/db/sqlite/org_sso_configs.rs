@@ -1,8 +1,10 @@
 use async_trait::async_trait;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::common::parse_uuid;
+use super::{
+    backend::{Pool, Row, RowExt, map_unique_violation, query},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -15,87 +17,87 @@ use crate::{
 };
 
 pub struct SqliteOrgSsoConfigRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteOrgSsoConfigRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
     /// Parse an OrgSsoConfig from a database row.
-    fn parse_config(row: &sqlx::sqlite::SqliteRow) -> DbResult<OrgSsoConfig> {
-        let default_team_id: Option<String> = row.get("default_team_id");
+    fn parse_config(row: &Row) -> DbResult<OrgSsoConfig> {
+        let default_team_id: Option<String> = row.col("default_team_id");
         let default_team_id = default_team_id.map(|s| parse_uuid(&s)).transpose()?;
 
-        let scopes_str: String = row.get("scopes");
+        let scopes_str: String = row.col("scopes");
         let scopes: Vec<String> = scopes_str.split_whitespace().map(String::from).collect();
 
-        let allowed_domains_json: Option<String> = row.get("allowed_email_domains");
+        let allowed_domains_json: Option<String> = row.col("allowed_email_domains");
         let allowed_email_domains: Vec<String> = allowed_domains_json
             .map(|json| serde_json::from_str(&json).unwrap_or_default())
             .unwrap_or_default();
 
-        let provider_type_str: String = row.get("provider_type");
+        let provider_type_str: String = row.col("provider_type");
         let provider_type = provider_type_str
             .parse::<SsoProviderType>()
             .unwrap_or_default();
 
-        let enforcement_mode_str: String = row.get("enforcement_mode");
+        let enforcement_mode_str: String = row.col("enforcement_mode");
         let enforcement_mode = enforcement_mode_str
             .parse::<SsoEnforcementMode>()
             .unwrap_or_default();
 
         Ok(OrgSsoConfig {
-            id: parse_uuid(&row.get::<String, _>("id"))?,
-            org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
+            id: parse_uuid(&row.col::<String>("id"))?,
+            org_id: parse_uuid(&row.col::<String>("org_id"))?,
             provider_type,
             // OIDC fields
-            issuer: row.get("issuer"),
-            discovery_url: row.get("discovery_url"),
-            client_id: row.get("client_id"),
-            redirect_uri: row.get("redirect_uri"),
+            issuer: row.col("issuer"),
+            discovery_url: row.col("discovery_url"),
+            client_id: row.col("client_id"),
+            redirect_uri: row.col("redirect_uri"),
             scopes,
-            identity_claim: row.get("identity_claim"),
-            org_claim: row.get("org_claim"),
-            groups_claim: row.get("groups_claim"),
+            identity_claim: row.col("identity_claim"),
+            org_claim: row.col("org_claim"),
+            groups_claim: row.col("groups_claim"),
             // SAML fields
-            saml_metadata_url: row.get("saml_metadata_url"),
-            saml_idp_entity_id: row.get("saml_idp_entity_id"),
-            saml_idp_sso_url: row.get("saml_idp_sso_url"),
-            saml_idp_slo_url: row.get("saml_idp_slo_url"),
-            saml_idp_certificate: row.get("saml_idp_certificate"),
-            saml_sp_entity_id: row.get("saml_sp_entity_id"),
-            saml_name_id_format: row.get("saml_name_id_format"),
-            saml_sign_requests: row.get::<i32, _>("saml_sign_requests") != 0,
-            saml_sp_certificate: row.get("saml_sp_certificate"),
-            saml_force_authn: row.get::<i32, _>("saml_force_authn") != 0,
-            saml_authn_context_class_ref: row.get("saml_authn_context_class_ref"),
-            saml_identity_attribute: row.get("saml_identity_attribute"),
-            saml_email_attribute: row.get("saml_email_attribute"),
-            saml_name_attribute: row.get("saml_name_attribute"),
-            saml_groups_attribute: row.get("saml_groups_attribute"),
+            saml_metadata_url: row.col("saml_metadata_url"),
+            saml_idp_entity_id: row.col("saml_idp_entity_id"),
+            saml_idp_sso_url: row.col("saml_idp_sso_url"),
+            saml_idp_slo_url: row.col("saml_idp_slo_url"),
+            saml_idp_certificate: row.col("saml_idp_certificate"),
+            saml_sp_entity_id: row.col("saml_sp_entity_id"),
+            saml_name_id_format: row.col("saml_name_id_format"),
+            saml_sign_requests: row.col::<i32>("saml_sign_requests") != 0,
+            saml_sp_certificate: row.col("saml_sp_certificate"),
+            saml_force_authn: row.col::<i32>("saml_force_authn") != 0,
+            saml_authn_context_class_ref: row.col("saml_authn_context_class_ref"),
+            saml_identity_attribute: row.col("saml_identity_attribute"),
+            saml_email_attribute: row.col("saml_email_attribute"),
+            saml_name_attribute: row.col("saml_name_attribute"),
+            saml_groups_attribute: row.col("saml_groups_attribute"),
             // JIT provisioning
-            provisioning_enabled: row.get::<i32, _>("provisioning_enabled") != 0,
-            create_users: row.get::<i32, _>("create_users") != 0,
+            provisioning_enabled: row.col::<i32>("provisioning_enabled") != 0,
+            create_users: row.col::<i32>("create_users") != 0,
             default_team_id,
-            default_org_role: row.get("default_org_role"),
-            default_team_role: row.get("default_team_role"),
+            default_org_role: row.col("default_org_role"),
+            default_team_role: row.col("default_team_role"),
             allowed_email_domains,
-            sync_attributes_on_login: row.get::<i32, _>("sync_attributes_on_login") != 0,
-            sync_memberships_on_login: row.get::<i32, _>("sync_memberships_on_login") != 0,
+            sync_attributes_on_login: row.col::<i32>("sync_attributes_on_login") != 0,
+            sync_memberships_on_login: row.col::<i32>("sync_memberships_on_login") != 0,
             enforcement_mode,
-            enabled: row.get::<i32, _>("enabled") != 0,
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
+            enabled: row.col::<i32>("enabled") != 0,
+            created_at: row.col("created_at"),
+            updated_at: row.col("updated_at"),
         })
     }
 
     /// Parse an OrgSsoConfigWithSecret from a database row.
-    fn parse_config_with_secret(row: &sqlx::sqlite::SqliteRow) -> DbResult<OrgSsoConfigWithSecret> {
+    fn parse_config_with_secret(row: &Row) -> DbResult<OrgSsoConfigWithSecret> {
         let config = Self::parse_config(row)?;
-        let client_secret_key: Option<String> = row.get("client_secret_key");
-        let saml_sp_private_key_ref: Option<String> = row.get("saml_sp_private_key_ref");
+        let client_secret_key: Option<String> = row.col("client_secret_key");
+        let saml_sp_private_key_ref: Option<String> = row.col("saml_sp_private_key_ref");
         Ok(OrgSsoConfigWithSecret {
             config,
             client_secret_key,
@@ -124,7 +126,7 @@ impl OrgSsoConfigRepo for SqliteOrgSsoConfigRepo {
             Some(serde_json::to_string(&input.allowed_email_domains).unwrap_or_default())
         };
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO org_sso_configs (
                 id, org_id, provider_type,
@@ -190,12 +192,9 @@ impl OrgSsoConfigRepo for SqliteOrgSsoConfigRepo {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                DbError::Conflict("Organization already has an SSO configuration".into())
-            }
-            _ => DbError::from(e),
-        })?;
+        .map_err(map_unique_violation(
+            "Organization already has an SSO configuration",
+        ))?;
 
         Ok(OrgSsoConfig {
             id,
@@ -243,7 +242,7 @@ impl OrgSsoConfigRepo for SqliteOrgSsoConfigRepo {
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<OrgSsoConfig>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, org_id, provider_type,
                    issuer, discovery_url, client_id, client_secret_key,
@@ -271,7 +270,7 @@ impl OrgSsoConfigRepo for SqliteOrgSsoConfigRepo {
     }
 
     async fn get_by_org_id(&self, org_id: Uuid) -> DbResult<Option<OrgSsoConfig>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, org_id, provider_type,
                    issuer, discovery_url, client_id, client_secret_key,
@@ -299,7 +298,7 @@ impl OrgSsoConfigRepo for SqliteOrgSsoConfigRepo {
     }
 
     async fn get_with_secret(&self, id: Uuid) -> DbResult<Option<OrgSsoConfigWithSecret>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, org_id, provider_type,
                    issuer, discovery_url, client_id, client_secret_key,
@@ -330,7 +329,7 @@ impl OrgSsoConfigRepo for SqliteOrgSsoConfigRepo {
         &self,
         org_id: Uuid,
     ) -> DbResult<Option<OrgSsoConfigWithSecret>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, org_id, provider_type,
                    issuer, discovery_url, client_id, client_secret_key,
@@ -394,7 +393,7 @@ impl OrgSsoConfigRepo for SqliteOrgSsoConfigRepo {
                 }
             });
 
-        sqlx::query(
+        query(
             r#"
             UPDATE org_sso_configs SET
                 provider_type = ?, issuer = ?, discovery_url = ?, client_id = ?, client_secret_key = ?,
@@ -487,7 +486,7 @@ impl OrgSsoConfigRepo for SqliteOrgSsoConfigRepo {
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
-        let result = sqlx::query("DELETE FROM org_sso_configs WHERE id = ?")
+        let result = query("DELETE FROM org_sso_configs WHERE id = ?")
             .bind(id.to_string())
             .execute(&self.pool)
             .await?;
@@ -500,7 +499,7 @@ impl OrgSsoConfigRepo for SqliteOrgSsoConfigRepo {
     }
 
     async fn find_enabled_oidc_by_issuer(&self, issuer: &str) -> DbResult<Vec<OrgSsoConfig>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, org_id, provider_type,
                    issuer, discovery_url, client_id, client_secret_key,
@@ -527,7 +526,7 @@ impl OrgSsoConfigRepo for SqliteOrgSsoConfigRepo {
     async fn find_by_email_domain(&self, domain: &str) -> DbResult<Option<OrgSsoConfig>> {
         // Search for configs where the domain is in the allowed_email_domains JSON array
         // SQLite uses json_each to search JSON arrays
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT c.id, c.org_id, c.provider_type,
                    c.issuer, c.discovery_url, c.client_id, c.client_secret_key,
@@ -556,7 +555,7 @@ impl OrgSsoConfigRepo for SqliteOrgSsoConfigRepo {
     }
 
     async fn list_enabled(&self) -> DbResult<Vec<OrgSsoConfigWithSecret>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, org_id, provider_type,
                    issuer, discovery_url, client_id, client_secret_key,
@@ -583,16 +582,18 @@ impl OrgSsoConfigRepo for SqliteOrgSsoConfigRepo {
     }
 
     async fn any_enabled(&self) -> DbResult<bool> {
-        let result: (i32,) =
-            sqlx::query_as("SELECT EXISTS(SELECT 1 FROM org_sso_configs WHERE enabled = 1)")
+        let row =
+            query("SELECT EXISTS(SELECT 1 FROM org_sso_configs WHERE enabled = 1) as has_any")
                 .fetch_one(&self.pool)
                 .await?;
-        Ok(result.0 != 0)
+        Ok(row.col::<i32>("has_any") != 0)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use sqlx::{Row as _, SqlitePool};
+
     use super::*;
 
     async fn create_test_pool() -> SqlitePool {

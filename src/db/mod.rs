@@ -2,7 +2,7 @@ mod error;
 #[cfg(feature = "database-postgres")]
 pub mod postgres;
 pub mod repos;
-#[cfg(feature = "database-sqlite")]
+#[cfg(any(feature = "database-sqlite", feature = "database-wasm-sqlite"))]
 pub mod sqlite;
 #[cfg(feature = "database-wasm-sqlite")]
 pub mod wasm_sqlite;
@@ -157,21 +157,19 @@ impl DbPool {
     #[cfg(feature = "database-wasm-sqlite")]
     pub fn from_wasm_sqlite(pool: wasm_sqlite::WasmSqlitePool) -> Self {
         let repos = CachedRepos {
-            organizations: Arc::new(wasm_sqlite::WasmSqliteOrganizationRepo::new(pool.clone())),
-            projects: Arc::new(wasm_sqlite::WasmSqliteProjectRepo::new(pool.clone())),
-            users: Arc::new(wasm_sqlite::WasmSqliteUserRepo::new(pool.clone())),
-            api_keys: Arc::new(wasm_sqlite::WasmSqliteApiKeyRepo::new(pool.clone())),
-            providers: Arc::new(wasm_sqlite::WasmSqliteDynamicProviderRepo::new(
-                pool.clone(),
-            )),
-            usage: Arc::new(wasm_sqlite::WasmSqliteUsageRepo::new(pool.clone())),
-            model_pricing: Arc::new(wasm_sqlite::WasmSqliteModelPricingRepo::new(pool.clone())),
-            conversations: Arc::new(wasm_sqlite::WasmSqliteConversationRepo::new(pool.clone())),
-            audit_logs: Arc::new(wasm_sqlite::WasmSqliteAuditLogRepo::new(pool.clone())),
-            vector_stores: Arc::new(wasm_sqlite::WasmSqliteVectorStoresRepo::new(pool.clone())),
-            files: Arc::new(wasm_sqlite::WasmSqliteFilesRepo::new(pool.clone())),
-            teams: Arc::new(wasm_sqlite::WasmSqliteTeamRepo::new(pool.clone())),
-            prompts: Arc::new(wasm_sqlite::WasmSqlitePromptRepo::new(pool.clone())),
+            organizations: Arc::new(sqlite::SqliteOrganizationRepo::new(pool.clone())),
+            projects: Arc::new(sqlite::SqliteProjectRepo::new(pool.clone())),
+            users: Arc::new(sqlite::SqliteUserRepo::new(pool.clone())),
+            api_keys: Arc::new(sqlite::SqliteApiKeyRepo::new(pool.clone())),
+            providers: Arc::new(sqlite::SqliteDynamicProviderRepo::new(pool.clone())),
+            usage: Arc::new(sqlite::SqliteUsageRepo::new(pool.clone())),
+            model_pricing: Arc::new(sqlite::SqliteModelPricingRepo::new(pool.clone())),
+            conversations: Arc::new(sqlite::SqliteConversationRepo::new(pool.clone())),
+            audit_logs: Arc::new(sqlite::SqliteAuditLogRepo::new(pool.clone())),
+            vector_stores: Arc::new(sqlite::SqliteVectorStoresRepo::new(pool.clone())),
+            files: Arc::new(sqlite::SqliteFilesRepo::new(pool.clone())),
+            teams: Arc::new(sqlite::SqliteTeamRepo::new(pool.clone())),
+            prompts: Arc::new(sqlite::SqlitePromptRepo::new(pool.clone())),
             #[cfg(feature = "sso")]
             sso_group_mappings: unreachable!("SSO not supported in WASM builds"),
             #[cfg(feature = "sso")]
@@ -184,12 +182,8 @@ impl DbPool {
             scim_user_mappings: unreachable!("SSO not supported in WASM builds"),
             #[cfg(feature = "sso")]
             scim_group_mappings: unreachable!("SSO not supported in WASM builds"),
-            org_rbac_policies: Arc::new(wasm_sqlite::WasmSqliteOrgRbacPolicyRepo::new(
-                pool.clone(),
-            )),
-            service_accounts: Arc::new(wasm_sqlite::WasmSqliteServiceAccountRepo::new(
-                pool.clone(),
-            )),
+            org_rbac_policies: Arc::new(sqlite::SqliteOrgRbacPolicyRepo::new(pool.clone())),
+            service_accounts: Arc::new(sqlite::SqliteServiceAccountRepo::new(pool.clone())),
         };
         DbPool {
             inner: PoolStorage::WasmSqlite(pool),

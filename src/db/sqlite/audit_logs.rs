@@ -1,9 +1,11 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::common::parse_uuid;
+use super::{
+    backend::{Pool, RowExt, query},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::DbResult,
@@ -16,11 +18,11 @@ use crate::{
 };
 
 pub struct SqliteAuditLogRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteAuditLogRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
@@ -39,7 +41,7 @@ impl AuditLogRepo for SqliteAuditLogRepo {
         let now = truncate_to_millis(chrono::Utc::now());
         let details_json = serde_json::to_string(&input.details)?;
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO audit_logs (
                 id, timestamp, actor_type, actor_id, action,
@@ -81,7 +83,7 @@ impl AuditLogRepo for SqliteAuditLogRepo {
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<AuditLog>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, timestamp, actor_type, actor_id, action,
                    resource_type, resource_id, org_id, project_id,
@@ -96,43 +98,43 @@ impl AuditLogRepo for SqliteAuditLogRepo {
 
         match result {
             Some(row) => {
-                let actor_id: Option<String> = row.get("actor_id");
-                let org_id: Option<String> = row.get("org_id");
-                let project_id: Option<String> = row.get("project_id");
-                let details_str: String = row.get("details");
+                let actor_id: Option<String> = row.col("actor_id");
+                let org_id: Option<String> = row.col("org_id");
+                let project_id: Option<String> = row.col("project_id");
+                let details_str: String = row.col("details");
 
                 Ok(Some(AuditLog {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
-                    timestamp: row.get("timestamp"),
-                    actor_type: Self::parse_actor_type(&row.get::<String, _>("actor_type"))?,
+                    id: parse_uuid(&row.col::<String>("id"))?,
+                    timestamp: row.col("timestamp"),
+                    actor_type: Self::parse_actor_type(&row.col::<String>("actor_type"))?,
                     actor_id: actor_id.map(|s| parse_uuid(&s)).transpose()?,
-                    action: row.get("action"),
-                    resource_type: row.get("resource_type"),
-                    resource_id: parse_uuid(&row.get::<String, _>("resource_id"))?,
+                    action: row.col("action"),
+                    resource_type: row.col("resource_type"),
+                    resource_id: parse_uuid(&row.col::<String>("resource_id"))?,
                     org_id: org_id.map(|s| parse_uuid(&s)).transpose()?,
                     project_id: project_id.map(|s| parse_uuid(&s)).transpose()?,
                     details: serde_json::from_str(&details_str)?,
-                    ip_address: row.get("ip_address"),
-                    user_agent: row.get("user_agent"),
+                    ip_address: row.col("ip_address"),
+                    user_agent: row.col("user_agent"),
                 }))
             }
             None => Ok(None),
         }
     }
 
-    async fn list(&self, query: AuditLogQuery) -> DbResult<ListResult<AuditLog>> {
-        let limit = query.limit.unwrap_or(100);
+    async fn list(&self, filter: AuditLogQuery) -> DbResult<ListResult<AuditLog>> {
+        let limit = filter.limit.unwrap_or(100);
         let fetch_limit = limit + 1; // Fetch one extra to determine if there are more items
 
         // Parse cursor if provided
-        let cursor = match &query.cursor {
+        let cursor = match &filter.cursor {
             Some(c) => Some(Cursor::decode(c).map_err(|e| {
                 crate::db::error::DbError::Internal(format!("Invalid cursor: {}", e))
             })?),
             None => None,
         };
 
-        let direction = match query.direction.as_deref() {
+        let direction = match filter.direction.as_deref() {
             Some("backward") => CursorDirection::Backward,
             _ => CursorDirection::Forward,
         };
@@ -141,39 +143,39 @@ impl AuditLogRepo for SqliteAuditLogRepo {
         let mut conditions = Vec::new();
         let mut params: Vec<String> = Vec::new();
 
-        if let Some(actor_type) = &query.actor_type {
+        if let Some(actor_type) = &filter.actor_type {
             conditions.push("actor_type = ?".to_string());
             params.push(actor_type.to_string());
         }
-        if let Some(actor_id) = &query.actor_id {
+        if let Some(actor_id) = &filter.actor_id {
             conditions.push("actor_id = ?".to_string());
             params.push(actor_id.to_string());
         }
-        if let Some(action) = &query.action {
+        if let Some(action) = &filter.action {
             conditions.push("action = ?".to_string());
             params.push(action.clone());
         }
-        if let Some(resource_type) = &query.resource_type {
+        if let Some(resource_type) = &filter.resource_type {
             conditions.push("resource_type = ?".to_string());
             params.push(resource_type.clone());
         }
-        if let Some(resource_id) = &query.resource_id {
+        if let Some(resource_id) = &filter.resource_id {
             conditions.push("resource_id = ?".to_string());
             params.push(resource_id.to_string());
         }
-        if let Some(org_id) = &query.org_id {
+        if let Some(org_id) = &filter.org_id {
             conditions.push("org_id = ?".to_string());
             params.push(org_id.to_string());
         }
-        if let Some(project_id) = &query.project_id {
+        if let Some(project_id) = &filter.project_id {
             conditions.push("project_id = ?".to_string());
             params.push(project_id.to_string());
         }
-        if let Some(from) = &query.from {
+        if let Some(from) = &filter.from {
             conditions.push("timestamp >= ?".to_string());
             params.push(from.to_rfc3339());
         }
-        if let Some(to) = &query.to {
+        if let Some(to) = &filter.to {
             conditions.push("timestamp < ?".to_string());
             params.push(to.to_rfc3339());
         }
@@ -235,7 +237,7 @@ impl AuditLogRepo for SqliteAuditLogRepo {
             )
         };
 
-        let mut query_builder = sqlx::query(&sql);
+        let mut query_builder = query(&sql);
         for param in &params {
             query_builder = query_builder.bind(param);
         }
@@ -252,24 +254,24 @@ impl AuditLogRepo for SqliteAuditLogRepo {
             .into_iter()
             .take(limit as usize)
             .map(|row| {
-                let actor_id: Option<String> = row.get("actor_id");
-                let org_id: Option<String> = row.get("org_id");
-                let project_id: Option<String> = row.get("project_id");
-                let details_str: String = row.get("details");
+                let actor_id: Option<String> = row.col("actor_id");
+                let org_id: Option<String> = row.col("org_id");
+                let project_id: Option<String> = row.col("project_id");
+                let details_str: String = row.col("details");
 
                 Ok(AuditLog {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
-                    timestamp: row.get("timestamp"),
-                    actor_type: Self::parse_actor_type(&row.get::<String, _>("actor_type"))?,
+                    id: parse_uuid(&row.col::<String>("id"))?,
+                    timestamp: row.col("timestamp"),
+                    actor_type: Self::parse_actor_type(&row.col::<String>("actor_type"))?,
                     actor_id: actor_id.map(|s| parse_uuid(&s)).transpose()?,
-                    action: row.get("action"),
-                    resource_type: row.get("resource_type"),
-                    resource_id: parse_uuid(&row.get::<String, _>("resource_id"))?,
+                    action: row.col("action"),
+                    resource_type: row.col("resource_type"),
+                    resource_id: parse_uuid(&row.col::<String>("resource_id"))?,
                     org_id: org_id.map(|s| parse_uuid(&s)).transpose()?,
                     project_id: project_id.map(|s| parse_uuid(&s)).transpose()?,
                     details: serde_json::from_str(&details_str)?,
-                    ip_address: row.get("ip_address"),
-                    user_agent: row.get("user_agent"),
+                    ip_address: row.col("ip_address"),
+                    user_agent: row.col("user_agent"),
                 })
             })
             .collect::<DbResult<Vec<_>>>()?;
@@ -288,44 +290,44 @@ impl AuditLogRepo for SqliteAuditLogRepo {
         Ok(ListResult::new(items, has_more, cursors))
     }
 
-    async fn count(&self, query: AuditLogQuery) -> DbResult<i64> {
+    async fn count(&self, filter: AuditLogQuery) -> DbResult<i64> {
         // Build dynamic WHERE clause
         let mut conditions = Vec::new();
         let mut params: Vec<String> = Vec::new();
 
-        if let Some(actor_type) = &query.actor_type {
+        if let Some(actor_type) = &filter.actor_type {
             conditions.push("actor_type = ?");
             params.push(actor_type.to_string());
         }
-        if let Some(actor_id) = &query.actor_id {
+        if let Some(actor_id) = &filter.actor_id {
             conditions.push("actor_id = ?");
             params.push(actor_id.to_string());
         }
-        if let Some(action) = &query.action {
+        if let Some(action) = &filter.action {
             conditions.push("action = ?");
             params.push(action.clone());
         }
-        if let Some(resource_type) = &query.resource_type {
+        if let Some(resource_type) = &filter.resource_type {
             conditions.push("resource_type = ?");
             params.push(resource_type.clone());
         }
-        if let Some(resource_id) = &query.resource_id {
+        if let Some(resource_id) = &filter.resource_id {
             conditions.push("resource_id = ?");
             params.push(resource_id.to_string());
         }
-        if let Some(org_id) = &query.org_id {
+        if let Some(org_id) = &filter.org_id {
             conditions.push("org_id = ?");
             params.push(org_id.to_string());
         }
-        if let Some(project_id) = &query.project_id {
+        if let Some(project_id) = &filter.project_id {
             conditions.push("project_id = ?");
             params.push(project_id.to_string());
         }
-        if let Some(from) = &query.from {
+        if let Some(from) = &filter.from {
             conditions.push("timestamp >= ?");
             params.push(from.to_rfc3339());
         }
-        if let Some(to) = &query.to {
+        if let Some(to) = &filter.to {
             conditions.push("timestamp < ?");
             params.push(to.to_rfc3339());
         }
@@ -338,13 +340,13 @@ impl AuditLogRepo for SqliteAuditLogRepo {
 
         let sql = format!("SELECT COUNT(*) as count FROM audit_logs {}", where_clause);
 
-        let mut query_builder = sqlx::query(&sql);
+        let mut query_builder = query(&sql);
         for param in &params {
             query_builder = query_builder.bind(param);
         }
 
         let row = query_builder.fetch_one(&self.pool).await?;
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     // ==================== Retention Operations ====================
@@ -366,7 +368,7 @@ impl AuditLogRepo for SqliteAuditLogRepo {
             let limit = std::cmp::min(batch_size as u64, remaining) as i64;
 
             // Delete a batch using subquery to select IDs
-            let result = sqlx::query(
+            let result = query(
                 r#"
                 DELETE FROM audit_logs
                 WHERE id IN (
@@ -397,6 +399,7 @@ impl AuditLogRepo for SqliteAuditLogRepo {
 mod tests {
     use chrono::Duration;
     use serde_json::json;
+    use sqlx::{Row as _, SqlitePool};
 
     use super::*;
     use crate::db::repos::AuditLogRepo;

@@ -1,8 +1,10 @@
 use async_trait::async_trait;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::common::parse_uuid;
+use super::{
+    backend::{Pool, RowExt, map_unique_violation, query},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -15,11 +17,11 @@ use crate::{
 };
 
 pub struct SqliteOrganizationRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteOrganizationRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
@@ -42,7 +44,7 @@ impl SqliteOrganizationRepo {
             "AND deleted_at IS NULL"
         };
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, slug, name, created_at, updated_at
             FROM organizations
@@ -54,7 +56,7 @@ impl SqliteOrganizationRepo {
             comparison, deleted_filter, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(cursor.created_at)
             .bind(cursor.id.to_string())
             .bind(fetch_limit)
@@ -67,11 +69,11 @@ impl SqliteOrganizationRepo {
             .take(limit as usize)
             .map(|row| {
                 Ok(Organization {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
-                    slug: row.get("slug"),
-                    name: row.get("name"),
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    id: parse_uuid(&row.col::<String>("id"))?,
+                    slug: row.col("slug"),
+                    name: row.col("name"),
+                    created_at: row.col("created_at"),
+                    updated_at: row.col("updated_at"),
                 })
             })
             .collect::<DbResult<Vec<_>>>()?;
@@ -97,7 +99,7 @@ impl OrganizationRepo for SqliteOrganizationRepo {
         let id = Uuid::new_v4();
         let now = chrono::Utc::now();
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO organizations (id, slug, name, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?)
@@ -110,12 +112,10 @@ impl OrganizationRepo for SqliteOrganizationRepo {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => DbError::Conflict(
-                format!("Organization with slug '{}' already exists", input.slug),
-            ),
-            _ => DbError::from(e),
-        })?;
+        .map_err(map_unique_violation(format!(
+            "Organization with slug '{}' already exists",
+            input.slug
+        )))?;
 
         Ok(Organization {
             id,
@@ -127,7 +127,7 @@ impl OrganizationRepo for SqliteOrganizationRepo {
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<Organization>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, slug, name, created_at, updated_at
             FROM organizations
@@ -140,18 +140,18 @@ impl OrganizationRepo for SqliteOrganizationRepo {
 
         match result {
             Some(row) => Ok(Some(Organization {
-                id: parse_uuid(&row.get::<String, _>("id"))?,
-                slug: row.get("slug"),
-                name: row.get("name"),
-                created_at: row.get("created_at"),
-                updated_at: row.get("updated_at"),
+                id: parse_uuid(&row.col::<String>("id"))?,
+                slug: row.col("slug"),
+                name: row.col("name"),
+                created_at: row.col("created_at"),
+                updated_at: row.col("updated_at"),
             })),
             None => Ok(None),
         }
     }
 
     async fn get_by_slug(&self, slug: &str) -> DbResult<Option<Organization>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, slug, name, created_at, updated_at
             FROM organizations
@@ -164,11 +164,11 @@ impl OrganizationRepo for SqliteOrganizationRepo {
 
         match result {
             Some(row) => Ok(Some(Organization {
-                id: parse_uuid(&row.get::<String, _>("id"))?,
-                slug: row.get("slug"),
-                name: row.get("name"),
-                created_at: row.get("created_at"),
-                updated_at: row.get("updated_at"),
+                id: parse_uuid(&row.col::<String>("id"))?,
+                slug: row.col("slug"),
+                name: row.col("name"),
+                created_at: row.col("created_at"),
+                updated_at: row.col("updated_at"),
             })),
             None => Ok(None),
         }
@@ -187,7 +187,7 @@ impl OrganizationRepo for SqliteOrganizationRepo {
         }
 
         // First page (no cursor provided)
-        let query = if params.include_deleted {
+        let sql = if params.include_deleted {
             r#"
             SELECT id, slug, name, created_at, updated_at
             FROM organizations
@@ -204,10 +204,7 @@ impl OrganizationRepo for SqliteOrganizationRepo {
             "#
         };
 
-        let rows = sqlx::query(query)
-            .bind(fetch_limit)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = query(sql).bind(fetch_limit).fetch_all(&self.pool).await?;
 
         let has_more = rows.len() as i64 > limit;
         let items: Vec<Organization> = rows
@@ -215,11 +212,11 @@ impl OrganizationRepo for SqliteOrganizationRepo {
             .take(limit as usize)
             .map(|row| {
                 Ok(Organization {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
-                    slug: row.get("slug"),
-                    name: row.get("name"),
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    id: parse_uuid(&row.col::<String>("id"))?,
+                    slug: row.col("slug"),
+                    name: row.col("name"),
+                    created_at: row.col("created_at"),
+                    updated_at: row.col("updated_at"),
                 })
             })
             .collect::<DbResult<Vec<_>>>()?;
@@ -234,21 +231,21 @@ impl OrganizationRepo for SqliteOrganizationRepo {
     }
 
     async fn count(&self, include_deleted: bool) -> DbResult<i64> {
-        let query = if include_deleted {
+        let sql = if include_deleted {
             "SELECT COUNT(*) as count FROM organizations"
         } else {
             "SELECT COUNT(*) as count FROM organizations WHERE deleted_at IS NULL"
         };
 
-        let row = sqlx::query(query).fetch_one(&self.pool).await?;
-        Ok(row.get::<i64, _>("count"))
+        let row = query(sql).fetch_one(&self.pool).await?;
+        Ok(row.col::<i64>("count"))
     }
 
     async fn update(&self, id: Uuid, input: UpdateOrganization) -> DbResult<Organization> {
         if let Some(name) = input.name {
             let now = chrono::Utc::now();
 
-            let result = sqlx::query(
+            let result = query(
                 r#"
                 UPDATE organizations
                 SET name = ?, updated_at = ?
@@ -275,7 +272,7 @@ impl OrganizationRepo for SqliteOrganizationRepo {
     async fn delete(&self, id: Uuid) -> DbResult<()> {
         let now = chrono::Utc::now();
 
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE organizations
             SET deleted_at = ?
@@ -297,6 +294,8 @@ impl OrganizationRepo for SqliteOrganizationRepo {
 
 #[cfg(test)]
 mod tests {
+    use sqlx::{Row as _, SqlitePool};
+
     use super::*;
     use crate::db::repos::OrganizationRepo;
 

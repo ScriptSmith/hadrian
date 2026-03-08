@@ -85,6 +85,12 @@ impl From<i32> for WasmParam {
     }
 }
 
+impl From<u32> for WasmParam {
+    fn from(v: u32) -> Self {
+        Self::Integer(v as i64)
+    }
+}
+
 impl From<u16> for WasmParam {
     fn from(v: u16) -> Self {
         Self::Integer(v as i64)
@@ -277,6 +283,23 @@ impl From<&Option<serde_json::Value>> for WasmParam {
 impl From<&serde_json::Value> for WasmParam {
     fn from(v: &serde_json::Value) -> Self {
         Self::Text(v.to_string())
+    }
+}
+
+impl From<Vec<u8>> for WasmParam {
+    fn from(v: Vec<u8>) -> Self {
+        use base64::Engine;
+        Self::Text(base64::engine::general_purpose::STANDARD.encode(&v))
+    }
+}
+
+impl From<&Option<Vec<u8>>> for WasmParam {
+    fn from(v: &Option<Vec<u8>>) -> Self {
+        use base64::Engine;
+        match v {
+            Some(bytes) => Self::Text(base64::engine::general_purpose::STANDARD.encode(bytes)),
+            None => Self::Null,
+        }
     }
 }
 
@@ -617,6 +640,35 @@ impl WasmDecode for Option<Decimal> {
         match value {
             WasmValue::Null => Ok(None),
             _ => Decimal::decode(value, col).map(Some),
+        }
+    }
+}
+
+impl WasmDecode for Vec<u8> {
+    fn decode(value: &WasmValue, col: &str) -> Result<Self, WasmDbError> {
+        use base64::Engine;
+        match value {
+            WasmValue::Text(s) => base64::engine::general_purpose::STANDARD
+                .decode(s)
+                .map_err(|_| WasmDbError::TypeMismatch {
+                    column: col.to_string(),
+                    expected: "Vec<u8> (base64)",
+                    actual: s.clone(),
+                }),
+            _ => Err(WasmDbError::TypeMismatch {
+                column: col.to_string(),
+                expected: "Vec<u8> (base64)",
+                actual: format!("{value:?}"),
+            }),
+        }
+    }
+}
+
+impl WasmDecode for Option<Vec<u8>> {
+    fn decode(value: &WasmValue, col: &str) -> Result<Self, WasmDbError> {
+        match value {
+            WasmValue::Null => Ok(None),
+            _ => Vec::<u8>::decode(value, col).map(Some),
         }
     }
 }

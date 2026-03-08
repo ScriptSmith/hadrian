@@ -1,8 +1,10 @@
 use async_trait::async_trait;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::common::parse_uuid;
+use super::{
+    backend::{Pool, Row, RowExt, map_unique_violation, query},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -15,29 +17,29 @@ use crate::{
 };
 
 pub struct SqliteSsoGroupMappingRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteSsoGroupMappingRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
     /// Parse an SsoGroupMapping from a database row.
-    fn parse_mapping(row: &sqlx::sqlite::SqliteRow) -> DbResult<SsoGroupMapping> {
-        let team_id: Option<String> = row.get("team_id");
+    fn parse_mapping(row: &Row) -> DbResult<SsoGroupMapping> {
+        let team_id: Option<String> = row.col("team_id");
         let team_id = team_id.map(|s| parse_uuid(&s)).transpose()?;
 
         Ok(SsoGroupMapping {
-            id: parse_uuid(&row.get::<String, _>("id"))?,
-            sso_connection_name: row.get("sso_connection_name"),
-            idp_group: row.get("idp_group"),
-            org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
+            id: parse_uuid(&row.col::<String>("id"))?,
+            sso_connection_name: row.col("sso_connection_name"),
+            idp_group: row.col("idp_group"),
+            org_id: parse_uuid(&row.col::<String>("org_id"))?,
             team_id,
-            role: row.get("role"),
-            priority: row.get("priority"),
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
+            role: row.col("role"),
+            priority: row.col("priority"),
+            created_at: row.col("created_at"),
+            updated_at: row.col("updated_at"),
         })
     }
 
@@ -60,7 +62,7 @@ impl SqliteSsoGroupMappingRepo {
             ""
         };
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, sso_connection_name, idp_group, org_id, team_id, role, priority, created_at, updated_at
             FROM sso_group_mappings
@@ -72,7 +74,7 @@ impl SqliteSsoGroupMappingRepo {
             comparison, connection_filter, order, order
         );
 
-        let mut query_builder = sqlx::query(&query)
+        let mut query_builder = query(&sql)
             .bind(org_id.to_string())
             .bind(cursor.created_at)
             .bind(cursor.id.to_string());
@@ -117,7 +119,7 @@ impl SsoGroupMappingRepo for SqliteSsoGroupMappingRepo {
         let id = Uuid::new_v4();
         let now = chrono::Utc::now();
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO sso_group_mappings (id, sso_connection_name, idp_group, org_id, team_id, role, priority, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -134,15 +136,10 @@ impl SsoGroupMappingRepo for SqliteSsoGroupMappingRepo {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                DbError::Conflict(format!(
-                    "Mapping for IdP group '{}' already exists for this connection/org/team combination",
-                    input.idp_group
-                ))
-            }
-            _ => DbError::from(e),
-        })?;
+        .map_err(map_unique_violation(format!(
+            "Mapping for IdP group '{}' already exists for this connection/org/team combination",
+            input.idp_group
+        )))?;
 
         Ok(SsoGroupMapping {
             id,
@@ -158,7 +155,7 @@ impl SsoGroupMappingRepo for SqliteSsoGroupMappingRepo {
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<SsoGroupMapping>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, sso_connection_name, idp_group, org_id, team_id, role, priority, created_at, updated_at
             FROM sso_group_mappings
@@ -189,7 +186,7 @@ impl SsoGroupMappingRepo for SqliteSsoGroupMappingRepo {
                 .await;
         }
 
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, sso_connection_name, idp_group, org_id, team_id, role, priority, created_at, updated_at
             FROM sso_group_mappings
@@ -240,7 +237,7 @@ impl SsoGroupMappingRepo for SqliteSsoGroupMappingRepo {
                 .await;
         }
 
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, sso_connection_name, idp_group, org_id, team_id, role, priority, created_at, updated_at
             FROM sso_group_mappings
@@ -284,7 +281,7 @@ impl SsoGroupMappingRepo for SqliteSsoGroupMappingRepo {
         let placeholders: Vec<&str> = idp_groups.iter().map(|_| "?").collect();
         let in_clause = placeholders.join(", ");
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, sso_connection_name, idp_group, org_id, team_id, role, priority, created_at, updated_at
             FROM sso_group_mappings
@@ -294,7 +291,7 @@ impl SsoGroupMappingRepo for SqliteSsoGroupMappingRepo {
             in_clause
         );
 
-        let mut query_builder = sqlx::query(&query)
+        let mut query_builder = query(&sql)
             .bind(sso_connection_name)
             .bind(org_id.to_string());
 
@@ -308,12 +305,12 @@ impl SsoGroupMappingRepo for SqliteSsoGroupMappingRepo {
     }
 
     async fn count_by_org(&self, org_id: Uuid) -> DbResult<i64> {
-        let row = sqlx::query("SELECT COUNT(*) as count FROM sso_group_mappings WHERE org_id = ?")
+        let row = query("SELECT COUNT(*) as count FROM sso_group_mappings WHERE org_id = ?")
             .bind(org_id.to_string())
             .fetch_one(&self.pool)
             .await?;
 
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn update(&self, id: Uuid, input: UpdateSsoGroupMapping) -> DbResult<SsoGroupMapping> {
@@ -342,12 +339,12 @@ impl SsoGroupMappingRepo for SqliteSsoGroupMappingRepo {
             set_clauses.push("priority = ?");
         }
 
-        let query = format!(
+        let sql = format!(
             "UPDATE sso_group_mappings SET {} WHERE id = ?",
             set_clauses.join(", ")
         );
 
-        let mut query_builder = sqlx::query(&query).bind(now);
+        let mut query_builder = query(&sql).bind(now);
 
         if let Some(ref idp_group) = input.idp_group {
             query_builder = query_builder.bind(idp_group);
@@ -366,12 +363,9 @@ impl SsoGroupMappingRepo for SqliteSsoGroupMappingRepo {
             .bind(id.to_string())
             .execute(&self.pool)
             .await
-            .map_err(|e| match e {
-                sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                    DbError::Conflict("Mapping with this combination already exists".into())
-                }
-                _ => DbError::from(e),
-            })?;
+            .map_err(map_unique_violation(
+                "Mapping with this combination already exists",
+            ))?;
 
         if result.rows_affected() == 0 {
             return Err(DbError::NotFound);
@@ -381,7 +375,7 @@ impl SsoGroupMappingRepo for SqliteSsoGroupMappingRepo {
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
-        let result = sqlx::query("DELETE FROM sso_group_mappings WHERE id = ?")
+        let result = query("DELETE FROM sso_group_mappings WHERE id = ?")
             .bind(id.to_string())
             .execute(&self.pool)
             .await?;
@@ -399,7 +393,7 @@ impl SsoGroupMappingRepo for SqliteSsoGroupMappingRepo {
         org_id: Uuid,
         idp_group: &str,
     ) -> DbResult<u64> {
-        let result = sqlx::query(
+        let result = query(
             "DELETE FROM sso_group_mappings WHERE sso_connection_name = ? AND org_id = ? AND idp_group = ?",
         )
         .bind(sso_connection_name)
@@ -414,6 +408,8 @@ impl SsoGroupMappingRepo for SqliteSsoGroupMappingRepo {
 
 #[cfg(test)]
 mod tests {
+    use sqlx::{Row as _, SqlitePool};
+
     use super::*;
 
     async fn create_test_pool() -> SqlitePool {

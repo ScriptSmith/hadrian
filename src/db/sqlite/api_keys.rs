@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
+use super::backend::{Pool, RowExt, map_unique_violation, query};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -15,11 +15,11 @@ use crate::{
 };
 
 pub struct SqliteApiKeyRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteApiKeyRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
@@ -58,39 +58,42 @@ impl SqliteApiKeyRepo {
         }
     }
 
-    fn parse_api_key(row: &sqlx::sqlite::SqliteRow) -> DbResult<ApiKey> {
-        let owner = Self::parse_owner(row.get("owner_type"), row.get("owner_id"))?;
-        let budget_period: Option<String> = row.get("budget_period");
+    fn parse_api_key(row: &super::backend::Row) -> DbResult<ApiKey> {
+        let owner_type: String = row.col("owner_type");
+        let owner_id: String = row.col("owner_id");
+        let owner = Self::parse_owner(&owner_type, &owner_id)?;
+        let budget_period: Option<String> = row.col("budget_period");
 
         // Parse JSON columns
-        let scopes: Option<String> = row.get("scopes");
-        let allowed_models: Option<String> = row.get("allowed_models");
-        let ip_allowlist: Option<String> = row.get("ip_allowlist");
+        let scopes: Option<String> = row.col("scopes");
+        let allowed_models: Option<String> = row.col("allowed_models");
+        let ip_allowlist: Option<String> = row.col("ip_allowlist");
 
         Ok(ApiKey {
-            id: Uuid::parse_str(row.get("id")).map_err(|e| DbError::Internal(e.to_string()))?,
-            key_prefix: row.get("key_prefix"),
-            name: row.get("name"),
+            id: Uuid::parse_str(&row.col::<String>("id"))
+                .map_err(|e| DbError::Internal(e.to_string()))?,
+            key_prefix: row.col("key_prefix"),
+            name: row.col("name"),
             owner,
-            budget_limit_cents: row.get("budget_amount"),
+            budget_limit_cents: row.col("budget_amount"),
             budget_period: budget_period.and_then(|p| match p.as_str() {
                 "daily" => Some(BudgetPeriod::Daily),
                 "monthly" => Some(BudgetPeriod::Monthly),
                 _ => None,
             }),
-            created_at: row.get("created_at"),
-            expires_at: row.get("expires_at"),
-            revoked_at: row.get("revoked_at"),
-            last_used_at: row.get("last_used_at"),
+            created_at: row.col("created_at"),
+            expires_at: row.col("expires_at"),
+            revoked_at: row.col("revoked_at"),
+            last_used_at: row.col("last_used_at"),
             scopes: scopes.and_then(|s| serde_json::from_str(&s).ok()),
             allowed_models: allowed_models.and_then(|s| serde_json::from_str(&s).ok()),
             ip_allowlist: ip_allowlist.and_then(|s| serde_json::from_str(&s).ok()),
-            rate_limit_rpm: row.get("rate_limit_rpm"),
-            rate_limit_tpm: row.get("rate_limit_tpm"),
+            rate_limit_rpm: row.col("rate_limit_rpm"),
+            rate_limit_tpm: row.col("rate_limit_tpm"),
             rotated_from_key_id: row
-                .get::<Option<String>, _>("rotated_from_key_id")
+                .col::<Option<String>>("rotated_from_key_id")
                 .and_then(|s| Uuid::parse_str(&s).ok()),
-            rotation_grace_until: row.get("rotation_grace_until"),
+            rotation_grace_until: row.col("rotation_grace_until"),
         })
     }
 
@@ -106,7 +109,7 @@ impl SqliteApiKeyRepo {
         let (comparison, order, should_reverse) =
             params.sort_order.cursor_query_params(params.direction);
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
@@ -121,7 +124,7 @@ impl SqliteApiKeyRepo {
             comparison, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(org_id.to_string())
             .bind(cursor.created_at)
             .bind(cursor.id.to_string())
@@ -160,7 +163,7 @@ impl SqliteApiKeyRepo {
         let (comparison, order, should_reverse) =
             params.sort_order.cursor_query_params(params.direction);
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
@@ -175,7 +178,7 @@ impl SqliteApiKeyRepo {
             comparison, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(project_id.to_string())
             .bind(cursor.created_at)
             .bind(cursor.id.to_string())
@@ -214,7 +217,7 @@ impl SqliteApiKeyRepo {
         let (comparison, order, should_reverse) =
             params.sort_order.cursor_query_params(params.direction);
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
@@ -229,7 +232,7 @@ impl SqliteApiKeyRepo {
             comparison, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(team_id.to_string())
             .bind(cursor.created_at)
             .bind(cursor.id.to_string())
@@ -268,7 +271,7 @@ impl SqliteApiKeyRepo {
         let (comparison, order, should_reverse) =
             params.sort_order.cursor_query_params(params.direction);
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
@@ -283,7 +286,7 @@ impl SqliteApiKeyRepo {
             comparison, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(user_id.to_string())
             .bind(cursor.created_at)
             .bind(cursor.id.to_string())
@@ -322,7 +325,7 @@ impl SqliteApiKeyRepo {
         let (comparison, order, should_reverse) =
             params.sort_order.cursor_query_params(params.direction);
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
@@ -337,7 +340,7 @@ impl SqliteApiKeyRepo {
             comparison, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(service_account_id.to_string())
             .bind(cursor.created_at)
             .bind(cursor.id.to_string())
@@ -381,7 +384,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
 
         let (owner_type, owner_id) = Self::owner_to_parts(&input.owner);
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO api_keys (
                 id, name, key_hash, key_prefix, owner_type, owner_id,
@@ -425,12 +428,9 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                DbError::Conflict("API key with this hash already exists".to_string())
-            }
-            _ => DbError::from(e),
-        })?;
+        .map_err(map_unique_violation(
+            "API key with this hash already exists",
+        ))?;
 
         Ok(ApiKey {
             id,
@@ -454,7 +454,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<ApiKey>> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
@@ -477,7 +477,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
 
     async fn get_by_hash(&self, key_hash: &str) -> DbResult<Option<ApiKeyWithOwner>> {
         let now = Utc::now();
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT
                 k.id, k.key_prefix, k.name, k.owner_type, k.owner_id,
@@ -516,15 +516,15 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
 
         let key = Self::parse_api_key(&row)?;
 
-        let org_id: Option<String> = row.get("org_id");
-        let team_id: Option<String> = row.get("team_id");
-        let project_id: Option<String> = row.get("project_id");
-        let user_id: Option<String> = row.get("user_id");
-        let service_account_id: Option<String> = row.get("service_account_id");
+        let org_id: Option<String> = row.col("org_id");
+        let team_id: Option<String> = row.col("team_id");
+        let project_id: Option<String> = row.col("project_id");
+        let user_id: Option<String> = row.col("user_id");
+        let service_account_id: Option<String> = row.col("service_account_id");
 
         // Parse service account roles from JSON TEXT
         let service_account_roles: Option<Vec<String>> = row
-            .get::<Option<String>, _>("service_account_roles")
+            .col::<Option<String>>("service_account_roles")
             .and_then(|s| serde_json::from_str(&s).ok());
 
         Ok(Some(ApiKeyWithOwner {
@@ -550,7 +550,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
         }
 
         // First page (no cursor provided)
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
@@ -583,13 +583,13 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
     }
 
     async fn count_by_org(&self, org_id: Uuid, _include_deleted: bool) -> DbResult<i64> {
-        let row = sqlx::query(
+        let row = query(
             "SELECT COUNT(*) as count FROM api_keys WHERE owner_type = 'organization' AND owner_id = ?",
         )
         .bind(org_id.to_string())
         .fetch_one(&self.pool)
         .await?;
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn list_by_team(
@@ -608,7 +608,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
         }
 
         // First page (no cursor provided)
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
@@ -641,13 +641,13 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
     }
 
     async fn count_by_team(&self, team_id: Uuid, _include_deleted: bool) -> DbResult<i64> {
-        let row = sqlx::query(
+        let row = query(
             "SELECT COUNT(*) as count FROM api_keys WHERE owner_type = 'team' AND owner_id = ?",
         )
         .bind(team_id.to_string())
         .fetch_one(&self.pool)
         .await?;
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn list_by_project(
@@ -666,7 +666,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
         }
 
         // First page (no cursor provided)
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
@@ -699,13 +699,13 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
     }
 
     async fn count_by_project(&self, project_id: Uuid, _include_deleted: bool) -> DbResult<i64> {
-        let row = sqlx::query(
+        let row = query(
             "SELECT COUNT(*) as count FROM api_keys WHERE owner_type = 'project' AND owner_id = ?",
         )
         .bind(project_id.to_string())
         .fetch_one(&self.pool)
         .await?;
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn list_by_user(
@@ -724,7 +724,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
         }
 
         // First page (no cursor provided)
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
@@ -757,17 +757,17 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
     }
 
     async fn count_by_user(&self, user_id: Uuid, _include_deleted: bool) -> DbResult<i64> {
-        let row = sqlx::query(
+        let row = query(
             "SELECT COUNT(*) as count FROM api_keys WHERE owner_type = 'user' AND owner_id = ?",
         )
         .bind(user_id.to_string())
         .fetch_one(&self.pool)
         .await?;
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn revoke(&self, id: Uuid) -> DbResult<()> {
-        sqlx::query(
+        query(
             r#"
             UPDATE api_keys
             SET revoked_at = datetime('now'), updated_at = datetime('now')
@@ -782,7 +782,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
     }
 
     async fn update_last_used(&self, id: Uuid) -> DbResult<()> {
-        sqlx::query(
+        query(
             r#"
             UPDATE api_keys
             SET last_used_at = datetime('now')
@@ -797,7 +797,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
     }
 
     async fn revoke_by_user(&self, user_id: Uuid) -> DbResult<u64> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE api_keys
             SET revoked_at = datetime('now'), updated_at = datetime('now')
@@ -833,7 +833,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
         }
 
         // First page (no cursor provided)
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT
                 id, key_prefix, name, owner_type, owner_id,
@@ -871,20 +871,20 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
         service_account_id: Uuid,
         include_revoked: bool,
     ) -> DbResult<i64> {
-        let query = if include_revoked {
+        let sql = if include_revoked {
             "SELECT COUNT(*) as count FROM api_keys WHERE owner_type = 'service_account' AND owner_id = ?"
         } else {
             "SELECT COUNT(*) as count FROM api_keys WHERE owner_type = 'service_account' AND owner_id = ? AND revoked_at IS NULL"
         };
-        let row = sqlx::query(query)
+        let row = query(sql)
             .bind(service_account_id.to_string())
             .fetch_one(&self.pool)
             .await?;
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn revoke_by_service_account(&self, service_account_id: Uuid) -> DbResult<u64> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE api_keys
             SET revoked_at = datetime('now'), updated_at = datetime('now')
@@ -917,77 +917,148 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
 
         let (owner_type, owner_id) = Self::owner_to_parts(&new_key_input.owner);
 
-        // Use a transaction to ensure both operations succeed or fail together
-        let mut tx = self.pool.begin().await?;
+        // Use a transaction to ensure both operations succeed or fail together.
+        // Native SQLite uses pool.begin(), WASM executes sequentially (single-threaded).
+        #[cfg(feature = "database-sqlite")]
+        {
+            let mut tx = self.pool.begin().await?;
 
-        // 1. Update old key with grace period
-        sqlx::query(
-            r#"
-            UPDATE api_keys
-            SET rotation_grace_until = ?, updated_at = datetime('now')
-            WHERE id = ?
-            "#,
-        )
-        .bind(grace_until)
-        .bind(old_key_id.to_string())
-        .execute(&mut *tx)
-        .await?;
-
-        // 2. Insert new key with rotated_from_key_id
-        sqlx::query(
-            r#"
-            INSERT INTO api_keys (
-                id, name, key_hash, key_prefix, owner_type, owner_id,
-                budget_amount, budget_period, expires_at,
-                scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                rotated_from_key_id,
-                created_at, updated_at
+            // 1. Update old key with grace period
+            sqlx::query(
+                r#"
+                UPDATE api_keys
+                SET rotation_grace_until = ?, updated_at = datetime('now')
+                WHERE id = ?
+                "#,
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(new_id.to_string())
-        .bind(&new_key_input.name)
-        .bind(new_key_hash)
-        .bind(key_prefix)
-        .bind(owner_type)
-        .bind(owner_id.to_string())
-        .bind(new_key_input.budget_limit_cents)
-        .bind(new_key_input.budget_period.map(|p| p.as_str()))
-        .bind(new_key_input.expires_at)
-        .bind(
-            new_key_input
-                .scopes
-                .as_ref()
-                .and_then(|s| serde_json::to_string(s).ok()),
-        )
-        .bind(
-            new_key_input
-                .allowed_models
-                .as_ref()
-                .and_then(|s| serde_json::to_string(s).ok()),
-        )
-        .bind(
-            new_key_input
-                .ip_allowlist
-                .as_ref()
-                .and_then(|s| serde_json::to_string(s).ok()),
-        )
-        .bind(new_key_input.rate_limit_rpm)
-        .bind(new_key_input.rate_limit_tpm)
-        .bind(old_key_id.to_string())
-        .bind(now)
-        .bind(now)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                DbError::Conflict("API key with this hash already exists".to_string())
-            }
-            _ => DbError::from(e),
-        })?;
+            .bind(grace_until)
+            .bind(old_key_id.to_string())
+            .execute(&mut *tx)
+            .await?;
 
-        tx.commit().await?;
+            // 2. Insert new key with rotated_from_key_id
+            sqlx::query(
+                r#"
+                INSERT INTO api_keys (
+                    id, name, key_hash, key_prefix, owner_type, owner_id,
+                    budget_amount, budget_period, expires_at,
+                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
+                    rotated_from_key_id,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(new_id.to_string())
+            .bind(&new_key_input.name)
+            .bind(new_key_hash)
+            .bind(key_prefix)
+            .bind(owner_type)
+            .bind(owner_id.to_string())
+            .bind(new_key_input.budget_limit_cents)
+            .bind(new_key_input.budget_period.map(|p| p.as_str()))
+            .bind(new_key_input.expires_at)
+            .bind(
+                new_key_input
+                    .scopes
+                    .as_ref()
+                    .and_then(|s| serde_json::to_string(s).ok()),
+            )
+            .bind(
+                new_key_input
+                    .allowed_models
+                    .as_ref()
+                    .and_then(|s| serde_json::to_string(s).ok()),
+            )
+            .bind(
+                new_key_input
+                    .ip_allowlist
+                    .as_ref()
+                    .and_then(|s| serde_json::to_string(s).ok()),
+            )
+            .bind(new_key_input.rate_limit_rpm)
+            .bind(new_key_input.rate_limit_tpm)
+            .bind(old_key_id.to_string())
+            .bind(now)
+            .bind(now)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_unique_violation(
+                "API key with this hash already exists",
+            ))?;
+
+            tx.commit().await?;
+        }
+
+        #[cfg(feature = "database-wasm-sqlite")]
+        {
+            // No transaction support in WASM — execute statements sequentially.
+            // Single-threaded WASM environment ensures no concurrency issues.
+
+            // 1. Update old key with grace period
+            query(
+                r#"
+                UPDATE api_keys
+                SET rotation_grace_until = ?, updated_at = datetime('now')
+                WHERE id = ?
+                "#,
+            )
+            .bind(grace_until)
+            .bind(old_key_id.to_string())
+            .execute(&self.pool)
+            .await?;
+
+            // 2. Insert new key with rotated_from_key_id
+            query(
+                r#"
+                INSERT INTO api_keys (
+                    id, name, key_hash, key_prefix, owner_type, owner_id,
+                    budget_amount, budget_period, expires_at,
+                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
+                    rotated_from_key_id,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(new_id.to_string())
+            .bind(&new_key_input.name)
+            .bind(new_key_hash)
+            .bind(key_prefix)
+            .bind(owner_type)
+            .bind(owner_id.to_string())
+            .bind(new_key_input.budget_limit_cents)
+            .bind(new_key_input.budget_period.map(|p| p.as_str()))
+            .bind(new_key_input.expires_at)
+            .bind(
+                new_key_input
+                    .scopes
+                    .as_ref()
+                    .and_then(|s| serde_json::to_string(s).ok()),
+            )
+            .bind(
+                new_key_input
+                    .allowed_models
+                    .as_ref()
+                    .and_then(|s| serde_json::to_string(s).ok()),
+            )
+            .bind(
+                new_key_input
+                    .ip_allowlist
+                    .as_ref()
+                    .and_then(|s| serde_json::to_string(s).ok()),
+            )
+            .bind(new_key_input.rate_limit_rpm)
+            .bind(new_key_input.rate_limit_tpm)
+            .bind(old_key_id.to_string())
+            .bind(now)
+            .bind(now)
+            .execute(&self.pool)
+            .await
+            .map_err(map_unique_violation(
+                "API key with this hash already exists",
+            ))?;
+        }
 
         Ok(ApiKey {
             id: new_id,
@@ -1014,41 +1085,83 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
         &self,
         service_account_id: Uuid,
     ) -> DbResult<Vec<String>> {
-        let hashes: Vec<String> = sqlx::query_scalar(
-            r#"
-            SELECT key_hash
-            FROM api_keys
-            WHERE owner_type = 'service_account'
-              AND owner_id = ?
-              AND revoked_at IS NULL
-            "#,
-        )
-        .bind(service_account_id.to_string())
-        .fetch_all(&self.pool)
-        .await?;
+        #[cfg(feature = "database-sqlite")]
+        {
+            let hashes: Vec<String> = sqlx::query_scalar(
+                r#"
+                SELECT key_hash
+                FROM api_keys
+                WHERE owner_type = 'service_account'
+                  AND owner_id = ?
+                  AND revoked_at IS NULL
+                "#,
+            )
+            .bind(service_account_id.to_string())
+            .fetch_all(&self.pool)
+            .await?;
 
-        Ok(hashes)
+            Ok(hashes)
+        }
+
+        #[cfg(feature = "database-wasm-sqlite")]
+        {
+            let rows = query(
+                r#"
+                SELECT key_hash
+                FROM api_keys
+                WHERE owner_type = 'service_account'
+                  AND owner_id = ?
+                  AND revoked_at IS NULL
+                "#,
+            )
+            .bind(service_account_id.to_string())
+            .fetch_all(&self.pool)
+            .await?;
+
+            Ok(rows.iter().map(|r| r.col("key_hash")).collect())
+        }
     }
 
     async fn get_key_hashes_by_user(&self, user_id: Uuid) -> DbResult<Vec<String>> {
-        let hashes: Vec<String> = sqlx::query_scalar(
-            r#"
-            SELECT key_hash
-            FROM api_keys
-            WHERE owner_type = 'user'
-              AND owner_id = ?
-              AND revoked_at IS NULL
-            "#,
-        )
-        .bind(user_id.to_string())
-        .fetch_all(&self.pool)
-        .await?;
+        #[cfg(feature = "database-sqlite")]
+        {
+            let hashes: Vec<String> = sqlx::query_scalar(
+                r#"
+                SELECT key_hash
+                FROM api_keys
+                WHERE owner_type = 'user'
+                  AND owner_id = ?
+                  AND revoked_at IS NULL
+                "#,
+            )
+            .bind(user_id.to_string())
+            .fetch_all(&self.pool)
+            .await?;
 
-        Ok(hashes)
+            Ok(hashes)
+        }
+
+        #[cfg(feature = "database-wasm-sqlite")]
+        {
+            let rows = query(
+                r#"
+                SELECT key_hash
+                FROM api_keys
+                WHERE owner_type = 'user'
+                  AND owner_id = ?
+                  AND revoked_at IS NULL
+                "#,
+            )
+            .bind(user_id.to_string())
+            .fetch_all(&self.pool)
+            .await?;
+
+            Ok(rows.iter().map(|r| r.col("key_hash")).collect())
+        }
     }
 
     async fn get_by_name_and_org(&self, org_id: Uuid, name: &str) -> DbResult<Option<ApiKey>> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
@@ -1073,6 +1186,8 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
 
 #[cfg(test)]
 mod tests {
+    use sqlx::{Row as _, SqlitePool};
+
     use super::*;
     use crate::db::repos::ApiKeyRepo;
 
