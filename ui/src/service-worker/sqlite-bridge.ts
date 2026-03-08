@@ -73,8 +73,9 @@ function debouncedSave(): void {
  */
 function bindParams(params: unknown[]): (string | number | Uint8Array | null)[] {
   return params.map((p) => {
-    if (p === null || p === "Null") return null;
+    if (p == null || p === "Null") return null; // == catches both null and undefined
     if (typeof p === "string" || typeof p === "number") return p;
+    if (typeof p === "boolean") return p ? 1 : 0; // SQLite stores booleans as integers
     if (typeof p === "object" && p !== null) {
       const obj = p as Record<string, unknown>;
       if ("Text" in obj) return obj.Text as string;
