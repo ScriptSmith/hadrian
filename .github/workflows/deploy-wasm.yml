@@ -1,0 +1,94 @@
+name: Deploy WASM App
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "ui/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/build-wasm.sh"
+      - ".github/workflows/deploy-wasm.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-wasm
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Cache pnpm
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-wasm-${{ hashFiles('ui/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-wasm-
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate API client
+        working-directory: ui
+        run: pnpm run generate-api
+
+      - name: Build WASM module
+        run: ./scripts/build-wasm.sh --release
+
+      - name: Build frontend (WASM mode)
+        working-directory: ui
+        run: pnpm build
+        env:
+          VITE_WASM_MODE: "true"
+
+      - name: Add headers for service worker
+        run: |
+          cat > ui/dist/_headers <<'EOF'
+          /sw.js
+            Service-Worker-Allowed: /
+            Cache-Control: no-cache, no-store, must-revalidate
+          EOF
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy ui/dist --project-name=hadrian

@@ -115,6 +115,59 @@ jobs:
       - name: Tests (integration)
         run: cargo test --no-default-features --features ${{ matrix.features }} -- --ignored
 
+  # WASM build check
+  wasm-build:
+    name: WASM Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm
+
+      - name: Create placeholder directories for rust-embed
+        run: |
+          mkdir -p ui/dist docs/out
+          echo '<!DOCTYPE html><html><body>Placeholder</body></html>' > ui/dist/index.html
+          echo '<!DOCTYPE html><html><body>Placeholder</body></html>' > docs/out/index.html
+
+      - name: Build WASM module
+        run: ./scripts/build-wasm.sh --release
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate API client
+        working-directory: ui
+        run: pnpm run generate-api
+
+      - name: Build frontend (WASM mode)
+        working-directory: ui
+        run: pnpm build
+        env:
+          VITE_WASM_MODE: "true"
+
   # Cross-platform builds
   cross-build:
     name: Cross Build (${{ matrix.target }})
