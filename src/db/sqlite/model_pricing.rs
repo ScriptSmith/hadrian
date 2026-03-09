@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use super::{
-    backend::{Pool, RowExt, map_unique_violation, query},
+    backend::{Pool, RowExt, begin, map_unique_violation, query},
     common::parse_uuid,
 };
 use crate::{
@@ -693,204 +693,102 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
         let now = chrono::Utc::now();
         let count = entries.len();
 
-        // Process all entries in a single transaction for atomicity.
-        // Native SQLite uses pool.begin(), WASM executes individually (no transaction support).
-        #[cfg(feature = "database-sqlite")]
-        {
-            let mut tx = self.pool.begin().await?;
+        let mut tx = begin(&self.pool).await?;
 
-            for entry in entries {
-                let id = Uuid::new_v4();
-                let (owner_type, owner_id) = Self::owner_to_parts(&entry.owner);
+        for entry in entries {
+            let id = Uuid::new_v4();
+            let (owner_type, owner_id) = Self::owner_to_parts(&entry.owner);
 
-                if owner_type.is_none() {
-                    sqlx::query(
-                        r#"
-                        INSERT INTO model_pricing (
-                            id, owner_type, owner_id, provider, model,
-                            input_per_1m_tokens, output_per_1m_tokens, per_image, per_request,
-                            cached_input_per_1m_tokens, cache_write_per_1m_tokens, reasoning_per_1m_tokens,
-                            per_second, per_1m_characters, source, created_at, updated_at
-                        )
-                        VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT (provider, model) WHERE owner_type IS NULL
-                        DO UPDATE SET
-                            input_per_1m_tokens = excluded.input_per_1m_tokens,
-                            output_per_1m_tokens = excluded.output_per_1m_tokens,
-                            per_image = excluded.per_image,
-                            per_request = excluded.per_request,
-                            cached_input_per_1m_tokens = excluded.cached_input_per_1m_tokens,
-                            cache_write_per_1m_tokens = excluded.cache_write_per_1m_tokens,
-                            reasoning_per_1m_tokens = excluded.reasoning_per_1m_tokens,
-                            per_second = excluded.per_second,
-                            per_1m_characters = excluded.per_1m_characters,
-                            source = excluded.source,
-                            updated_at = excluded.updated_at
-                        "#,
+            if owner_type.is_none() {
+                query(
+                    r#"
+                    INSERT INTO model_pricing (
+                        id, owner_type, owner_id, provider, model,
+                        input_per_1m_tokens, output_per_1m_tokens, per_image, per_request,
+                        cached_input_per_1m_tokens, cache_write_per_1m_tokens, reasoning_per_1m_tokens,
+                        per_second, per_1m_characters, source, created_at, updated_at
                     )
-                    .bind(id.to_string())
-                    .bind(&entry.provider)
-                    .bind(&entry.model)
-                    .bind(entry.input_per_1m_tokens)
-                    .bind(entry.output_per_1m_tokens)
-                    .bind(entry.per_image)
-                    .bind(entry.per_request)
-                    .bind(entry.cached_input_per_1m_tokens)
-                    .bind(entry.cache_write_per_1m_tokens)
-                    .bind(entry.reasoning_per_1m_tokens)
-                    .bind(entry.per_second)
-                    .bind(entry.per_1m_characters)
-                    .bind(entry.source.as_str())
-                    .bind(now)
-                    .bind(now)
-                    .execute(&mut *tx)
-                    .await?;
-                } else {
-                    sqlx::query(
-                        r#"
-                        INSERT INTO model_pricing (
-                            id, owner_type, owner_id, provider, model,
-                            input_per_1m_tokens, output_per_1m_tokens, per_image, per_request,
-                            cached_input_per_1m_tokens, cache_write_per_1m_tokens, reasoning_per_1m_tokens,
-                            per_second, per_1m_characters, source, created_at, updated_at
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT (owner_type, owner_id, provider, model) WHERE owner_type IS NOT NULL
-                        DO UPDATE SET
-                            input_per_1m_tokens = excluded.input_per_1m_tokens,
-                            output_per_1m_tokens = excluded.output_per_1m_tokens,
-                            per_image = excluded.per_image,
-                            per_request = excluded.per_request,
-                            cached_input_per_1m_tokens = excluded.cached_input_per_1m_tokens,
-                            cache_write_per_1m_tokens = excluded.cache_write_per_1m_tokens,
-                            reasoning_per_1m_tokens = excluded.reasoning_per_1m_tokens,
-                            per_second = excluded.per_second,
-                            per_1m_characters = excluded.per_1m_characters,
-                            source = excluded.source,
-                            updated_at = excluded.updated_at
-                        "#,
+                    VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (provider, model) WHERE owner_type IS NULL
+                    DO UPDATE SET
+                        input_per_1m_tokens = excluded.input_per_1m_tokens,
+                        output_per_1m_tokens = excluded.output_per_1m_tokens,
+                        per_image = excluded.per_image,
+                        per_request = excluded.per_request,
+                        cached_input_per_1m_tokens = excluded.cached_input_per_1m_tokens,
+                        cache_write_per_1m_tokens = excluded.cache_write_per_1m_tokens,
+                        reasoning_per_1m_tokens = excluded.reasoning_per_1m_tokens,
+                        per_second = excluded.per_second,
+                        per_1m_characters = excluded.per_1m_characters,
+                        source = excluded.source,
+                        updated_at = excluded.updated_at
+                    "#,
+                )
+                .bind(id.to_string())
+                .bind(&entry.provider)
+                .bind(&entry.model)
+                .bind(entry.input_per_1m_tokens)
+                .bind(entry.output_per_1m_tokens)
+                .bind(entry.per_image)
+                .bind(entry.per_request)
+                .bind(entry.cached_input_per_1m_tokens)
+                .bind(entry.cache_write_per_1m_tokens)
+                .bind(entry.reasoning_per_1m_tokens)
+                .bind(entry.per_second)
+                .bind(entry.per_1m_characters)
+                .bind(entry.source.as_str())
+                .bind(now)
+                .bind(now)
+                .execute(&mut *tx)
+                .await?;
+            } else {
+                query(
+                    r#"
+                    INSERT INTO model_pricing (
+                        id, owner_type, owner_id, provider, model,
+                        input_per_1m_tokens, output_per_1m_tokens, per_image, per_request,
+                        cached_input_per_1m_tokens, cache_write_per_1m_tokens, reasoning_per_1m_tokens,
+                        per_second, per_1m_characters, source, created_at, updated_at
                     )
-                    .bind(id.to_string())
-                    .bind(owner_type)
-                    .bind(owner_id.map(|u| u.to_string()))
-                    .bind(&entry.provider)
-                    .bind(&entry.model)
-                    .bind(entry.input_per_1m_tokens)
-                    .bind(entry.output_per_1m_tokens)
-                    .bind(entry.per_image)
-                    .bind(entry.per_request)
-                    .bind(entry.cached_input_per_1m_tokens)
-                    .bind(entry.cache_write_per_1m_tokens)
-                    .bind(entry.reasoning_per_1m_tokens)
-                    .bind(entry.per_second)
-                    .bind(entry.per_1m_characters)
-                    .bind(entry.source.as_str())
-                    .bind(now)
-                    .bind(now)
-                    .execute(&mut *tx)
-                    .await?;
-                }
-            }
-
-            tx.commit().await?;
-        }
-
-        #[cfg(feature = "database-wasm-sqlite")]
-        {
-            // No transaction support in WASM — execute individually
-            for entry in entries {
-                let id = Uuid::new_v4();
-                let (owner_type, owner_id) = Self::owner_to_parts(&entry.owner);
-
-                if owner_type.is_none() {
-                    query(
-                        r#"
-                        INSERT INTO model_pricing (
-                            id, owner_type, owner_id, provider, model,
-                            input_per_1m_tokens, output_per_1m_tokens, per_image, per_request,
-                            cached_input_per_1m_tokens, cache_write_per_1m_tokens, reasoning_per_1m_tokens,
-                            per_second, per_1m_characters, source, created_at, updated_at
-                        )
-                        VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT (provider, model) WHERE owner_type IS NULL
-                        DO UPDATE SET
-                            input_per_1m_tokens = excluded.input_per_1m_tokens,
-                            output_per_1m_tokens = excluded.output_per_1m_tokens,
-                            per_image = excluded.per_image,
-                            per_request = excluded.per_request,
-                            cached_input_per_1m_tokens = excluded.cached_input_per_1m_tokens,
-                            cache_write_per_1m_tokens = excluded.cache_write_per_1m_tokens,
-                            reasoning_per_1m_tokens = excluded.reasoning_per_1m_tokens,
-                            per_second = excluded.per_second,
-                            per_1m_characters = excluded.per_1m_characters,
-                            source = excluded.source,
-                            updated_at = excluded.updated_at
-                        "#,
-                    )
-                    .bind(id.to_string())
-                    .bind(&entry.provider)
-                    .bind(&entry.model)
-                    .bind(entry.input_per_1m_tokens)
-                    .bind(entry.output_per_1m_tokens)
-                    .bind(entry.per_image)
-                    .bind(entry.per_request)
-                    .bind(entry.cached_input_per_1m_tokens)
-                    .bind(entry.cache_write_per_1m_tokens)
-                    .bind(entry.reasoning_per_1m_tokens)
-                    .bind(entry.per_second)
-                    .bind(entry.per_1m_characters)
-                    .bind(entry.source.as_str())
-                    .bind(now)
-                    .bind(now)
-                    .execute(&self.pool)
-                    .await?;
-                } else {
-                    query(
-                        r#"
-                        INSERT INTO model_pricing (
-                            id, owner_type, owner_id, provider, model,
-                            input_per_1m_tokens, output_per_1m_tokens, per_image, per_request,
-                            cached_input_per_1m_tokens, cache_write_per_1m_tokens, reasoning_per_1m_tokens,
-                            per_second, per_1m_characters, source, created_at, updated_at
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT (owner_type, owner_id, provider, model) WHERE owner_type IS NOT NULL
-                        DO UPDATE SET
-                            input_per_1m_tokens = excluded.input_per_1m_tokens,
-                            output_per_1m_tokens = excluded.output_per_1m_tokens,
-                            per_image = excluded.per_image,
-                            per_request = excluded.per_request,
-                            cached_input_per_1m_tokens = excluded.cached_input_per_1m_tokens,
-                            cache_write_per_1m_tokens = excluded.cache_write_per_1m_tokens,
-                            reasoning_per_1m_tokens = excluded.reasoning_per_1m_tokens,
-                            per_second = excluded.per_second,
-                            per_1m_characters = excluded.per_1m_characters,
-                            source = excluded.source,
-                            updated_at = excluded.updated_at
-                        "#,
-                    )
-                    .bind(id.to_string())
-                    .bind(owner_type)
-                    .bind(owner_id.map(|u| u.to_string()))
-                    .bind(&entry.provider)
-                    .bind(&entry.model)
-                    .bind(entry.input_per_1m_tokens)
-                    .bind(entry.output_per_1m_tokens)
-                    .bind(entry.per_image)
-                    .bind(entry.per_request)
-                    .bind(entry.cached_input_per_1m_tokens)
-                    .bind(entry.cache_write_per_1m_tokens)
-                    .bind(entry.reasoning_per_1m_tokens)
-                    .bind(entry.per_second)
-                    .bind(entry.per_1m_characters)
-                    .bind(entry.source.as_str())
-                    .bind(now)
-                    .bind(now)
-                    .execute(&self.pool)
-                    .await?;
-                }
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (owner_type, owner_id, provider, model) WHERE owner_type IS NOT NULL
+                    DO UPDATE SET
+                        input_per_1m_tokens = excluded.input_per_1m_tokens,
+                        output_per_1m_tokens = excluded.output_per_1m_tokens,
+                        per_image = excluded.per_image,
+                        per_request = excluded.per_request,
+                        cached_input_per_1m_tokens = excluded.cached_input_per_1m_tokens,
+                        cache_write_per_1m_tokens = excluded.cache_write_per_1m_tokens,
+                        reasoning_per_1m_tokens = excluded.reasoning_per_1m_tokens,
+                        per_second = excluded.per_second,
+                        per_1m_characters = excluded.per_1m_characters,
+                        source = excluded.source,
+                        updated_at = excluded.updated_at
+                    "#,
+                )
+                .bind(id.to_string())
+                .bind(owner_type)
+                .bind(owner_id.map(|u| u.to_string()))
+                .bind(&entry.provider)
+                .bind(&entry.model)
+                .bind(entry.input_per_1m_tokens)
+                .bind(entry.output_per_1m_tokens)
+                .bind(entry.per_image)
+                .bind(entry.per_request)
+                .bind(entry.cached_input_per_1m_tokens)
+                .bind(entry.cache_write_per_1m_tokens)
+                .bind(entry.reasoning_per_1m_tokens)
+                .bind(entry.per_second)
+                .bind(entry.per_1m_characters)
+                .bind(entry.source.as_str())
+                .bind(now)
+                .bind(now)
+                .execute(&mut *tx)
+                .await?;
             }
         }
+
+        tx.commit().await?;
 
         Ok(count)
     }

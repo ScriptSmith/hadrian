@@ -313,6 +313,42 @@ impl From<&DateTime<Utc>> for WasmParam {
 // Query builder
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// A scalar query builder that returns a single column decoded as `T`.
+///
+/// Mimics `sqlx::QueryScalar` — use `.bind()` to add parameters, then
+/// `.fetch_all()` to run and extract the first column from each row.
+pub struct WasmQueryScalar<T> {
+    inner: WasmQuery,
+    _marker: std::marker::PhantomData<T>,
+}
+
+impl<T: WasmDecode> WasmQueryScalar<T> {
+    pub fn new(sql: &str) -> Self {
+        Self {
+            inner: WasmQuery::new(sql),
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    pub fn bind<V: Into<WasmParam>>(mut self, value: V) -> Self {
+        self.inner = self.inner.bind(value);
+        self
+    }
+
+    pub async fn fetch_all(self, pool: &WasmSqlitePool) -> Result<Vec<T>, WasmDbError> {
+        let rows = self.inner.fetch_all(pool).await?;
+        rows.into_iter()
+            .map(|row| {
+                let (_, value) =
+                    row.columns.into_iter().next().ok_or_else(|| {
+                        WasmDbError::Query("No columns in scalar result".to_string())
+                    })?;
+                T::decode(&value, "scalar")
+            })
+            .collect()
+    }
+}
+
 /// A query builder that accumulates bind parameters.
 ///
 /// Mimics `sqlx::Query` — use `.bind()` to add parameters, then
@@ -648,13 +684,15 @@ impl WasmDecode for Vec<u8> {
     fn decode(value: &WasmValue, col: &str) -> Result<Self, WasmDbError> {
         use base64::Engine;
         match value {
-            WasmValue::Text(s) => base64::engine::general_purpose::STANDARD
-                .decode(s)
-                .map_err(|_| WasmDbError::TypeMismatch {
-                    column: col.to_string(),
-                    expected: "Vec<u8> (base64)",
-                    actual: s.clone(),
-                }),
+            WasmValue::Text(s) => {
+                base64::engine::general_purpose::STANDARD
+                    .decode(s)
+                    .map_err(|_| WasmDbError::TypeMismatch {
+                        column: col.to_string(),
+                        expected: "Vec<u8> (base64)",
+                        actual: s.clone(),
+                    })
+            }
             _ => Err(WasmDbError::TypeMismatch {
                 column: col.to_string(),
                 expected: "Vec<u8> (base64)",

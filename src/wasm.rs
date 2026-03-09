@@ -395,9 +395,6 @@ fn error_response(status: u16, message: &str) -> Response {
 fn wasm_default_config() -> config::GatewayConfig {
     config::GatewayConfig {
         server: config::ServerConfig {
-            // SSRF protection is irrelevant in the browser — the browser enforces
-            // its own CORS/security. Allow all URLs so users can point providers
-            // at localhost (e.g. Ollama) or private network addresses.
             allow_loopback_urls: true,
             allow_private_urls: true,
             ..Default::default()

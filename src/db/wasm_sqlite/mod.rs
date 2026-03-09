@@ -23,7 +23,8 @@ pub(crate) mod types;
 
 pub use bridge::WasmSqlitePool;
 pub use types::{
-    WasmDbError, WasmDecode, WasmParam, WasmQuery, WasmQueryResult, WasmRow, WasmValue,
+    WasmDbError, WasmDecode, WasmParam, WasmQuery, WasmQueryResult, WasmQueryScalar, WasmRow,
+    WasmValue,
 };
 
 /// Create a query builder (analogous to `sqlx::query()`).

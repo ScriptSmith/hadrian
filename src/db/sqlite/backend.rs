@@ -95,6 +95,104 @@ pub(crate) fn query(sql: &str) -> crate::db::wasm_sqlite::WasmQuery {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Scalar query constructor
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Create a query that returns a single column, decoded as `T`.
+/// Mirrors `sqlx::query_scalar()`.
+#[cfg(feature = "database-sqlite")]
+pub(crate) fn query_scalar<T>(
+    sql: &str,
+) -> sqlx::query::QueryScalar<'_, sqlx::Sqlite, T, sqlx::sqlite::SqliteArguments<'_>>
+where
+    T: sqlx::Type<sqlx::Sqlite> + for<'r> sqlx::Decode<'r, sqlx::Sqlite>,
+    (T,): for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>,
+{
+    sqlx::query_scalar(sql)
+}
+
+#[cfg(feature = "database-wasm-sqlite")]
+pub(crate) fn query_scalar<T: crate::db::wasm_sqlite::WasmDecode>(
+    sql: &str,
+) -> crate::db::wasm_sqlite::WasmQueryScalar<T> {
+    crate::db::wasm_sqlite::WasmQueryScalar::new(sql)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Transaction
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A database transaction that works for both native and WASM SQLite.
+///
+/// Native: wraps `sqlx::Transaction<'a, Sqlite>` with auto-rollback on drop.
+/// WASM: sends BEGIN/COMMIT/ROLLBACK through the JS bridge.
+///
+/// Use `begin(&pool)` to start, then `query(sql).execute(&mut *tx)` for
+/// queries, and `tx.commit()` to finalize.
+#[cfg(feature = "database-sqlite")]
+pub(crate) struct Transaction<'a>(sqlx::Transaction<'a, sqlx::Sqlite>);
+
+#[cfg(feature = "database-wasm-sqlite")]
+pub(crate) struct Transaction<'a>(Pool, std::marker::PhantomData<&'a ()>);
+
+/// Begin a new transaction.
+#[cfg(feature = "database-sqlite")]
+pub(crate) async fn begin(pool: &Pool) -> Result<Transaction<'_>, BackendError> {
+    Ok(Transaction(pool.begin().await?))
+}
+
+#[cfg(feature = "database-wasm-sqlite")]
+pub(crate) async fn begin(pool: &Pool) -> Result<Transaction<'_>, BackendError> {
+    query("BEGIN").execute(pool).await?;
+    Ok(Transaction(pool.clone(), std::marker::PhantomData))
+}
+
+#[cfg(feature = "database-sqlite")]
+impl Transaction<'_> {
+    pub async fn commit(self) -> Result<(), BackendError> {
+        self.0.commit().await
+    }
+}
+
+#[cfg(feature = "database-wasm-sqlite")]
+impl Transaction<'_> {
+    pub async fn commit(self) -> Result<(), BackendError> {
+        query("COMMIT").execute(&self.0).await?;
+        Ok(())
+    }
+}
+
+#[cfg(feature = "database-sqlite")]
+impl std::ops::Deref for Transaction<'_> {
+    type Target = sqlx::SqliteConnection;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[cfg(feature = "database-sqlite")]
+impl std::ops::DerefMut for Transaction<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[cfg(feature = "database-wasm-sqlite")]
+impl std::ops::Deref for Transaction<'_> {
+    type Target = crate::db::wasm_sqlite::WasmSqlitePool;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[cfg(feature = "database-wasm-sqlite")]
+impl std::ops::DerefMut for Transaction<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Error helpers
 // ─────────────────────────────────────────────────────────────────────────────
 

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use super::backend::{Pool, RowExt, map_unique_violation, query};
+use super::backend::{Pool, RowExt, begin, map_unique_violation, query, query_scalar};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -917,148 +917,73 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
 
         let (owner_type, owner_id) = Self::owner_to_parts(&new_key_input.owner);
 
-        // Use a transaction to ensure both operations succeed or fail together.
-        // Native SQLite uses pool.begin(), WASM executes sequentially (single-threaded).
-        #[cfg(feature = "database-sqlite")]
-        {
-            let mut tx = self.pool.begin().await?;
+        let mut tx = begin(&self.pool).await?;
 
-            // 1. Update old key with grace period
-            sqlx::query(
-                r#"
-                UPDATE api_keys
-                SET rotation_grace_until = ?, updated_at = datetime('now')
-                WHERE id = ?
-                "#,
-            )
-            .bind(grace_until)
-            .bind(old_key_id.to_string())
-            .execute(&mut *tx)
-            .await?;
+        // 1. Update old key with grace period
+        query(
+            r#"
+            UPDATE api_keys
+            SET rotation_grace_until = ?, updated_at = datetime('now')
+            WHERE id = ?
+            "#,
+        )
+        .bind(grace_until)
+        .bind(old_key_id.to_string())
+        .execute(&mut *tx)
+        .await?;
 
-            // 2. Insert new key with rotated_from_key_id
-            sqlx::query(
-                r#"
-                INSERT INTO api_keys (
-                    id, name, key_hash, key_prefix, owner_type, owner_id,
-                    budget_amount, budget_period, expires_at,
-                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                    rotated_from_key_id,
-                    created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                "#,
+        // 2. Insert new key with rotated_from_key_id
+        query(
+            r#"
+            INSERT INTO api_keys (
+                id, name, key_hash, key_prefix, owner_type, owner_id,
+                budget_amount, budget_period, expires_at,
+                scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
+                rotated_from_key_id,
+                created_at, updated_at
             )
-            .bind(new_id.to_string())
-            .bind(&new_key_input.name)
-            .bind(new_key_hash)
-            .bind(key_prefix)
-            .bind(owner_type)
-            .bind(owner_id.to_string())
-            .bind(new_key_input.budget_limit_cents)
-            .bind(new_key_input.budget_period.map(|p| p.as_str()))
-            .bind(new_key_input.expires_at)
-            .bind(
-                new_key_input
-                    .scopes
-                    .as_ref()
-                    .and_then(|s| serde_json::to_string(s).ok()),
-            )
-            .bind(
-                new_key_input
-                    .allowed_models
-                    .as_ref()
-                    .and_then(|s| serde_json::to_string(s).ok()),
-            )
-            .bind(
-                new_key_input
-                    .ip_allowlist
-                    .as_ref()
-                    .and_then(|s| serde_json::to_string(s).ok()),
-            )
-            .bind(new_key_input.rate_limit_rpm)
-            .bind(new_key_input.rate_limit_tpm)
-            .bind(old_key_id.to_string())
-            .bind(now)
-            .bind(now)
-            .execute(&mut *tx)
-            .await
-            .map_err(map_unique_violation(
-                "API key with this hash already exists",
-            ))?;
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(new_id.to_string())
+        .bind(&new_key_input.name)
+        .bind(new_key_hash)
+        .bind(key_prefix)
+        .bind(owner_type)
+        .bind(owner_id.to_string())
+        .bind(new_key_input.budget_limit_cents)
+        .bind(new_key_input.budget_period.map(|p| p.as_str()))
+        .bind(new_key_input.expires_at)
+        .bind(
+            new_key_input
+                .scopes
+                .as_ref()
+                .and_then(|s| serde_json::to_string(s).ok()),
+        )
+        .bind(
+            new_key_input
+                .allowed_models
+                .as_ref()
+                .and_then(|s| serde_json::to_string(s).ok()),
+        )
+        .bind(
+            new_key_input
+                .ip_allowlist
+                .as_ref()
+                .and_then(|s| serde_json::to_string(s).ok()),
+        )
+        .bind(new_key_input.rate_limit_rpm)
+        .bind(new_key_input.rate_limit_tpm)
+        .bind(old_key_id.to_string())
+        .bind(now)
+        .bind(now)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_unique_violation(
+            "API key with this hash already exists",
+        ))?;
 
-            tx.commit().await?;
-        }
-
-        #[cfg(feature = "database-wasm-sqlite")]
-        {
-            // No transaction support in WASM — execute statements sequentially.
-            // Single-threaded WASM environment ensures no concurrency issues.
-
-            // 1. Update old key with grace period
-            query(
-                r#"
-                UPDATE api_keys
-                SET rotation_grace_until = ?, updated_at = datetime('now')
-                WHERE id = ?
-                "#,
-            )
-            .bind(grace_until)
-            .bind(old_key_id.to_string())
-            .execute(&self.pool)
-            .await?;
-
-            // 2. Insert new key with rotated_from_key_id
-            query(
-                r#"
-                INSERT INTO api_keys (
-                    id, name, key_hash, key_prefix, owner_type, owner_id,
-                    budget_amount, budget_period, expires_at,
-                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                    rotated_from_key_id,
-                    created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                "#,
-            )
-            .bind(new_id.to_string())
-            .bind(&new_key_input.name)
-            .bind(new_key_hash)
-            .bind(key_prefix)
-            .bind(owner_type)
-            .bind(owner_id.to_string())
-            .bind(new_key_input.budget_limit_cents)
-            .bind(new_key_input.budget_period.map(|p| p.as_str()))
-            .bind(new_key_input.expires_at)
-            .bind(
-                new_key_input
-                    .scopes
-                    .as_ref()
-                    .and_then(|s| serde_json::to_string(s).ok()),
-            )
-            .bind(
-                new_key_input
-                    .allowed_models
-                    .as_ref()
-                    .and_then(|s| serde_json::to_string(s).ok()),
-            )
-            .bind(
-                new_key_input
-                    .ip_allowlist
-                    .as_ref()
-                    .and_then(|s| serde_json::to_string(s).ok()),
-            )
-            .bind(new_key_input.rate_limit_rpm)
-            .bind(new_key_input.rate_limit_tpm)
-            .bind(old_key_id.to_string())
-            .bind(now)
-            .bind(now)
-            .execute(&self.pool)
-            .await
-            .map_err(map_unique_violation(
-                "API key with this hash already exists",
-            ))?;
-        }
+        tx.commit().await?;
 
         Ok(ApiKey {
             id: new_id,
@@ -1085,79 +1010,37 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
         &self,
         service_account_id: Uuid,
     ) -> DbResult<Vec<String>> {
-        #[cfg(feature = "database-sqlite")]
-        {
-            let hashes: Vec<String> = sqlx::query_scalar(
-                r#"
-                SELECT key_hash
-                FROM api_keys
-                WHERE owner_type = 'service_account'
-                  AND owner_id = ?
-                  AND revoked_at IS NULL
-                "#,
-            )
-            .bind(service_account_id.to_string())
-            .fetch_all(&self.pool)
-            .await?;
+        let hashes: Vec<String> = query_scalar(
+            r#"
+            SELECT key_hash
+            FROM api_keys
+            WHERE owner_type = 'service_account'
+              AND owner_id = ?
+              AND revoked_at IS NULL
+            "#,
+        )
+        .bind(service_account_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
 
-            Ok(hashes)
-        }
-
-        #[cfg(feature = "database-wasm-sqlite")]
-        {
-            let rows = query(
-                r#"
-                SELECT key_hash
-                FROM api_keys
-                WHERE owner_type = 'service_account'
-                  AND owner_id = ?
-                  AND revoked_at IS NULL
-                "#,
-            )
-            .bind(service_account_id.to_string())
-            .fetch_all(&self.pool)
-            .await?;
-
-            Ok(rows.iter().map(|r| r.col("key_hash")).collect())
-        }
+        Ok(hashes)
     }
 
     async fn get_key_hashes_by_user(&self, user_id: Uuid) -> DbResult<Vec<String>> {
-        #[cfg(feature = "database-sqlite")]
-        {
-            let hashes: Vec<String> = sqlx::query_scalar(
-                r#"
-                SELECT key_hash
-                FROM api_keys
-                WHERE owner_type = 'user'
-                  AND owner_id = ?
-                  AND revoked_at IS NULL
-                "#,
-            )
-            .bind(user_id.to_string())
-            .fetch_all(&self.pool)
-            .await?;
+        let hashes: Vec<String> = query_scalar(
+            r#"
+            SELECT key_hash
+            FROM api_keys
+            WHERE owner_type = 'user'
+              AND owner_id = ?
+              AND revoked_at IS NULL
+            "#,
+        )
+        .bind(user_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
 
-            Ok(hashes)
-        }
-
-        #[cfg(feature = "database-wasm-sqlite")]
-        {
-            let rows = query(
-                r#"
-                SELECT key_hash
-                FROM api_keys
-                WHERE owner_type = 'user'
-                  AND owner_id = ?
-                  AND revoked_at IS NULL
-                "#,
-            )
-            .bind(user_id.to_string())
-            .fetch_all(&self.pool)
-            .await?;
-
-            Ok(rows.iter().map(|r| r.col("key_hash")).collect())
-        }
+        Ok(hashes)
     }
 
     async fn get_by_name_and_org(&self, org_id: Uuid, name: &str) -> DbResult<Option<ApiKey>> {

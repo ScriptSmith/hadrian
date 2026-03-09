@@ -404,12 +404,6 @@
     animation: shimmer 3s ease-in-out infinite;
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .animate-shimmer::after {
-      animation: shimmer 3s ease-in-out infinite;
-    }
-  }
-
   @keyframes animate-in {
     from {
       opacity: var(--tw-enter-opacity, 1);

@@ -3,7 +3,7 @@ use chrono::SubsecRound;
 use uuid::Uuid;
 
 use super::{
-    backend::{Pool, RowExt, map_unique_violation, query},
+    backend::{Pool, RowExt, begin, map_unique_violation, query, query_scalar},
     common::parse_uuid,
 };
 use crate::{
@@ -325,79 +325,37 @@ impl ServiceAccountRepo for SqliteServiceAccountRepo {
     async fn delete_with_api_key_revocation(&self, id: Uuid) -> DbResult<Vec<Uuid>> {
         let now = chrono::Utc::now().trunc_subsecs(3);
 
-        #[cfg(feature = "database-sqlite")]
-        {
-            let mut tx = self.pool.begin().await?;
+        let mut tx = begin(&self.pool).await?;
 
-            let exists = sqlx::query(
-                r#"SELECT id FROM service_accounts WHERE id = ? AND deleted_at IS NULL"#,
-            )
+        let exists =
+            query(r#"SELECT id FROM service_accounts WHERE id = ? AND deleted_at IS NULL"#)
+                .bind(id.to_string())
+                .fetch_optional(&mut *tx)
+                .await?;
+
+        if exists.is_none() {
+            return Err(DbError::NotFound);
+        }
+
+        let revoked_ids: Vec<String> = query_scalar(
+            r#"UPDATE api_keys SET revoked_at = ?, updated_at = ? WHERE owner_type = 'service_account' AND owner_id = ? AND revoked_at IS NULL RETURNING id"#,
+        )
+        .bind(now).bind(now).bind(id.to_string())
+        .fetch_all(&mut *tx).await?;
+
+        query(r#"UPDATE service_accounts SET deleted_at = ? WHERE id = ?"#)
+            .bind(now)
             .bind(id.to_string())
-            .fetch_optional(&mut *tx)
+            .execute(&mut *tx)
             .await?;
 
-            if exists.is_none() {
-                return Err(DbError::NotFound);
-            }
+        tx.commit().await?;
 
-            let revoked_ids: Vec<String> = sqlx::query_scalar(
-                r#"UPDATE api_keys SET revoked_at = ?, updated_at = ? WHERE owner_type = 'service_account' AND owner_id = ? AND revoked_at IS NULL RETURNING id"#,
-            )
-            .bind(now).bind(now).bind(id.to_string())
-            .fetch_all(&mut *tx).await?;
-
-            sqlx::query(r#"UPDATE service_accounts SET deleted_at = ? WHERE id = ?"#)
-                .bind(now)
-                .bind(id.to_string())
-                .execute(&mut *tx)
-                .await?;
-
-            tx.commit().await?;
-
-            let revoked_uuids = revoked_ids
-                .into_iter()
-                .filter_map(|s| parse_uuid(&s).ok())
-                .collect();
-            return Ok(revoked_uuids);
-        }
-
-        #[cfg(feature = "database-wasm-sqlite")]
-        {
-            let exists =
-                query(r#"SELECT id FROM service_accounts WHERE id = ? AND deleted_at IS NULL"#)
-                    .bind(id.to_string())
-                    .fetch_optional(&self.pool)
-                    .await?;
-
-            if exists.is_none() {
-                return Err(DbError::NotFound);
-            }
-
-            let revoked_rows = query(r#"SELECT id FROM api_keys WHERE owner_type = 'service_account' AND owner_id = ? AND revoked_at IS NULL"#)
-                .bind(id.to_string())
-                .fetch_all(&self.pool).await?;
-
-            let revoked_ids: Vec<String> = revoked_rows
-                .iter()
-                .map(|row| row.col::<String>("id"))
-                .collect();
-
-            query(r#"UPDATE api_keys SET revoked_at = ?, updated_at = ? WHERE owner_type = 'service_account' AND owner_id = ? AND revoked_at IS NULL"#)
-                .bind(now).bind(now).bind(id.to_string())
-                .execute(&self.pool).await?;
-
-            query(r#"UPDATE service_accounts SET deleted_at = ? WHERE id = ?"#)
-                .bind(now)
-                .bind(id.to_string())
-                .execute(&self.pool)
-                .await?;
-
-            let revoked_uuids = revoked_ids
-                .into_iter()
-                .filter_map(|s| parse_uuid(&s).ok())
-                .collect();
-            return Ok(revoked_uuids);
-        }
+        let revoked_uuids = revoked_ids
+            .into_iter()
+            .filter_map(|s| parse_uuid(&s).ok())
+            .collect();
+        Ok(revoked_uuids)
     }
 }
 

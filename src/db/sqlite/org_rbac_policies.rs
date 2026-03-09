@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use super::{
-    backend::{Pool, RowExt, map_unique_violation, query},
+    backend::{Pool, RowExt, Transaction, begin, map_unique_violation, query},
     common::parse_uuid,
 };
 use crate::{
@@ -194,50 +194,10 @@ impl SqliteOrgRbacPolicyRepo {
         Ok(ListResult::new(items, has_more, cursors))
     }
 
-    /// Create a version record from a policy snapshot (used within sqlx transactions)
-    #[cfg(feature = "database-sqlite")]
+    /// Create a version record from a policy snapshot within a transaction.
     async fn create_version_record(
         &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        policy: &OrgRbacPolicy,
-        created_by: Option<Uuid>,
-        reason: Option<String>,
-    ) -> DbResult<()> {
-        let version_id = Uuid::new_v4();
-
-        sqlx::query(
-            r#"
-            INSERT INTO org_rbac_policy_versions (
-                id, policy_id, version, name, description, resource, action,
-                condition, effect, priority, enabled, created_by, reason, created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(version_id.to_string())
-        .bind(policy.id.to_string())
-        .bind(policy.version)
-        .bind(&policy.name)
-        .bind(&policy.description)
-        .bind(&policy.resource)
-        .bind(&policy.action)
-        .bind(&policy.condition)
-        .bind(policy.effect.to_string())
-        .bind(policy.priority)
-        .bind(if policy.enabled { 1 } else { 0 })
-        .bind(created_by.map(|u| u.to_string()))
-        .bind(reason)
-        .bind(policy.updated_at)
-        .execute(&mut **tx)
-        .await?;
-
-        Ok(())
-    }
-
-    /// Create a version record from a policy snapshot (non-transactional, for wasm)
-    #[cfg(feature = "database-wasm-sqlite")]
-    async fn create_version_record_standalone(
-        &self,
+        tx: &mut Transaction<'_>,
         policy: &OrgRbacPolicy,
         created_by: Option<Uuid>,
         reason: Option<String>,
@@ -267,7 +227,7 @@ impl SqliteOrgRbacPolicyRepo {
         .bind(created_by.map(|u| u.to_string()))
         .bind(reason)
         .bind(policy.updated_at)
-        .execute(&self.pool)
+        .execute(&mut **tx)
         .await?;
 
         Ok(())
@@ -303,81 +263,42 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
             deleted_at: None,
         };
 
-        #[cfg(feature = "database-sqlite")]
-        {
-            let mut tx = self.pool.begin().await?;
+        let mut tx = begin(&self.pool).await?;
 
-            sqlx::query(
-                r#"
-                INSERT INTO org_rbac_policies (
-                    id, org_id, name, description, resource, action, condition,
-                    effect, priority, enabled, version, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-                "#,
+        query(
+            r#"
+            INSERT INTO org_rbac_policies (
+                id, org_id, name, description, resource, action, condition,
+                effect, priority, enabled, version, created_at, updated_at
             )
-            .bind(id.to_string())
-            .bind(org_id.to_string())
-            .bind(&policy.name)
-            .bind(&policy.description)
-            .bind(&policy.resource)
-            .bind(&policy.action)
-            .bind(&policy.condition)
-            .bind(policy.effect.to_string())
-            .bind(policy.priority)
-            .bind(if policy.enabled { 1 } else { 0 })
-            .bind(now)
-            .bind(now)
-            .execute(&mut *tx)
-            .await
-            .map_err(map_unique_violation(format!(
-                "Policy with name '{}' already exists in this organization",
-                policy.name
-            )))?;
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            "#,
+        )
+        .bind(id.to_string())
+        .bind(org_id.to_string())
+        .bind(&policy.name)
+        .bind(&policy.description)
+        .bind(&policy.resource)
+        .bind(&policy.action)
+        .bind(&policy.condition)
+        .bind(policy.effect.to_string())
+        .bind(policy.priority)
+        .bind(if policy.enabled { 1 } else { 0 })
+        .bind(now)
+        .bind(now)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_unique_violation(format!(
+            "Policy with name '{}' already exists in this organization",
+            policy.name
+        )))?;
 
-            self.create_version_record(&mut tx, &policy, created_by, input.reason)
-                .await?;
+        self.create_version_record(&mut tx, &policy, created_by, input.reason)
+            .await?;
 
-            tx.commit().await?;
+        tx.commit().await?;
 
-            return Ok(policy);
-        }
-
-        #[cfg(feature = "database-wasm-sqlite")]
-        {
-            query(
-                r#"
-                INSERT INTO org_rbac_policies (
-                    id, org_id, name, description, resource, action, condition,
-                    effect, priority, enabled, version, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-                "#,
-            )
-            .bind(id.to_string())
-            .bind(org_id.to_string())
-            .bind(&policy.name)
-            .bind(&policy.description)
-            .bind(&policy.resource)
-            .bind(&policy.action)
-            .bind(&policy.condition)
-            .bind(policy.effect.to_string())
-            .bind(policy.priority)
-            .bind(if policy.enabled { 1 } else { 0 })
-            .bind(now)
-            .bind(now)
-            .execute(&self.pool)
-            .await
-            .map_err(map_unique_violation(format!(
-                "Policy with name '{}' already exists in this organization",
-                policy.name
-            )))?;
-
-            self.create_version_record_standalone(&policy, created_by, input.reason)
-                .await?;
-
-            return Ok(policy);
-        }
+        Ok(policy)
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<OrgRbacPolicy>> {
@@ -587,91 +508,47 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
         policy.version += 1;
         policy.updated_at = Utc::now();
 
-        #[cfg(feature = "database-sqlite")]
-        {
-            let mut tx = self.pool.begin().await?;
+        let mut tx = begin(&self.pool).await?;
 
-            let result = sqlx::query(
-                r#"
-                UPDATE org_rbac_policies
-                SET name = ?, description = ?, resource = ?, action = ?, condition = ?,
-                    effect = ?, priority = ?, enabled = ?, version = ?, updated_at = ?
-                WHERE id = ? AND version = ? AND deleted_at IS NULL
-                "#,
-            )
-            .bind(&policy.name)
-            .bind(&policy.description)
-            .bind(&policy.resource)
-            .bind(&policy.action)
-            .bind(&policy.condition)
-            .bind(policy.effect.to_string())
-            .bind(policy.priority)
-            .bind(if policy.enabled { 1 } else { 0 })
-            .bind(policy.version)
-            .bind(policy.updated_at)
-            .bind(id.to_string())
-            .bind(original_version)
-            .execute(&mut *tx)
-            .await
-            .map_err(map_unique_violation(format!(
-                "Policy with name '{}' already exists in this organization",
-                policy.name
-            )))?;
+        let result = query(
+            r#"
+            UPDATE org_rbac_policies
+            SET name = ?, description = ?, resource = ?, action = ?, condition = ?,
+                effect = ?, priority = ?, enabled = ?, version = ?, updated_at = ?
+            WHERE id = ? AND version = ? AND deleted_at IS NULL
+            "#,
+        )
+        .bind(&policy.name)
+        .bind(&policy.description)
+        .bind(&policy.resource)
+        .bind(&policy.action)
+        .bind(&policy.condition)
+        .bind(policy.effect.to_string())
+        .bind(policy.priority)
+        .bind(if policy.enabled { 1 } else { 0 })
+        .bind(policy.version)
+        .bind(policy.updated_at)
+        .bind(id.to_string())
+        .bind(original_version)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_unique_violation(format!(
+            "Policy with name '{}' already exists in this organization",
+            policy.name
+        )))?;
 
-            if result.rows_affected() == 0 {
-                return Err(DbError::Conflict(
-                    "Policy was modified concurrently. Please refresh and try again.".to_string(),
-                ));
-            }
-
-            self.create_version_record(&mut tx, &policy, updated_by, input.reason)
-                .await?;
-
-            tx.commit().await?;
-
-            return Ok(policy);
+        if result.rows_affected() == 0 {
+            return Err(DbError::Conflict(
+                "Policy was modified concurrently. Please refresh and try again.".to_string(),
+            ));
         }
 
-        #[cfg(feature = "database-wasm-sqlite")]
-        {
-            let result = query(
-                r#"
-                UPDATE org_rbac_policies
-                SET name = ?, description = ?, resource = ?, action = ?, condition = ?,
-                    effect = ?, priority = ?, enabled = ?, version = ?, updated_at = ?
-                WHERE id = ? AND version = ? AND deleted_at IS NULL
-                "#,
-            )
-            .bind(&policy.name)
-            .bind(&policy.description)
-            .bind(&policy.resource)
-            .bind(&policy.action)
-            .bind(&policy.condition)
-            .bind(policy.effect.to_string())
-            .bind(policy.priority)
-            .bind(if policy.enabled { 1 } else { 0 })
-            .bind(policy.version)
-            .bind(policy.updated_at)
-            .bind(id.to_string())
-            .bind(original_version)
-            .execute(&self.pool)
-            .await
-            .map_err(map_unique_violation(format!(
-                "Policy with name '{}' already exists in this organization",
-                policy.name
-            )))?;
+        self.create_version_record(&mut tx, &policy, updated_by, input.reason)
+            .await?;
 
-            if result.rows_affected() == 0 {
-                return Err(DbError::Conflict(
-                    "Policy was modified concurrently. Please refresh and try again.".to_string(),
-                ));
-            }
+        tx.commit().await?;
 
-            self.create_version_record_standalone(&policy, updated_by, input.reason)
-                .await?;
-
-            return Ok(policy);
-        }
+        Ok(policy)
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
@@ -767,83 +644,43 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
             .reason
             .unwrap_or_else(|| format!("Rolled back to version {}", input.target_version));
 
-        #[cfg(feature = "database-sqlite")]
-        {
-            let mut tx = self.pool.begin().await?;
+        let mut tx = begin(&self.pool).await?;
 
-            let result = sqlx::query(
-                r#"
-                UPDATE org_rbac_policies
-                SET name = ?, description = ?, resource = ?, action = ?, condition = ?,
-                    effect = ?, priority = ?, enabled = ?, version = ?, updated_at = ?
-                WHERE id = ? AND version = ? AND deleted_at IS NULL
-                "#,
-            )
-            .bind(&policy.name)
-            .bind(&policy.description)
-            .bind(&policy.resource)
-            .bind(&policy.action)
-            .bind(&policy.condition)
-            .bind(policy.effect.to_string())
-            .bind(policy.priority)
-            .bind(if policy.enabled { 1 } else { 0 })
-            .bind(policy.version)
-            .bind(policy.updated_at)
-            .bind(id.to_string())
-            .bind(current_policy.version)
-            .execute(&mut *tx)
-            .await?;
+        let result = query(
+            r#"
+            UPDATE org_rbac_policies
+            SET name = ?, description = ?, resource = ?, action = ?, condition = ?,
+                effect = ?, priority = ?, enabled = ?, version = ?, updated_at = ?
+            WHERE id = ? AND version = ? AND deleted_at IS NULL
+            "#,
+        )
+        .bind(&policy.name)
+        .bind(&policy.description)
+        .bind(&policy.resource)
+        .bind(&policy.action)
+        .bind(&policy.condition)
+        .bind(policy.effect.to_string())
+        .bind(policy.priority)
+        .bind(if policy.enabled { 1 } else { 0 })
+        .bind(policy.version)
+        .bind(policy.updated_at)
+        .bind(id.to_string())
+        .bind(current_policy.version)
+        .execute(&mut *tx)
+        .await?;
 
-            if result.rows_affected() == 0 {
-                return Err(DbError::Conflict(
-                    "Policy was modified concurrently. Please refresh and try again.".to_string(),
-                ));
-            }
-
-            self.create_version_record(&mut tx, &policy, rolled_back_by, Some(reason))
-                .await?;
-
-            tx.commit().await?;
-
-            return Ok(policy);
+        if result.rows_affected() == 0 {
+            return Err(DbError::Conflict(
+                "Policy was modified concurrently. Please refresh and try again.".to_string(),
+            ));
         }
 
-        #[cfg(feature = "database-wasm-sqlite")]
-        {
-            let result = query(
-                r#"
-                UPDATE org_rbac_policies
-                SET name = ?, description = ?, resource = ?, action = ?, condition = ?,
-                    effect = ?, priority = ?, enabled = ?, version = ?, updated_at = ?
-                WHERE id = ? AND version = ? AND deleted_at IS NULL
-                "#,
-            )
-            .bind(&policy.name)
-            .bind(&policy.description)
-            .bind(&policy.resource)
-            .bind(&policy.action)
-            .bind(&policy.condition)
-            .bind(policy.effect.to_string())
-            .bind(policy.priority)
-            .bind(if policy.enabled { 1 } else { 0 })
-            .bind(policy.version)
-            .bind(policy.updated_at)
-            .bind(id.to_string())
-            .bind(current_policy.version)
-            .execute(&self.pool)
+        self.create_version_record(&mut tx, &policy, rolled_back_by, Some(reason))
             .await?;
 
-            if result.rows_affected() == 0 {
-                return Err(DbError::Conflict(
-                    "Policy was modified concurrently. Please refresh and try again.".to_string(),
-                ));
-            }
+        tx.commit().await?;
 
-            self.create_version_record_standalone(&policy, rolled_back_by, Some(reason))
-                .await?;
-
-            return Ok(policy);
-        }
+        Ok(policy)
     }
 
     async fn get_version(

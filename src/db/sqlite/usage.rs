@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use super::backend::{Pool, RowExt, query};
+use super::backend::{Pool, RowExt, begin, query};
 use crate::{
     db::{
         error::DbResult,
@@ -107,158 +107,71 @@ impl UsageRepo for SqliteUsageRepo {
 
         let mut total_inserted = 0;
 
-        // Native SQLite uses pool.begin() for transaction.
-        #[cfg(feature = "database-sqlite")]
-        {
-            let mut tx = self.pool.begin().await?;
+        let mut tx = begin(&self.pool).await?;
 
-            for chunk in entries.chunks(MAX_ENTRIES_PER_BATCH) {
-                let placeholders: Vec<&str> = chunk
-                    .iter()
-                    .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                    .collect();
+        for chunk in entries.chunks(MAX_ENTRIES_PER_BATCH) {
+            let placeholders: Vec<&str> = chunk
+                .iter()
+                .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .collect();
 
-                let sql = format!(
-                    r#"
-                    INSERT OR IGNORE INTO usage_records (
-                        id, request_id, api_key_id, user_id, org_id, project_id, team_id,
-                        service_account_id, model, provider, input_tokens, output_tokens,
-                        total_tokens, cost_microcents, http_referer, recorded_at,
-                        streamed, cached_tokens, reasoning_tokens, finish_reason,
-                        latency_ms, cancelled, status_code, pricing_source,
-                        image_count, audio_seconds, character_count, provider_source
-                    )
-                    VALUES {}
-                    "#,
-                    placeholders.join(", ")
-                );
+            let sql = format!(
+                r#"
+                INSERT OR IGNORE INTO usage_records (
+                    id, request_id, api_key_id, user_id, org_id, project_id, team_id,
+                    service_account_id, model, provider, input_tokens, output_tokens,
+                    total_tokens, cost_microcents, http_referer, recorded_at,
+                    streamed, cached_tokens, reasoning_tokens, finish_reason,
+                    latency_ms, cancelled, status_code, pricing_source,
+                    image_count, audio_seconds, character_count, provider_source
+                )
+                VALUES {}
+                "#,
+                placeholders.join(", ")
+            );
 
-                let mut query_builder = sqlx::query(&sql);
+            let mut query_builder = query(&sql);
 
-                for entry in chunk {
-                    let id = Uuid::new_v4();
-                    let total_tokens = entry.input_tokens + entry.output_tokens;
+            for entry in chunk {
+                let id = Uuid::new_v4();
+                let total_tokens = entry.input_tokens + entry.output_tokens;
 
-                    query_builder = query_builder
-                        .bind(id.to_string())
-                        .bind(&entry.request_id)
-                        .bind(entry.api_key_id.map(|id| id.to_string()))
-                        .bind(entry.user_id.map(|id| id.to_string()))
-                        .bind(entry.org_id.map(|id| id.to_string()))
-                        .bind(entry.project_id.map(|id| id.to_string()))
-                        .bind(entry.team_id.map(|id| id.to_string()))
-                        .bind(entry.service_account_id.map(|id| id.to_string()))
-                        .bind(&entry.model)
-                        .bind(&entry.provider)
-                        .bind(entry.input_tokens)
-                        .bind(entry.output_tokens)
-                        .bind(total_tokens)
-                        .bind(entry.cost_microcents.unwrap_or(0))
-                        .bind(&entry.http_referer)
-                        .bind(entry.request_at)
-                        .bind(entry.streamed)
-                        .bind(entry.cached_tokens)
-                        .bind(entry.reasoning_tokens)
-                        .bind(&entry.finish_reason)
-                        .bind(entry.latency_ms)
-                        .bind(entry.cancelled)
-                        .bind(entry.status_code)
-                        .bind(entry.pricing_source.as_str())
-                        .bind(entry.image_count)
-                        .bind(entry.audio_seconds)
-                        .bind(entry.character_count)
-                        .bind(&entry.provider_source);
-                }
-
-                let result = query_builder.execute(&mut *tx).await?;
-                total_inserted += result.rows_affected() as usize;
+                query_builder = query_builder
+                    .bind(id.to_string())
+                    .bind(&entry.request_id)
+                    .bind(entry.api_key_id.map(|id| id.to_string()))
+                    .bind(entry.user_id.map(|id| id.to_string()))
+                    .bind(entry.org_id.map(|id| id.to_string()))
+                    .bind(entry.project_id.map(|id| id.to_string()))
+                    .bind(entry.team_id.map(|id| id.to_string()))
+                    .bind(entry.service_account_id.map(|id| id.to_string()))
+                    .bind(&entry.model)
+                    .bind(&entry.provider)
+                    .bind(entry.input_tokens)
+                    .bind(entry.output_tokens)
+                    .bind(total_tokens)
+                    .bind(entry.cost_microcents.unwrap_or(0))
+                    .bind(&entry.http_referer)
+                    .bind(entry.request_at)
+                    .bind(entry.streamed)
+                    .bind(entry.cached_tokens)
+                    .bind(entry.reasoning_tokens)
+                    .bind(&entry.finish_reason)
+                    .bind(entry.latency_ms)
+                    .bind(entry.cancelled)
+                    .bind(entry.status_code)
+                    .bind(entry.pricing_source.as_str())
+                    .bind(entry.image_count)
+                    .bind(entry.audio_seconds)
+                    .bind(entry.character_count)
+                    .bind(&entry.provider_source);
             }
 
-            tx.commit().await?;
+            let result = query_builder.execute(&mut *tx).await?;
+            total_inserted += result.rows_affected() as usize;
         }
 
-        // WASM SQLite uses manual BEGIN/COMMIT for transaction.
-        #[cfg(feature = "database-wasm-sqlite")]
-        {
-            query("BEGIN").execute(&self.pool).await?;
-
-            let result = async {
-                for chunk in entries.chunks(MAX_ENTRIES_PER_BATCH) {
-                    let placeholders: Vec<&str> = chunk
-                        .iter()
-                        .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                        .collect();
-
-                    let sql = format!(
-                        r#"
-                        INSERT OR IGNORE INTO usage_records (
-                            id, request_id, api_key_id, user_id, org_id, project_id, team_id,
-                            service_account_id, model, provider, input_tokens, output_tokens,
-                            total_tokens, cost_microcents, http_referer, recorded_at,
-                            streamed, cached_tokens, reasoning_tokens, finish_reason,
-                            latency_ms, cancelled, status_code, pricing_source,
-                            image_count, audio_seconds, character_count, provider_source
-                        )
-                        VALUES {}
-                        "#,
-                        placeholders.join(", ")
-                    );
-
-                    let mut query_builder = query(&sql);
-
-                    for entry in chunk {
-                        let id = Uuid::new_v4();
-                        let total_tokens = entry.input_tokens + entry.output_tokens;
-
-                        query_builder = query_builder
-                            .bind(id.to_string())
-                            .bind(&entry.request_id)
-                            .bind(entry.api_key_id.map(|id| id.to_string()))
-                            .bind(entry.user_id.map(|id| id.to_string()))
-                            .bind(entry.org_id.map(|id| id.to_string()))
-                            .bind(entry.project_id.map(|id| id.to_string()))
-                            .bind(entry.team_id.map(|id| id.to_string()))
-                            .bind(entry.service_account_id.map(|id| id.to_string()))
-                            .bind(&entry.model)
-                            .bind(&entry.provider)
-                            .bind(entry.input_tokens)
-                            .bind(entry.output_tokens)
-                            .bind(total_tokens)
-                            .bind(entry.cost_microcents.unwrap_or(0))
-                            .bind(&entry.http_referer)
-                            .bind(entry.request_at)
-                            .bind(entry.streamed)
-                            .bind(entry.cached_tokens)
-                            .bind(entry.reasoning_tokens)
-                            .bind(&entry.finish_reason)
-                            .bind(entry.latency_ms)
-                            .bind(entry.cancelled)
-                            .bind(entry.status_code)
-                            .bind(entry.pricing_source.as_str())
-                            .bind(entry.image_count)
-                            .bind(entry.audio_seconds)
-                            .bind(entry.character_count)
-                            .bind(&entry.provider_source);
-                    }
-
-                    let result = query_builder.execute(&self.pool).await?;
-                    total_inserted += result.rows_affected() as usize;
-                }
-                Ok::<_, crate::db::error::DbError>(total_inserted)
-            }
-            .await;
-
-            match result {
-                Ok(count) => {
-                    query("COMMIT").execute(&self.pool).await?;
-                    total_inserted = count;
-                }
-                Err(e) => {
-                    let _ = query("ROLLBACK").execute(&self.pool).await;
-                    return Err(e);
-                }
-            }
-        }
+        tx.commit().await?;
 
         Ok(total_inserted)
     }
