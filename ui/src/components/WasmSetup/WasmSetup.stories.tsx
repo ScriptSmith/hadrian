@@ -48,3 +48,36 @@ function InteractiveStory() {
 export const Default: Story = {
   render: () => <InteractiveStory />,
 };
+
+function OAuthSuccessStory() {
+  const [open, setOpen] = useState(true);
+  return (
+    <>
+      <Button onClick={() => setOpen(true)}>Open (OAuth Success)</Button>
+      <WasmSetup open={open} onComplete={() => setOpen(false)} oauthProviderName="openrouter" />
+    </>
+  );
+}
+
+export const OAuthSuccess: Story = {
+  render: () => <OAuthSuccessStory />,
+};
+
+function OllamaDetectedStory() {
+  const [open, setOpen] = useState(true);
+  return (
+    <>
+      <Button onClick={() => setOpen(true)}>Open (Ollama Detected)</Button>
+      <WasmSetup
+        open={open}
+        onComplete={() => setOpen(false)}
+        ollamaDetected
+        onOllamaConnect={() => alert("Connecting Ollama...")}
+      />
+    </>
+  );
+}
+
+export const OllamaDetected: Story = {
+  render: () => <OllamaDetectedStory />,
+};

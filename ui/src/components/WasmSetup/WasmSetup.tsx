@@ -1,7 +1,5 @@
-import { useState, useCallback, useId } from "react";
+import { useState, useCallback, useEffect, useId } from "react";
 import {
-  Globe,
-  Lock,
   ArrowRight,
   ArrowLeft,
   CheckCircle2,
@@ -10,6 +8,8 @@ import {
   Sparkles,
   Plus,
   Trash2,
+  ExternalLink,
+  Server,
 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -18,7 +18,7 @@ import {
   apiV1ModelsQueryKey,
 } from "@/api/generated/@tanstack/react-query.gen";
 import { meProvidersTestCredentials } from "@/api/generated/sdk.gen";
-import type { ConnectivityTestResponse } from "@/api/generated/types.gen";
+import type { ConnectivityTestResponse, DynamicProviderResponse } from "@/api/generated/types.gen";
 import {
   Modal,
   ModalHeader,
@@ -30,6 +30,7 @@ import {
 import { Button } from "@/components/Button/Button";
 import { Input } from "@/components/Input/Input";
 import { FormField } from "@/components/FormField/FormField";
+import { startOpenRouterOAuth } from "./openrouter-oauth";
 
 interface ProviderTemplate {
   id: string;
@@ -100,10 +101,50 @@ function initialEntries(): ProviderEntry[] {
   return PROVIDER_TEMPLATES.map((t) => createEntry(t, 0));
 }
 
-export function WasmSetup({ open, onComplete }: { open: boolean; onComplete: () => void }) {
+export function WasmSetup({
+  open,
+  onComplete,
+  oauthProviderName,
+  oauthError,
+  existingProviders,
+  ollamaDetected,
+  ollamaConnecting,
+  ollamaConnected,
+  onOllamaConnect,
+}: {
+  open: boolean;
+  onComplete: () => void;
+  oauthProviderName?: string | null;
+  oauthError?: string | null;
+  existingProviders?: DynamicProviderResponse[];
+  ollamaDetected?: boolean;
+  ollamaConnecting?: boolean;
+  ollamaConnected?: boolean;
+  onOllamaConnect?: () => void;
+}) {
   const [step, setStep] = useState<Step>("welcome");
   const [entries, setEntries] = useState<ProviderEntry[]>(initialEntries);
+
+  // Reset to welcome when the wizard is re-opened
+  useEffect(() => {
+    if (open) setStep("welcome");
+  }, [open]);
+
+  // Jump to "done" when OAuth completes (oauthProviderName arrives async)
+  useEffect(() => {
+    if (oauthProviderName) setStep("done");
+  }, [oauthProviderName]);
+  const [oauthLoading, setOauthLoading] = useState(false);
   const queryClient = useQueryClient();
+
+  // Detect existing OpenRouter provider from the database
+  const hasExistingOpenRouter =
+    !!oauthProviderName ||
+    existingProviders?.some((p) => p.base_url.includes("openrouter.ai")) === true;
+
+  const hasExistingOllama =
+    !!ollamaConnected ||
+    existingProviders?.some((p) => p.base_url.includes("localhost:11434")) === true;
 
   const createMutation = useMutation({
     ...meProvidersCreateMutation(),
@@ -177,13 +218,35 @@ export function WasmSetup({ open, onComplete }: { open: boolean; onComplete: () 
     [entries, createMutation, queryClient, updateEntry]
   );
 
-  const savedCount = entries.filter((e) => e.saved).length;
+  const handleOpenRouterOAuth = useCallback(async () => {
+    setOauthLoading(true);
+    try {
+      await startOpenRouterOAuth();
+    } catch {
+      setOauthLoading(false);
+    }
+  }, []);
+
+  const savedCount =
+    entries.filter((e) => e.saved).length +
+    (hasExistingOpenRouter ? 1 : 0) +
+    (hasExistingOllama ? 1 : 0);
   const hasAnySaved = savedCount > 0;
 
   return (
     <Modal open={open} onClose={onComplete} className="max-w-lg">
       {step === "welcome" && (
-        <WelcomeStep onNext={() => setStep("providers")} onSkip={onComplete} />
+        <WelcomeStep
+          onNext={() => setStep("providers")}
+          onSkip={onComplete}
+          onOpenRouterOAuth={handleOpenRouterOAuth}
+          oauthLoading={oauthLoading}
+          hasExistingOpenRouter={hasExistingOpenRouter}
+          ollamaDetected={ollamaDetected}
+          ollamaConnecting={ollamaConnecting}
+          hasExistingOllama={hasExistingOllama}
+          onOllamaConnect={onOllamaConnect}
+        />
       )}
       {step === "providers" && (
         <ProvidersStep
@@ -197,6 +260,14 @@ export function WasmSetup({ open, onComplete }: { open: boolean; onComplete: () 
           onNext={() => setStep("done")}
           onSkip={onComplete}
           hasAnySaved={hasAnySaved}
+          hasExistingOpenRouter={hasExistingOpenRouter}
+          oauthError={oauthError ?? null}
+          onOpenRouterOAuth={handleOpenRouterOAuth}
+          oauthLoading={oauthLoading}
+          ollamaDetected={ollamaDetected}
+          ollamaConnecting={ollamaConnecting}
+          hasExistingOllama={hasExistingOllama}
+          onOllamaConnect={onOllamaConnect}
         />
       )}
       {step === "done" && <DoneStep savedCount={savedCount} onComplete={onComplete} />}
@@ -204,55 +275,159 @@ export function WasmSetup({ open, onComplete }: { open: boolean; onComplete: () 
   );
 }
 
-function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
+function WelcomeStep({
+  onNext,
+  onSkip,
+  onOpenRouterOAuth,
+  oauthLoading,
+  hasExistingOpenRouter,
+  ollamaDetected,
+  ollamaConnecting,
+  hasExistingOllama,
+  onOllamaConnect,
+}: {
+  onNext: () => void;
+  onSkip: () => void;
+  onOpenRouterOAuth: () => void;
+  oauthLoading: boolean;
+  hasExistingOpenRouter: boolean;
+  ollamaDetected?: boolean;
+  ollamaConnecting?: boolean;
+  hasExistingOllama: boolean;
+  onOllamaConnect?: () => void;
+}) {
   return (
     <>
       <ModalHeader>
         <ModalTitle>Welcome to Hadrian</ModalTitle>
-        <ModalDescription>Browser-powered AI gateway</ModalDescription>
+        <ModalDescription>Open-source AI gateway</ModalDescription>
       </ModalHeader>
       <ModalContent>
-        <p className="text-sm text-muted-foreground mb-6">
-          This is the standalone browser edition of Hadrian. The AI gateway runs locally in your
-          browser — there is no Hadrian server.
+        <p className="text-sm text-muted-foreground mb-4">
+          Hadrian is a free, open-source AI gateway that lets you chat with multiple models side by
+          side. This is the browser edition: the gateway runs entirely in your browser.
         </p>
-        <div className="space-y-4">
-          <div className="flex gap-3">
-            <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
-              <Globe className="h-4 w-4 text-primary" />
-            </div>
-            <div>
-              <p className="text-sm font-medium">No backend server</p>
-              <p className="text-xs text-muted-foreground">
-                The gateway and all your data live in your browser's local storage. Nothing is sent
-                to Hadrian — requests go directly from your browser to the AI providers you
-                configure.
-              </p>
+        <p className="text-xs text-muted-foreground mb-6">
+          For the server version with teams, SSO, guardrails, and more providers, see{" "}
+          <a
+            href="https://hadriangateway.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary hover:underline"
+          >
+            hadriangateway.com
+          </a>
+          .
+        </p>
+
+        {hasExistingOpenRouter ? (
+          <div className="mt-6 rounded-lg border border-border bg-muted/30 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">OpenRouter</p>
+                <p className="text-xs text-muted-foreground">https://openrouter.ai/api/v1</p>
+              </div>
+              <div className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400">
+                <CheckCircle2 className="h-4 w-4" />
+                Connected
+              </div>
             </div>
           </div>
-          <div className="flex gap-3">
-            <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
-              <Lock className="h-4 w-4 text-primary" />
-            </div>
-            <div>
-              <p className="text-sm font-medium">Direct to provider</p>
-              <p className="text-xs text-muted-foreground">
-                API keys and conversations are stored locally. When you send a message, it goes
-                directly to the provider (OpenAI, Anthropic) — not through any intermediary.
-              </p>
+        ) : (
+          <div className="mt-6 rounded-lg border border-violet-200 bg-violet-50 p-4 dark:border-violet-500/20 dark:bg-violet-500/5">
+            <p className="text-sm font-medium mb-1">OpenRouter</p>
+            <p className="text-xs text-muted-foreground mb-3">
+              Sign in to access 200+ models. No manual API key entry required.
+            </p>
+            <Button
+              onClick={onOpenRouterOAuth}
+              disabled={oauthLoading}
+              className="w-full bg-violet-600 text-white hover:bg-violet-700 dark:bg-violet-600 dark:hover:bg-violet-500"
+            >
+              {oauthLoading ? (
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              ) : (
+                <ExternalLink className="mr-1.5 h-4 w-4" />
+              )}
+              Connect with OpenRouter
+            </Button>
+          </div>
+        )}
+
+        {hasExistingOllama ? (
+          <div className="mt-3 rounded-lg border border-border bg-muted/30 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Ollama</p>
+                <p className="text-xs text-muted-foreground">http://localhost:11434/v1</p>
+              </div>
+              <div className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400">
+                <CheckCircle2 className="h-4 w-4" />
+                Connected
+              </div>
             </div>
           </div>
-        </div>
-        <p className="text-sm text-muted-foreground mt-6">
-          To get started, you'll need an API key from at least one provider.
+        ) : ollamaDetected ? (
+          <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-500/20 dark:bg-emerald-500/5">
+            <p className="text-sm font-medium mb-1">Ollama</p>
+            <p className="text-xs text-muted-foreground mb-3">
+              Found Ollama running at localhost:11434.
+            </p>
+            <Button
+              onClick={onOllamaConnect}
+              disabled={ollamaConnecting}
+              className="w-full bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-600 dark:hover:bg-emerald-500"
+            >
+              {ollamaConnecting ? (
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              ) : (
+                <Server className="mr-1.5 h-4 w-4" />
+              )}
+              Connect Ollama
+            </Button>
+          </div>
+        ) : (
+          <div className="mt-3 rounded-lg border border-border bg-muted/30 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">Ollama</p>
+                <p className="text-xs text-muted-foreground">Not detected at localhost:11434</p>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <XCircle className="h-3.5 w-3.5" />
+                Not found
+              </div>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Install and start{" "}
+              <a
+                href="https://ollama.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline"
+              >
+                Ollama
+                <ExternalLink className="ml-0.5 inline h-3 w-3" />
+              </a>{" "}
+              to use local models for free. Re-open this wizard after starting it.
+            </p>
+          </div>
+        )}
+
+        <p className="text-sm text-muted-foreground mt-4">
+          {hasExistingOpenRouter || hasExistingOllama
+            ? "You can also add API keys from OpenAI, Anthropic, or other providers."
+            : "Or add your own API keys from OpenAI, Anthropic, or other providers."}
         </p>
       </ModalContent>
       <ModalFooter>
         <Button variant="ghost" onClick={onSkip}>
           Skip for now
         </Button>
-        <Button onClick={onNext}>
-          Add provider keys
+        <Button variant="outline" onClick={onNext}>
+          {hasExistingOpenRouter || hasExistingOllama
+            ? "Manage providers"
+            : "Add API keys manually"}
           <ArrowRight className="ml-1.5 h-4 w-4" />
         </Button>
       </ModalFooter>
@@ -271,6 +446,14 @@ function ProvidersStep({
   onNext,
   onSkip,
   hasAnySaved,
+  hasExistingOpenRouter,
+  oauthError,
+  onOpenRouterOAuth,
+  oauthLoading,
+  ollamaDetected,
+  ollamaConnecting,
+  hasExistingOllama,
+  onOllamaConnect,
 }: {
   entries: ProviderEntry[];
   onUpdate: (key: string, update: Partial<ProviderEntry>) => void;
@@ -282,6 +465,14 @@ function ProvidersStep({
   onNext: () => void;
   onSkip: () => void;
   hasAnySaved: boolean;
+  hasExistingOpenRouter: boolean;
+  oauthError: string | null;
+  onOpenRouterOAuth: () => void;
+  oauthLoading: boolean;
+  ollamaDetected?: boolean;
+  ollamaConnecting?: boolean;
+  hasExistingOllama: boolean;
+  onOllamaConnect?: () => void;
 }) {
   return (
     <>
@@ -290,6 +481,89 @@ function ProvidersStep({
         <ModalDescription>Add at least one API key to start chatting</ModalDescription>
       </ModalHeader>
       <ModalContent>
+        {/* OpenRouter OAuth section */}
+        {hasExistingOpenRouter ? (
+          <div className="mb-4 rounded-lg border border-border bg-muted/30 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">OpenRouter</p>
+                <p className="text-xs text-muted-foreground">https://openrouter.ai/api/v1</p>
+              </div>
+              <div className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400">
+                <CheckCircle2 className="h-4 w-4" />
+                Connected
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="mb-4 rounded-lg border border-violet-200 bg-violet-50/50 p-3 dark:border-violet-500/20 dark:bg-violet-500/5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">OpenRouter</p>
+                <p className="text-xs text-muted-foreground">200+ models, one click</p>
+              </div>
+              <Button
+                size="sm"
+                onClick={onOpenRouterOAuth}
+                disabled={oauthLoading}
+                className="shrink-0 bg-violet-600 text-white hover:bg-violet-700 dark:bg-violet-600 dark:hover:bg-violet-500"
+              >
+                {oauthLoading ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                Connect
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {oauthError && (
+          <div className="mb-4 flex items-start gap-1.5 text-xs text-destructive">
+            <XCircle className="mt-0.5 h-3 w-3 shrink-0" />
+            <span>OpenRouter connection failed: {oauthError}</span>
+          </div>
+        )}
+
+        {/* Ollama section */}
+        {hasExistingOllama ? (
+          <div className="mb-4 rounded-lg border border-border bg-muted/30 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Ollama</p>
+                <p className="text-xs text-muted-foreground">http://localhost:11434/v1</p>
+              </div>
+              <div className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400">
+                <CheckCircle2 className="h-4 w-4" />
+                Connected
+              </div>
+            </div>
+          </div>
+        ) : ollamaDetected ? (
+          <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50/50 p-3 dark:border-emerald-500/20 dark:bg-emerald-500/5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">Ollama</p>
+                <p className="text-xs text-muted-foreground">Local models detected</p>
+              </div>
+              <Button
+                size="sm"
+                onClick={onOllamaConnect}
+                disabled={ollamaConnecting}
+                className="shrink-0 bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-600 dark:hover:bg-emerald-500"
+              >
+                {ollamaConnecting ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Server className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                Connect
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
         <div className="space-y-5">
           {entries.map((entry) => (
             <ProviderKeyEntry
@@ -465,7 +739,7 @@ function DoneStep({ savedCount, onComplete }: { savedCount: number; onComplete: 
   return (
     <>
       <ModalHeader>
-        <ModalTitle>You're all set</ModalTitle>
+        <ModalTitle>Setup complete</ModalTitle>
         <ModalDescription>
           {savedCount} provider{savedCount !== 1 ? "s" : ""} connected
         </ModalDescription>
@@ -476,8 +750,8 @@ function DoneStep({ savedCount, onComplete }: { savedCount: number; onComplete: 
             <Sparkles className="h-6 w-6 text-green-600 dark:text-green-400" />
           </div>
           <p className="text-sm text-muted-foreground max-w-sm">
-            You can manage your providers anytime from the <strong>Providers</strong> page in the
-            sidebar, or re-run this wizard from the user menu.
+            Manage providers from the <strong>Providers</strong> page in the sidebar, or re-run this
+            wizard from the user menu.
           </p>
         </div>
       </ModalContent>

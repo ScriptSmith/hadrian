@@ -46,7 +46,7 @@ use crate::{
     compat::wasm_routing::get,
     config, db, events, jobs,
     middleware::{AdminAuth, AuthzContext, ClientInfo},
-    pricing, providers, secrets, services,
+    pricing, providers, services,
 };
 
 /// Browser-based Hadrian gateway.
@@ -68,8 +68,9 @@ impl HadrianGateway {
         let config = wasm_default_config();
         let http_client = reqwest::Client::new();
 
-        let secrets: Arc<dyn secrets::SecretManager> =
-            Arc::new(secrets::MemorySecretManager::new());
+        // No secret manager in WASM — API keys are stored directly in SQLite
+        // (which is persisted to IndexedDB). Using MemorySecretManager would lose
+        // secrets when the service worker restarts.
 
         let event_bus = Arc::new(events::EventBus::with_capacity(
             config.features.websocket.channel_capacity,
@@ -128,7 +129,7 @@ impl HadrianGateway {
             db: Some(db),
             services: Some(svc),
             cache: None,
-            secrets: Some(secrets),
+            secrets: None,
             dlq: None,
             pricing: Arc::new(config.pricing.clone()),
             circuit_breakers: providers::CircuitBreakerRegistry::new(),
