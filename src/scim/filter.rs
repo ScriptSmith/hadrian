@@ -231,7 +231,7 @@ impl std::error::Error for FilterParseError {}
 /// # Examples
 ///
 /// ```
-/// use gateway::scim::filter::parse_filter;
+/// use hadrian::scim::filter::parse_filter;
 ///
 /// let filter = parse_filter("userName eq \"john\"").unwrap();
 /// let filter = parse_filter("active eq true and emails pr").unwrap();
