@@ -361,9 +361,14 @@ export function ModelSelector({
         </div>
       ) : availableModels.length > 0 ? (
         <Button
-          variant="outline"
+          variant={selectedInstances.length === 0 ? "primary" : "outline"}
           size="sm"
-          className="h-7 sm:h-8 gap-1 sm:gap-1.5 rounded-lg border-dashed px-2 sm:px-3 text-xs sm:text-sm text-muted-foreground hover:text-foreground shrink-0"
+          className={cn(
+            "h-7 sm:h-8 gap-1 sm:gap-1.5 rounded-lg px-2 sm:px-3 text-xs sm:text-sm shrink-0",
+            selectedInstances.length === 0
+              ? "animate-shimmer"
+              : "border-dashed text-muted-foreground hover:text-foreground"
+          )}
           onClick={() => setPickerOpen(true)}
         >
           <Plus className="h-3.5 sm:h-4 w-3.5 sm:w-4" />
