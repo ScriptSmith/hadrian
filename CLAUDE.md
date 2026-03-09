@@ -26,6 +26,7 @@ Features:
 - Image generation, audio (TTS, transcription, translation)
 - Knowledge Bases / RAG: file upload, text extraction, chunking, vector search, re-ranking
 - Integrations: SQLite/Postgres, Redis, OpenTelemetry, Vault, S3
+- WASM build: runs entirely in the browser via service workers and sql.js (app.hadriangateway.com)
 
 The backend is written in Rust and uses Axum for routing and middleware.
 The frontend is written in React and TypeScript, with TailwindCSS for styling.
@@ -84,6 +85,7 @@ Hierarchical feature profiles (default: `full`):
 - **`standard`** — minimal + Postgres, Redis, OTLP, Prometheus, SSO, CEL, doc extraction, OpenAPI docs, S3, secrets managers (AWS/Azure/GCP/Vault)
 - **`full`** — standard + SAML, Kreuzberg, ClamAV
 - **`headless`** — all `full` features except embedded assets (UI, docs, catalog). Used by `cargo install` and for deployments that serve the frontend separately.
+- **`wasm`** — Browser-only build targeting `wasm32-unknown-unknown`. OpenAI + Anthropic + Test providers, wasm-sqlite (sql.js FFI), no server/concurrency/CLI/JWT/SSO features. Built with `wasm-pack`.
 
 ```bash
 cargo build --no-default-features --features tiny       # Smallest binary
@@ -91,6 +93,8 @@ cargo build --no-default-features --features minimal    # Fast compile
 cargo build --no-default-features --features standard   # Typical deployment
 cargo build                                             # Full (default)
 cargo build --no-default-features --features headless   # Full features, no embedded assets
+./scripts/build-wasm.sh                                 # WASM build (dev)
+./scripts/build-wasm.sh --release                       # WASM build (release)
 ```
 
 Run `hadrian features` to list enabled/disabled features at runtime. CI tests `minimal`, `standard`, and `headless` profiles; Windows uses `minimal` to avoid OpenSSL.
@@ -116,6 +120,7 @@ GitHub Actions workflow (`.github/workflows/ci.yml`) runs:
 - E2E tests (TypeScript/Playwright with testcontainers, needs Docker build)
 - OpenAPI conformance check
 - Documentation build
+- WASM build (compile to `wasm32-unknown-unknown` via `wasm-pack`, build frontend with `VITE_WASM_MODE=true`)
 
 ### Release Pipeline
 
@@ -129,6 +134,12 @@ GitHub Actions workflow (`.github/workflows/release.yml`) triggers on version ta
   - `x86_64-pc-windows-msvc` (standard, minimal, tiny)
 - Creates GitHub Release with archives and SHA256 checksums (tag push only)
 - Dry-run mode builds artifacts and prints a summary without creating a release
+
+WASM deploy workflow (`.github/workflows/deploy-wasm.yml`):
+- Triggers on pushes to `main` touching `src/**`, `ui/**`, `Cargo.toml`, `Cargo.lock`, or `scripts/build-wasm.sh`
+- Builds WASM module + frontend with `VITE_WASM_MODE=true`
+- Deploys to Cloudflare Pages (app.hadriangateway.com)
+- Sets `Service-Worker-Allowed: /` and `Cache-Control: no-cache` headers on `sw.js`
 
 Helm chart workflow (`.github/workflows/helm.yml`) runs:
 - `helm lint` (standard and strict mode)
@@ -214,6 +225,36 @@ Per-org SSO allows each organization to configure its own identity provider (OID
 3. **Route Handler** parses model string, resolves provider (static config or dynamic from DB)
 4. **LLM Provider** forwards request, streams response
 5. **Usage Tracking** records tokens/cost asynchronously with full principal attribution (user, org, project, team, service account)
+
+### WASM Build Architecture
+
+The WASM build runs the full Hadrian Axum router inside a browser service worker, enabling a zero-backend deployment at app.hadriangateway.com.
+
+**Request flow:**
+1. Service worker intercepts `fetch` events matching `/v1/`, `/admin/v1/`, `/health`, `/auth/`, `/api/`
+2. `web_sys::Request` is converted to `http::Request` (with `/api/v1/` → `/v1/` path rewriting)
+3. Request is dispatched through the same Axum `Router` used by the native server
+4. `http::Response` is converted back to `web_sys::Response`
+5. LLM API calls use `reqwest` which delegates to the browser's `fetch()` API
+
+**Three-layer gating strategy:**
+1. **Cargo features** (`wasm` vs `server`) — Controls what modules/dependencies are included
+2. **`#[cfg(target_arch = "wasm32")]`** — Handles Send/Sync differences (`AssertSend`, `async_trait(?Send)`, `spawn_local` vs `tokio::spawn`)
+3. **`#[cfg(feature = "server")]`** / `#[cfg(feature = "concurrency")]`** — Gates server-only functionality (middleware layers, `TaskTracker`, `UsageLogBuffer`)
+
+**Database:** `WasmSqlitePool` is a zero-size type; actual SQLite runs in JavaScript via sql.js. Queries cross the FFI boundary via `wasm_bindgen` extern functions. The `backend.rs` abstraction provides cfg-switched type aliases (`Pool`, `Row`, `BackendError`) and traits (`ColDecode`, `RowExt`) so SQLite repo code compiles against either `sqlx::SqlitePool` or `WasmSqlitePool` without changes.
+
+**Persistence:** Database is persisted to IndexedDB with a debounced save (500ms) after write operations.
+
+**Auth:** WASM mode uses `AuthMode::None` with a bootstrapped anonymous user and org. Permissive `AuthzContext` and `AdminAuth` extensions are injected as layers.
+
+**Setup flow:** `WasmSetupGuard` detects if providers are configured; if not, shows a setup wizard (`WasmSetup`) supporting OpenRouter OAuth (PKCE), Ollama auto-detection, and manual API key entry for OpenAI/Anthropic/etc.
+
+**Known limitations:**
+- Streaming responses are fully buffered (no real-time SSE token streaming for LLM calls)
+- No usage tracking (no `TaskTracker`/`UsageLogBuffer` in WASM)
+- No caching layer, rate limiting, or budget enforcement
+- Module service workers require Chrome 91+ / Edge 91+ (Firefox support may be limited)
 
 ### Document Processing Flow (RAG)
 
@@ -469,6 +510,17 @@ See `agent_instructions/adding_admin_endpoint.md` for implementation patterns (r
 - `src/validation/` — Response validation against OpenAI schema
 - `src/observability/siem/` — SIEM formatters
 
+### Backend — WASM
+
+- `src/wasm.rs` — WASM entry point: `HadrianGateway` struct, request/response conversion, router construction, default config
+- `src/compat.rs` — WASM compatibility: `AssertSend`, `WasmHandler`, `wasm_routing` module (drop-in replacements for `axum::routing`), `spawn_detached`, `impl_wasm_handler!` macro
+- `src/lib.rs` — Library exports (crate type `cdylib` + `rlib` for wasm-pack)
+- `src/db/wasm_sqlite/bridge.rs` — `wasm_bindgen` FFI to `globalThis.__hadrian_sqlite` (sql.js bridge)
+- `src/db/wasm_sqlite/types.rs` — `WasmParam`, `WasmValue`, `WasmRow`, `WasmDecode` trait with type conversions
+- `src/db/sqlite/backend.rs` — SQLite backend abstraction: cfg-switched `Pool`/`Row`/`BackendError` type aliases, `RowExt`/`ColDecode` traits for unified repo code
+- `src/middleware/types.rs` — Shared middleware types (`AuthzContext`, `AdminAuth`, `ClientInfo`) extracted from layers for WASM compatibility
+- `scripts/build-wasm.sh` — Build script (invokes `wasm-pack`, copies sql-wasm.wasm)
+
 ### Backend — Other
 
 - `src/catalog/` — Model catalog registry
@@ -507,6 +559,17 @@ See `agent_instructions/adding_admin_endpoint.md` for implementation patterns (r
 - `ui/src/services/opfs/` — OPFS audio storage
 - `ui/src/components/ToolExecution/` — Tool execution timeline UI
 - `ui/src/components/Artifact/` — Artifact rendering (charts, tables, images, code)
+
+### Frontend — WASM / Service Worker
+
+- `ui/src/service-worker/sw.ts` — Service worker: intercepts API calls, lazily initializes `HadrianGateway` WASM module, routes requests through Axum router
+- `ui/src/service-worker/sqlite-bridge.ts` — sql.js bridge: `globalThis.__hadrian_sqlite` with `init_database()`, `query()`, `execute()`, `execute_script()`; persists to IndexedDB with debounced save
+- `ui/src/service-worker/register.ts` — Service worker registration with `CLAIM` message handling for hard refreshes
+- `ui/src/service-worker/wasm.d.ts` — Type declarations for the WASM module exports
+- `ui/src/components/WasmSetup/WasmSetup.tsx` — Three-step setup wizard (welcome → providers → done) with OpenRouter OAuth, Ollama detection, manual API key entry
+- `ui/src/components/WasmSetup/WasmSetupGuard.tsx` — Guard component: auto-shows wizard when no providers configured, handles OAuth callback
+- `ui/src/components/WasmSetup/openrouter-oauth.ts` — OpenRouter OAuth PKCE flow (code verifier in sessionStorage)
+- `ui/src/routes/AppRoutes.tsx` — Routes extracted from App.tsx
 
 ### Frontend — Pages & Layout
 
@@ -560,6 +623,30 @@ pnpm storybook         # Component development
 pnpm test-storybook    # Run Storybook tests with vitest
 pnpm openapi-ts        # Regenerate from /api/openapi.json
 ```
+
+### WASM Frontend Development
+
+The WASM mode is controlled by the `VITE_WASM_MODE=true` environment variable. When set:
+- The Vite dev server uses a custom service worker plugin instead of `VitePWA`
+- The proxy configuration is disabled (service worker handles API routing)
+- `main.tsx` registers the service worker before rendering React
+- `App.tsx` wraps the app in `WasmSetupGuard`
+
+```bash
+# Build WASM module first (from repo root)
+./scripts/build-wasm.sh
+
+# Then run frontend in WASM mode
+cd ui && VITE_WASM_MODE=true pnpm dev
+```
+
+The service worker (`sw.ts`) is built separately from the Vite bundle using esbuild (via the custom `wasmServiceWorkerPlugin` in `vite.config.ts`). In dev mode it's compiled on each request; in production it's written to `dist/sw.js` during the `writeBundle` hook.
+
+When modifying WASM-related code:
+- The `wasm_routing` module (`src/compat.rs`) provides drop-in replacements for `axum::routing::{get, post, put, patch, delete}` — route modules use cfg-switched imports
+- All async trait definitions use `#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]` / `#[cfg_attr(not(target_arch = "wasm32"), async_trait)]`
+- The `backend.rs` abstraction means SQLite repo code is written once — modify repos normally and both native/WASM will compile
+- Server-only routes (multipart file upload, audio transcription/translation) are excluded with `#[cfg(feature = "server")]`
 
 ### Frontend Conventions
 
