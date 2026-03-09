@@ -98,6 +98,7 @@ export function WasmSetupGuard({ children }: { children: ReactNode }) {
       queryClient.invalidateQueries({ queryKey: meProvidersListQueryKey() });
       queryClient.invalidateQueries({ queryKey: apiV1ModelsQueryKey() });
       setOllamaConnected(true);
+      setManualOpen(true);
     } catch (err) {
       console.error("Ollama connect failed:", err);
     } finally {

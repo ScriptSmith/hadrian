@@ -238,6 +238,7 @@ export function WasmSetup({
       {step === "welcome" && (
         <WelcomeStep
           onNext={() => setStep("providers")}
+          onReady={() => setStep("done")}
           onSkip={onComplete}
           onOpenRouterOAuth={handleOpenRouterOAuth}
           oauthLoading={oauthLoading}
@@ -277,6 +278,7 @@ export function WasmSetup({
 
 function WelcomeStep({
   onNext,
+  onReady,
   onSkip,
   onOpenRouterOAuth,
   oauthLoading,
@@ -287,6 +289,7 @@ function WelcomeStep({
   onOllamaConnect,
 }: {
   onNext: () => void;
+  onReady: () => void;
   onSkip: () => void;
   onOpenRouterOAuth: () => void;
   oauthLoading: boolean;
@@ -296,6 +299,7 @@ function WelcomeStep({
   hasExistingOllama: boolean;
   onOllamaConnect?: () => void;
 }) {
+  const hasProvider = hasExistingOpenRouter || hasExistingOllama;
   return (
     <>
       <ModalHeader>
@@ -415,21 +419,34 @@ function WelcomeStep({
         )}
 
         <p className="text-sm text-muted-foreground mt-4">
-          {hasExistingOpenRouter || hasExistingOllama
+          {hasProvider
             ? "You can also add API keys from OpenAI, Anthropic, or other providers."
             : "Or add your own API keys from OpenAI, Anthropic, or other providers."}
         </p>
       </ModalContent>
       <ModalFooter>
-        <Button variant="ghost" onClick={onSkip}>
-          Skip for now
-        </Button>
-        <Button variant="outline" onClick={onNext}>
-          {hasExistingOpenRouter || hasExistingOllama
-            ? "Manage providers"
-            : "Add API keys manually"}
-          <ArrowRight className="ml-1.5 h-4 w-4" />
-        </Button>
+        {hasProvider ? (
+          <>
+            <Button variant="outline" onClick={onNext}>
+              Add more providers
+              <ArrowRight className="ml-1.5 h-4 w-4" />
+            </Button>
+            <Button onClick={onReady}>
+              Next
+              <ArrowRight className="ml-1.5 h-4 w-4" />
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={onSkip}>
+              Skip for now
+            </Button>
+            <Button variant="outline" onClick={onNext}>
+              Add API keys manually
+              <ArrowRight className="ml-1.5 h-4 w-4" />
+            </Button>
+          </>
+        )}
       </ModalFooter>
     </>
   );
