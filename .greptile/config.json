@@ -1,0 +1,7 @@
+{
+  "strictness": 1,
+  "commentTypes": ["syntax", "logic", "style", "info"],
+  "fileChangeLimit": 300,
+  "triggerOnUpdates": true,
+  "fixWithAI": true
+}
