@@ -383,7 +383,7 @@ impl PromptRepo for SqlitePromptRepo {
 
 #[cfg(test)]
 mod tests {
-    use sqlx::{Row as _, SqlitePool};
+    use sqlx::SqlitePool;
 
     use super::*;
     use crate::models::PromptOwner;

@@ -399,7 +399,7 @@ impl AuditLogRepo for SqliteAuditLogRepo {
 mod tests {
     use chrono::Duration;
     use serde_json::json;
-    use sqlx::{Row as _, SqlitePool};
+    use sqlx::SqlitePool;
 
     use super::*;
     use crate::db::repos::AuditLogRepo;

@@ -592,7 +592,7 @@ impl OrgSsoConfigRepo for SqliteOrgSsoConfigRepo {
 
 #[cfg(test)]
 mod tests {
-    use sqlx::{Row as _, SqlitePool};
+    use sqlx::SqlitePool;
 
     use super::*;
 

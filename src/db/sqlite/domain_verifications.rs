@@ -374,7 +374,7 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
 
 #[cfg(test)]
 mod tests {
-    use sqlx::{Row as _, SqlitePool};
+    use sqlx::SqlitePool;
 
     use super::*;
 

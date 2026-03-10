@@ -796,7 +796,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
 
 #[cfg(test)]
 mod tests {
-    use sqlx::{Row as _, SqlitePool};
+    use sqlx::SqlitePool;
 
     use super::*;
     use crate::db::repos::{ListParams, ModelPricingRepo};
