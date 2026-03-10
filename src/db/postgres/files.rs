@@ -28,7 +28,8 @@ impl PostgresFilesRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl FilesRepo for PostgresFilesRepo {
     async fn create_file(&self, input: CreateFile) -> DbResult<File> {
         let id = Uuid::new_v4();

@@ -1,10 +1,12 @@
 //! SQLite implementation of the SCIM user mapping repository.
 
 use async_trait::async_trait;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::common::parse_uuid;
+use super::{
+    backend::{Pool, Row, RowExt, query},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -19,52 +21,53 @@ use crate::{
 };
 
 pub struct SqliteScimUserMappingRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteScimUserMappingRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
     /// Parse a ScimUserMapping from a database row.
-    fn parse_mapping(row: &sqlx::sqlite::SqliteRow) -> DbResult<ScimUserMapping> {
+    fn parse_mapping(row: &Row) -> DbResult<ScimUserMapping> {
         Ok(ScimUserMapping {
-            id: parse_uuid(&row.get::<String, _>("id"))?,
-            org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
-            scim_external_id: row.get("scim_external_id"),
-            user_id: parse_uuid(&row.get::<String, _>("user_id"))?,
-            active: row.get::<i32, _>("active") != 0,
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
+            id: parse_uuid(&row.col::<String>("id"))?,
+            org_id: parse_uuid(&row.col::<String>("org_id"))?,
+            scim_external_id: row.col("scim_external_id"),
+            user_id: parse_uuid(&row.col::<String>("user_id"))?,
+            active: row.col::<i32>("active") != 0,
+            created_at: row.col("created_at"),
+            updated_at: row.col("updated_at"),
         })
     }
 
     /// Parse a ScimUserWithMapping from a joined row with aliased columns.
-    fn parse_mapping_with_user(row: &sqlx::sqlite::SqliteRow) -> DbResult<ScimUserWithMapping> {
+    fn parse_mapping_with_user(row: &Row) -> DbResult<ScimUserWithMapping> {
         Ok(ScimUserWithMapping {
             mapping: ScimUserMapping {
-                id: parse_uuid(&row.get::<String, _>("m_id"))?,
-                org_id: parse_uuid(&row.get::<String, _>("m_org_id"))?,
-                scim_external_id: row.get("m_scim_external_id"),
-                user_id: parse_uuid(&row.get::<String, _>("m_user_id"))?,
-                active: row.get::<i32, _>("m_active") != 0,
-                created_at: row.get("m_created_at"),
-                updated_at: row.get("m_updated_at"),
+                id: parse_uuid(&row.col::<String>("m_id"))?,
+                org_id: parse_uuid(&row.col::<String>("m_org_id"))?,
+                scim_external_id: row.col("m_scim_external_id"),
+                user_id: parse_uuid(&row.col::<String>("m_user_id"))?,
+                active: row.col::<i32>("m_active") != 0,
+                created_at: row.col("m_created_at"),
+                updated_at: row.col("m_updated_at"),
             },
             user: User {
-                id: parse_uuid(&row.get::<String, _>("u_id"))?,
-                external_id: row.get("u_external_id"),
-                email: row.get("u_email"),
-                name: row.get("u_name"),
-                created_at: row.get("u_created_at"),
-                updated_at: row.get("u_updated_at"),
+                id: parse_uuid(&row.col::<String>("u_id"))?,
+                external_id: row.col("u_external_id"),
+                email: row.col("u_email"),
+                name: row.col("u_name"),
+                created_at: row.col("u_created_at"),
+                updated_at: row.col("u_updated_at"),
             },
         })
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
     async fn create(
         &self,
@@ -74,7 +77,7 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
         let id = Uuid::new_v4();
         let now = chrono::Utc::now();
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO scim_user_mappings (
                 id, org_id, scim_external_id, user_id, active, created_at, updated_at
@@ -91,14 +94,17 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                DbError::Conflict("SCIM external ID already mapped in this organization".into())
+        .map_err(|e| {
+            if super::backend::is_unique_violation(&e) {
+                return DbError::Conflict(
+                    "SCIM external ID already mapped in this organization".into(),
+                );
             }
-            sqlx::Error::Database(db_err) if db_err.is_foreign_key_violation() => {
-                DbError::Conflict("Referenced user or organization not found".into())
+            #[cfg(feature = "database-sqlite")]
+            if matches!(&e, sqlx::Error::Database(db_err) if db_err.is_foreign_key_violation()) {
+                return DbError::Conflict("Referenced user or organization not found".into());
             }
-            _ => DbError::from(e),
+            DbError::from(e)
         })?;
 
         Ok(ScimUserMapping {
@@ -113,7 +119,7 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<ScimUserMapping>> {
-        let row = sqlx::query("SELECT * FROM scim_user_mappings WHERE id = ?")
+        let row = query("SELECT * FROM scim_user_mappings WHERE id = ?")
             .bind(id.to_string())
             .fetch_optional(&self.pool)
             .await?;
@@ -126,13 +132,12 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
         org_id: Uuid,
         scim_external_id: &str,
     ) -> DbResult<Option<ScimUserMapping>> {
-        let row = sqlx::query(
-            "SELECT * FROM scim_user_mappings WHERE org_id = ? AND scim_external_id = ?",
-        )
-        .bind(org_id.to_string())
-        .bind(scim_external_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row =
+            query("SELECT * FROM scim_user_mappings WHERE org_id = ? AND scim_external_id = ?")
+                .bind(org_id.to_string())
+                .bind(scim_external_id)
+                .fetch_optional(&self.pool)
+                .await?;
 
         row.map(|r| Self::parse_mapping(&r)).transpose()
     }
@@ -142,7 +147,7 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
         org_id: Uuid,
         user_id: Uuid,
     ) -> DbResult<Option<ScimUserMapping>> {
-        let row = sqlx::query("SELECT * FROM scim_user_mappings WHERE org_id = ? AND user_id = ?")
+        let row = query("SELECT * FROM scim_user_mappings WHERE org_id = ? AND user_id = ?")
             .bind(org_id.to_string())
             .bind(user_id.to_string())
             .fetch_optional(&self.pool)
@@ -163,7 +168,7 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
             params.sort_order.cursor_query_params(params.direction);
 
         let rows = if let Some(cursor) = &params.cursor {
-            let query = format!(
+            let sql = format!(
                 r#"
                 SELECT * FROM scim_user_mappings
                 WHERE org_id = ?
@@ -173,7 +178,7 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
                 "#,
                 comparison_op, order_dir, order_dir
             );
-            sqlx::query(&query)
+            query(&sql)
                 .bind(org_id.to_string())
                 .bind(cursor.created_at)
                 .bind(cursor.id.to_string())
@@ -181,7 +186,7 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            let query = format!(
+            let sql = format!(
                 r#"
                 SELECT * FROM scim_user_mappings
                 WHERE org_id = ?
@@ -190,7 +195,7 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
                 "#,
                 order_dir, order_dir
             );
-            sqlx::query(&query)
+            query(&sql)
                 .bind(org_id.to_string())
                 .bind(fetch_limit)
                 .fetch_all(&self.pool)
@@ -283,7 +288,7 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
         );
 
         // Execute count query
-        let mut count_query = sqlx::query(&count_sql).bind(org_id.to_string());
+        let mut count_query = query(&count_sql).bind(org_id.to_string());
         if let Some(f) = filter {
             for val in &f.bindings {
                 count_query = match val {
@@ -294,10 +299,10 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
             }
         }
         let count_row = count_query.fetch_one(&self.pool).await?;
-        let total: i64 = count_row.get("cnt");
+        let total: i64 = count_row.col("cnt");
 
         // Execute data query
-        let mut data_query = sqlx::query(&data_sql).bind(org_id.to_string());
+        let mut data_query = query(&data_sql).bind(org_id.to_string());
         if let Some(f) = filter {
             for val in &f.bindings {
                 data_query = match val {
@@ -319,7 +324,7 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
     }
 
     async fn list_by_user(&self, user_id: Uuid) -> DbResult<Vec<ScimUserMapping>> {
-        let rows = sqlx::query("SELECT * FROM scim_user_mappings WHERE user_id = ?")
+        let rows = query("SELECT * FROM scim_user_mappings WHERE user_id = ?")
             .bind(user_id.to_string())
             .fetch_all(&self.pool)
             .await?;
@@ -333,7 +338,7 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
         let active = input.active.unwrap_or(current.active);
         let now = chrono::Utc::now();
 
-        sqlx::query("UPDATE scim_user_mappings SET active = ?, updated_at = ? WHERE id = ?")
+        query("UPDATE scim_user_mappings SET active = ?, updated_at = ? WHERE id = ?")
             .bind(active as i32)
             .bind(now)
             .bind(id.to_string())
@@ -362,7 +367,7 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
-        let result = sqlx::query("DELETE FROM scim_user_mappings WHERE id = ?")
+        let result = query("DELETE FROM scim_user_mappings WHERE id = ?")
             .bind(id.to_string())
             .execute(&self.pool)
             .await?;
@@ -375,7 +380,7 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
     }
 
     async fn delete_by_user(&self, user_id: Uuid) -> DbResult<u64> {
-        let result = sqlx::query("DELETE FROM scim_user_mappings WHERE user_id = ?")
+        let result = query("DELETE FROM scim_user_mappings WHERE user_id = ?")
             .bind(user_id.to_string())
             .execute(&self.pool)
             .await?;
@@ -384,11 +389,11 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
     }
 
     async fn count_by_org(&self, org_id: Uuid) -> DbResult<i64> {
-        let row = sqlx::query("SELECT COUNT(*) as count FROM scim_user_mappings WHERE org_id = ?")
+        let row = query("SELECT COUNT(*) as count FROM scim_user_mappings WHERE org_id = ?")
             .bind(org_id.to_string())
             .fetch_one(&self.pool)
             .await?;
 
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 }

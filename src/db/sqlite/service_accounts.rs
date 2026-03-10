@@ -1,9 +1,11 @@
 use async_trait::async_trait;
 use chrono::SubsecRound;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::common::parse_uuid;
+use super::{
+    backend::{Pool, RowExt, begin, map_unique_violation, query, query_scalar},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -16,11 +18,11 @@ use crate::{
 };
 
 pub struct SqliteServiceAccountRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteServiceAccountRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
@@ -46,7 +48,7 @@ impl SqliteServiceAccountRepo {
         let (comparison, order, should_reverse) =
             params.sort_order.cursor_query_params(params.direction);
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, org_id, slug, name, description, roles, created_at, updated_at
             FROM service_accounts
@@ -57,7 +59,7 @@ impl SqliteServiceAccountRepo {
             comparison, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(org_id.to_string())
             .bind(cursor.created_at)
             .bind(cursor.id.to_string())
@@ -71,14 +73,14 @@ impl SqliteServiceAccountRepo {
             .take(limit as usize)
             .map(|row| {
                 Ok(ServiceAccount {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
-                    org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
-                    slug: row.get("slug"),
-                    name: row.get("name"),
-                    description: row.get("description"),
-                    roles: Self::parse_roles(&row.get::<String, _>("roles")),
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    id: parse_uuid(&row.col::<String>("id"))?,
+                    org_id: parse_uuid(&row.col::<String>("org_id"))?,
+                    slug: row.col("slug"),
+                    name: row.col("name"),
+                    description: row.col("description"),
+                    roles: Self::parse_roles(&row.col::<String>("roles")),
+                    created_at: row.col("created_at"),
+                    updated_at: row.col("updated_at"),
                 })
             })
             .collect::<DbResult<Vec<_>>>()?;
@@ -96,14 +98,15 @@ impl SqliteServiceAccountRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl ServiceAccountRepo for SqliteServiceAccountRepo {
     async fn create(&self, org_id: Uuid, input: CreateServiceAccount) -> DbResult<ServiceAccount> {
         let id = Uuid::new_v4();
         let now = chrono::Utc::now().trunc_subsecs(3);
         let roles_json = Self::serialize_roles(&input.roles);
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO service_accounts (id, org_id, slug, name, description, roles, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -119,15 +122,10 @@ impl ServiceAccountRepo for SqliteServiceAccountRepo {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                DbError::Conflict(format!(
-                    "Service account with slug '{}' already exists in this organization",
-                    input.slug
-                ))
-            }
-            _ => DbError::from(e),
-        })?;
+        .map_err(map_unique_violation(format!(
+            "Service account with slug '{}' already exists in this organization",
+            input.slug
+        )))?;
 
         Ok(ServiceAccount {
             id,
@@ -142,7 +140,7 @@ impl ServiceAccountRepo for SqliteServiceAccountRepo {
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<ServiceAccount>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, org_id, slug, name, description, roles, created_at, updated_at
             FROM service_accounts
@@ -155,21 +153,21 @@ impl ServiceAccountRepo for SqliteServiceAccountRepo {
 
         match result {
             Some(row) => Ok(Some(ServiceAccount {
-                id: parse_uuid(&row.get::<String, _>("id"))?,
-                org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
-                slug: row.get("slug"),
-                name: row.get("name"),
-                description: row.get("description"),
-                roles: Self::parse_roles(&row.get::<String, _>("roles")),
-                created_at: row.get("created_at"),
-                updated_at: row.get("updated_at"),
+                id: parse_uuid(&row.col::<String>("id"))?,
+                org_id: parse_uuid(&row.col::<String>("org_id"))?,
+                slug: row.col("slug"),
+                name: row.col("name"),
+                description: row.col("description"),
+                roles: Self::parse_roles(&row.col::<String>("roles")),
+                created_at: row.col("created_at"),
+                updated_at: row.col("updated_at"),
             })),
             None => Ok(None),
         }
     }
 
     async fn get_by_slug(&self, org_id: Uuid, slug: &str) -> DbResult<Option<ServiceAccount>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, org_id, slug, name, description, roles, created_at, updated_at
             FROM service_accounts
@@ -183,14 +181,14 @@ impl ServiceAccountRepo for SqliteServiceAccountRepo {
 
         match result {
             Some(row) => Ok(Some(ServiceAccount {
-                id: parse_uuid(&row.get::<String, _>("id"))?,
-                org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
-                slug: row.get("slug"),
-                name: row.get("name"),
-                description: row.get("description"),
-                roles: Self::parse_roles(&row.get::<String, _>("roles")),
-                created_at: row.get("created_at"),
-                updated_at: row.get("updated_at"),
+                id: parse_uuid(&row.col::<String>("id"))?,
+                org_id: parse_uuid(&row.col::<String>("org_id"))?,
+                slug: row.col("slug"),
+                name: row.col("name"),
+                description: row.col("description"),
+                roles: Self::parse_roles(&row.col::<String>("roles")),
+                created_at: row.col("created_at"),
+                updated_at: row.col("updated_at"),
             })),
             None => Ok(None),
         }
@@ -210,7 +208,7 @@ impl ServiceAccountRepo for SqliteServiceAccountRepo {
                 .await;
         }
 
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, org_id, slug, name, description, roles, created_at, updated_at
             FROM service_accounts
@@ -230,14 +228,14 @@ impl ServiceAccountRepo for SqliteServiceAccountRepo {
             .take(limit as usize)
             .map(|row| {
                 Ok(ServiceAccount {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
-                    org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
-                    slug: row.get("slug"),
-                    name: row.get("name"),
-                    description: row.get("description"),
-                    roles: Self::parse_roles(&row.get::<String, _>("roles")),
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    id: parse_uuid(&row.col::<String>("id"))?,
+                    org_id: parse_uuid(&row.col::<String>("org_id"))?,
+                    slug: row.col("slug"),
+                    name: row.col("name"),
+                    description: row.col("description"),
+                    roles: Self::parse_roles(&row.col::<String>("roles")),
+                    created_at: row.col("created_at"),
+                    updated_at: row.col("updated_at"),
                 })
             })
             .collect::<DbResult<Vec<_>>>()?;
@@ -251,13 +249,13 @@ impl ServiceAccountRepo for SqliteServiceAccountRepo {
     }
 
     async fn count_by_org(&self, org_id: Uuid) -> DbResult<i64> {
-        let row = sqlx::query(
+        let row = query(
             "SELECT COUNT(*) as count FROM service_accounts WHERE org_id = ? AND deleted_at IS NULL",
         )
         .bind(org_id.to_string())
         .fetch_one(&self.pool)
         .await?;
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn update(&self, id: Uuid, input: UpdateServiceAccount) -> DbResult<ServiceAccount> {
@@ -270,7 +268,7 @@ impl ServiceAccountRepo for SqliteServiceAccountRepo {
         let new_roles = input.roles.unwrap_or(existing.roles);
         let roles_json = Self::serialize_roles(&new_roles);
 
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE service_accounts
             SET name = ?, description = ?, roles = ?, updated_at = ?
@@ -305,7 +303,7 @@ impl ServiceAccountRepo for SqliteServiceAccountRepo {
     async fn delete(&self, id: Uuid) -> DbResult<()> {
         let now = chrono::Utc::now().trunc_subsecs(3);
 
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE service_accounts
             SET deleted_at = ?
@@ -325,69 +323,46 @@ impl ServiceAccountRepo for SqliteServiceAccountRepo {
     }
 
     async fn delete_with_api_key_revocation(&self, id: Uuid) -> DbResult<Vec<Uuid>> {
-        // SQLite IMMEDIATE transactions provide write locking, preventing race conditions
-        // where new API keys could be created between deleting the SA and revoking its keys.
-        // Note: sqlx uses IMMEDIATE mode for write transactions on SQLite by default.
-        let mut tx = self.pool.begin().await?;
         let now = chrono::Utc::now().trunc_subsecs(3);
 
-        // 1. Check if the service account exists (locks the row in SQLite's transaction)
-        let exists = sqlx::query(
-            r#"
-            SELECT id FROM service_accounts
-            WHERE id = ? AND deleted_at IS NULL
-            "#,
-        )
-        .bind(id.to_string())
-        .fetch_optional(&mut *tx)
-        .await?;
+        let mut tx = begin(&self.pool).await?;
+
+        let exists =
+            query(r#"SELECT id FROM service_accounts WHERE id = ? AND deleted_at IS NULL"#)
+                .bind(id.to_string())
+                .fetch_optional(&mut *tx)
+                .await?;
 
         if exists.is_none() {
             return Err(DbError::NotFound);
         }
 
-        // 2. Get API key IDs before revoking (SQLite RETURNING is available since 3.35)
-        let revoked_ids: Vec<String> = sqlx::query_scalar(
-            r#"
-            UPDATE api_keys
-            SET revoked_at = ?, updated_at = ?
-            WHERE owner_type = 'service_account' AND owner_id = ? AND revoked_at IS NULL
-            RETURNING id
-            "#,
+        let revoked_ids: Vec<String> = query_scalar(
+            r#"UPDATE api_keys SET revoked_at = ?, updated_at = ? WHERE owner_type = 'service_account' AND owner_id = ? AND revoked_at IS NULL RETURNING id"#,
         )
-        .bind(now)
-        .bind(now)
-        .bind(id.to_string())
-        .fetch_all(&mut *tx)
-        .await?;
+        .bind(now).bind(now).bind(id.to_string())
+        .fetch_all(&mut *tx).await?;
 
-        // 3. Soft-delete the service account
-        sqlx::query(
-            r#"
-            UPDATE service_accounts
-            SET deleted_at = ?
-            WHERE id = ?
-            "#,
-        )
-        .bind(now)
-        .bind(id.to_string())
-        .execute(&mut *tx)
-        .await?;
+        query(r#"UPDATE service_accounts SET deleted_at = ? WHERE id = ?"#)
+            .bind(now)
+            .bind(id.to_string())
+            .execute(&mut *tx)
+            .await?;
 
         tx.commit().await?;
 
-        // Convert string IDs to UUIDs
-        let revoked_uuids: Vec<Uuid> = revoked_ids
+        let revoked_uuids = revoked_ids
             .into_iter()
             .filter_map(|s| parse_uuid(&s).ok())
             .collect();
-
         Ok(revoked_uuids)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use sqlx::SqlitePool;
+
     use super::*;
     use crate::db::repos::ServiceAccountRepo;
 

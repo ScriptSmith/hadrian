@@ -1,7 +1,9 @@
+#[cfg(feature = "server")]
+use axum::extract::Multipart;
 use axum::{
     Extension, Json,
     body::Bytes,
-    extract::{Multipart, State},
+    extract::State,
     response::{IntoResponse, Response},
 };
 use axum_valid::Valid;
@@ -198,6 +200,7 @@ pub async fn api_v1_images_generations(
             pricing: &state.pricing,
             db: state.db.as_ref(),
             api_key_id,
+            #[cfg(feature = "server")]
             task_tracker: &state.task_tracker,
             usage: crate::pricing::TokenUsage::for_images(
                 image_count,
@@ -233,6 +236,7 @@ pub async fn api_v1_images_generations(
     Ok(response)
 }
 
+#[cfg(feature = "server")]
 /// Edit image with text instructions
 ///
 /// POST /v1/images/edits
@@ -538,6 +542,7 @@ pub async fn api_v1_images_edits(
             pricing: &state.pricing,
             db: state.db.as_ref(),
             api_key_id,
+            #[cfg(feature = "server")]
             task_tracker: &state.task_tracker,
             usage: crate::pricing::TokenUsage::for_images(
                 image_count,
@@ -573,6 +578,7 @@ pub async fn api_v1_images_edits(
     Ok(response)
 }
 
+#[cfg(feature = "server")]
 /// Create image variations
 ///
 /// POST /v1/images/variations
@@ -838,6 +844,7 @@ pub async fn api_v1_images_variations(
             pricing: &state.pricing,
             db: state.db.as_ref(),
             api_key_id,
+            #[cfg(feature = "server")]
             task_tracker: &state.task_tracker,
             usage: crate::pricing::TokenUsage::for_images(
                 image_count,

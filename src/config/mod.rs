@@ -29,6 +29,7 @@ mod server;
 mod storage;
 mod ui;
 
+#[cfg(feature = "server")]
 use std::path::Path;
 
 pub use auth::*;
@@ -121,15 +122,17 @@ impl GatewayConfig {
     ///
     /// Environment variables in the format `${VAR_NAME}` are expanded.
     /// Missing required variables will cause an error.
+    #[cfg(feature = "server")]
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let contents = std::fs::read_to_string(path.as_ref())
             .map_err(|e| ConfigError::Io(e, path.as_ref().to_path_buf()))?;
 
-        Self::from_str(&contents)
+        Self::parse(&contents)
     }
 
     /// Parse configuration from a TOML string.
-    pub fn from_str(contents: &str) -> Result<Self, ConfigError> {
+    #[cfg(feature = "server")]
+    pub fn parse(contents: &str) -> Result<Self, ConfigError> {
         // Expand environment variables
         let expanded = expand_env_vars(contents)?;
 
@@ -148,6 +151,7 @@ impl GatewayConfig {
     }
 
     /// Validate the configuration for consistency and completeness.
+    #[cfg(feature = "server")]
     fn validate(&mut self) -> Result<(), ConfigError> {
         // If auth is enabled, we need a database
         if self.auth.is_auth_enabled() && self.database.is_none() {
@@ -217,6 +221,7 @@ pub enum ConfigError {
     #[error("Failed to read config file {1}: {0}")]
     Io(std::io::Error, std::path::PathBuf),
 
+    #[cfg(feature = "server")]
     #[error("Failed to parse config: {0}")]
     Parse(#[from] toml::de::Error),
 
@@ -233,6 +238,7 @@ pub enum ConfigError {
 /// not compiled into this binary, serde produces cryptic "unknown variant" errors.
 /// This function inspects the raw TOML to detect such cases and produce actionable
 /// error messages telling the user exactly which features to enable.
+#[cfg(feature = "server")]
 fn check_disabled_features(raw: &toml::Value) -> Result<(), ConfigError> {
     let mut issues: Vec<(String, &str)> = Vec::new();
 
@@ -334,6 +340,7 @@ fn check_disabled_features(raw: &toml::Value) -> Result<(), ConfigError> {
     )))
 }
 
+#[cfg(feature = "server")]
 fn check_provider_feature(_name: &str, type_val: &str, _issues: &mut Vec<(String, &str)>) {
     match type_val {
         #[cfg(not(feature = "provider-bedrock"))]
@@ -361,6 +368,7 @@ fn check_provider_feature(_name: &str, type_val: &str, _issues: &mut Vec<(String
     }
 }
 
+#[cfg(feature = "server")]
 fn check_database_feature(type_val: &str, _issues: &mut Vec<(String, &str)>) {
     match type_val {
         #[cfg(not(feature = "database-sqlite"))]
@@ -377,6 +385,7 @@ fn check_database_feature(type_val: &str, _issues: &mut Vec<(String, &str)>) {
     }
 }
 
+#[cfg(feature = "server")]
 fn check_secrets_feature(type_val: &str, _issues: &mut Vec<(String, &str)>) {
     match type_val {
         #[cfg(not(feature = "vault"))]
@@ -403,6 +412,7 @@ fn check_secrets_feature(type_val: &str, _issues: &mut Vec<(String, &str)>) {
     }
 }
 
+#[cfg(feature = "server")]
 fn check_cache_feature(type_val: &str, _issues: &mut Vec<(String, &str)>) {
     match type_val {
         #[cfg(not(feature = "redis"))]
@@ -414,6 +424,7 @@ fn check_cache_feature(type_val: &str, _issues: &mut Vec<(String, &str)>) {
     }
 }
 
+#[cfg(feature = "server")]
 fn check_rbac_feature(_issues: &mut Vec<(String, &str)>) {
     #[cfg(not(feature = "cel"))]
     _issues.push((
@@ -422,6 +433,7 @@ fn check_rbac_feature(_issues: &mut Vec<(String, &str)>) {
     ));
 }
 
+#[cfg(feature = "server")]
 fn check_metrics_feature(_issues: &mut Vec<(String, &str)>) {
     #[cfg(not(feature = "prometheus"))]
     _issues.push((
@@ -430,6 +442,7 @@ fn check_metrics_feature(_issues: &mut Vec<(String, &str)>) {
     ));
 }
 
+#[cfg(feature = "server")]
 fn check_otlp_feature(_issues: &mut Vec<(String, &str)>) {
     #[cfg(not(feature = "otlp"))]
     _issues.push((
@@ -438,6 +451,7 @@ fn check_otlp_feature(_issues: &mut Vec<(String, &str)>) {
     ));
 }
 
+#[cfg(feature = "server")]
 fn check_auth_mode_feature(_raw: &toml::Value, _issues: &mut Vec<(String, &str)>) {
     #[cfg(not(feature = "sso"))]
     if _raw
@@ -456,6 +470,7 @@ fn check_auth_mode_feature(_raw: &toml::Value, _issues: &mut Vec<(String, &str)>
 
 /// Expand environment variables in the format `${VAR_NAME}`.
 /// Skips commented lines (lines where content before the variable is a comment).
+#[cfg(feature = "server")]
 fn expand_env_vars(input: &str) -> Result<String, ConfigError> {
     let re = regex::Regex::new(r"\$\{([^}]+)\}").unwrap();
     let mut result = String::with_capacity(input.len());
@@ -510,7 +525,7 @@ mod tests {
 
     #[test]
     fn test_minimal_config() {
-        let config = GatewayConfig::from_str(
+        let config = GatewayConfig::parse(
             r#"
             [providers.my-openai]
             type = "open_ai"
@@ -525,7 +540,7 @@ mod tests {
 
     #[test]
     fn test_multiple_providers_config() {
-        let config = GatewayConfig::from_str(
+        let config = GatewayConfig::parse(
             r#"
             [providers]
             default_provider = "openrouter"
@@ -599,7 +614,7 @@ key3 = "literal""#
     #[test]
     #[cfg(not(feature = "provider-bedrock"))]
     fn test_disabled_provider_bedrock_error() {
-        let err = GatewayConfig::from_str(
+        let err = GatewayConfig::parse(
             r#"
             [providers.my-bedrock]
             type = "bedrock"
@@ -626,7 +641,7 @@ key3 = "literal""#
     #[test]
     #[cfg(not(feature = "vault"))]
     fn test_disabled_secrets_vault_error() {
-        let err = GatewayConfig::from_str(
+        let err = GatewayConfig::parse(
             r#"
             [secrets]
             type = "vault"
@@ -651,7 +666,7 @@ key3 = "literal""#
     #[test]
     #[cfg(not(feature = "provider-bedrock"))]
     fn test_disabled_multiple_features_error() {
-        let err = GatewayConfig::from_str(
+        let err = GatewayConfig::parse(
             r#"
             [providers.my-bedrock]
             type = "bedrock"
@@ -679,7 +694,7 @@ key3 = "literal""#
     #[test]
     #[cfg(not(feature = "database-sqlite"))]
     fn test_disabled_database_sqlite_error() {
-        let err = GatewayConfig::from_str(
+        let err = GatewayConfig::parse(
             r#"
             [database]
             type = "sqlite"
@@ -706,7 +721,7 @@ key3 = "literal""#
     #[test]
     #[cfg(not(feature = "database-postgres"))]
     fn test_disabled_database_postgres_error() {
-        let err = GatewayConfig::from_str(
+        let err = GatewayConfig::parse(
             r#"
             [database]
             type = "postgres"
@@ -755,7 +770,7 @@ key3 = "literal""#
     #[cfg(feature = "database-sqlite")]
     fn test_iap_without_trusted_proxies_non_localhost_errors() {
         // IAP on 0.0.0.0 without trusted_proxies should fail
-        let err = GatewayConfig::from_str(
+        let err = GatewayConfig::parse(
             r#"
             [server]
             host = "0.0.0.0"
@@ -790,7 +805,7 @@ key3 = "literal""#
     #[cfg(feature = "database-sqlite")]
     fn test_iap_without_trusted_proxies_localhost_warns_but_ok() {
         // IAP on localhost without trusted_proxies should succeed (just warn)
-        let result = GatewayConfig::from_str(
+        let result = GatewayConfig::parse(
             r#"
             [server]
             host = "127.0.0.1"
@@ -820,7 +835,7 @@ key3 = "literal""#
     #[cfg(feature = "database-sqlite")]
     fn test_iap_with_trusted_proxies_non_localhost_ok() {
         // IAP on 0.0.0.0 with trusted_proxies configured should succeed
-        let result = GatewayConfig::from_str(
+        let result = GatewayConfig::parse(
             r#"
             [server]
             host = "0.0.0.0"
@@ -853,7 +868,7 @@ key3 = "literal""#
     #[cfg(feature = "database-sqlite")]
     fn test_iap_with_dangerously_trust_all_non_localhost_ok() {
         // IAP with dangerously_trust_all should also pass validation
-        let result = GatewayConfig::from_str(
+        let result = GatewayConfig::parse(
             r#"
             [server]
             host = "0.0.0.0"

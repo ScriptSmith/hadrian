@@ -92,7 +92,8 @@ impl AwsSecretsManager {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl SecretManager for AwsSecretsManager {
     async fn get(&self, key: &str) -> SecretResult<Option<String>> {
         let name = self.full_name(key);

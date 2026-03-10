@@ -206,7 +206,8 @@ impl VaultSecretManager {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl SecretManager for VaultSecretManager {
     async fn get(&self, key: &str) -> SecretResult<Option<String>> {
         let path = self.full_path(key);

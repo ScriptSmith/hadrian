@@ -96,7 +96,8 @@ impl PostgresProjectRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl ProjectRepo for PostgresProjectRepo {
     async fn create(&self, org_id: Uuid, input: CreateProject) -> DbResult<Project> {
         let row = sqlx::query(

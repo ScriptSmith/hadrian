@@ -9,12 +9,14 @@ import {
   Palette,
   Server,
   Shield,
+  Sparkles,
   UsersRound,
 } from "lucide-react";
 import { Button } from "@/components/Button/Button";
 import { HadrianIcon } from "@/components/HadrianIcon/HadrianIcon";
 import { ThemeToggle } from "@/components/ThemeToggle/ThemeToggle";
 import { UserMenu } from "@/components/UserMenu/UserMenu";
+import { useWasmSetup } from "@/components/WasmSetup/WasmSetupGuard";
 import { useConfig } from "@/config/ConfigProvider";
 import { usePreferences } from "@/preferences/PreferencesProvider";
 import { useAuth, hasAdminAccess } from "@/auth";
@@ -55,6 +57,7 @@ export function Header({ onMenuClick, showMenuButton = false, className }: Heade
   const { config } = useConfig();
   const { resolvedTheme } = usePreferences();
   const { user } = useAuth();
+  const { isWasm, openSetupWizard } = useWasmSetup();
   const location = useLocation();
 
   // Determine which logo to use based on theme
@@ -136,6 +139,11 @@ export function Header({ onMenuClick, showMenuButton = false, className }: Heade
       {/* Right: Theme toggle and user menu */}
       <div className="flex items-center gap-2">
         <ThemeToggle />
+        {isWasm && (
+          <Button variant="ghost" size="icon" onClick={openSetupWizard} aria-label="Setup Wizard">
+            <Sparkles className="h-4 w-4" />
+          </Button>
+        )}
         <UserMenu />
       </div>
     </header>

@@ -1,8 +1,10 @@
 use std::{net::IpAddr, sync::Arc, time::Duration};
 
+#[cfg(feature = "server")]
+use axum::extract::ConnectInfo;
 use axum::{
     Json,
-    extract::{ConnectInfo, Request, State},
+    extract::{Request, State},
     http::{HeaderValue, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
@@ -166,10 +168,13 @@ pub async fn rate_limit_middleware(
 #[allow(clippy::collapsible_if)]
 pub fn extract_client_ip(req: &Request, trusted_proxies: &TrustedProxiesConfig) -> Option<IpAddr> {
     // Get the direct connecting IP (from TCP connection)
+    #[cfg(feature = "server")]
     let connecting_ip = req
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0.ip());
+    #[cfg(not(feature = "server"))]
+    let connecting_ip: Option<IpAddr> = None;
 
     // If no proxy trust is configured, just return the connecting IP
     if !trusted_proxies.is_configured() {

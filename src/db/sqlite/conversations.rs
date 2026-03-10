@@ -1,9 +1,11 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::common::parse_uuid;
+use super::{
+    backend::{Pool, RowExt, query},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -16,11 +18,11 @@ use crate::{
 };
 
 pub struct SqliteConversationRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteConversationRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
@@ -61,7 +63,7 @@ impl SqliteConversationRepo {
             "AND deleted_at IS NULL"
         };
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, owner_type, owner_id, title, models, messages, pin_order, created_at, updated_at
             FROM conversations
@@ -74,7 +76,7 @@ impl SqliteConversationRepo {
             comparison, deleted_filter, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(owner_type.as_str())
             .bind(owner_id.to_string())
             .bind(cursor.created_at) // cursor.created_at holds updated_at value
@@ -88,22 +90,22 @@ impl SqliteConversationRepo {
             .into_iter()
             .take(limit as usize)
             .map(|row| {
-                let owner_type_str: String = row.get("owner_type");
-                let models_json: String = row.get("models");
-                let messages_json: String = row.get("messages");
+                let owner_type_str: String = row.col("owner_type");
+                let models_json: String = row.col("models");
+                let messages_json: String = row.col("messages");
 
                 Ok(Conversation {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
+                    id: parse_uuid(&row.col::<String>("id"))?,
                     owner_type: owner_type_str
                         .parse()
                         .map_err(|e: String| DbError::Internal(e))?,
-                    owner_id: parse_uuid(&row.get::<String, _>("owner_id"))?,
-                    title: row.get("title"),
+                    owner_id: parse_uuid(&row.col::<String>("owner_id"))?,
+                    title: row.col("title"),
                     models: Self::parse_models(&models_json)?,
                     messages: Self::parse_messages(&messages_json)?,
-                    pin_order: row.get("pin_order"),
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    pin_order: row.col("pin_order"),
+                    created_at: row.col("created_at"),
+                    updated_at: row.col("updated_at"),
                 })
             })
             .collect::<DbResult<Vec<_>>>()?;
@@ -125,7 +127,8 @@ impl SqliteConversationRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl ConversationRepo for SqliteConversationRepo {
     async fn create(&self, input: CreateConversation) -> DbResult<Conversation> {
         let id = Uuid::new_v4();
@@ -137,7 +140,7 @@ impl ConversationRepo for SqliteConversationRepo {
         let messages_json =
             serde_json::to_string(&input.messages).map_err(|e| DbError::Internal(e.to_string()))?;
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO conversations (id, owner_type, owner_id, title, models, messages, pin_order, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
@@ -168,7 +171,7 @@ impl ConversationRepo for SqliteConversationRepo {
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<Conversation>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, owner_type, owner_id, title, models, messages, pin_order, created_at, updated_at
             FROM conversations
@@ -181,22 +184,22 @@ impl ConversationRepo for SqliteConversationRepo {
 
         match result {
             Some(row) => {
-                let owner_type_str: String = row.get("owner_type");
-                let models_json: String = row.get("models");
-                let messages_json: String = row.get("messages");
+                let owner_type_str: String = row.col("owner_type");
+                let models_json: String = row.col("models");
+                let messages_json: String = row.col("messages");
 
                 Ok(Some(Conversation {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
+                    id: parse_uuid(&row.col::<String>("id"))?,
                     owner_type: owner_type_str
                         .parse()
                         .map_err(|e: String| DbError::Internal(e))?,
-                    owner_id: parse_uuid(&row.get::<String, _>("owner_id"))?,
-                    title: row.get("title"),
+                    owner_id: parse_uuid(&row.col::<String>("owner_id"))?,
+                    title: row.col("title"),
                     models: Self::parse_models(&models_json)?,
                     messages: Self::parse_messages(&messages_json)?,
-                    pin_order: row.get("pin_order"),
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    pin_order: row.col("pin_order"),
+                    created_at: row.col("created_at"),
+                    updated_at: row.col("updated_at"),
                 }))
             }
             None => Ok(None),
@@ -204,7 +207,7 @@ impl ConversationRepo for SqliteConversationRepo {
     }
 
     async fn get_by_id_and_org(&self, id: Uuid, org_id: Uuid) -> DbResult<Option<Conversation>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT c.id, c.owner_type, c.owner_id, c.title, c.models, c.messages, c.pin_order, c.created_at, c.updated_at
             FROM conversations c
@@ -228,22 +231,22 @@ impl ConversationRepo for SqliteConversationRepo {
 
         match result {
             Some(row) => {
-                let owner_type_str: String = row.get("owner_type");
-                let models_json: String = row.get("models");
-                let messages_json: String = row.get("messages");
+                let owner_type_str: String = row.col("owner_type");
+                let models_json: String = row.col("models");
+                let messages_json: String = row.col("messages");
 
                 Ok(Some(Conversation {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
+                    id: parse_uuid(&row.col::<String>("id"))?,
                     owner_type: owner_type_str
                         .parse()
                         .map_err(|e: String| DbError::Internal(e))?,
-                    owner_id: parse_uuid(&row.get::<String, _>("owner_id"))?,
-                    title: row.get("title"),
+                    owner_id: parse_uuid(&row.col::<String>("owner_id"))?,
+                    title: row.col("title"),
                     models: Self::parse_models(&models_json)?,
                     messages: Self::parse_messages(&messages_json)?,
-                    pin_order: row.get("pin_order"),
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    pin_order: row.col("pin_order"),
+                    created_at: row.col("created_at"),
+                    updated_at: row.col("updated_at"),
                 }))
             }
             None => Ok(None),
@@ -268,7 +271,7 @@ impl ConversationRepo for SqliteConversationRepo {
         }
 
         // First page (no cursor provided)
-        let query = if params.include_deleted {
+        let sql = if params.include_deleted {
             r#"
             SELECT id, owner_type, owner_id, title, models, messages, pin_order, created_at, updated_at
             FROM conversations
@@ -286,7 +289,7 @@ impl ConversationRepo for SqliteConversationRepo {
             "#
         };
 
-        let rows = sqlx::query(query)
+        let rows = query(sql)
             .bind(owner_type.as_str())
             .bind(owner_id.to_string())
             .bind(fetch_limit)
@@ -298,22 +301,22 @@ impl ConversationRepo for SqliteConversationRepo {
             .into_iter()
             .take(limit as usize)
             .map(|row| {
-                let owner_type_str: String = row.get("owner_type");
-                let models_json: String = row.get("models");
-                let messages_json: String = row.get("messages");
+                let owner_type_str: String = row.col("owner_type");
+                let models_json: String = row.col("models");
+                let messages_json: String = row.col("messages");
 
                 Ok(Conversation {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
+                    id: parse_uuid(&row.col::<String>("id"))?,
                     owner_type: owner_type_str
                         .parse()
                         .map_err(|e: String| DbError::Internal(e))?,
-                    owner_id: parse_uuid(&row.get::<String, _>("owner_id"))?,
-                    title: row.get("title"),
+                    owner_id: parse_uuid(&row.col::<String>("owner_id"))?,
+                    title: row.col("title"),
                     models: Self::parse_models(&models_json)?,
                     messages: Self::parse_messages(&messages_json)?,
-                    pin_order: row.get("pin_order"),
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    pin_order: row.col("pin_order"),
+                    created_at: row.col("created_at"),
+                    updated_at: row.col("updated_at"),
                 })
             })
             .collect::<DbResult<Vec<_>>>()?;
@@ -336,18 +339,18 @@ impl ConversationRepo for SqliteConversationRepo {
         owner_id: Uuid,
         include_deleted: bool,
     ) -> DbResult<i64> {
-        let query = if include_deleted {
+        let sql = if include_deleted {
             "SELECT COUNT(*) as count FROM conversations WHERE owner_type = ? AND owner_id = ?"
         } else {
             "SELECT COUNT(*) as count FROM conversations WHERE owner_type = ? AND owner_id = ? AND deleted_at IS NULL"
         };
 
-        let row = sqlx::query(query)
+        let row = query(sql)
             .bind(owner_type.as_str())
             .bind(owner_id.to_string())
             .fetch_one(&self.pool)
             .await?;
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn update(&self, id: Uuid, input: UpdateConversation) -> DbResult<Conversation> {
@@ -358,11 +361,11 @@ impl ConversationRepo for SqliteConversationRepo {
         // other writers until this transaction completes.
         // Note: SQLite doesn't support FOR UPDATE, so we use BEGIN IMMEDIATE instead.
         let mut conn = self.pool.acquire().await?;
-        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+        query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
 
         let result = async {
             // Read current state within transaction (with write lock held)
-            let current_row = sqlx::query(
+            let current_row = query(
                 r#"
                 SELECT id, owner_type, owner_id, title, models, messages, pin_order, created_at, updated_at
                 FROM conversations
@@ -374,16 +377,16 @@ impl ConversationRepo for SqliteConversationRepo {
             .await?
             .ok_or(DbError::NotFound)?;
 
-            let current_owner_type_str: String = current_row.get("owner_type");
+            let current_owner_type_str: String = current_row.col("owner_type");
             let current_owner_type: ConversationOwnerType = current_owner_type_str
                 .parse()
                 .map_err(|e: String| DbError::Internal(e))?;
-            let current_owner_id = parse_uuid(&current_row.get::<String, _>("owner_id"))?;
-            let current_title: String = current_row.get("title");
-            let current_models_json: String = current_row.get("models");
-            let current_messages_json: String = current_row.get("messages");
-            let pin_order: Option<i32> = current_row.get("pin_order");
-            let created_at = current_row.get("created_at");
+            let current_owner_id = parse_uuid(&current_row.col::<String>("owner_id"))?;
+            let current_title: String = current_row.col("title");
+            let current_models_json: String = current_row.col("models");
+            let current_messages_json: String = current_row.col("messages");
+            let pin_order: Option<i32> = current_row.col("pin_order");
+            let created_at = current_row.col("created_at");
 
             // Determine new owner (if provided) or keep current
             let (new_owner_type, new_owner_id) = if let Some(ref owner) = input.owner {
@@ -404,7 +407,7 @@ impl ConversationRepo for SqliteConversationRepo {
             let messages_json = serde_json::to_string(&new_messages)
                 .map_err(|e| DbError::Internal(e.to_string()))?;
 
-            let update_result = sqlx::query(
+            let update_result = query(
                 r#"
                 UPDATE conversations
                 SET owner_type = ?, owner_id = ?, title = ?, models = ?, messages = ?, updated_at = ?
@@ -442,10 +445,10 @@ impl ConversationRepo for SqliteConversationRepo {
         // Commit or rollback based on result
         match &result {
             Ok(_) => {
-                sqlx::query("COMMIT").execute(&mut *conn).await?;
+                query("COMMIT").execute(&mut *conn).await?;
             }
             Err(_) => {
-                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                let _ = query("ROLLBACK").execute(&mut *conn).await;
             }
         }
 
@@ -460,11 +463,11 @@ impl ConversationRepo for SqliteConversationRepo {
         // other writers until this transaction completes.
         // Note: SQLite doesn't support FOR UPDATE, so we use BEGIN IMMEDIATE instead.
         let mut conn = self.pool.acquire().await?;
-        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+        query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
 
         let result = async {
             // Get current messages within transaction (with write lock held)
-            let current_row = sqlx::query(
+            let current_row = query(
                 r#"
                 SELECT messages
                 FROM conversations
@@ -476,7 +479,7 @@ impl ConversationRepo for SqliteConversationRepo {
             .await?
             .ok_or(DbError::NotFound)?;
 
-            let current_messages_json: String = current_row.get("messages");
+            let current_messages_json: String = current_row.col("messages");
             let mut messages = Self::parse_messages(&current_messages_json)?;
 
             // Append new messages
@@ -485,7 +488,7 @@ impl ConversationRepo for SqliteConversationRepo {
             let messages_json =
                 serde_json::to_string(&messages).map_err(|e| DbError::Internal(e.to_string()))?;
 
-            let update_result = sqlx::query(
+            let update_result = query(
                 r#"
                 UPDATE conversations
                 SET messages = ?, updated_at = ?
@@ -509,10 +512,10 @@ impl ConversationRepo for SqliteConversationRepo {
         // Commit or rollback based on result
         match &result {
             Ok(_) => {
-                sqlx::query("COMMIT").execute(&mut *conn).await?;
+                query("COMMIT").execute(&mut *conn).await?;
             }
             Err(_) => {
-                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                let _ = query("ROLLBACK").execute(&mut *conn).await;
             }
         }
 
@@ -522,7 +525,7 @@ impl ConversationRepo for SqliteConversationRepo {
     async fn delete(&self, id: Uuid) -> DbResult<()> {
         let now = chrono::Utc::now();
 
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE conversations
             SET deleted_at = ?
@@ -559,7 +562,7 @@ impl ConversationRepo for SqliteConversationRepo {
             "AND c.deleted_at IS NULL"
         };
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT
                 c.id,
@@ -604,7 +607,7 @@ impl ConversationRepo for SqliteConversationRepo {
             "#
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(user_id.to_string())
             .bind(user_id.to_string())
             .bind(limit)
@@ -614,26 +617,26 @@ impl ConversationRepo for SqliteConversationRepo {
         let items: Vec<ConversationWithProject> = rows
             .into_iter()
             .map(|row| {
-                let owner_type_str: String = row.get("owner_type");
-                let models_json: String = row.get("models");
-                let messages_json: String = row.get("messages");
-                let project_id: Option<String> = row.get("project_id");
-                let project_name: Option<String> = row.get("project_name");
-                let project_slug: Option<String> = row.get("project_slug");
+                let owner_type_str: String = row.col("owner_type");
+                let models_json: String = row.col("models");
+                let messages_json: String = row.col("messages");
+                let project_id: Option<String> = row.col("project_id");
+                let project_name: Option<String> = row.col("project_name");
+                let project_slug: Option<String> = row.col("project_slug");
 
                 Ok(ConversationWithProject {
                     conversation: Conversation {
-                        id: parse_uuid(&row.get::<String, _>("id"))?,
+                        id: parse_uuid(&row.col::<String>("id"))?,
                         owner_type: owner_type_str
                             .parse()
                             .map_err(|e: String| DbError::Internal(e))?,
-                        owner_id: parse_uuid(&row.get::<String, _>("owner_id"))?,
-                        title: row.get("title"),
+                        owner_id: parse_uuid(&row.col::<String>("owner_id"))?,
+                        title: row.col("title"),
                         models: Self::parse_models(&models_json)?,
                         messages: Self::parse_messages(&messages_json)?,
-                        pin_order: row.get("pin_order"),
-                        created_at: row.get("created_at"),
-                        updated_at: row.get("updated_at"),
+                        pin_order: row.col("pin_order"),
+                        created_at: row.col("created_at"),
+                        updated_at: row.col("updated_at"),
                     },
                     project_id: project_id.map(|s| parse_uuid(&s)).transpose()?,
                     project_name,
@@ -650,11 +653,11 @@ impl ConversationRepo for SqliteConversationRepo {
 
         // Use IMMEDIATE transaction mode to acquire write lock
         let mut conn = self.pool.acquire().await?;
-        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+        query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
 
         let result = async {
             // Read current state within transaction (with write lock held)
-            let current_row = sqlx::query(
+            let current_row = query(
                 r#"
                 SELECT id, owner_type, owner_id, title, models, messages, pin_order, created_at, updated_at
                 FROM conversations
@@ -666,17 +669,17 @@ impl ConversationRepo for SqliteConversationRepo {
             .await?
             .ok_or(DbError::NotFound)?;
 
-            let owner_type_str: String = current_row.get("owner_type");
+            let owner_type_str: String = current_row.col("owner_type");
             let owner_type: ConversationOwnerType = owner_type_str
                 .parse()
                 .map_err(|e: String| DbError::Internal(e))?;
-            let owner_id = parse_uuid(&current_row.get::<String, _>("owner_id"))?;
-            let title: String = current_row.get("title");
-            let models_json: String = current_row.get("models");
-            let messages_json: String = current_row.get("messages");
-            let created_at = current_row.get("created_at");
+            let owner_id = parse_uuid(&current_row.col::<String>("owner_id"))?;
+            let title: String = current_row.col("title");
+            let models_json: String = current_row.col("models");
+            let messages_json: String = current_row.col("messages");
+            let created_at = current_row.col("created_at");
 
-            let update_result = sqlx::query(
+            let update_result = query(
                 r#"
                 UPDATE conversations
                 SET pin_order = ?, updated_at = ?
@@ -710,10 +713,10 @@ impl ConversationRepo for SqliteConversationRepo {
         // Commit or rollback based on result
         match &result {
             Ok(_) => {
-                sqlx::query("COMMIT").execute(&mut *conn).await?;
+                query("COMMIT").execute(&mut *conn).await?;
             }
             Err(_) => {
-                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                let _ = query("ROLLBACK").execute(&mut *conn).await;
             }
         }
 
@@ -739,7 +742,7 @@ impl ConversationRepo for SqliteConversationRepo {
             let limit = std::cmp::min(batch_size as u64, remaining) as i64;
 
             // Hard delete conversations that were soft-deleted before the cutoff
-            let result = sqlx::query(
+            let result = query(
                 r#"
                 DELETE FROM conversations
                 WHERE id IN (
@@ -768,6 +771,8 @@ impl ConversationRepo for SqliteConversationRepo {
 
 #[cfg(test)]
 mod tests {
+    use sqlx::SqlitePool;
+
     use super::*;
     use crate::{
         db::repos::ConversationRepo,

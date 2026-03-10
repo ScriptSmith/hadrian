@@ -7,7 +7,8 @@ use crate::{
     models::{CreateModelPricing, DbModelPricing, PricingOwner, UpdateModelPricing},
 };
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait ModelPricingRepo: Send + Sync {
     /// Create a new model pricing entry
     async fn create(&self, input: CreateModelPricing) -> DbResult<DbModelPricing>;

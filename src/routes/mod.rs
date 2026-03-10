@@ -6,6 +6,7 @@ pub mod execution;
 pub mod health;
 #[cfg(feature = "sso")]
 pub mod scim;
+#[cfg(feature = "server")]
 pub mod ws;
 
 pub use api::*;
@@ -13,4 +14,5 @@ pub use api::*;
 pub use auth as auth_routes;
 #[cfg(feature = "sso")]
 pub use scim::scim_routes;
+#[cfg(feature = "server")]
 pub use ws::ws_handler;

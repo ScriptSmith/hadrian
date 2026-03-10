@@ -431,12 +431,20 @@ impl FileSearchAuthContext {
 ///
 /// This callback is used to send continuation requests to the provider
 /// after executing file_search tool calls.
+#[cfg(not(target_arch = "wasm32"))]
 pub type ProviderCallback = Arc<
     dyn Fn(
             CreateResponsesPayload,
         ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, ProviderError>> + Send>>
         + Send
         + Sync,
+>;
+
+#[cfg(target_arch = "wasm32")]
+pub type ProviderCallback = Arc<
+    dyn Fn(
+        CreateResponsesPayload,
+    ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, ProviderError>>>>,
 >;
 
 /// Errors that can occur during file search middleware processing.
@@ -1536,7 +1544,7 @@ pub fn wrap_streaming_with_file_search(
     let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
 
     // Spawn a task to process the stream, propagating the span context
-    tokio::spawn(
+    crate::compat::spawn_detached(
         async move {
             let mut iteration = 0;
             let mut current_body = body;

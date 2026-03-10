@@ -1,8 +1,10 @@
 use async_trait::async_trait;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::common::parse_uuid;
+use super::{
+    backend::{Pool, Row, RowExt, query},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -15,39 +17,40 @@ use crate::{
 };
 
 pub struct SqliteDomainVerificationRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteDomainVerificationRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
     /// Parse a DomainVerification from a database row.
-    fn parse_verification(row: &sqlx::sqlite::SqliteRow) -> DbResult<DomainVerification> {
-        let status_str: String = row.get("status");
+    fn parse_verification(row: &Row) -> DbResult<DomainVerification> {
+        let status_str: String = row.col("status");
         let status = status_str
             .parse::<DomainVerificationStatus>()
             .unwrap_or_default();
 
         Ok(DomainVerification {
-            id: parse_uuid(&row.get::<String, _>("id"))?,
-            org_sso_config_id: parse_uuid(&row.get::<String, _>("org_sso_config_id"))?,
-            domain: row.get("domain"),
-            verification_token: row.get("verification_token"),
+            id: parse_uuid(&row.col::<String>("id"))?,
+            org_sso_config_id: parse_uuid(&row.col::<String>("org_sso_config_id"))?,
+            domain: row.col("domain"),
+            verification_token: row.col("verification_token"),
             status,
-            dns_txt_record: row.get("dns_txt_record"),
-            verification_attempts: row.get("verification_attempts"),
-            last_attempt_at: row.get("last_attempt_at"),
-            verified_at: row.get("verified_at"),
-            expires_at: row.get("expires_at"),
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
+            dns_txt_record: row.col("dns_txt_record"),
+            verification_attempts: row.col("verification_attempts"),
+            last_attempt_at: row.col("last_attempt_at"),
+            verified_at: row.col("verified_at"),
+            expires_at: row.col("expires_at"),
+            created_at: row.col("created_at"),
+            updated_at: row.col("updated_at"),
         })
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl DomainVerificationRepo for SqliteDomainVerificationRepo {
     async fn create(
         &self,
@@ -58,7 +61,7 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
         let id = Uuid::new_v4();
         let now = chrono::Utc::now();
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO domain_verifications (
                 id, org_sso_config_id, domain, verification_token, status,
@@ -75,15 +78,18 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                DbError::Conflict(format!(
+        .map_err(|e| {
+            if super::backend::is_unique_violation(&e) {
+                return DbError::Conflict(format!(
                     "Domain '{}' already exists for this SSO configuration",
                     input.domain
-                ))
+                ));
             }
-            sqlx::Error::Database(db_err) if db_err.is_foreign_key_violation() => DbError::NotFound,
-            _ => DbError::from(e),
+            #[cfg(feature = "database-sqlite")]
+            if matches!(&e, sqlx::Error::Database(db_err) if db_err.is_foreign_key_violation()) {
+                return DbError::NotFound;
+            }
+            DbError::from(e)
         })?;
 
         Ok(DomainVerification {
@@ -103,7 +109,7 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<DomainVerification>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, org_sso_config_id, domain, verification_token, status,
                    dns_txt_record, verification_attempts, last_attempt_at, verified_at,
@@ -127,7 +133,7 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
         org_sso_config_id: Uuid,
         domain: &str,
     ) -> DbResult<Option<DomainVerification>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, org_sso_config_id, domain, verification_token, status,
                    dns_txt_record, verification_attempts, last_attempt_at, verified_at,
@@ -154,7 +160,7 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
     ) -> DbResult<Vec<DomainVerification>> {
         let limit = params.limit.unwrap_or(100);
 
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, org_sso_config_id, domain, verification_token, status,
                    dns_txt_record, verification_attempts, last_attempt_at, verified_at,
@@ -176,14 +182,13 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
     }
 
     async fn count_by_config(&self, org_sso_config_id: Uuid) -> DbResult<i64> {
-        let row = sqlx::query(
-            "SELECT COUNT(*) as count FROM domain_verifications WHERE org_sso_config_id = ?",
-        )
-        .bind(org_sso_config_id.to_string())
-        .fetch_one(&self.pool)
-        .await?;
+        let row =
+            query("SELECT COUNT(*) as count FROM domain_verifications WHERE org_sso_config_id = ?")
+                .bind(org_sso_config_id.to_string())
+                .fetch_one(&self.pool)
+                .await?;
 
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn update(
@@ -196,7 +201,7 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
         // Fetch existing record
         let existing = self.get_by_id(id).await?.ok_or(DbError::NotFound)?;
 
-        sqlx::query(
+        query(
             r#"
             UPDATE domain_verifications SET
                 status = ?,
@@ -228,7 +233,7 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
-        let result = sqlx::query("DELETE FROM domain_verifications WHERE id = ?")
+        let result = query("DELETE FROM domain_verifications WHERE id = ?")
             .bind(id.to_string())
             .execute(&self.pool)
             .await?;
@@ -241,7 +246,7 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
     }
 
     async fn find_verified_by_domain(&self, domain: &str) -> DbResult<Option<DomainVerification>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT dv.id, dv.org_sso_config_id, dv.domain, dv.verification_token, dv.status,
                    dv.dns_txt_record, dv.verification_attempts, dv.last_attempt_at, dv.verified_at,
@@ -269,7 +274,7 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
         &self,
         org_sso_config_id: Uuid,
     ) -> DbResult<Vec<DomainVerification>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, org_sso_config_id, domain, verification_token, status,
                    dns_txt_record, verification_attempts, last_attempt_at, verified_at,
@@ -291,7 +296,7 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
     }
 
     async fn has_verified_domain(&self, org_sso_config_id: Uuid) -> DbResult<bool> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT EXISTS(
                 SELECT 1 FROM domain_verifications
@@ -306,7 +311,7 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
         .await?;
 
         // SQLite returns 0 or 1 for EXISTS
-        Ok(row.get::<i32, _>("has_verified") != 0)
+        Ok(row.col::<i32>("has_verified") != 0)
     }
 
     async fn create_auto_verified(
@@ -318,7 +323,7 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
         let id = Uuid::new_v4();
         let now = chrono::Utc::now();
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO domain_verifications (
                 id, org_sso_config_id, domain, verification_token, status,
@@ -336,15 +341,18 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
         .bind(now) // updated_at
         .execute(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                DbError::Conflict(format!(
+        .map_err(|e| {
+            if super::backend::is_unique_violation(&e) {
+                return DbError::Conflict(format!(
                     "Domain '{}' already exists for this SSO configuration",
                     input.domain
-                ))
+                ));
             }
-            sqlx::Error::Database(db_err) if db_err.is_foreign_key_violation() => DbError::NotFound,
-            _ => DbError::from(e),
+            #[cfg(feature = "database-sqlite")]
+            if matches!(&e, sqlx::Error::Database(db_err) if db_err.is_foreign_key_violation()) {
+                return DbError::NotFound;
+            }
+            DbError::from(e)
         })?;
 
         Ok(DomainVerification {
@@ -366,6 +374,8 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
 
 #[cfg(test)]
 mod tests {
+    use sqlx::SqlitePool;
+
     use super::*;
 
     async fn create_test_pool() -> SqlitePool {

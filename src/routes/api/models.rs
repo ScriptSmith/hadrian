@@ -313,6 +313,7 @@ pub async fn api_v1_models(
         };
 
         // Collect all enabled providers across scopes, auto-paginating through cursor pages
+        #[cfg(not(target_arch = "wasm32"))]
         type ProviderPageFn = Box<
             dyn Fn(
                     crate::db::repos::ListParams,
@@ -325,6 +326,20 @@ pub async fn api_v1_models(
                             > + Send,
                     >,
                 > + Send,
+        >;
+        #[cfg(target_arch = "wasm32")]
+        type ProviderPageFn = Box<
+            dyn Fn(
+                crate::db::repos::ListParams,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<
+                            Output = crate::db::DbResult<
+                                crate::db::repos::ListResult<crate::models::DynamicProvider>,
+                            >,
+                        >,
+                >,
+            >,
         >;
         let collect_all_enabled = |fetch_page: ProviderPageFn| async move {
             let mut all = Vec::new();

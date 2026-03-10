@@ -24,7 +24,8 @@ use crate::{
 ///
 /// All query methods (get, list, count) automatically exclude soft-deleted policies.
 /// Delete operations set `deleted_at` rather than removing rows, preserving version history.
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait OrgRbacPolicyRepo: Send + Sync {
     // =========================================================================
     // Policy CRUD Operations

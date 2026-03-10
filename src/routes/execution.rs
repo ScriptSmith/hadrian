@@ -130,17 +130,30 @@ impl ApiPayload for api_types::CreateEmbeddingPayload {
 ///
 /// This trait is implemented for marker types that represent each API operation,
 /// allowing us to dispatch to the correct provider method generically.
+///
+/// On native targets, futures must be `Send` for use with multi-threaded runtimes.
+/// On WASM, `Send` is not required (single-threaded).
 pub trait ProviderExecutor: Send + Sync + 'static {
     /// The payload type for this operation.
     type Payload: ApiPayload;
 
     /// Execute the request against the given provider.
+    #[cfg(not(target_arch = "wasm32"))]
     fn execute(
         state: &AppState,
         provider_name: &str,
         provider_config: &ProviderConfig,
         payload: Self::Payload,
     ) -> impl std::future::Future<Output = Result<Response, ProviderError>> + Send;
+
+    /// Execute the request against the given provider.
+    #[cfg(target_arch = "wasm32")]
+    fn execute(
+        state: &AppState,
+        provider_name: &str,
+        provider_config: &ProviderConfig,
+        payload: Self::Payload,
+    ) -> impl std::future::Future<Output = Result<Response, ProviderError>>;
 
     /// Name of the operation for logging/tracing.
     fn operation_name() -> &'static str;
@@ -781,7 +794,7 @@ mod tests {
 
     /// Create a minimal AppState for testing with the given providers config.
     fn create_test_state(providers: ProvidersConfig) -> AppState {
-        let mut config = GatewayConfig::from_str("").expect("Empty config should parse");
+        let mut config = GatewayConfig::parse("").expect("Empty config should parse");
         config.providers = providers;
         let config = Arc::new(config);
 

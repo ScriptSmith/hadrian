@@ -1,8 +1,10 @@
 use async_trait::async_trait;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::common::parse_uuid;
+use super::{
+    backend::{Pool, RowExt, begin, map_unique_violation, query},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -15,11 +17,11 @@ use crate::{
 };
 
 pub struct SqliteModelPricingRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteModelPricingRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
@@ -52,28 +54,28 @@ impl SqliteModelPricingRepo {
         }
     }
 
-    fn row_to_pricing(row: &sqlx::sqlite::SqliteRow) -> DbResult<DbModelPricing> {
-        let owner_type: Option<String> = row.get("owner_type");
-        let owner_id: Option<String> = row.get("owner_id");
-        let source_str: String = row.get("source");
+    fn row_to_pricing(row: &super::backend::Row) -> DbResult<DbModelPricing> {
+        let owner_type: Option<String> = row.col("owner_type");
+        let owner_id: Option<String> = row.col("owner_id");
+        let source_str: String = row.col("source");
 
         Ok(DbModelPricing {
-            id: parse_uuid(&row.get::<String, _>("id"))?,
+            id: parse_uuid(&row.col::<String>("id"))?,
             owner: Self::parse_owner(owner_type.as_deref(), owner_id.as_deref())?,
-            provider: row.get("provider"),
-            model: row.get("model"),
-            input_per_1m_tokens: row.get("input_per_1m_tokens"),
-            output_per_1m_tokens: row.get("output_per_1m_tokens"),
-            per_image: row.get("per_image"),
-            per_request: row.get("per_request"),
-            cached_input_per_1m_tokens: row.get("cached_input_per_1m_tokens"),
-            cache_write_per_1m_tokens: row.get("cache_write_per_1m_tokens"),
-            reasoning_per_1m_tokens: row.get("reasoning_per_1m_tokens"),
-            per_second: row.get("per_second"),
-            per_1m_characters: row.get("per_1m_characters"),
-            source: PricingSource::from_str(&source_str),
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
+            provider: row.col("provider"),
+            model: row.col("model"),
+            input_per_1m_tokens: row.col("input_per_1m_tokens"),
+            output_per_1m_tokens: row.col("output_per_1m_tokens"),
+            per_image: row.col("per_image"),
+            per_request: row.col("per_request"),
+            cached_input_per_1m_tokens: row.col("cached_input_per_1m_tokens"),
+            cache_write_per_1m_tokens: row.col("cache_write_per_1m_tokens"),
+            reasoning_per_1m_tokens: row.col("reasoning_per_1m_tokens"),
+            per_second: row.col("per_second"),
+            per_1m_characters: row.col("per_1m_characters"),
+            source: PricingSource::parse(&source_str),
+            created_at: row.col("created_at"),
+            updated_at: row.col("updated_at"),
         })
     }
 
@@ -99,7 +101,7 @@ impl SqliteModelPricingRepo {
             )
         };
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, owner_type, owner_id, provider, model,
                    input_per_1m_tokens, output_per_1m_tokens, per_image, per_request,
@@ -113,7 +115,7 @@ impl SqliteModelPricingRepo {
             cursor_condition, order, order
         );
 
-        let mut query_builder = sqlx::query(&query);
+        let mut query_builder = query(&sql);
         for bind in &binds {
             query_builder = query_builder.bind(bind);
         }
@@ -156,7 +158,7 @@ impl SqliteModelPricingRepo {
     ) -> DbResult<ListResult<DbModelPricing>> {
         let fetch_limit = limit + 1;
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, owner_type, owner_id, provider, model,
                    input_per_1m_tokens, output_per_1m_tokens, per_image, per_request,
@@ -170,7 +172,7 @@ impl SqliteModelPricingRepo {
             where_clause
         );
 
-        let mut query_builder = sqlx::query(&query);
+        let mut query_builder = query(&sql);
         for bind in &binds {
             query_builder = query_builder.bind(bind);
         }
@@ -198,14 +200,15 @@ impl SqliteModelPricingRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl ModelPricingRepo for SqliteModelPricingRepo {
     async fn create(&self, input: CreateModelPricing) -> DbResult<DbModelPricing> {
         let id = Uuid::new_v4();
         let now = chrono::Utc::now();
         let (owner_type, owner_id) = Self::owner_to_parts(&input.owner);
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO model_pricing (
                 id, owner_type, owner_id, provider, model,
@@ -236,15 +239,10 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                DbError::Conflict(format!(
-                    "Pricing for provider '{}' model '{}' already exists",
-                    input.provider, input.model
-                ))
-            }
-            _ => DbError::from(e),
-        })?;
+        .map_err(map_unique_violation(format!(
+            "Pricing for provider '{}' model '{}' already exists",
+            input.provider, input.model
+        )))?;
 
         Ok(DbModelPricing {
             id,
@@ -267,7 +265,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<DbModelPricing>> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT id, owner_type, owner_id, provider, model,
                    input_per_1m_tokens, output_per_1m_tokens, per_image, per_request,
@@ -293,7 +291,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
         let (owner_type, owner_id) = Self::owner_to_parts(owner);
 
         let row = if owner_type.is_none() {
-            sqlx::query(
+            query(
                 r#"
                 SELECT id, owner_type, owner_id, provider, model,
                        input_per_1m_tokens, output_per_1m_tokens, per_image, per_request,
@@ -308,7 +306,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
             .fetch_optional(&self.pool)
             .await?
         } else {
-            sqlx::query(
+            query(
                 r#"
                 SELECT id, owner_type, owner_id, provider, model,
                        input_per_1m_tokens, output_per_1m_tokens, per_image, per_request,
@@ -339,7 +337,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
     ) -> DbResult<Option<DbModelPricing>> {
         // Single query with priority ordering: user > project > org > global
         // Uses CASE expression to assign priority and LIMIT 1 to get highest priority match
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT id, owner_type, owner_id, provider, model,
                    input_per_1m_tokens, output_per_1m_tokens, per_image, per_request,
@@ -396,7 +394,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
     }
 
     async fn count_by_org(&self, org_id: Uuid) -> DbResult<i64> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT COUNT(*) as count
             FROM model_pricing
@@ -407,7 +405,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn list_by_project(
@@ -430,7 +428,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
     }
 
     async fn count_by_project(&self, project_id: Uuid) -> DbResult<i64> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT COUNT(*) as count
             FROM model_pricing
@@ -441,7 +439,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn list_by_user(
@@ -464,7 +462,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
     }
 
     async fn count_by_user(&self, user_id: Uuid) -> DbResult<i64> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT COUNT(*) as count
             FROM model_pricing
@@ -475,7 +473,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn list_global(&self, params: ListParams) -> DbResult<ListResult<DbModelPricing>> {
@@ -494,7 +492,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
     }
 
     async fn count_global(&self) -> DbResult<i64> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT COUNT(*) as count
             FROM model_pricing
@@ -504,7 +502,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn list_by_provider(
@@ -527,7 +525,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
     }
 
     async fn count_by_provider(&self, provider: &str) -> DbResult<i64> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT COUNT(*) as count
             FROM model_pricing
@@ -538,13 +536,13 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn update(&self, id: Uuid, input: UpdateModelPricing) -> DbResult<DbModelPricing> {
         let now = chrono::Utc::now();
 
-        sqlx::query(
+        query(
             r#"
             UPDATE model_pricing SET
                 input_per_1m_tokens = COALESCE(?, input_per_1m_tokens),
@@ -576,7 +574,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
-        sqlx::query("DELETE FROM model_pricing WHERE id = ?")
+        query("DELETE FROM model_pricing WHERE id = ?")
             .bind(id.to_string())
             .execute(&self.pool)
             .await?;
@@ -593,7 +591,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
         // Different conflict targets for global vs scoped pricing due to partial indexes
         if owner_type.is_none() {
             // Global pricing: conflict on (provider, model) where owner_type IS NULL
-            sqlx::query(
+            query(
                 r#"
                 INSERT INTO model_pricing (
                     id, owner_type, owner_id, provider, model,
@@ -636,7 +634,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
             .await?;
         } else {
             // Scoped pricing: conflict on (owner_type, owner_id, provider, model)
-            sqlx::query(
+            query(
                 r#"
                 INSERT INTO model_pricing (
                     id, owner_type, owner_id, provider, model,
@@ -695,16 +693,14 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
         let now = chrono::Utc::now();
         let count = entries.len();
 
-        // Process all entries in a single transaction for atomicity
-        // If any entry fails, the entire batch is rolled back
-        let mut tx = self.pool.begin().await?;
+        let mut tx = begin(&self.pool).await?;
 
         for entry in entries {
             let id = Uuid::new_v4();
             let (owner_type, owner_id) = Self::owner_to_parts(&entry.owner);
 
             if owner_type.is_none() {
-                sqlx::query(
+                query(
                     r#"
                     INSERT INTO model_pricing (
                         id, owner_type, owner_id, provider, model,
@@ -746,7 +742,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
                 .execute(&mut *tx)
                 .await?;
             } else {
-                sqlx::query(
+                query(
                     r#"
                     INSERT INTO model_pricing (
                         id, owner_type, owner_id, provider, model,
@@ -793,12 +789,15 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
         }
 
         tx.commit().await?;
+
         Ok(count)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use sqlx::SqlitePool;
+
     use super::*;
     use crate::db::repos::{ListParams, ModelPricingRepo};
 

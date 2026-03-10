@@ -163,7 +163,8 @@ impl RedisDlq {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl DeadLetterQueue for RedisDlq {
     async fn push(&self, entry: DlqEntry) -> DlqResult<()> {
         let mut conn = self.conn().await?;

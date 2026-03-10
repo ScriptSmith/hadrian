@@ -12,7 +12,8 @@ use crate::{
 /// Domain verifications track the ownership verification status of email domains
 /// claimed by an organization's SSO configuration. Domains must be verified via
 /// DNS TXT record before SSO can be enforced for users with that email domain.
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait DomainVerificationRepo: Send + Sync {
     /// Create a new domain verification record.
     ///

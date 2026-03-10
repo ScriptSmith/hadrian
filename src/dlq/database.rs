@@ -34,7 +34,8 @@ impl DatabaseDlq {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl DeadLetterQueue for DatabaseDlq {
     async fn push(&self, entry: DlqEntry) -> DlqResult<()> {
         let metadata = serde_json::to_string(&entry.metadata)

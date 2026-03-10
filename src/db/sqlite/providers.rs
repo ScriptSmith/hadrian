@@ -1,7 +1,7 @@
 use async_trait::async_trait;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
+use super::backend::{Pool, Row, RowExt, map_unique_violation, query};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -13,11 +13,11 @@ use crate::{
 };
 
 pub struct SqliteDynamicProviderRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteDynamicProviderRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
@@ -50,28 +50,31 @@ impl SqliteDynamicProviderRepo {
         }
     }
 
-    fn parse_provider(row: &sqlx::sqlite::SqliteRow) -> DbResult<DynamicProvider> {
-        let owner = Self::parse_owner(row.get("owner_type"), row.get("owner_id"))?;
-        let models_json: String = row.get("models");
+    fn parse_provider(row: &Row) -> DbResult<DynamicProvider> {
+        let owner_type: String = row.col("owner_type");
+        let owner_id: String = row.col("owner_id");
+        let owner = Self::parse_owner(&owner_type, &owner_id)?;
+        let models_json: String = row.col("models");
         let models: Vec<String> =
             serde_json::from_str(&models_json).map_err(|e| DbError::Internal(e.to_string()))?;
 
         let config: Option<serde_json::Value> = row
-            .get::<Option<String>, _>("config")
+            .col::<Option<String>>("config")
             .and_then(|s| serde_json::from_str(&s).ok());
 
+        let id_str: String = row.col("id");
         Ok(DynamicProvider {
-            id: Uuid::parse_str(row.get("id")).map_err(|e| DbError::Internal(e.to_string()))?,
-            name: row.get("name"),
+            id: Uuid::parse_str(&id_str).map_err(|e| DbError::Internal(e.to_string()))?,
+            name: row.col("name"),
             owner,
-            provider_type: row.get("provider_type"),
-            base_url: row.get("base_url"),
-            api_key_secret_ref: row.get("api_key_secret_ref"),
+            provider_type: row.col("provider_type"),
+            base_url: row.col("base_url"),
+            api_key_secret_ref: row.col("api_key_secret_ref"),
             config,
             models,
-            is_enabled: row.get::<i32, _>("is_enabled") != 0,
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
+            is_enabled: row.col::<i32>("is_enabled") != 0,
+            created_at: row.col("created_at"),
+            updated_at: row.col("updated_at"),
         })
     }
 
@@ -87,7 +90,7 @@ impl SqliteDynamicProviderRepo {
         let (comparison, order, should_reverse) =
             params.sort_order.cursor_query_params(params.direction);
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
                    api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -100,7 +103,7 @@ impl SqliteDynamicProviderRepo {
             comparison, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(org_id.to_string())
             .bind(cursor.created_at)
             .bind(cursor.id.to_string())
@@ -139,7 +142,7 @@ impl SqliteDynamicProviderRepo {
         let (comparison, order, should_reverse) =
             params.sort_order.cursor_query_params(params.direction);
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
                    api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -152,7 +155,7 @@ impl SqliteDynamicProviderRepo {
             comparison, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(project_id.to_string())
             .bind(cursor.created_at)
             .bind(cursor.id.to_string())
@@ -191,7 +194,7 @@ impl SqliteDynamicProviderRepo {
         let (comparison, order, should_reverse) =
             params.sort_order.cursor_query_params(params.direction);
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
                    api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -204,7 +207,7 @@ impl SqliteDynamicProviderRepo {
             comparison, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(team_id.to_string())
             .bind(cursor.created_at)
             .bind(cursor.id.to_string())
@@ -243,7 +246,7 @@ impl SqliteDynamicProviderRepo {
         let (comparison, order, should_reverse) =
             params.sort_order.cursor_query_params(params.direction);
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
                    api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -256,7 +259,7 @@ impl SqliteDynamicProviderRepo {
             comparison, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(user_id.to_string())
             .bind(cursor.created_at)
             .bind(cursor.id.to_string())
@@ -284,7 +287,8 @@ impl SqliteDynamicProviderRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl DynamicProviderRepo for SqliteDynamicProviderRepo {
     async fn create(&self, id: Uuid, input: CreateDynamicProvider) -> DbResult<DynamicProvider> {
         let now = chrono::Utc::now();
@@ -298,7 +302,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             .map(|c| serde_json::to_string(c).map_err(|e| DbError::Internal(e.to_string())))
             .transpose()?;
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO dynamic_providers (
                 id, owner_type, owner_id, name, provider_type, base_url,
@@ -320,12 +324,10 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => DbError::Conflict(
-                format!("Provider '{}' already exists for this owner", input.name),
-            ),
-            _ => DbError::from(e),
-        })?;
+        .map_err(map_unique_violation(format!(
+            "Provider '{}' already exists for this owner",
+            input.name
+        )))?;
 
         Ok(DynamicProvider {
             id,
@@ -343,7 +345,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<DynamicProvider>> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
                    api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -365,7 +367,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
     ) -> DbResult<Option<DynamicProvider>> {
         let (owner_type, owner_id) = Self::owner_to_parts(owner);
 
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
                    api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -398,7 +400,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         }
 
         // First page (no cursor provided)
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
                    api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -428,7 +430,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
     }
 
     async fn count_by_org(&self, org_id: Uuid) -> DbResult<i64> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT COUNT(*) as count
             FROM dynamic_providers
@@ -439,7 +441,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn list_by_team(
@@ -458,7 +460,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         }
 
         // First page (no cursor provided)
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
                    api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -488,7 +490,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
     }
 
     async fn count_by_team(&self, team_id: Uuid) -> DbResult<i64> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT COUNT(*) as count
             FROM dynamic_providers
@@ -499,7 +501,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn list_by_project(
@@ -518,7 +520,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         }
 
         // First page (no cursor provided)
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
                    api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -548,7 +550,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
     }
 
     async fn count_by_project(&self, project_id: Uuid) -> DbResult<i64> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT COUNT(*) as count
             FROM dynamic_providers
@@ -559,7 +561,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn list_by_user(
@@ -578,7 +580,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         }
 
         // First page (no cursor provided)
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
                    api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -608,7 +610,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
     }
 
     async fn count_by_user(&self, user_id: Uuid) -> DbResult<i64> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT COUNT(*) as count
             FROM dynamic_providers
@@ -619,7 +621,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn list_enabled_by_user(
@@ -634,7 +636,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             let (comparison, order, should_reverse) =
                 params.sort_order.cursor_query_params(params.direction);
 
-            let query = format!(
+            let sql = format!(
                 r#"
                 SELECT id, owner_type, owner_id, name, provider_type, base_url,
                        api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -647,7 +649,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
                 comparison, order, order
             );
 
-            let rows = sqlx::query(&query)
+            let rows = query(&sql)
                 .bind(user_id.to_string())
                 .bind(cursor.created_at)
                 .bind(cursor.id.to_string())
@@ -674,7 +676,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             return Ok(ListResult::new(items, has_more, cursors));
         }
 
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
                    api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -715,7 +717,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             let (comparison, order, should_reverse) =
                 params.sort_order.cursor_query_params(params.direction);
 
-            let query = format!(
+            let sql = format!(
                 r#"
                 SELECT id, owner_type, owner_id, name, provider_type, base_url,
                        api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -728,7 +730,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
                 comparison, order, order
             );
 
-            let rows = sqlx::query(&query)
+            let rows = query(&sql)
                 .bind(org_id.to_string())
                 .bind(cursor.created_at)
                 .bind(cursor.id.to_string())
@@ -755,7 +757,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             return Ok(ListResult::new(items, has_more, cursors));
         }
 
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
                    api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -796,7 +798,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             let (comparison, order, should_reverse) =
                 params.sort_order.cursor_query_params(params.direction);
 
-            let query = format!(
+            let sql = format!(
                 r#"
                 SELECT id, owner_type, owner_id, name, provider_type, base_url,
                        api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -809,7 +811,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
                 comparison, order, order
             );
 
-            let rows = sqlx::query(&query)
+            let rows = query(&sql)
                 .bind(project_id.to_string())
                 .bind(cursor.created_at)
                 .bind(cursor.id.to_string())
@@ -836,7 +838,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             return Ok(ListResult::new(items, has_more, cursors));
         }
 
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
                    api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -877,7 +879,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             let (comparison, order, should_reverse) =
                 params.sort_order.cursor_query_params(params.direction);
 
-            let query = format!(
+            let sql = format!(
                 r#"
                 SELECT id, owner_type, owner_id, name, provider_type, base_url,
                        api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -890,7 +892,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
                 comparison, order, order
             );
 
-            let rows = sqlx::query(&query)
+            let rows = query(&sql)
                 .bind(team_id.to_string())
                 .bind(cursor.created_at)
                 .bind(cursor.id.to_string())
@@ -917,7 +919,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             return Ok(ListResult::new(items, has_more, cursors));
         }
 
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
                    api_key_secret_ref, config, models, is_enabled, created_at, updated_at
@@ -983,13 +985,13 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             updates.join(", ")
         );
 
-        let mut query = sqlx::query(&query_str);
-        query = query.bind(now);
+        let mut q = query(&query_str);
+        q = q.bind(now);
         if has_base_url {
-            query = query.bind(&input.base_url);
+            q = q.bind(&input.base_url);
         }
         if has_api_key {
-            query = query.bind(&input.api_key);
+            q = q.bind(&input.api_key);
         }
         if has_config {
             let config_json = input
@@ -997,26 +999,26 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
                 .as_ref()
                 .map(|c| serde_json::to_string(c).map_err(|e| DbError::Internal(e.to_string())))
                 .transpose()?;
-            query = query.bind(config_json);
+            q = q.bind(config_json);
         }
         if has_models {
             let models_json = serde_json::to_string(&input.models.as_ref().unwrap())
                 .map_err(|e| DbError::Internal(e.to_string()))?;
-            query = query.bind(models_json);
+            q = q.bind(models_json);
         }
         if has_is_enabled {
-            query = query.bind(input.is_enabled.map(|b| if b { 1 } else { 0 }));
+            q = q.bind(input.is_enabled.map(|b| if b { 1 } else { 0 }));
         }
-        query = query.bind(id.to_string());
+        q = q.bind(id.to_string());
 
-        query.execute(&self.pool).await?;
+        q.execute(&self.pool).await?;
 
         // Fetch and return updated record
         self.get_by_id(id).await?.ok_or(DbError::NotFound)
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
-        sqlx::query("DELETE FROM dynamic_providers WHERE id = ?")
+        query("DELETE FROM dynamic_providers WHERE id = ?")
             .bind(id.to_string())
             .execute(&self.pool)
             .await?;

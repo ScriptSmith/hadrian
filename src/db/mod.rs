@@ -2,8 +2,10 @@ mod error;
 #[cfg(feature = "database-postgres")]
 pub mod postgres;
 pub mod repos;
-#[cfg(feature = "database-sqlite")]
+#[cfg(any(feature = "database-sqlite", feature = "database-wasm-sqlite"))]
 pub mod sqlite;
+#[cfg(feature = "database-wasm-sqlite")]
+pub mod wasm_sqlite;
 
 #[cfg(all(test, any(feature = "database-sqlite", feature = "database-postgres")))]
 pub mod tests;
@@ -76,7 +78,13 @@ enum PoolStorage {
     Sqlite(sqlx::SqlitePool),
     #[cfg(feature = "database-postgres")]
     Postgres(PgPoolPair),
-    #[cfg(not(any(feature = "database-sqlite", feature = "database-postgres")))]
+    #[cfg(feature = "database-wasm-sqlite")]
+    WasmSqlite(wasm_sqlite::WasmSqlitePool),
+    #[cfg(not(any(
+        feature = "database-sqlite",
+        feature = "database-postgres",
+        feature = "database-wasm-sqlite"
+    )))]
     _None(std::convert::Infallible),
 }
 
@@ -87,7 +95,13 @@ pub enum DbPoolRef<'a> {
     Sqlite(&'a sqlx::SqlitePool),
     #[cfg(feature = "database-postgres")]
     Postgres(&'a PgPoolPair),
-    #[cfg(not(any(feature = "database-sqlite", feature = "database-postgres")))]
+    #[cfg(feature = "database-wasm-sqlite")]
+    WasmSqlite(&'a wasm_sqlite::WasmSqlitePool),
+    #[cfg(not(any(
+        feature = "database-sqlite",
+        feature = "database-postgres",
+        feature = "database-wasm-sqlite"
+    )))]
     _None(std::convert::Infallible, std::marker::PhantomData<&'a ()>),
 }
 
@@ -135,6 +149,44 @@ impl DbPool {
         };
         DbPool {
             inner: PoolStorage::Sqlite(pool),
+            repos,
+        }
+    }
+
+    /// Create a DbPool from a WASM SQLite pool (wa-sqlite in the browser).
+    #[cfg(feature = "database-wasm-sqlite")]
+    pub fn from_wasm_sqlite(pool: wasm_sqlite::WasmSqlitePool) -> Self {
+        let repos = CachedRepos {
+            organizations: Arc::new(sqlite::SqliteOrganizationRepo::new(pool.clone())),
+            projects: Arc::new(sqlite::SqliteProjectRepo::new(pool.clone())),
+            users: Arc::new(sqlite::SqliteUserRepo::new(pool.clone())),
+            api_keys: Arc::new(sqlite::SqliteApiKeyRepo::new(pool.clone())),
+            providers: Arc::new(sqlite::SqliteDynamicProviderRepo::new(pool.clone())),
+            usage: Arc::new(sqlite::SqliteUsageRepo::new(pool.clone())),
+            model_pricing: Arc::new(sqlite::SqliteModelPricingRepo::new(pool.clone())),
+            conversations: Arc::new(sqlite::SqliteConversationRepo::new(pool.clone())),
+            audit_logs: Arc::new(sqlite::SqliteAuditLogRepo::new(pool.clone())),
+            vector_stores: Arc::new(sqlite::SqliteVectorStoresRepo::new(pool.clone())),
+            files: Arc::new(sqlite::SqliteFilesRepo::new(pool.clone())),
+            teams: Arc::new(sqlite::SqliteTeamRepo::new(pool.clone())),
+            prompts: Arc::new(sqlite::SqlitePromptRepo::new(pool.clone())),
+            #[cfg(feature = "sso")]
+            sso_group_mappings: unreachable!("SSO not supported in WASM builds"),
+            #[cfg(feature = "sso")]
+            org_sso_configs: unreachable!("SSO not supported in WASM builds"),
+            #[cfg(feature = "sso")]
+            domain_verifications: unreachable!("SSO not supported in WASM builds"),
+            #[cfg(feature = "sso")]
+            scim_configs: unreachable!("SSO not supported in WASM builds"),
+            #[cfg(feature = "sso")]
+            scim_user_mappings: unreachable!("SSO not supported in WASM builds"),
+            #[cfg(feature = "sso")]
+            scim_group_mappings: unreachable!("SSO not supported in WASM builds"),
+            org_rbac_policies: Arc::new(sqlite::SqliteOrgRbacPolicyRepo::new(pool.clone())),
+            service_accounts: Arc::new(sqlite::SqliteServiceAccountRepo::new(pool.clone())),
+        };
+        DbPool {
+            inner: PoolStorage::WasmSqlite(pool),
             repos,
         }
     }
@@ -454,7 +506,17 @@ impl DbPool {
                 tracing::info!("PostgreSQL migrations completed successfully");
                 Ok(())
             }
-            #[cfg(not(any(feature = "database-sqlite", feature = "database-postgres")))]
+            #[cfg(feature = "database-wasm-sqlite")]
+            PoolStorage::WasmSqlite(pool) => {
+                tracing::info!("Running WASM SQLite migrations");
+                pool.run_migrations().await?;
+                Ok(())
+            }
+            #[cfg(not(any(
+                feature = "database-sqlite",
+                feature = "database-postgres",
+                feature = "database-wasm-sqlite"
+            )))]
             PoolStorage::_None(infallible) => match *infallible {},
         }
     }
@@ -578,7 +640,13 @@ impl DbPool {
             PoolStorage::Sqlite(pool) => DbPoolRef::Sqlite(pool),
             #[cfg(feature = "database-postgres")]
             PoolStorage::Postgres(pools) => DbPoolRef::Postgres(pools),
-            #[cfg(not(any(feature = "database-sqlite", feature = "database-postgres")))]
+            #[cfg(feature = "database-wasm-sqlite")]
+            PoolStorage::WasmSqlite(pool) => DbPoolRef::WasmSqlite(pool),
+            #[cfg(not(any(
+                feature = "database-sqlite",
+                feature = "database-postgres",
+                feature = "database-wasm-sqlite"
+            )))]
             PoolStorage::_None(infallible) => match *infallible {},
         }
     }
@@ -611,7 +679,16 @@ impl DbPool {
                 }
                 Ok(())
             }
-            #[cfg(not(any(feature = "database-sqlite", feature = "database-postgres")))]
+            #[cfg(feature = "database-wasm-sqlite")]
+            PoolStorage::WasmSqlite(pool) => {
+                pool.execute_query("SELECT 1", &[]).await?;
+                Ok(())
+            }
+            #[cfg(not(any(
+                feature = "database-sqlite",
+                feature = "database-postgres",
+                feature = "database-wasm-sqlite"
+            )))]
             PoolStorage::_None(infallible) => match *infallible {},
         }
     }

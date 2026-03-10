@@ -17,7 +17,7 @@ use clap::Parser;
 /// CLI arguments for Hadrian Gateway
 #[derive(Parser, Debug)]
 #[command(version, about = "Hadrian AI Gateway", long_about = None)]
-pub(crate) struct Args {
+pub struct Args {
     #[command(subcommand)]
     command: Option<Command>,
 
@@ -102,7 +102,7 @@ enum Command {
 }
 
 /// Dispatch to the appropriate subcommand handler.
-pub(crate) async fn dispatch(args: Args) {
+pub async fn dispatch(args: Args) {
     match args.command {
         Some(Command::Openapi { output }) => {
             #[cfg(feature = "utoipa")]
@@ -220,19 +220,19 @@ pub(crate) fn default_config_dir() -> Option<PathBuf> {
 }
 
 /// Get the default config file path.
-pub(crate) fn default_config_path() -> Option<PathBuf> {
+pub fn default_config_path() -> Option<PathBuf> {
     default_config_dir().map(|p| p.join("hadrian.toml"))
 }
 
 /// Get the default data directory path.
 #[cfg(feature = "wizard")]
-pub(crate) fn default_data_dir() -> Option<PathBuf> {
+pub fn default_data_dir() -> Option<PathBuf> {
     dirs::data_dir().map(|p| p.join("hadrian"))
 }
 
 /// Get the default data directory path.
 #[cfg(not(feature = "wizard"))]
-pub(crate) fn default_data_dir() -> Option<PathBuf> {
+pub fn default_data_dir() -> Option<PathBuf> {
     None
 }
 

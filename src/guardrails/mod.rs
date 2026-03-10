@@ -176,7 +176,8 @@ pub fn inject_trace_context(headers: &mut HashMap<String, String>) {
 ///     }
 /// }
 /// ```
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait GuardrailsProvider: Send + Sync {
     /// Returns the name of this provider (e.g., "openai", "bedrock", "azure").
     fn name(&self) -> &str;

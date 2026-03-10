@@ -8,7 +8,8 @@ use crate::{
     models::{AuditLog, AuditLogQuery, CreateAuditLog},
 };
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait AuditLogRepo: Send + Sync {
     /// Create a new audit log entry
     async fn create(&self, input: CreateAuditLog) -> DbResult<AuditLog>;

@@ -2,10 +2,12 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::common::parse_uuid;
+use super::{
+    backend::{Pool, Row, RowExt, query},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -20,11 +22,11 @@ use crate::{
 };
 
 pub struct SqliteVectorStoresRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteVectorStoresRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
@@ -72,56 +74,56 @@ impl SqliteVectorStoresRepo {
     /// Expects columns: id, owner_type, owner_id, name, description, status, embedding_model,
     /// embedding_dimensions, usage_bytes, file_counts, metadata, expires_after, expires_at,
     /// last_active_at, created_at, updated_at
-    fn vector_store_from_row(row: &sqlx::sqlite::SqliteRow) -> DbResult<VectorStore> {
-        let owner_type_str: String = row.get("owner_type");
-        let status_str: String = row.get("status");
-        let file_counts_str: String = row.get("file_counts");
+    fn vector_store_from_row(row: &Row) -> DbResult<VectorStore> {
+        let owner_type_str: String = row.col("owner_type");
+        let status_str: String = row.col("status");
+        let file_counts_str: String = row.col("file_counts");
 
         Ok(VectorStore {
-            id: parse_uuid(&row.get::<String, _>("id"))?,
+            id: parse_uuid(&row.col::<String>("id"))?,
             object: OBJECT_TYPE_VECTOR_STORE.to_string(),
             owner_type: owner_type_str
                 .parse()
                 .map_err(|e: String| DbError::Internal(e))?,
-            owner_id: parse_uuid(&row.get::<String, _>("owner_id"))?,
-            name: row.get("name"),
-            description: row.get("description"),
+            owner_id: parse_uuid(&row.col::<String>("owner_id"))?,
+            name: row.col("name"),
+            description: row.col("description"),
             status: status_str
                 .parse()
                 .map_err(|e: String| DbError::Internal(e))?,
-            embedding_model: row.get("embedding_model"),
-            embedding_dimensions: row.get("embedding_dimensions"),
-            usage_bytes: row.get("usage_bytes"),
+            embedding_model: row.col("embedding_model"),
+            embedding_dimensions: row.col("embedding_dimensions"),
+            usage_bytes: row.col("usage_bytes"),
             file_counts: Self::parse_file_counts(&file_counts_str)?,
-            metadata: Self::parse_metadata(row.get("metadata"))?,
-            expires_after: Self::parse_expires_after(row.get("expires_after"))?,
-            expires_at: row.get("expires_at"),
-            last_active_at: row.get("last_active_at"),
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
+            metadata: Self::parse_metadata(row.col("metadata"))?,
+            expires_after: Self::parse_expires_after(row.col("expires_after"))?,
+            expires_at: row.col("expires_at"),
+            last_active_at: row.col("last_active_at"),
+            created_at: row.col("created_at"),
+            updated_at: row.col("updated_at"),
         })
     }
 
     /// Parse a VectorStoreFile from a database row.
     /// Expects columns: id, vector_store_id, file_id, status, usage_bytes, last_error,
     /// chunking_strategy, attributes, created_at, updated_at
-    fn vector_store_file_from_row(row: &sqlx::sqlite::SqliteRow) -> DbResult<VectorStoreFile> {
-        let status_str: String = row.get("status");
+    fn vector_store_file_from_row(row: &Row) -> DbResult<VectorStoreFile> {
+        let status_str: String = row.col("status");
 
         Ok(VectorStoreFile {
-            internal_id: parse_uuid(&row.get::<String, _>("id"))?,
-            file_id: parse_uuid(&row.get::<String, _>("file_id"))?,
+            internal_id: parse_uuid(&row.col::<String>("id"))?,
+            file_id: parse_uuid(&row.col::<String>("file_id"))?,
             object: OBJECT_TYPE_VECTOR_STORE_FILE.to_string(),
-            vector_store_id: parse_uuid(&row.get::<String, _>("vector_store_id"))?,
+            vector_store_id: parse_uuid(&row.col::<String>("vector_store_id"))?,
             status: status_str
                 .parse()
                 .map_err(|e: String| DbError::Internal(e))?,
-            usage_bytes: row.get("usage_bytes"),
-            last_error: Self::parse_file_error(row.get("last_error"))?,
-            chunking_strategy: Self::parse_chunking_strategy(row.get("chunking_strategy"))?,
-            attributes: Self::parse_attributes(row.get("attributes"))?,
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
+            usage_bytes: row.col("usage_bytes"),
+            last_error: Self::parse_file_error(row.col("last_error"))?,
+            chunking_strategy: Self::parse_chunking_strategy(row.col("chunking_strategy"))?,
+            attributes: Self::parse_attributes(row.col("attributes"))?,
+            created_at: row.col("created_at"),
+            updated_at: row.col("updated_at"),
         })
     }
 
@@ -134,7 +136,8 @@ impl SqliteVectorStoresRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl VectorStoresRepo for SqliteVectorStoresRepo {
     // ==================== Vector Stores CRUD ====================
 
@@ -162,7 +165,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         let default_file_counts =
             r#"{"cancelled":0,"completed":0,"failed":0,"in_progress":0,"total":0}"#;
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO vector_stores (id, owner_type, owner_id, name, description, embedding_model, embedding_dimensions, metadata, expires_after, file_counts, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -205,7 +208,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
     }
 
     async fn get_vector_store(&self, id: Uuid) -> DbResult<Option<VectorStore>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, owner_type, owner_id, name, description, status, embedding_model, embedding_dimensions,
                    usage_bytes, file_counts, metadata, expires_after, expires_at, last_active_at, created_at, updated_at
@@ -224,7 +227,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
     }
 
     async fn get_by_id_and_org(&self, id: Uuid, org_id: Uuid) -> DbResult<Option<VectorStore>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT vs.id, vs.owner_type, vs.owner_id, vs.name, vs.description, vs.status, vs.embedding_model, vs.embedding_dimensions,
                    vs.usage_bytes, vs.file_counts, vs.metadata, vs.expires_after, vs.expires_at, vs.last_active_at, vs.created_at, vs.updated_at
@@ -267,7 +270,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         owner_id: Uuid,
         name: &str,
     ) -> DbResult<Option<VectorStore>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, owner_type, owner_id, name, description, status, embedding_model, embedding_dimensions,
                    usage_bytes, file_counts, metadata, expires_after, expires_at, last_active_at, created_at, updated_at
@@ -307,7 +310,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
                 "AND deleted_at IS NULL"
             };
 
-            let query = format!(
+            let sql = format!(
                 r#"
                 SELECT id, owner_type, owner_id, name, description, status, embedding_model, embedding_dimensions,
                        usage_bytes, file_counts, metadata, expires_after, expires_at, last_active_at, created_at, updated_at
@@ -321,7 +324,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
                 comparison, deleted_filter, order, order
             );
 
-            let rows = sqlx::query(&query)
+            let rows = query(&sql)
                 .bind(owner_type.as_str())
                 .bind(owner_id.to_string())
                 .bind(cursor.created_at)
@@ -354,7 +357,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
 
         // First page (no cursor)
         let order = params.sort_order.as_sql();
-        let query = if params.include_deleted {
+        let sql = if params.include_deleted {
             format!(
                 r#"
                 SELECT id, owner_type, owner_id, name, description, status, embedding_model, embedding_dimensions,
@@ -380,7 +383,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
             )
         };
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(owner_type.as_str())
             .bind(owner_id.to_string())
             .bind(fetch_limit)
@@ -463,7 +466,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
                 "AND deleted_at IS NULL"
             };
 
-            let query = format!(
+            let sql = format!(
                 r#"
                 SELECT id, owner_type, owner_id, name, description, status, embedding_model, embedding_dimensions,
                        usage_bytes, file_counts, metadata, expires_after, expires_at, last_active_at, created_at, updated_at
@@ -478,16 +481,16 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
             );
 
             // Build the query dynamically
-            let mut query_builder = sqlx::query(&query);
+            let mut q = query(&sql);
             for binding in &bindings {
-                query_builder = query_builder.bind(binding);
+                q = q.bind(binding);
             }
-            query_builder = query_builder
+            q = q
                 .bind(cursor.created_at)
                 .bind(cursor.id.to_string())
                 .bind(fetch_limit);
 
-            let rows = query_builder.fetch_all(&self.pool).await?;
+            let rows = q.fetch_all(&self.pool).await?;
 
             let has_more = rows.len() as i64 > limit;
             let mut items: Vec<VectorStore> = rows
@@ -512,7 +515,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         }
 
         // First page (no cursor)
-        let query = if params.include_deleted {
+        let sql = if params.include_deleted {
             format!(
                 r#"
                 SELECT id, owner_type, owner_id, name, description, status, embedding_model, embedding_dimensions,
@@ -539,13 +542,13 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         };
 
         // Build the query dynamically
-        let mut query_builder = sqlx::query(&query);
+        let mut q = query(&sql);
         for binding in &bindings {
-            query_builder = query_builder.bind(binding);
+            q = q.bind(binding);
         }
-        query_builder = query_builder.bind(fetch_limit);
+        q = q.bind(fetch_limit);
 
-        let rows = query_builder.fetch_all(&self.pool).await?;
+        let rows = q.fetch_all(&self.pool).await?;
 
         let has_more = rows.len() as i64 > limit;
         let items: Vec<VectorStore> = rows
@@ -584,7 +587,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
                 "AND deleted_at IS NULL"
             };
 
-            let query = format!(
+            let sql = format!(
                 r#"
                 SELECT id, owner_type, owner_id, name, description, status, embedding_model, embedding_dimensions,
                        usage_bytes, file_counts, metadata, expires_after, expires_at, last_active_at, created_at, updated_at
@@ -597,7 +600,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
                 comparison, deleted_filter, order_dir, order_dir
             );
 
-            let rows = sqlx::query(&query)
+            let rows = query(&sql)
                 .bind(cursor.created_at)
                 .bind(cursor.id.to_string())
                 .bind(fetch_limit)
@@ -627,7 +630,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         }
 
         // First page (no cursor)
-        let query = if params.include_deleted {
+        let sql = if params.include_deleted {
             format!(
                 r#"
                 SELECT id, owner_type, owner_id, name, description, status, embedding_model, embedding_dimensions,
@@ -652,10 +655,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
             )
         };
 
-        let rows = sqlx::query(&query)
-            .bind(fetch_limit)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = query(&sql).bind(fetch_limit).fetch_all(&self.pool).await?;
 
         let has_more = rows.len() as i64 > limit;
         let items: Vec<VectorStore> = rows
@@ -684,11 +684,11 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
 
         // Use IMMEDIATE transaction mode to acquire write lock before reading
         let mut conn = self.pool.acquire().await?;
-        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+        query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
 
         let result = async {
             // Read current state within transaction
-            let current = sqlx::query(
+            let current = query(
                 r#"
                 SELECT id, owner_type, owner_id, name, description, status, embedding_model, embedding_dimensions,
                        usage_bytes, file_counts, metadata, expires_after, expires_at, last_active_at, created_at, updated_at
@@ -701,20 +701,20 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
             .await?
             .ok_or(DbError::NotFound)?;
 
-            let owner_type_str: String = current.get("owner_type");
+            let owner_type_str: String = current.col("owner_type");
             let owner_type: VectorStoreOwnerType = owner_type_str
                 .parse()
                 .map_err(|e: String| DbError::Internal(e))?;
-            let owner_id = parse_uuid(&current.get::<String, _>("owner_id"))?;
-            let status_str: String = current.get("status");
-            let file_counts_str: String = current.get("file_counts");
-            let embedding_model: String = current.get("embedding_model");
-            let embedding_dimensions: i32 = current.get("embedding_dimensions");
+            let owner_id = parse_uuid(&current.col::<String>("owner_id"))?;
+            let status_str: String = current.col("status");
+            let file_counts_str: String = current.col("file_counts");
+            let embedding_model: String = current.col("embedding_model");
+            let embedding_dimensions: i32 = current.col("embedding_dimensions");
 
-            let current_name: String = current.get("name");
-            let current_description: Option<String> = current.get("description");
-            let current_metadata: Option<String> = current.get("metadata");
-            let current_expires_after: Option<String> = current.get("expires_after");
+            let current_name: String = current.col("name");
+            let current_description: Option<String> = current.col("description");
+            let current_metadata: Option<String> = current.col("metadata");
+            let current_expires_after: Option<String> = current.col("expires_after");
 
             let new_name = input.name.unwrap_or(current_name);
             let new_description = input.description.or(current_description);
@@ -731,7 +731,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
                 .map_err(|e| DbError::Internal(e.to_string()))?
                 .or(current_expires_after);
 
-            let update_result = sqlx::query(
+            let update_result = query(
                 r#"
                 UPDATE vector_stores
                 SET name = ?, description = ?, metadata = ?, expires_after = ?, updated_at = ?
@@ -763,13 +763,13 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
                     .map_err(|e: String| DbError::Internal(e))?,
                 embedding_model,
                 embedding_dimensions,
-                usage_bytes: current.get("usage_bytes"),
+                usage_bytes: current.col("usage_bytes"),
                 file_counts: Self::parse_file_counts(&file_counts_str)?,
                 metadata: Self::parse_metadata(new_metadata)?,
                 expires_after: Self::parse_expires_after(new_expires_after)?,
-                expires_at: current.get("expires_at"),
-                last_active_at: current.get("last_active_at"),
-                created_at: current.get("created_at"),
+                expires_at: current.col("expires_at"),
+                last_active_at: current.col("last_active_at"),
+                created_at: current.col("created_at"),
                 updated_at: now,
             })
         }
@@ -778,10 +778,10 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         // Commit or rollback based on result
         match &result {
             Ok(_) => {
-                sqlx::query("COMMIT").execute(&mut *conn).await?;
+                query("COMMIT").execute(&mut *conn).await?;
             }
             Err(_) => {
-                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                let _ = query("ROLLBACK").execute(&mut *conn).await;
             }
         }
 
@@ -791,7 +791,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
     async fn delete_vector_store(&self, id: Uuid) -> DbResult<()> {
         let now = chrono::Utc::now();
 
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE vector_stores
             SET deleted_at = ?
@@ -812,7 +812,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
 
     async fn hard_delete_vector_store(&self, id: Uuid) -> DbResult<()> {
         // First delete all vector_store_files links
-        sqlx::query(
+        query(
             r#"
             DELETE FROM vector_store_files
             WHERE vector_store_id = ?
@@ -823,7 +823,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         .await?;
 
         // Then delete the vector store
-        let result = sqlx::query(
+        let result = query(
             r#"
             DELETE FROM vector_stores
             WHERE id = ?
@@ -844,7 +844,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         &self,
         older_than: DateTime<Utc>,
     ) -> DbResult<Vec<VectorStore>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, owner_type, owner_id, name, description, status, embedding_model, embedding_dimensions,
                    usage_bytes, file_counts, metadata, expires_after, expires_at, last_active_at, created_at, updated_at
@@ -864,7 +864,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
     async fn touch_vector_store(&self, id: Uuid) -> DbResult<()> {
         let now = chrono::Utc::now();
 
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE vector_stores
             SET last_active_at = ?, updated_at = ?
@@ -905,7 +905,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
             .transpose()
             .map_err(|e| DbError::Internal(e.to_string()))?;
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO vector_store_files (id, vector_store_id, file_id, chunking_strategy, attributes, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -937,7 +937,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
     }
 
     async fn get_vector_store_file(&self, id: Uuid) -> DbResult<Option<VectorStoreFile>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, vector_store_id, file_id, status, usage_bytes,
                    last_error, chunking_strategy, attributes, created_at, updated_at
@@ -960,7 +960,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         vector_store_id: Uuid,
         file_id: Uuid,
     ) -> DbResult<Option<VectorStoreFile>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, vector_store_id, file_id, status, usage_bytes,
                    last_error, chunking_strategy, attributes, created_at, updated_at
@@ -989,7 +989,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         owner_type: VectorStoreOwnerType,
         owner_id: Uuid,
     ) -> DbResult<Option<VectorStoreFile>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT cf.id, cf.vector_store_id, cf.file_id, cf.status, cf.usage_bytes,
                    cf.last_error, cf.chunking_strategy, cf.attributes, cf.created_at, cf.updated_at
@@ -1029,7 +1029,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
             let (comparison, order, should_reverse) =
                 params.sort_order.cursor_query_params(params.direction);
 
-            let query = format!(
+            let sql = format!(
                 r#"
                 SELECT id, vector_store_id, file_id, status, usage_bytes,
                        last_error, chunking_strategy, attributes, created_at, updated_at
@@ -1042,7 +1042,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
                 comparison, order, order
             );
 
-            let rows = sqlx::query(&query)
+            let rows = query(&sql)
                 .bind(vector_store_id.to_string())
                 .bind(cursor.created_at)
                 .bind(cursor.id.to_string())
@@ -1074,7 +1074,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
 
         // First page (no cursor)
         let order = params.sort_order.as_sql();
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, vector_store_id, file_id, status, usage_bytes,
                    last_error, chunking_strategy, attributes, created_at, updated_at
@@ -1086,7 +1086,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
             order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(vector_store_id.to_string())
             .bind(fetch_limit)
             .fetch_all(&self.pool)
@@ -1122,7 +1122,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
             .transpose()
             .map_err(|e| DbError::Internal(e.to_string()))?;
 
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE vector_store_files
             SET status = ?, last_error = ?, updated_at = ?
@@ -1146,7 +1146,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
     async fn update_vector_store_file_usage(&self, id: Uuid, usage_bytes: i64) -> DbResult<()> {
         let now = chrono::Utc::now();
 
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE vector_store_files
             SET usage_bytes = ?, updated_at = ?
@@ -1169,7 +1169,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
     async fn remove_file_from_vector_store(&self, id: Uuid) -> DbResult<()> {
         let now = chrono::Utc::now();
 
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE vector_store_files
             SET deleted_at = ?, updated_at = ?
@@ -1193,7 +1193,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         &self,
         older_than: DateTime<Utc>,
     ) -> DbResult<Vec<VectorStoreFile>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, vector_store_id, file_id, status, usage_bytes,
                    last_error, chunking_strategy, attributes, created_at, updated_at
@@ -1211,7 +1211,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
     }
 
     async fn hard_delete_vector_store_file(&self, id: Uuid) -> DbResult<()> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             DELETE FROM vector_store_files
             WHERE id = ?
@@ -1229,7 +1229,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
     }
 
     async fn hard_delete_soft_deleted_references(&self, file_id: Uuid) -> DbResult<u64> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             DELETE FROM vector_store_files
             WHERE file_id = ? AND deleted_at IS NOT NULL
@@ -1251,7 +1251,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
 
         // Calculate aggregate stats from files (excluding soft-deleted)
         // SQLite doesn't have jsonb_build_object, so we build the JSON string manually
-        let stats = sqlx::query(
+        let stats = query(
             r#"
             SELECT
                 COALESCE(SUM(usage_bytes), 0) as total_usage,
@@ -1268,12 +1268,12 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         .fetch_one(&self.pool)
         .await?;
 
-        let total_usage: i64 = stats.get("total_usage");
-        let cancelled: i32 = stats.get("cancelled");
-        let completed: i32 = stats.get("completed");
-        let failed: i32 = stats.get("failed");
-        let in_progress: i32 = stats.get("in_progress");
-        let total: i32 = stats.get("total");
+        let total_usage: i64 = stats.col("total_usage");
+        let cancelled: i32 = stats.col("cancelled");
+        let completed: i32 = stats.col("completed");
+        let failed: i32 = stats.col("failed");
+        let in_progress: i32 = stats.col("in_progress");
+        let total: i32 = stats.col("total");
 
         let file_counts_json = serde_json::json!({
             "cancelled": cancelled,
@@ -1284,7 +1284,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         })
         .to_string();
 
-        sqlx::query(
+        query(
             r#"
             UPDATE vector_stores
             SET usage_bytes = ?, file_counts = ?, updated_at = ?
@@ -1304,6 +1304,8 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
 
 #[cfg(test)]
 mod tests {
+    use sqlx::SqlitePool;
+
     use super::*;
     use crate::models::VectorStoreOwner;
 

@@ -144,7 +144,8 @@ impl MemoryCache {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl Cache for MemoryCache {
     async fn get_bytes(&self, key: &str) -> CacheResult<Option<Vec<u8>>> {
         if let Some(mut entry) = self.data.get_mut(key) {

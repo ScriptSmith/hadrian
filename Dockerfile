@@ -71,7 +71,8 @@ COPY Cargo.toml Cargo.lock ./
 # Create dummy src to build dependencies
 RUN mkdir -p src/bin \
     && echo "fn main() {}" > src/main.rs \
-    && echo "fn main() {}" > src/bin/record_fixtures.rs
+    && echo "fn main() {}" > src/bin/record_fixtures.rs \
+    && echo "" > src/lib.rs
 
 # Build dependencies only (cached layer)
 RUN --mount=type=cache,target=/usr/local/cargo/registry \

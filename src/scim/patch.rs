@@ -259,7 +259,7 @@ impl From<super::filter::FilterParseError> for PatchError {
 /// # Examples
 ///
 /// ```
-/// use gateway::scim::patch::parse_path;
+/// use hadrian::scim::patch::parse_path;
 ///
 /// let path = parse_path("displayName").unwrap();
 /// let path = parse_path("name.familyName").unwrap();

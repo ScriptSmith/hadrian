@@ -243,11 +243,19 @@ export default function HomePage() {
               MIT and Apache-2.0 licensed. No proprietary code, no upgrade tiers, no restrictions.
             </p>
             <div className="flex flex-wrap justify-center gap-4">
-              <Link
-                href="/docs/getting-started"
+              <a
+                href="https://app.hadriangateway.com"
                 className="inline-flex items-center gap-2 rounded-lg bg-fd-primary px-6 py-3 font-medium text-fd-primary-foreground transition-colors hover:bg-fd-primary/90"
+                target="_blank"
+                rel="noopener noreferrer"
               >
                 <Zap className="h-4 w-4" />
+                Try in Browser
+              </a>
+              <Link
+                href="/docs/getting-started"
+                className="inline-flex items-center gap-2 rounded-lg border border-fd-border bg-fd-background px-6 py-3 font-medium transition-colors hover:bg-fd-muted"
+              >
                 Get Started
               </Link>
               <Link

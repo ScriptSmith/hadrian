@@ -6,22 +6,25 @@ use axum::Json;
 use axum::response::Response;
 #[cfg(any(feature = "sso", feature = "saml"))]
 use axum::routing::post;
+#[cfg(feature = "server")]
 use axum::{Router, routing::get};
 #[cfg(any(feature = "embed-ui", feature = "embed-docs"))]
 use axum::{body::Body, response::IntoResponse};
 #[cfg(any(feature = "embed-ui", feature = "embed-docs"))]
 use http::StatusCode;
+#[cfg(any(feature = "server", feature = "embed-ui", feature = "embed-docs"))]
 use http::header;
 use reqwest::Client;
 #[cfg(any(feature = "embed-ui", feature = "embed-docs"))]
 use rust_embed::Embed;
+#[cfg(feature = "server")]
 use tokio_util::task::TaskTracker;
-use tower_http::{
-    limit::RequestBodyLimitLayer,
-    services::{ServeDir, ServeFile},
-    set_header::SetResponseHeaderLayer,
-    trace::TraceLayer,
-};
+#[cfg(feature = "server")]
+use tower_http::services::{ServeDir, ServeFile};
+#[cfg(feature = "server")]
+use tower_http::set_header::SetResponseHeaderLayer;
+#[cfg(feature = "server")]
+use tower_http::{limit::RequestBodyLimitLayer, trace::TraceLayer};
 #[cfg(feature = "utoipa")]
 use utoipa_scalar::{Scalar, Servable};
 
@@ -31,9 +34,11 @@ use crate::observability;
 use crate::openapi;
 use crate::{
     auth, authz, cache, catalog, config, db, dlq, events, guardrails,
-    init::create_provider_instance, jobs, middleware, models, pricing, providers, routes, secrets,
-    services, usage_buffer,
+    init::create_provider_instance, jobs, models, pricing, providers, secrets, services,
+    usage_buffer,
 };
+#[cfg(feature = "server")]
+use crate::{middleware, routes};
 
 /// Embedded UI assets from ui/dist directory.
 /// These are compiled into the binary at build time.
@@ -89,12 +94,14 @@ fn serve_embedded_file(path: &str) -> Response {
 }
 
 /// Add routes for serving static UI files
+#[cfg(feature = "server")]
 fn add_ui_routes(app: Router<AppState>, config: &config::GatewayConfig) -> Router<AppState> {
     use config::AssetSource;
 
     let ui_path = config.ui.path.trim_end_matches('/');
 
     match &config.ui.assets.source {
+        #[cfg(feature = "server")]
         AssetSource::Filesystem { path } => {
             let assets_path = std::path::Path::new(path);
             let index_file = assets_path.join("index.html");
@@ -127,6 +134,13 @@ fn add_ui_routes(app: Router<AppState>, config: &config::GatewayConfig) -> Route
                 // Serve at a specific path
                 app.nest_service(ui_path, serve_dir_with_headers)
             }
+        }
+        #[cfg(not(feature = "server"))]
+        AssetSource::Filesystem { .. } => {
+            tracing::warn!(
+                "Filesystem UI assets requested but 'server' feature is not enabled, skipping"
+            );
+            app
         }
         #[cfg(feature = "embed-ui")]
         AssetSource::Embedded => {
@@ -218,12 +232,14 @@ fn build_docs_response(content: rust_embed::EmbeddedFile) -> Response {
 }
 
 /// Add routes for serving static documentation files
+#[cfg(feature = "server")]
 fn add_docs_routes(app: Router<AppState>, config: &config::GatewayConfig) -> Router<AppState> {
     use config::AssetSource;
 
     let docs_path = config.docs.path.trim_end_matches('/');
 
     match &config.docs.assets.source {
+        #[cfg(feature = "server")]
         AssetSource::Filesystem { path } => {
             let assets_path = std::path::Path::new(path);
 
@@ -250,6 +266,13 @@ fn add_docs_routes(app: Router<AppState>, config: &config::GatewayConfig) -> Rou
 
             // Docs are always at a specific path (never root)
             app.nest_service(docs_path, serve_dir_with_headers)
+        }
+        #[cfg(not(feature = "server"))]
+        AssetSource::Filesystem { .. } => {
+            tracing::warn!(
+                "Filesystem docs assets requested but 'server' feature is not enabled, skipping"
+            );
+            app
         }
         #[cfg(feature = "embed-docs")]
         AssetSource::Embedded => {
@@ -295,6 +318,7 @@ pub struct AppState {
     pub provider_health: jobs::ProviderHealthStateRegistry,
     /// Task tracker for background tasks (usage logging, etc.)
     /// Ensures all spawned tasks complete during graceful shutdown.
+    #[cfg(feature = "server")]
     pub task_tracker: TaskTracker,
     /// Registry of per-organization OIDC authenticators.
     /// Loaded from org_sso_configs table at startup for multi-tenant SSO.
@@ -306,12 +330,14 @@ pub struct AppState {
     pub saml_registry: Option<Arc<auth::SamlAuthenticatorRegistry>>,
     /// Registry of per-org gateway JWT validators.
     /// Routes incoming JWTs to the correct org-scoped validator by issuer.
+    #[cfg(feature = "jwt")]
     pub gateway_jwt_registry: Option<Arc<auth::GatewayJwtRegistry>>,
     /// Registry of per-organization RBAC policies.
     /// Loaded from org_rbac_policies table at startup for per-org authorization.
     pub policy_registry: Option<Arc<authz::PolicyRegistry>>,
     /// Async buffer for usage log entries.
     /// Batches writes to reduce database pressure.
+    #[cfg(feature = "concurrency")]
     pub usage_buffer: Option<Arc<usage_buffer::UsageLogBuffer>>,
     /// Response cache for chat completions.
     /// Caches deterministic responses to reduce latency and costs.
@@ -753,6 +779,7 @@ impl AppState {
         // Initialize per-org gateway JWT registry for multi-tenant JWT auth on /v1/*.
         // Validators are pre-loaded in a background task so server startup isn't
         // blocked by N sequential OIDC discovery HTTP requests.
+        #[cfg(feature = "jwt")]
         let gateway_jwt_registry = if db.is_some() {
             Some(Arc::new(auth::GatewayJwtRegistry::new()))
         } else {
@@ -831,6 +858,7 @@ impl AppState {
         };
 
         // Initialize usage log buffer with configured buffer settings and EventBus
+        #[cfg(feature = "concurrency")]
         let usage_buffer = {
             let buffer_config =
                 usage_buffer::UsageBufferConfig::from(&config.observability.usage.buffer);
@@ -866,9 +894,11 @@ impl AppState {
         };
 
         // Create the task tracker for background tasks
+        #[cfg(feature = "server")]
         let task_tracker = TaskTracker::new();
 
         // Initialize semantic cache if configured
+        #[cfg(feature = "server")]
         let semantic_cache = Self::init_semantic_cache(
             &config,
             cache.as_ref(),
@@ -878,6 +908,8 @@ impl AppState {
             &task_tracker,
         )
         .await;
+        #[cfg(not(feature = "server"))]
+        let semantic_cache: Option<Arc<cache::SemanticCache>> = None;
 
         // Initialize input guardrails if configured
         let input_guardrails = match &config.features.guardrails {
@@ -1038,13 +1070,16 @@ impl AppState {
             pricing,
             circuit_breakers,
             provider_health: jobs::ProviderHealthStateRegistry::new(),
+            #[cfg(feature = "server")]
             task_tracker,
             #[cfg(feature = "sso")]
             oidc_registry,
             #[cfg(feature = "saml")]
             saml_registry,
+            #[cfg(feature = "jwt")]
             gateway_jwt_registry,
             policy_registry,
+            #[cfg(feature = "concurrency")]
             usage_buffer,
             response_cache,
             semantic_cache,
@@ -1067,7 +1102,7 @@ impl AppState {
     /// Ensure a default user exists for anonymous access when auth is disabled.
     /// Uses a well-known external_id so the same user is used across restarts.
     /// Race-safe: tries to create first, falls back to lookup on conflict.
-    async fn ensure_default_user(
+    pub(crate) async fn ensure_default_user(
         services: &services::Services,
     ) -> Result<uuid::Uuid, Box<dyn std::error::Error + Send + Sync>> {
         use crate::db::DbError;
@@ -1099,7 +1134,7 @@ impl AppState {
     /// Ensure a default organization exists for anonymous access when auth is disabled.
     /// Uses a well-known slug so the same organization is used across restarts.
     /// Race-safe: tries to create first, falls back to lookup on conflict.
-    async fn ensure_default_org(
+    pub(crate) async fn ensure_default_org(
         services: &services::Services,
     ) -> Result<uuid::Uuid, Box<dyn std::error::Error + Send + Sync>> {
         use crate::db::DbError;
@@ -1128,7 +1163,7 @@ impl AppState {
     }
 
     /// Ensure the default user is a member of the default organization.
-    async fn ensure_default_org_membership(
+    pub(crate) async fn ensure_default_org_membership(
         services: &services::Services,
         user_id: uuid::Uuid,
         org_id: uuid::Uuid,
@@ -1161,6 +1196,7 @@ impl AppState {
     /// Initialize semantic cache if configured.
     ///
     /// Spawns the background embedding worker on the provided task tracker.
+    #[cfg(feature = "server")]
     async fn init_semantic_cache(
         config: &config::GatewayConfig,
         cache: Option<&Arc<dyn cache::Cache>>,
@@ -1782,6 +1818,7 @@ impl AppState {
     }
 }
 
+#[cfg(feature = "server")]
 pub fn build_app(config: &config::GatewayConfig, state: AppState) -> Router {
     let mut app = Router::new()
         // Health check endpoint
@@ -1960,6 +1997,7 @@ pub fn build_app(config: &config::GatewayConfig, state: AppState) -> Router {
     }
 
     // Add WebSocket route for real-time event subscriptions if enabled
+    #[cfg(feature = "server")]
     if config.features.websocket.enabled {
         app = app.route("/ws/events", get(routes::ws_handler));
         tracing::info!("WebSocket event subscriptions enabled at /ws/events");

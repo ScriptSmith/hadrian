@@ -12,7 +12,8 @@ use crate::{
 };
 
 /// Repository trait for collections (vector stores) operations
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait VectorStoresRepo: Send + Sync {
     // ==================== Vector Stores CRUD ====================
 

@@ -253,7 +253,7 @@ where
                                 let user_id = self.config.user_id.clone();
                                 let on_error = self.config.on_error.clone();
 
-                                tokio::spawn(async move {
+                                crate::compat::spawn_detached(async move {
                                     evaluate_buffered_content(
                                         state,
                                         provider,
@@ -299,7 +299,7 @@ where
                             let user_id = self.config.user_id.clone();
                             let on_error = self.config.on_error.clone();
 
-                            tokio::spawn(async move {
+                            crate::compat::spawn_detached(async move {
                                 evaluate_chunk_content(
                                     state,
                                     provider,
@@ -336,7 +336,7 @@ where
                 let on_error = self.config.on_error.clone();
                 let start_time = self.start_time;
 
-                tokio::spawn(async move {
+                crate::compat::spawn_detached(async move {
                     evaluate_final_content(
                         state,
                         provider,

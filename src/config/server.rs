@@ -635,29 +635,36 @@ impl Default for HttpClientConfig {
 impl HttpClientConfig {
     /// Build a reqwest Client from this configuration.
     pub fn build_client(&self) -> Result<reqwest::Client, reqwest::Error> {
-        let mut builder = reqwest::Client::builder()
-            .timeout(Duration::from_secs(self.timeout_secs))
-            .connection_verbose(self.verbose)
-            .connect_timeout(Duration::from_secs(self.connect_timeout_secs))
-            .pool_max_idle_per_host(self.pool_max_idle_per_host)
-            .pool_idle_timeout(Duration::from_secs(self.pool_idle_timeout_secs))
-            .tcp_nodelay(self.tcp_nodelay)
-            .user_agent(&self.user_agent);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut builder = reqwest::Client::builder()
+                .timeout(Duration::from_secs(self.timeout_secs))
+                .connection_verbose(self.verbose)
+                .connect_timeout(Duration::from_secs(self.connect_timeout_secs))
+                .pool_max_idle_per_host(self.pool_max_idle_per_host)
+                .pool_idle_timeout(Duration::from_secs(self.pool_idle_timeout_secs))
+                .tcp_nodelay(self.tcp_nodelay)
+                .user_agent(&self.user_agent);
 
-        // HTTP/2 configuration
-        if self.http2_prior_knowledge {
-            builder = builder.http2_prior_knowledge();
-        }
-        if self.http2_adaptive_window {
-            builder = builder.http2_adaptive_window(true);
-        }
+            // HTTP/2 configuration
+            if self.http2_prior_knowledge {
+                builder = builder.http2_prior_knowledge();
+            }
+            if self.http2_adaptive_window {
+                builder = builder.http2_adaptive_window(true);
+            }
 
-        // TCP keepalive (0 means disabled)
-        if self.tcp_keepalive_secs > 0 {
-            builder = builder.tcp_keepalive(Duration::from_secs(self.tcp_keepalive_secs));
-        }
+            // TCP keepalive (0 means disabled)
+            if self.tcp_keepalive_secs > 0 {
+                builder = builder.tcp_keepalive(Duration::from_secs(self.tcp_keepalive_secs));
+            }
 
-        builder.build()
+            builder.build()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            reqwest::Client::builder().build()
+        }
     }
 }
 

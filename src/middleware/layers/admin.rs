@@ -16,8 +16,10 @@
 
 use std::net::IpAddr;
 
+#[cfg(feature = "server")]
+use axum::extract::ConnectInfo;
 use axum::{
-    extract::{ConnectInfo, Request, State},
+    extract::{Request, State},
     middleware::Next,
     response::Response,
 };
@@ -27,17 +29,10 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthError, AuthenticatedRequest, Identity, IdentityKind},
-    middleware::{ClientInfo, RequestId},
+    middleware::{AdminAuth, ClientInfo, RequestId},
     observability::metrics,
     services::audit_logs::{AuthEventParams, auth_events},
 };
-
-/// Admin authentication result.
-#[derive(Debug, Clone)]
-pub struct AdminAuth {
-    /// The authenticated identity
-    pub identity: Identity,
-}
 
 /// Middleware that requires admin authentication.
 /// This will reject requests without valid Proxy auth headers or OIDC session.
@@ -59,10 +54,13 @@ pub async fn admin_auth_middleware(
     let cookies = req.extensions().get::<Cookies>().cloned();
 
     // Extract connecting IP for trusted proxy validation
+    #[cfg(feature = "server")]
     let connecting_ip = req
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0.ip());
+    #[cfg(not(feature = "server"))]
+    let connecting_ip: Option<IpAddr> = None;
 
     let client_info = ClientInfo {
         ip_address: connecting_ip.map(|ip| ip.to_string()),
@@ -2328,7 +2326,7 @@ mod tests {
     /// Create a minimal AppState for testing with ProxyAuth config
     fn create_test_state(identity_header: &str, trusted_proxies: TrustedProxiesConfig) -> AppState {
         // Create minimal config from empty TOML
-        let mut config = GatewayConfig::from_str("").unwrap();
+        let mut config = GatewayConfig::parse("").unwrap();
         config.auth.mode = AuthMode::Iap(Box::new(IapConfig {
             identity_header: identity_header.to_string(),
             email_header: Some("X-Email".to_string()),
@@ -2637,7 +2635,7 @@ mod tests {
 
     /// Create a minimal AppState for testing with Emergency config
     fn create_emergency_test_state(emergency_config: Option<EmergencyAccessConfig>) -> AppState {
-        let mut config = GatewayConfig::from_str("").unwrap();
+        let mut config = GatewayConfig::parse("").unwrap();
         config.auth.emergency = emergency_config;
 
         AppState {

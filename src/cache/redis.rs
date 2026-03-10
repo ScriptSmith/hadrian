@@ -558,7 +558,8 @@ impl RedisCache {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl Cache for RedisCache {
     async fn get_bytes(&self, key: &str) -> CacheResult<Option<Vec<u8>>> {
         let mut conn = self.get_connection().await?;

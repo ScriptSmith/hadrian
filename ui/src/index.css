@@ -379,6 +379,31 @@
     animation: typing-dot 1.4s ease-in-out 0.4s infinite;
   }
 
+  /* Shimmer sweep for attention */
+  @keyframes shimmer {
+    0%,
+    40% {
+      transform: translateX(-100%);
+    }
+    70%,
+    100% {
+      transform: translateX(100%);
+    }
+  }
+
+  .animate-shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .animate-shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(110deg, transparent 30%, hsl(0 0% 100% / 0.3) 50%, transparent 70%);
+    animation: shimmer 3s ease-in-out infinite;
+  }
+
   @keyframes animate-in {
     from {
       opacity: var(--tw-enter-opacity, 1);

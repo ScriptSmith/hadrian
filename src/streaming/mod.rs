@@ -13,6 +13,7 @@ use bytes::Bytes;
 use futures_util::stream::Stream;
 use serde_json::Value;
 use tokio::time::Sleep;
+#[cfg(feature = "server")]
 use tokio_util::task::TaskTracker;
 
 use crate::{db::DbPool, models::UsageLogEntry, observability::metrics, pricing::PricingConfig};
@@ -335,7 +336,7 @@ pub struct TokenAccumulator {
     /// Uses NONE_SENTINEL for None.
     provider_cost_nanodollars: AtomicI64,
     /// How the generation ended (stop, length, etc.)
-    finish_reason: parking_lot::Mutex<Option<String>>,
+    finish_reason: crate::compat::Mutex<Option<String>>,
 }
 
 impl Default for TokenAccumulator {
@@ -348,7 +349,7 @@ impl Default for TokenAccumulator {
             cached_tokens: AtomicI64::new(NONE_SENTINEL),
             reasoning_tokens: AtomicI64::new(NONE_SENTINEL),
             provider_cost_nanodollars: AtomicI64::new(NONE_SENTINEL),
-            finish_reason: parking_lot::Mutex::new(None),
+            finish_reason: crate::compat::Mutex::new(None),
         }
     }
 }
@@ -456,6 +457,7 @@ pub struct UsageTrackingStream<S> {
     accumulated_tokens: Arc<TokenAccumulator>,
     usage_logger: Arc<UsageLogger>,
     stream_ended: bool,
+    #[cfg(feature = "server")]
     task_tracker: TaskTracker,
     /// Streaming metrics tracking
     streaming_metrics: Arc<StreamingMetrics>,
@@ -572,6 +574,7 @@ pub struct UsageLogger {
     usage_entry: UsageLogEntry,
     provider: String,
     model: String,
+    #[cfg(feature = "server")]
     task_tracker: TaskTracker,
 }
 
@@ -582,7 +585,7 @@ impl UsageLogger {
         usage_entry: UsageLogEntry,
         provider: String,
         model: String,
-        task_tracker: TaskTracker,
+        #[cfg(feature = "server")] task_tracker: TaskTracker,
     ) -> Self {
         Self {
             db,
@@ -590,6 +593,7 @@ impl UsageLogger {
             usage_entry,
             provider,
             model,
+            #[cfg(feature = "server")]
             task_tracker,
         }
     }
@@ -685,6 +689,7 @@ impl UsageLogger {
 
         // Log to database with retry logic, using task_tracker to ensure completion on shutdown
         let db = self.db.clone();
+        #[cfg(feature = "server")]
         self.task_tracker.spawn(async move {
             for attempt in 0..3 {
                 match db.usage().log(entry.clone()).await {
@@ -732,7 +737,7 @@ where
         usage_entry: UsageLogEntry,
         provider: String,
         model: String,
-        task_tracker: TaskTracker,
+        #[cfg(feature = "server")] task_tracker: TaskTracker,
     ) -> Self {
         let logger = Arc::new(UsageLogger::new(
             db,
@@ -740,6 +745,7 @@ where
             usage_entry,
             provider.clone(),
             model.clone(),
+            #[cfg(feature = "server")]
             task_tracker.clone(),
         ));
 
@@ -748,6 +754,7 @@ where
             accumulated_tokens: Arc::new(TokenAccumulator::default()),
             usage_logger: logger,
             stream_ended: false,
+            #[cfg(feature = "server")]
             task_tracker: task_tracker.clone(),
             streaming_metrics: Arc::new(StreamingMetrics::new(provider, model)),
         }
@@ -817,6 +824,7 @@ where
                     streaming_metrics.report("completed");
 
                     // Use task_tracker to ensure usage logging completes during graceful shutdown
+                    #[cfg(feature = "server")]
                     self.task_tracker.spawn(async move {
                         logger.log_usage(&tokens).await;
                     });
@@ -836,6 +844,7 @@ where
                     streaming_metrics.report("error");
 
                     // Use task_tracker to ensure usage logging completes during graceful shutdown
+                    #[cfg(feature = "server")]
                     self.task_tracker.spawn(async move {
                         tracing::warn!("Stream ended with error, logging partial usage");
                         logger.log_usage(&tokens).await;
@@ -872,6 +881,7 @@ impl<S> Drop for UsageTrackingStream<S> {
             // Spawn async task to log usage
             // Note: We can't await here since Drop is sync, so we spawn a task.
             // The task_tracker ensures this completes during graceful shutdown.
+            #[cfg(feature = "server")]
             self.task_tracker.spawn(async move {
                 tracing::warn!(
                     "Stream dropped without completing - logging partial usage for budget accuracy"

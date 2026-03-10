@@ -1,8 +1,10 @@
 use async_trait::async_trait;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::common::parse_uuid;
+use super::{
+    backend::{Pool, RowExt, map_unique_violation, query},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -16,11 +18,11 @@ use crate::{
 };
 
 pub struct SqliteTeamRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteTeamRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
@@ -42,7 +44,7 @@ impl SqliteTeamRepo {
             "AND deleted_at IS NULL"
         };
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, org_id, slug, name, created_at, updated_at
             FROM teams
@@ -54,7 +56,7 @@ impl SqliteTeamRepo {
             comparison, deleted_filter, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(org_id.to_string())
             .bind(cursor.created_at)
             .bind(cursor.id.to_string())
@@ -68,12 +70,12 @@ impl SqliteTeamRepo {
             .take(limit as usize)
             .map(|row| {
                 Ok(Team {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
-                    org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
-                    slug: row.get("slug"),
-                    name: row.get("name"),
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    id: parse_uuid(&row.col::<String>("id"))?,
+                    org_id: parse_uuid(&row.col::<String>("org_id"))?,
+                    slug: row.col("slug"),
+                    name: row.col("name"),
+                    created_at: row.col("created_at"),
+                    updated_at: row.col("updated_at"),
                 })
             })
             .collect::<DbResult<Vec<_>>>()?;
@@ -102,7 +104,7 @@ impl SqliteTeamRepo {
         let (comparison, order, should_reverse) =
             params.sort_order.cursor_query_params(params.direction);
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT u.id as user_id, u.external_id, u.email, u.name,
                    tm.role, tm.created_at as joined_at
@@ -116,7 +118,7 @@ impl SqliteTeamRepo {
             comparison, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(team_id.to_string())
             .bind(cursor.created_at)
             .bind(cursor.id.to_string())
@@ -130,12 +132,12 @@ impl SqliteTeamRepo {
             .take(limit as usize)
             .map(|row| {
                 Ok(TeamMember {
-                    user_id: parse_uuid(&row.get::<String, _>("user_id"))?,
-                    external_id: row.get("external_id"),
-                    email: row.get("email"),
-                    name: row.get("name"),
-                    role: row.get("role"),
-                    joined_at: row.get("joined_at"),
+                    user_id: parse_uuid(&row.col::<String>("user_id"))?,
+                    external_id: row.col("external_id"),
+                    email: row.col("email"),
+                    name: row.col("name"),
+                    role: row.col("role"),
+                    joined_at: row.col("joined_at"),
                 })
             })
             .collect::<DbResult<Vec<_>>>()?;
@@ -153,13 +155,14 @@ impl SqliteTeamRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl TeamRepo for SqliteTeamRepo {
     async fn create(&self, org_id: Uuid, input: CreateTeam) -> DbResult<Team> {
         let id = Uuid::new_v4();
         let now = chrono::Utc::now();
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO teams (id, org_id, slug, name, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -173,15 +176,10 @@ impl TeamRepo for SqliteTeamRepo {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                DbError::Conflict(format!(
-                    "Team with slug '{}' already exists in this organization",
-                    input.slug
-                ))
-            }
-            _ => DbError::from(e),
-        })?;
+        .map_err(map_unique_violation(format!(
+            "Team with slug '{}' already exists in this organization",
+            input.slug
+        )))?;
 
         Ok(Team {
             id,
@@ -194,7 +192,7 @@ impl TeamRepo for SqliteTeamRepo {
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<Team>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, org_id, slug, name, created_at, updated_at
             FROM teams
@@ -207,12 +205,12 @@ impl TeamRepo for SqliteTeamRepo {
 
         match result {
             Some(row) => Ok(Some(Team {
-                id: parse_uuid(&row.get::<String, _>("id"))?,
-                org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
-                slug: row.get("slug"),
-                name: row.get("name"),
-                created_at: row.get("created_at"),
-                updated_at: row.get("updated_at"),
+                id: parse_uuid(&row.col::<String>("id"))?,
+                org_id: parse_uuid(&row.col::<String>("org_id"))?,
+                slug: row.col("slug"),
+                name: row.col("name"),
+                created_at: row.col("created_at"),
+                updated_at: row.col("updated_at"),
             })),
             None => Ok(None),
         }
@@ -225,7 +223,7 @@ impl TeamRepo for SqliteTeamRepo {
 
         // Build query with placeholders for each ID
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, org_id, slug, name, created_at, updated_at
             FROM teams
@@ -234,7 +232,7 @@ impl TeamRepo for SqliteTeamRepo {
             placeholders
         );
 
-        let mut query_builder = sqlx::query(&query);
+        let mut query_builder = query(&sql);
         for id in ids {
             query_builder = query_builder.bind(id.to_string());
         }
@@ -244,19 +242,19 @@ impl TeamRepo for SqliteTeamRepo {
         rows.into_iter()
             .map(|row| {
                 Ok(Team {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
-                    org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
-                    slug: row.get("slug"),
-                    name: row.get("name"),
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    id: parse_uuid(&row.col::<String>("id"))?,
+                    org_id: parse_uuid(&row.col::<String>("org_id"))?,
+                    slug: row.col("slug"),
+                    name: row.col("name"),
+                    created_at: row.col("created_at"),
+                    updated_at: row.col("updated_at"),
                 })
             })
             .collect()
     }
 
     async fn get_by_slug(&self, org_id: Uuid, slug: &str) -> DbResult<Option<Team>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, org_id, slug, name, created_at, updated_at
             FROM teams
@@ -270,12 +268,12 @@ impl TeamRepo for SqliteTeamRepo {
 
         match result {
             Some(row) => Ok(Some(Team {
-                id: parse_uuid(&row.get::<String, _>("id"))?,
-                org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
-                slug: row.get("slug"),
-                name: row.get("name"),
-                created_at: row.get("created_at"),
-                updated_at: row.get("updated_at"),
+                id: parse_uuid(&row.col::<String>("id"))?,
+                org_id: parse_uuid(&row.col::<String>("org_id"))?,
+                slug: row.col("slug"),
+                name: row.col("name"),
+                created_at: row.col("created_at"),
+                updated_at: row.col("updated_at"),
             })),
             None => Ok(None),
         }
@@ -291,7 +289,7 @@ impl TeamRepo for SqliteTeamRepo {
                 .await;
         }
 
-        let query = if params.include_deleted {
+        let sql = if params.include_deleted {
             r#"
             SELECT id, org_id, slug, name, created_at, updated_at
             FROM teams
@@ -309,7 +307,7 @@ impl TeamRepo for SqliteTeamRepo {
             "#
         };
 
-        let rows = sqlx::query(query)
+        let rows = query(sql)
             .bind(org_id.to_string())
             .bind(fetch_limit)
             .fetch_all(&self.pool)
@@ -321,12 +319,12 @@ impl TeamRepo for SqliteTeamRepo {
             .take(limit as usize)
             .map(|row| {
                 Ok(Team {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
-                    org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
-                    slug: row.get("slug"),
-                    name: row.get("name"),
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    id: parse_uuid(&row.col::<String>("id"))?,
+                    org_id: parse_uuid(&row.col::<String>("org_id"))?,
+                    slug: row.col("slug"),
+                    name: row.col("name"),
+                    created_at: row.col("created_at"),
+                    updated_at: row.col("updated_at"),
                 })
             })
             .collect::<DbResult<Vec<_>>>()?;
@@ -340,24 +338,24 @@ impl TeamRepo for SqliteTeamRepo {
     }
 
     async fn count_by_org(&self, org_id: Uuid, include_deleted: bool) -> DbResult<i64> {
-        let query = if include_deleted {
+        let sql = if include_deleted {
             "SELECT COUNT(*) as count FROM teams WHERE org_id = ?"
         } else {
             "SELECT COUNT(*) as count FROM teams WHERE org_id = ? AND deleted_at IS NULL"
         };
 
-        let row = sqlx::query(query)
+        let row = query(sql)
             .bind(org_id.to_string())
             .fetch_one(&self.pool)
             .await?;
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn update(&self, id: Uuid, input: UpdateTeam) -> DbResult<Team> {
         if let Some(name) = input.name {
             let now = chrono::Utc::now();
 
-            let result = sqlx::query(
+            let result = query(
                 r#"
                 UPDATE teams
                 SET name = ?, updated_at = ?
@@ -383,7 +381,7 @@ impl TeamRepo for SqliteTeamRepo {
     async fn delete(&self, id: Uuid) -> DbResult<()> {
         let now = chrono::Utc::now();
 
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE teams
             SET deleted_at = ?
@@ -409,7 +407,7 @@ impl TeamRepo for SqliteTeamRepo {
     async fn add_member(&self, team_id: Uuid, input: AddTeamMember) -> DbResult<TeamMember> {
         let now = chrono::Utc::now();
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO team_memberships (team_id, user_id, role, source, created_at)
             VALUES (?, ?, ?, ?, ?)
@@ -422,12 +420,9 @@ impl TeamRepo for SqliteTeamRepo {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                DbError::Conflict("User is already a member of this team".to_string())
-            }
-            _ => DbError::from(e),
-        })?;
+        .map_err(map_unique_violation(
+            "User is already a member of this team".to_string(),
+        ))?;
 
         // Fetch the user details to return a complete TeamMember
         self.get_member(team_id, input.user_id)
@@ -436,7 +431,7 @@ impl TeamRepo for SqliteTeamRepo {
     }
 
     async fn remove_member(&self, team_id: Uuid, user_id: Uuid) -> DbResult<()> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             DELETE FROM team_memberships
             WHERE team_id = ? AND user_id = ?
@@ -461,7 +456,7 @@ impl TeamRepo for SqliteTeamRepo {
         except_team_ids: &[Uuid],
     ) -> DbResult<u64> {
         let result = if except_team_ids.is_empty() {
-            sqlx::query(
+            query(
                 r#"
                 DELETE FROM team_memberships
                 WHERE user_id = ? AND source = ?
@@ -477,16 +472,14 @@ impl TeamRepo for SqliteTeamRepo {
                 .map(|_| "?")
                 .collect::<Vec<_>>()
                 .join(",");
-            let query = format!(
+            let sql = format!(
                 r#"
                 DELETE FROM team_memberships
                 WHERE user_id = ? AND source = ? AND team_id NOT IN ({})
                 "#,
                 placeholders
             );
-            let mut q = sqlx::query(&query)
-                .bind(user_id.to_string())
-                .bind(source.as_str());
+            let mut q = query(&sql).bind(user_id.to_string()).bind(source.as_str());
             for id in except_team_ids {
                 q = q.bind(id.to_string());
             }
@@ -502,7 +495,7 @@ impl TeamRepo for SqliteTeamRepo {
         user_id: Uuid,
         input: UpdateTeamMember,
     ) -> DbResult<TeamMember> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE team_memberships
             SET role = ?
@@ -538,7 +531,7 @@ impl TeamRepo for SqliteTeamRepo {
                 .await;
         }
 
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT u.id as user_id, u.external_id, u.email, u.name,
                    tm.role, tm.created_at as joined_at
@@ -560,12 +553,12 @@ impl TeamRepo for SqliteTeamRepo {
             .take(limit as usize)
             .map(|row| {
                 Ok(TeamMember {
-                    user_id: parse_uuid(&row.get::<String, _>("user_id"))?,
-                    external_id: row.get("external_id"),
-                    email: row.get("email"),
-                    name: row.get("name"),
-                    role: row.get("role"),
-                    joined_at: row.get("joined_at"),
+                    user_id: parse_uuid(&row.col::<String>("user_id"))?,
+                    external_id: row.col("external_id"),
+                    email: row.col("email"),
+                    name: row.col("name"),
+                    role: row.col("role"),
+                    joined_at: row.col("joined_at"),
                 })
             })
             .collect::<DbResult<Vec<_>>>()?;
@@ -579,7 +572,7 @@ impl TeamRepo for SqliteTeamRepo {
     }
 
     async fn get_member(&self, team_id: Uuid, user_id: Uuid) -> DbResult<Option<TeamMember>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT u.id as user_id, u.external_id, u.email, u.name,
                    tm.role, tm.created_at as joined_at
@@ -595,19 +588,19 @@ impl TeamRepo for SqliteTeamRepo {
 
         match result {
             Some(row) => Ok(Some(TeamMember {
-                user_id: parse_uuid(&row.get::<String, _>("user_id"))?,
-                external_id: row.get("external_id"),
-                email: row.get("email"),
-                name: row.get("name"),
-                role: row.get("role"),
-                joined_at: row.get("joined_at"),
+                user_id: parse_uuid(&row.col::<String>("user_id"))?,
+                external_id: row.col("external_id"),
+                email: row.col("email"),
+                name: row.col("name"),
+                role: row.col("role"),
+                joined_at: row.col("joined_at"),
             })),
             None => Ok(None),
         }
     }
 
     async fn is_member(&self, team_id: Uuid, user_id: Uuid) -> DbResult<bool> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT COUNT(*) as count
             FROM team_memberships
@@ -619,20 +612,22 @@ impl TeamRepo for SqliteTeamRepo {
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(row.get::<i64, _>("count") > 0)
+        Ok(row.col::<i64>("count") > 0)
     }
 
     async fn count_members(&self, team_id: Uuid) -> DbResult<i64> {
-        let row = sqlx::query("SELECT COUNT(*) as count FROM team_memberships WHERE team_id = ?")
+        let row = query("SELECT COUNT(*) as count FROM team_memberships WHERE team_id = ?")
             .bind(team_id.to_string())
             .fetch_one(&self.pool)
             .await?;
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use sqlx::SqlitePool;
+
     use super::*;
     use crate::db::repos::TeamRepo;
 

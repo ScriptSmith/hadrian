@@ -311,12 +311,7 @@ pub struct TimeContext {
 impl TimeContext {
     /// Create a new TimeContext with the current time.
     pub fn now() -> Self {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
-        let timestamp = now.as_secs() as i64;
+        let timestamp = Self::current_timestamp();
 
         // Calculate hour and day_of_week from timestamp
         // This is a simplified calculation - in production you might want chrono
@@ -344,6 +339,24 @@ impl TimeContext {
             day_of_week,
             timestamp,
         }
+    }
+
+    /// Current Unix timestamp in seconds.
+    ///
+    /// On native uses `SystemTime`; on wasm32 uses `js_sys::Date` since
+    /// `SystemTime::now()` panics in the browser.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn current_timestamp() -> i64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn current_timestamp() -> i64 {
+        (js_sys::Date::now() / 1000.0) as i64
     }
 }
 

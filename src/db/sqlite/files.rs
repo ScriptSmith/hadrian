@@ -1,8 +1,10 @@
 use async_trait::async_trait;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::common::parse_uuid;
+use super::{
+    backend::{Pool, RowExt, query},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -12,11 +14,11 @@ use crate::{
 };
 
 pub struct SqliteFilesRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteFilesRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
@@ -25,13 +27,14 @@ impl SqliteFilesRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl FilesRepo for SqliteFilesRepo {
     async fn create_file(&self, input: CreateFile) -> DbResult<File> {
         let id = Uuid::new_v4();
         let now = chrono::Utc::now();
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO files (id, owner_type, owner_id, filename, purpose, content_type, size_bytes, status, content_hash, storage_backend, file_data, storage_path, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -73,7 +76,7 @@ impl FilesRepo for SqliteFilesRepo {
     }
 
     async fn get_file(&self, id: Uuid) -> DbResult<Option<File>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, owner_type, owner_id, filename, purpose, content_type, size_bytes, status,
                    status_details, content_hash, storage_backend, storage_path, created_at, expires_at
@@ -87,35 +90,35 @@ impl FilesRepo for SqliteFilesRepo {
 
         match result {
             Some(row) => {
-                let owner_type_str: String = row.get("owner_type");
-                let purpose_str: String = row.get("purpose");
-                let status_str: String = row.get("status");
-                let storage_backend_str: String = row.get("storage_backend");
+                let owner_type_str: String = row.col("owner_type");
+                let purpose_str: String = row.col("purpose");
+                let status_str: String = row.col("status");
+                let storage_backend_str: String = row.col("storage_backend");
 
                 Ok(Some(File {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
+                    id: parse_uuid(&row.col::<String>("id"))?,
                     object: OBJECT_TYPE_FILE.to_string(),
                     owner_type: owner_type_str
                         .parse()
                         .map_err(|e: String| DbError::Internal(e))?,
-                    owner_id: parse_uuid(&row.get::<String, _>("owner_id"))?,
-                    filename: row.get("filename"),
+                    owner_id: parse_uuid(&row.col::<String>("owner_id"))?,
+                    filename: row.col("filename"),
                     purpose: purpose_str
                         .parse()
                         .map_err(|e: String| DbError::Internal(e))?,
-                    content_type: row.get("content_type"),
-                    size_bytes: row.get("size_bytes"),
+                    content_type: row.col("content_type"),
+                    size_bytes: row.col("size_bytes"),
                     status: status_str
                         .parse()
                         .map_err(|e: String| DbError::Internal(e))?,
-                    status_details: row.get("status_details"),
-                    content_hash: row.get("content_hash"),
+                    status_details: row.col("status_details"),
+                    content_hash: row.col("content_hash"),
                     storage_backend: storage_backend_str
                         .parse()
                         .map_err(|e: String| DbError::Internal(e))?,
-                    storage_path: row.get("storage_path"),
-                    created_at: row.get("created_at"),
-                    expires_at: row.get("expires_at"),
+                    storage_path: row.col("storage_path"),
+                    created_at: row.col("created_at"),
+                    expires_at: row.col("expires_at"),
                 }))
             }
             None => Ok(None),
@@ -123,7 +126,7 @@ impl FilesRepo for SqliteFilesRepo {
     }
 
     async fn get_file_data(&self, id: Uuid) -> DbResult<Option<Vec<u8>>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT file_data
             FROM files
@@ -134,7 +137,7 @@ impl FilesRepo for SqliteFilesRepo {
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(result.and_then(|row| row.get::<Option<Vec<u8>>, _>("file_data")))
+        Ok(result.and_then(|row| row.col::<Option<Vec<u8>>>("file_data")))
     }
 
     async fn list_files(
@@ -152,7 +155,7 @@ impl FilesRepo for SqliteFilesRepo {
             let (comparison, order, should_reverse) =
                 params.sort_order.cursor_query_params(params.direction);
 
-            let (query, bind_purpose) = match &purpose {
+            let (sql, bind_purpose) = match &purpose {
                 Some(p) => (
                     format!(
                         r#"
@@ -186,7 +189,7 @@ impl FilesRepo for SqliteFilesRepo {
             };
 
             let rows = if let Some(purpose_str) = bind_purpose {
-                sqlx::query(&query)
+                query(&sql)
                     .bind(owner_type.as_str())
                     .bind(owner_id.to_string())
                     .bind(purpose_str)
@@ -196,7 +199,7 @@ impl FilesRepo for SqliteFilesRepo {
                     .fetch_all(&self.pool)
                     .await?
             } else {
-                sqlx::query(&query)
+                query(&sql)
                     .bind(owner_type.as_str())
                     .bind(owner_id.to_string())
                     .bind(cursor.created_at)
@@ -211,35 +214,35 @@ impl FilesRepo for SqliteFilesRepo {
                 .into_iter()
                 .take(limit as usize)
                 .map(|row| {
-                    let owner_type_str: String = row.get("owner_type");
-                    let purpose_str: String = row.get("purpose");
-                    let status_str: String = row.get("status");
-                    let storage_backend_str: String = row.get("storage_backend");
+                    let owner_type_str: String = row.col("owner_type");
+                    let purpose_str: String = row.col("purpose");
+                    let status_str: String = row.col("status");
+                    let storage_backend_str: String = row.col("storage_backend");
 
                     Ok(File {
-                        id: parse_uuid(&row.get::<String, _>("id"))?,
+                        id: parse_uuid(&row.col::<String>("id"))?,
                         object: OBJECT_TYPE_FILE.to_string(),
                         owner_type: owner_type_str
                             .parse()
                             .map_err(|e: String| DbError::Internal(e))?,
-                        owner_id: parse_uuid(&row.get::<String, _>("owner_id"))?,
-                        filename: row.get("filename"),
+                        owner_id: parse_uuid(&row.col::<String>("owner_id"))?,
+                        filename: row.col("filename"),
                         purpose: purpose_str
                             .parse()
                             .map_err(|e: String| DbError::Internal(e))?,
-                        content_type: row.get("content_type"),
-                        size_bytes: row.get("size_bytes"),
+                        content_type: row.col("content_type"),
+                        size_bytes: row.col("size_bytes"),
                         status: status_str
                             .parse()
                             .map_err(|e: String| DbError::Internal(e))?,
-                        status_details: row.get("status_details"),
-                        content_hash: row.get("content_hash"),
+                        status_details: row.col("status_details"),
+                        content_hash: row.col("content_hash"),
                         storage_backend: storage_backend_str
                             .parse()
                             .map_err(|e: String| DbError::Internal(e))?,
-                        storage_path: row.get("storage_path"),
-                        created_at: row.get("created_at"),
-                        expires_at: row.get("expires_at"),
+                        storage_path: row.col("storage_path"),
+                        created_at: row.col("created_at"),
+                        expires_at: row.col("expires_at"),
                     })
                 })
                 .collect::<DbResult<Vec<_>>>()?;
@@ -261,7 +264,7 @@ impl FilesRepo for SqliteFilesRepo {
 
         // First page (no cursor)
         let order = params.sort_order.as_sql();
-        let (query, bind_purpose) = match &purpose {
+        let (sql, bind_purpose) = match &purpose {
             Some(p) => (
                 format!(
                     r#"
@@ -293,7 +296,7 @@ impl FilesRepo for SqliteFilesRepo {
         };
 
         let rows = if let Some(purpose_str) = bind_purpose {
-            sqlx::query(&query)
+            query(&sql)
                 .bind(owner_type.as_str())
                 .bind(owner_id.to_string())
                 .bind(purpose_str)
@@ -301,7 +304,7 @@ impl FilesRepo for SqliteFilesRepo {
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            sqlx::query(&query)
+            query(&sql)
                 .bind(owner_type.as_str())
                 .bind(owner_id.to_string())
                 .bind(fetch_limit)
@@ -314,35 +317,35 @@ impl FilesRepo for SqliteFilesRepo {
             .into_iter()
             .take(limit as usize)
             .map(|row| {
-                let owner_type_str: String = row.get("owner_type");
-                let purpose_str: String = row.get("purpose");
-                let status_str: String = row.get("status");
-                let storage_backend_str: String = row.get("storage_backend");
+                let owner_type_str: String = row.col("owner_type");
+                let purpose_str: String = row.col("purpose");
+                let status_str: String = row.col("status");
+                let storage_backend_str: String = row.col("storage_backend");
 
                 Ok(File {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
+                    id: parse_uuid(&row.col::<String>("id"))?,
                     object: OBJECT_TYPE_FILE.to_string(),
                     owner_type: owner_type_str
                         .parse()
                         .map_err(|e: String| DbError::Internal(e))?,
-                    owner_id: parse_uuid(&row.get::<String, _>("owner_id"))?,
-                    filename: row.get("filename"),
+                    owner_id: parse_uuid(&row.col::<String>("owner_id"))?,
+                    filename: row.col("filename"),
                     purpose: purpose_str
                         .parse()
                         .map_err(|e: String| DbError::Internal(e))?,
-                    content_type: row.get("content_type"),
-                    size_bytes: row.get("size_bytes"),
+                    content_type: row.col("content_type"),
+                    size_bytes: row.col("size_bytes"),
                     status: status_str
                         .parse()
                         .map_err(|e: String| DbError::Internal(e))?,
-                    status_details: row.get("status_details"),
-                    content_hash: row.get("content_hash"),
+                    status_details: row.col("status_details"),
+                    content_hash: row.col("content_hash"),
                     storage_backend: storage_backend_str
                         .parse()
                         .map_err(|e: String| DbError::Internal(e))?,
-                    storage_path: row.get("storage_path"),
-                    created_at: row.get("created_at"),
-                    expires_at: row.get("expires_at"),
+                    storage_path: row.col("storage_path"),
+                    created_at: row.col("created_at"),
+                    expires_at: row.col("expires_at"),
                 })
             })
             .collect::<DbResult<Vec<_>>>()?;
@@ -359,7 +362,7 @@ impl FilesRepo for SqliteFilesRepo {
     }
 
     async fn delete_file(&self, id: Uuid) -> DbResult<()> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             DELETE FROM files
             WHERE id = ?
@@ -382,7 +385,7 @@ impl FilesRepo for SqliteFilesRepo {
         status: FileStatus,
         status_details: Option<String>,
     ) -> DbResult<()> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE files
             SET status = ?, status_details = ?
@@ -403,7 +406,7 @@ impl FilesRepo for SqliteFilesRepo {
     }
 
     async fn count_file_references(&self, file_id: Uuid) -> DbResult<i64> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT COUNT(*) as count
             FROM vector_store_files
@@ -414,6 +417,6 @@ impl FilesRepo for SqliteFilesRepo {
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(result.get("count"))
+        Ok(result.col("count"))
     }
 }

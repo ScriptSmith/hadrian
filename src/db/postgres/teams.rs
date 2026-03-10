@@ -153,7 +153,8 @@ impl PostgresTeamRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl TeamRepo for PostgresTeamRepo {
     async fn create(&self, org_id: Uuid, input: CreateTeam) -> DbResult<Team> {
         let row = sqlx::query(

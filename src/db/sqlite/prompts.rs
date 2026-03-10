@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::common::parse_uuid;
+use super::{
+    backend::{Pool, RowExt, map_unique_violation, query},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -17,37 +19,37 @@ use crate::{
 };
 
 pub struct SqlitePromptRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqlitePromptRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
     /// Parse a Prompt from a database row.
-    fn parse_prompt(row: &sqlx::sqlite::SqliteRow) -> DbResult<Prompt> {
-        let owner_type_str: String = row.get("owner_type");
+    fn parse_prompt(row: &super::backend::Row) -> DbResult<Prompt> {
+        let owner_type_str: String = row.col("owner_type");
         let owner_type: PromptOwnerType = owner_type_str
             .parse()
             .map_err(|e: String| DbError::Internal(e))?;
 
-        let metadata: Option<String> = row.get("metadata");
+        let metadata: Option<String> = row.col("metadata");
         let metadata: Option<HashMap<String, serde_json::Value>> = metadata
             .map(|s| serde_json::from_str(&s))
             .transpose()
             .map_err(|e| DbError::Internal(format!("Failed to parse metadata: {}", e)))?;
 
         Ok(Prompt {
-            id: parse_uuid(&row.get::<String, _>("id"))?,
+            id: parse_uuid(&row.col::<String>("id"))?,
             owner_type,
-            owner_id: parse_uuid(&row.get::<String, _>("owner_id"))?,
-            name: row.get("name"),
-            description: row.get("description"),
-            content: row.get("content"),
+            owner_id: parse_uuid(&row.col::<String>("owner_id"))?,
+            name: row.col("name"),
+            description: row.col("description"),
+            content: row.col("content"),
             metadata,
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
+            created_at: row.col("created_at"),
+            updated_at: row.col("updated_at"),
         })
     }
 
@@ -70,7 +72,7 @@ impl SqlitePromptRepo {
             "AND deleted_at IS NULL"
         };
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, owner_type, owner_id, name, description, content, metadata, created_at, updated_at
             FROM prompts
@@ -82,7 +84,7 @@ impl SqlitePromptRepo {
             comparison, deleted_filter, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(owner_type.as_str())
             .bind(owner_id.to_string())
             .bind(cursor.created_at)
@@ -111,7 +113,8 @@ impl SqlitePromptRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl PromptRepo for SqlitePromptRepo {
     async fn create(&self, input: CreatePrompt) -> DbResult<Prompt> {
         let id = Uuid::new_v4();
@@ -126,7 +129,7 @@ impl PromptRepo for SqlitePromptRepo {
             .transpose()
             .map_err(|e| DbError::Internal(format!("Failed to serialize metadata: {}", e)))?;
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO prompts (id, owner_type, owner_id, name, description, content, metadata, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -143,15 +146,10 @@ impl PromptRepo for SqlitePromptRepo {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                DbError::Conflict(format!(
-                    "Prompt with name '{}' already exists for this owner",
-                    input.name
-                ))
-            }
-            _ => DbError::from(e),
-        })?;
+        .map_err(map_unique_violation(format!(
+            "Prompt with name '{}' already exists for this owner",
+            input.name
+        )))?;
 
         Ok(Prompt {
             id,
@@ -167,7 +165,7 @@ impl PromptRepo for SqlitePromptRepo {
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<Prompt>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, owner_type, owner_id, name, description, content, metadata, created_at, updated_at
             FROM prompts
@@ -185,7 +183,7 @@ impl PromptRepo for SqlitePromptRepo {
     }
 
     async fn get_by_id_and_org(&self, id: Uuid, org_id: Uuid) -> DbResult<Option<Prompt>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT p.id, p.owner_type, p.owner_id, p.name, p.description, p.content, p.metadata, p.created_at, p.updated_at
             FROM prompts p
@@ -236,7 +234,7 @@ impl PromptRepo for SqlitePromptRepo {
                 .await;
         }
 
-        let query = if params.include_deleted {
+        let sql = if params.include_deleted {
             r#"
             SELECT id, owner_type, owner_id, name, description, content, metadata, created_at, updated_at
             FROM prompts
@@ -254,7 +252,7 @@ impl PromptRepo for SqlitePromptRepo {
             "#
         };
 
-        let rows = sqlx::query(query)
+        let rows = query(sql)
             .bind(owner_type.as_str())
             .bind(owner_id.to_string())
             .bind(fetch_limit)
@@ -282,19 +280,19 @@ impl PromptRepo for SqlitePromptRepo {
         owner_id: Uuid,
         include_deleted: bool,
     ) -> DbResult<i64> {
-        let query = if include_deleted {
+        let sql = if include_deleted {
             "SELECT COUNT(*) as count FROM prompts WHERE owner_type = ? AND owner_id = ?"
         } else {
             "SELECT COUNT(*) as count FROM prompts WHERE owner_type = ? AND owner_id = ? AND deleted_at IS NULL"
         };
 
-        let row = sqlx::query(query)
+        let row = query(sql)
             .bind(owner_type.as_str())
             .bind(owner_id.to_string())
             .fetch_one(&self.pool)
             .await?;
 
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn update(&self, id: Uuid, input: UpdatePrompt) -> DbResult<Prompt> {
@@ -323,12 +321,12 @@ impl PromptRepo for SqlitePromptRepo {
             set_clauses.push("metadata = ?");
         }
 
-        let query = format!(
+        let sql = format!(
             "UPDATE prompts SET {} WHERE id = ? AND deleted_at IS NULL",
             set_clauses.join(", ")
         );
 
-        let mut query_builder = sqlx::query(&query).bind(now);
+        let mut query_builder = query(&sql).bind(now);
 
         if let Some(ref name) = input.name {
             query_builder = query_builder.bind(name);
@@ -349,12 +347,9 @@ impl PromptRepo for SqlitePromptRepo {
             .bind(id.to_string())
             .execute(&self.pool)
             .await
-            .map_err(|e| match e {
-                sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                    DbError::Conflict("Prompt with this name already exists for this owner".into())
-                }
-                _ => DbError::from(e),
-            })?;
+            .map_err(map_unique_violation(
+                "Prompt with this name already exists for this owner",
+            ))?;
 
         if result.rows_affected() == 0 {
             return Err(DbError::NotFound);
@@ -366,7 +361,7 @@ impl PromptRepo for SqlitePromptRepo {
     async fn delete(&self, id: Uuid) -> DbResult<()> {
         let now = chrono::Utc::now();
 
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE prompts
             SET deleted_at = ?
@@ -388,6 +383,8 @@ impl PromptRepo for SqlitePromptRepo {
 
 #[cfg(test)]
 mod tests {
+    use sqlx::SqlitePool;
+
     use super::*;
     use crate::models::PromptOwner;
 

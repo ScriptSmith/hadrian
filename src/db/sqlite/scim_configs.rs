@@ -1,10 +1,12 @@
 //! SQLite implementation of the SCIM config repository.
 
 use async_trait::async_trait;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::common::parse_uuid;
+use super::{
+    backend::{Pool, Row, RowExt, map_unique_violation, query},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -14,46 +16,47 @@ use crate::{
 };
 
 pub struct SqliteOrgScimConfigRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteOrgScimConfigRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
     /// Parse an OrgScimConfig from a database row.
-    fn parse_config(row: &sqlx::sqlite::SqliteRow) -> DbResult<OrgScimConfig> {
-        let default_team_id: Option<String> = row.get("default_team_id");
+    fn parse_config(row: &Row) -> DbResult<OrgScimConfig> {
+        let default_team_id: Option<String> = row.col("default_team_id");
         let default_team_id = default_team_id.map(|s| parse_uuid(&s)).transpose()?;
 
         Ok(OrgScimConfig {
-            id: parse_uuid(&row.get::<String, _>("id"))?,
-            org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
-            enabled: row.get::<i32, _>("enabled") != 0,
-            token_prefix: row.get("token_prefix"),
-            token_last_used_at: row.get("token_last_used_at"),
-            create_users: row.get::<i32, _>("create_users") != 0,
+            id: parse_uuid(&row.col::<String>("id"))?,
+            org_id: parse_uuid(&row.col::<String>("org_id"))?,
+            enabled: row.col::<i32>("enabled") != 0,
+            token_prefix: row.col("token_prefix"),
+            token_last_used_at: row.col("token_last_used_at"),
+            create_users: row.col::<i32>("create_users") != 0,
             default_team_id,
-            default_org_role: row.get("default_org_role"),
-            default_team_role: row.get("default_team_role"),
-            sync_display_name: row.get::<i32, _>("sync_display_name") != 0,
-            deactivate_deletes_user: row.get::<i32, _>("deactivate_deletes_user") != 0,
-            revoke_api_keys_on_deactivate: row.get::<i32, _>("revoke_api_keys_on_deactivate") != 0,
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
+            default_org_role: row.col("default_org_role"),
+            default_team_role: row.col("default_team_role"),
+            sync_display_name: row.col::<i32>("sync_display_name") != 0,
+            deactivate_deletes_user: row.col::<i32>("deactivate_deletes_user") != 0,
+            revoke_api_keys_on_deactivate: row.col::<i32>("revoke_api_keys_on_deactivate") != 0,
+            created_at: row.col("created_at"),
+            updated_at: row.col("updated_at"),
         })
     }
 
     /// Parse an OrgScimConfigWithHash from a database row.
-    fn parse_config_with_hash(row: &sqlx::sqlite::SqliteRow) -> DbResult<OrgScimConfigWithHash> {
+    fn parse_config_with_hash(row: &Row) -> DbResult<OrgScimConfigWithHash> {
         let config = Self::parse_config(row)?;
-        let token_hash: String = row.get("token_hash");
+        let token_hash: String = row.col("token_hash");
         Ok(OrgScimConfigWithHash { config, token_hash })
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl OrgScimConfigRepo for SqliteOrgScimConfigRepo {
     async fn create(
         &self,
@@ -65,7 +68,7 @@ impl OrgScimConfigRepo for SqliteOrgScimConfigRepo {
         let id = Uuid::new_v4();
         let now = chrono::Utc::now();
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO org_scim_configs (
                 id, org_id, enabled, token_hash, token_prefix,
@@ -92,12 +95,9 @@ impl OrgScimConfigRepo for SqliteOrgScimConfigRepo {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                DbError::Conflict("Organization already has a SCIM configuration".into())
-            }
-            _ => DbError::from(e),
-        })?;
+        .map_err(map_unique_violation(
+            "Organization already has a SCIM configuration",
+        ))?;
 
         Ok(OrgScimConfig {
             id,
@@ -118,7 +118,7 @@ impl OrgScimConfigRepo for SqliteOrgScimConfigRepo {
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<OrgScimConfig>> {
-        let row = sqlx::query("SELECT * FROM org_scim_configs WHERE id = ?")
+        let row = query("SELECT * FROM org_scim_configs WHERE id = ?")
             .bind(id.to_string())
             .fetch_optional(&self.pool)
             .await?;
@@ -127,7 +127,7 @@ impl OrgScimConfigRepo for SqliteOrgScimConfigRepo {
     }
 
     async fn get_by_org_id(&self, org_id: Uuid) -> DbResult<Option<OrgScimConfig>> {
-        let row = sqlx::query("SELECT * FROM org_scim_configs WHERE org_id = ?")
+        let row = query("SELECT * FROM org_scim_configs WHERE org_id = ?")
             .bind(org_id.to_string())
             .fetch_optional(&self.pool)
             .await?;
@@ -139,7 +139,7 @@ impl OrgScimConfigRepo for SqliteOrgScimConfigRepo {
         &self,
         org_id: Uuid,
     ) -> DbResult<Option<OrgScimConfigWithHash>> {
-        let row = sqlx::query("SELECT * FROM org_scim_configs WHERE org_id = ?")
+        let row = query("SELECT * FROM org_scim_configs WHERE org_id = ?")
             .bind(org_id.to_string())
             .fetch_optional(&self.pool)
             .await?;
@@ -148,7 +148,7 @@ impl OrgScimConfigRepo for SqliteOrgScimConfigRepo {
     }
 
     async fn get_by_token_hash(&self, token_hash: &str) -> DbResult<Option<OrgScimConfigWithHash>> {
-        let row = sqlx::query("SELECT * FROM org_scim_configs WHERE token_hash = ?")
+        let row = query("SELECT * FROM org_scim_configs WHERE token_hash = ?")
             .bind(token_hash)
             .fetch_optional(&self.pool)
             .await?;
@@ -182,7 +182,7 @@ impl OrgScimConfigRepo for SqliteOrgScimConfigRepo {
 
         let now = chrono::Utc::now();
 
-        sqlx::query(
+        query(
             r#"
             UPDATE org_scim_configs
             SET enabled = ?, create_users = ?, default_team_id = ?,
@@ -231,7 +231,7 @@ impl OrgScimConfigRepo for SqliteOrgScimConfigRepo {
     ) -> DbResult<OrgScimConfig> {
         let now = chrono::Utc::now();
 
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE org_scim_configs
             SET token_hash = ?, token_prefix = ?, token_last_used_at = NULL, updated_at = ?
@@ -255,7 +255,7 @@ impl OrgScimConfigRepo for SqliteOrgScimConfigRepo {
     async fn update_token_last_used(&self, id: Uuid) -> DbResult<()> {
         let now = chrono::Utc::now();
 
-        sqlx::query("UPDATE org_scim_configs SET token_last_used_at = ? WHERE id = ?")
+        query("UPDATE org_scim_configs SET token_last_used_at = ? WHERE id = ?")
             .bind(now)
             .bind(id.to_string())
             .execute(&self.pool)
@@ -265,7 +265,7 @@ impl OrgScimConfigRepo for SqliteOrgScimConfigRepo {
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
-        let result = sqlx::query("DELETE FROM org_scim_configs WHERE id = ?")
+        let result = query("DELETE FROM org_scim_configs WHERE id = ?")
             .bind(id.to_string())
             .execute(&self.pool)
             .await?;
@@ -278,7 +278,7 @@ impl OrgScimConfigRepo for SqliteOrgScimConfigRepo {
     }
 
     async fn list_enabled(&self) -> DbResult<Vec<OrgScimConfig>> {
-        let rows = sqlx::query("SELECT * FROM org_scim_configs WHERE enabled = 1")
+        let rows = query("SELECT * FROM org_scim_configs WHERE enabled = 1")
             .fetch_all(&self.pool)
             .await?;
 

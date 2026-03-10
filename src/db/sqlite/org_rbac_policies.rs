@@ -1,9 +1,11 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::common::parse_uuid;
+use super::{
+    backend::{Pool, RowExt, Transaction, begin, map_unique_violation, query},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -19,64 +21,64 @@ use crate::{
 };
 
 pub struct SqliteOrgRbacPolicyRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteOrgRbacPolicyRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
-    fn parse_policy(row: &sqlx::sqlite::SqliteRow) -> DbResult<OrgRbacPolicy> {
-        let effect_str: String = row.get("effect");
+    fn parse_policy(row: &super::backend::Row) -> DbResult<OrgRbacPolicy> {
+        let effect_str: String = row.col("effect");
         let effect: RbacPolicyEffect = effect_str
             .parse()
             .map_err(|e: String| DbError::Internal(e))?;
 
-        let enabled: i32 = row.get("enabled");
+        let enabled: i32 = row.col("enabled");
 
         Ok(OrgRbacPolicy {
-            id: parse_uuid(row.get("id"))?,
-            org_id: parse_uuid(row.get("org_id"))?,
-            name: row.get("name"),
-            description: row.get("description"),
-            resource: row.get("resource"),
-            action: row.get("action"),
-            condition: row.get("condition"),
+            id: parse_uuid(&row.col::<String>("id"))?,
+            org_id: parse_uuid(&row.col::<String>("org_id"))?,
+            name: row.col("name"),
+            description: row.col("description"),
+            resource: row.col("resource"),
+            action: row.col("action"),
+            condition: row.col("condition"),
             effect,
-            priority: row.get("priority"),
+            priority: row.col("priority"),
             enabled: enabled != 0,
-            version: row.get("version"),
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
-            deleted_at: row.get("deleted_at"),
+            version: row.col("version"),
+            created_at: row.col("created_at"),
+            updated_at: row.col("updated_at"),
+            deleted_at: row.col("deleted_at"),
         })
     }
 
-    fn parse_version(row: &sqlx::sqlite::SqliteRow) -> DbResult<OrgRbacPolicyVersion> {
-        let effect_str: String = row.get("effect");
+    fn parse_version(row: &super::backend::Row) -> DbResult<OrgRbacPolicyVersion> {
+        let effect_str: String = row.col("effect");
         let effect: RbacPolicyEffect = effect_str
             .parse()
             .map_err(|e: String| DbError::Internal(e))?;
 
-        let enabled: i32 = row.get("enabled");
-        let created_by: Option<String> = row.get("created_by");
+        let enabled: i32 = row.col("enabled");
+        let created_by: Option<String> = row.col("created_by");
 
         Ok(OrgRbacPolicyVersion {
-            id: parse_uuid(row.get("id"))?,
-            policy_id: parse_uuid(row.get("policy_id"))?,
-            version: row.get("version"),
-            name: row.get("name"),
-            description: row.get("description"),
-            resource: row.get("resource"),
-            action: row.get("action"),
-            condition: row.get("condition"),
+            id: parse_uuid(&row.col::<String>("id"))?,
+            policy_id: parse_uuid(&row.col::<String>("policy_id"))?,
+            version: row.col("version"),
+            name: row.col("name"),
+            description: row.col("description"),
+            resource: row.col("resource"),
+            action: row.col("action"),
+            condition: row.col("condition"),
             effect,
-            priority: row.get("priority"),
+            priority: row.col("priority"),
             enabled: enabled != 0,
             created_by: created_by.and_then(|s| Uuid::parse_str(&s).ok()),
-            reason: row.get("reason"),
-            created_at: row.get("created_at"),
+            reason: row.col("reason"),
+            created_at: row.col("created_at"),
         })
     }
 
@@ -98,7 +100,7 @@ impl SqliteOrgRbacPolicyRepo {
             "AND deleted_at IS NULL"
         };
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, org_id, name, description, resource, action, condition,
                    effect, priority, enabled, version, created_at, updated_at, deleted_at
@@ -111,7 +113,7 @@ impl SqliteOrgRbacPolicyRepo {
             comparison, deleted_filter, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(org_id.to_string())
             .bind(cursor.created_at)
             .bind(cursor.id.to_string())
@@ -150,7 +152,7 @@ impl SqliteOrgRbacPolicyRepo {
         let (comparison, order, should_reverse) =
             params.sort_order.cursor_query_params(params.direction);
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, policy_id, version, name, description, resource, action,
                    condition, effect, priority, enabled, created_by, reason, created_at
@@ -162,7 +164,7 @@ impl SqliteOrgRbacPolicyRepo {
             comparison, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(policy_id.to_string())
             .bind(cursor.created_at)
             .bind(cursor.id.to_string())
@@ -192,17 +194,17 @@ impl SqliteOrgRbacPolicyRepo {
         Ok(ListResult::new(items, has_more, cursors))
     }
 
-    /// Create a version record from a policy snapshot
+    /// Create a version record from a policy snapshot within a transaction.
     async fn create_version_record(
         &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        tx: &mut Transaction<'_>,
         policy: &OrgRbacPolicy,
         created_by: Option<Uuid>,
         reason: Option<String>,
     ) -> DbResult<()> {
         let version_id = Uuid::new_v4();
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO org_rbac_policy_versions (
                 id, policy_id, version, name, description, resource, action,
@@ -232,7 +234,8 @@ impl SqliteOrgRbacPolicyRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
     async fn create(
         &self,
@@ -242,42 +245,6 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
     ) -> DbResult<OrgRbacPolicy> {
         let id = Uuid::new_v4();
         let now: DateTime<Utc> = Utc::now();
-
-        let mut tx = self.pool.begin().await?;
-
-        // Insert the policy
-        sqlx::query(
-            r#"
-            INSERT INTO org_rbac_policies (
-                id, org_id, name, description, resource, action, condition,
-                effect, priority, enabled, version, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-            "#,
-        )
-        .bind(id.to_string())
-        .bind(org_id.to_string())
-        .bind(&input.name)
-        .bind(&input.description)
-        .bind(&input.resource)
-        .bind(&input.action)
-        .bind(&input.condition)
-        .bind(input.effect.to_string())
-        .bind(input.priority)
-        .bind(if input.enabled { 1 } else { 0 })
-        .bind(now)
-        .bind(now)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                DbError::Conflict(format!(
-                    "Policy with name '{}' already exists in this organization",
-                    input.name
-                ))
-            }
-            _ => DbError::from(e),
-        })?;
 
         let policy = OrgRbacPolicy {
             id,
@@ -296,7 +263,36 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
             deleted_at: None,
         };
 
-        // Create version 1 record
+        let mut tx = begin(&self.pool).await?;
+
+        query(
+            r#"
+            INSERT INTO org_rbac_policies (
+                id, org_id, name, description, resource, action, condition,
+                effect, priority, enabled, version, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            "#,
+        )
+        .bind(id.to_string())
+        .bind(org_id.to_string())
+        .bind(&policy.name)
+        .bind(&policy.description)
+        .bind(&policy.resource)
+        .bind(&policy.action)
+        .bind(&policy.condition)
+        .bind(policy.effect.to_string())
+        .bind(policy.priority)
+        .bind(if policy.enabled { 1 } else { 0 })
+        .bind(now)
+        .bind(now)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_unique_violation(format!(
+            "Policy with name '{}' already exists in this organization",
+            policy.name
+        )))?;
+
         self.create_version_record(&mut tx, &policy, created_by, input.reason)
             .await?;
 
@@ -306,7 +302,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<OrgRbacPolicy>> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT id, org_id, name, description, resource, action, condition,
                    effect, priority, enabled, version, created_at, updated_at, deleted_at
@@ -329,7 +325,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
         org_id: Uuid,
         name: &str,
     ) -> DbResult<Option<OrgRbacPolicy>> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT id, org_id, name, description, resource, action, condition,
                    effect, priority, enabled, version, created_at, updated_at, deleted_at
@@ -349,7 +345,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
     }
 
     async fn list_by_org(&self, org_id: Uuid) -> DbResult<Vec<OrgRbacPolicy>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, org_id, name, description, resource, action, condition,
                    effect, priority, enabled, version, created_at, updated_at, deleted_at
@@ -380,7 +376,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
         }
 
         // First page (no cursor)
-        let query = if params.include_deleted {
+        let sql = if params.include_deleted {
             r#"
             SELECT id, org_id, name, description, resource, action, condition,
                    effect, priority, enabled, version, created_at, updated_at, deleted_at
@@ -400,7 +396,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
             "#
         };
 
-        let rows = sqlx::query(query)
+        let rows = query(sql)
             .bind(org_id.to_string())
             .bind(fetch_limit)
             .fetch_all(&self.pool)
@@ -422,7 +418,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
     }
 
     async fn list_enabled_by_org(&self, org_id: Uuid) -> DbResult<Vec<OrgRbacPolicy>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, org_id, name, description, resource, action, condition,
                    effect, priority, enabled, version, created_at, updated_at, deleted_at
@@ -439,7 +435,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
     }
 
     async fn list_all_enabled(&self) -> DbResult<Vec<OrgRbacPolicy>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, org_id, name, description, resource, action, condition,
                    effect, priority, enabled, version, created_at, updated_at, deleted_at
@@ -460,10 +456,8 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
         input: UpdateOrgRbacPolicy,
         updated_by: Option<Uuid>,
     ) -> DbResult<OrgRbacPolicy> {
-        let mut tx = self.pool.begin().await?;
-
         // Fetch current policy (excluding soft-deleted)
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT id, org_id, name, description, resource, action, condition,
                    effect, priority, enabled, version, created_at, updated_at, deleted_at
@@ -472,7 +466,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
             "#,
         )
         .bind(id.to_string())
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&self.pool)
         .await?;
 
         let Some(row) = row else {
@@ -514,8 +508,9 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
         policy.version += 1;
         policy.updated_at = Utc::now();
 
-        // Update the policy with optimistic locking (check original version and not deleted)
-        let result = sqlx::query(
+        let mut tx = begin(&self.pool).await?;
+
+        let result = query(
             r#"
             UPDATE org_rbac_policies
             SET name = ?, description = ?, resource = ?, action = ?, condition = ?,
@@ -537,24 +532,17 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
         .bind(original_version)
         .execute(&mut *tx)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                DbError::Conflict(format!(
-                    "Policy with name '{}' already exists in this organization",
-                    policy.name
-                ))
-            }
-            _ => DbError::from(e),
-        })?;
+        .map_err(map_unique_violation(format!(
+            "Policy with name '{}' already exists in this organization",
+            policy.name
+        )))?;
 
-        // Check for concurrent modification (optimistic locking)
         if result.rows_affected() == 0 {
             return Err(DbError::Conflict(
                 "Policy was modified concurrently. Please refresh and try again.".to_string(),
             ));
         }
 
-        // Create version record
         self.create_version_record(&mut tx, &policy, updated_by, input.reason)
             .await?;
 
@@ -567,7 +555,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
         let now = Utc::now();
 
         // Soft-delete by setting deleted_at timestamp
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE org_rbac_policies
             SET deleted_at = ?
@@ -592,10 +580,8 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
         input: RollbackOrgRbacPolicy,
         rolled_back_by: Option<Uuid>,
     ) -> DbResult<OrgRbacPolicy> {
-        let mut tx = self.pool.begin().await?;
-
         // Fetch the target version
-        let version_row = sqlx::query(
+        let version_row = query(
             r#"
             SELECT id, policy_id, version, name, description, resource, action,
                    condition, effect, priority, enabled, created_by, reason, created_at
@@ -605,7 +591,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
         )
         .bind(id.to_string())
         .bind(input.target_version)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&self.pool)
         .await?;
 
         let Some(version_row) = version_row else {
@@ -615,7 +601,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
         let target_version = Self::parse_version(&version_row)?;
 
         // Fetch current policy to get current version number and timestamps (excluding soft-deleted)
-        let policy_row = sqlx::query(
+        let policy_row = query(
             r#"
             SELECT id, org_id, name, description, resource, action, condition,
                    effect, priority, enabled, version, created_at, updated_at, deleted_at
@@ -624,7 +610,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
             "#,
         )
         .bind(id.to_string())
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&self.pool)
         .await?;
 
         let Some(policy_row) = policy_row else {
@@ -654,8 +640,13 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
             deleted_at: None,
         };
 
-        // Update the policy with rolled-back values (with optimistic locking and not deleted)
-        let result = sqlx::query(
+        let reason = input
+            .reason
+            .unwrap_or_else(|| format!("Rolled back to version {}", input.target_version));
+
+        let mut tx = begin(&self.pool).await?;
+
+        let result = query(
             r#"
             UPDATE org_rbac_policies
             SET name = ?, description = ?, resource = ?, action = ?, condition = ?,
@@ -674,21 +665,16 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
         .bind(policy.version)
         .bind(policy.updated_at)
         .bind(id.to_string())
-        .bind(current_policy.version) // Original version for optimistic locking
+        .bind(current_policy.version)
         .execute(&mut *tx)
         .await?;
 
-        // Check for concurrent modification (optimistic locking)
         if result.rows_affected() == 0 {
             return Err(DbError::Conflict(
                 "Policy was modified concurrently. Please refresh and try again.".to_string(),
             ));
         }
 
-        // Create version record for the rollback
-        let reason = input
-            .reason
-            .unwrap_or_else(|| format!("Rolled back to version {}", input.target_version));
         self.create_version_record(&mut tx, &policy, rolled_back_by, Some(reason))
             .await?;
 
@@ -702,7 +688,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
         policy_id: Uuid,
         version: i32,
     ) -> DbResult<Option<OrgRbacPolicyVersion>> {
-        let row = sqlx::query(
+        let row = query(
             r#"
             SELECT id, policy_id, version, name, description, resource, action,
                    condition, effect, priority, enabled, created_by, reason, created_at
@@ -722,7 +708,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
     }
 
     async fn list_versions(&self, policy_id: Uuid) -> DbResult<Vec<OrgRbacPolicyVersion>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, policy_id, version, name, description, resource, action,
                    condition, effect, priority, enabled, created_by, reason, created_at
@@ -744,7 +730,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
         limit: u32,
         offset: u32,
     ) -> DbResult<Vec<OrgRbacPolicyVersion>> {
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, policy_id, version, name, description, resource, action,
                    condition, effect, priority, enabled, created_by, reason, created_at
@@ -778,7 +764,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
         }
 
         // First page (no cursor)
-        let rows = sqlx::query(
+        let rows = query(
             r#"
             SELECT id, policy_id, version, name, description, resource, action,
                    condition, effect, priority, enabled, created_by, reason, created_at
@@ -812,39 +798,39 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
     }
 
     async fn count_versions(&self, policy_id: Uuid) -> DbResult<i64> {
-        let row = sqlx::query(
-            "SELECT COUNT(*) as count FROM org_rbac_policy_versions WHERE policy_id = ?",
-        )
-        .bind(policy_id.to_string())
-        .fetch_one(&self.pool)
-        .await?;
+        let row =
+            query("SELECT COUNT(*) as count FROM org_rbac_policy_versions WHERE policy_id = ?")
+                .bind(policy_id.to_string())
+                .fetch_one(&self.pool)
+                .await?;
 
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn count_by_org(&self, org_id: Uuid) -> DbResult<i64> {
-        let row = sqlx::query(
+        let row = query(
             "SELECT COUNT(*) as count FROM org_rbac_policies WHERE org_id = ? AND deleted_at IS NULL",
         )
         .bind(org_id.to_string())
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn count_all(&self) -> DbResult<i64> {
-        let row =
-            sqlx::query("SELECT COUNT(*) as count FROM org_rbac_policies WHERE deleted_at IS NULL")
-                .fetch_one(&self.pool)
-                .await?;
+        let row = query("SELECT COUNT(*) as count FROM org_rbac_policies WHERE deleted_at IS NULL")
+            .fetch_one(&self.pool)
+            .await?;
 
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use sqlx::SqlitePool;
+
     use super::*;
 
     async fn create_test_pool() -> SqlitePool {

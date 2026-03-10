@@ -1,15 +1,22 @@
+#[cfg(any(feature = "server", feature = "wasm"))]
+use axum::Router;
+#[cfg(feature = "server")]
+use axum::middleware::from_fn_with_state;
+#[cfg(feature = "server")]
+use axum::routing::{delete, get, post};
 use axum::{
-    Extension, Json, Router,
+    Extension, Json,
     http::HeaderMap,
-    middleware::from_fn_with_state,
     response::{IntoResponse, Response},
-    routing::{get, post},
 };
 use http::StatusCode;
 use serde::Deserialize;
+#[cfg(feature = "server")]
 use tower::ServiceBuilder;
 use uuid::Uuid;
 
+#[cfg(feature = "wasm")]
+use crate::compat::wasm_routing::{delete, get, post};
 use crate::{
     AppState, api_types,
     auth::AuthenticatedRequest,
@@ -566,6 +573,7 @@ fn log_guardrails_evaluation(
         })
         .collect();
 
+    #[cfg(feature = "server")]
     state.task_tracker.spawn(async move {
         let result = db
             .audit_logs()
@@ -685,6 +693,7 @@ fn log_output_guardrails_evaluation(
         })
         .collect();
 
+    #[cfg(feature = "server")]
     state.task_tracker.spawn(async move {
         let mut details = serde_json::json!({
             "provider": provider,
@@ -746,52 +755,66 @@ fn get_services(state: &AppState) -> Result<&Services, ApiError> {
     })
 }
 
-pub fn get_api_routes(state: AppState) -> Router<AppState> {
-    Router::new()
+/// Route definitions for the OpenAI-compatible API.
+///
+/// Shared between server and WASM builds. The server wraps these with auth/rate-limit
+/// middleware in [`get_api_routes`]; the WASM build uses them directly.
+#[cfg(any(feature = "server", feature = "wasm"))]
+pub(crate) fn api_v1_routes() -> Router<AppState> {
+    let router = Router::new()
         .route("/v1/chat/completions", post(api_v1_chat_completions))
         .route("/v1/responses", post(api_v1_responses))
         .route("/v1/completions", post(api_v1_completions))
         .route("/v1/embeddings", post(api_v1_embeddings))
         .route("/v1/models", get(api_v1_models))
         // Images API (OpenAI-compatible)
-        .route("/v1/images/generations", post(api_v1_images_generations))
+        .route("/v1/images/generations", post(api_v1_images_generations));
+    #[cfg(feature = "server")]
+    let router = router
         .route("/v1/images/edits", post(api_v1_images_edits))
-        .route("/v1/images/variations", post(api_v1_images_variations))
+        .route("/v1/images/variations", post(api_v1_images_variations));
+    let router = router
         // Audio API (OpenAI-compatible)
-        .route("/v1/audio/speech", post(api_v1_audio_speech))
+        .route("/v1/audio/speech", post(api_v1_audio_speech));
+    #[cfg(feature = "server")]
+    let router = router
         .route(
             "/v1/audio/transcriptions",
             post(api_v1_audio_transcriptions),
         )
-        .route("/v1/audio/translations", post(api_v1_audio_translations))
-        // Files API (OpenAI-compatible)
-        .route(
-            "/v1/files",
-            post(api_v1_files_upload).get(api_v1_files_list),
-        )
+        .route("/v1/audio/translations", post(api_v1_audio_translations));
+    // Files API (OpenAI-compatible)
+    #[cfg(feature = "server")]
+    let router = router.route(
+        "/v1/files",
+        post(api_v1_files_upload).merge(get(api_v1_files_list)),
+    );
+    #[cfg(not(feature = "server"))]
+    let router = router.route("/v1/files", get(api_v1_files_list));
+    router
         .route(
             "/v1/files/{file_id}",
-            get(api_v1_files_get).delete(api_v1_files_delete),
+            get(api_v1_files_get).merge(delete(api_v1_files_delete)),
         )
         .route("/v1/files/{file_id}/content", get(api_v1_files_get_content))
         // Vector Stores API (OpenAI-compatible)
         .route(
             "/v1/vector_stores",
-            post(api_v1_vector_stores_create).get(api_v1_vector_stores_list),
+            post(api_v1_vector_stores_create).merge(get(api_v1_vector_stores_list)),
         )
         .route(
             "/v1/vector_stores/{vector_store_id}",
             get(api_v1_vector_stores_get)
-                .post(api_v1_vector_stores_modify)
-                .delete(api_v1_vector_stores_delete),
+                .merge(post(api_v1_vector_stores_modify))
+                .merge(delete(api_v1_vector_stores_delete)),
         )
         .route(
             "/v1/vector_stores/{vector_store_id}/files",
-            post(api_v1_vector_stores_create_file).get(api_v1_vector_stores_list_files),
+            post(api_v1_vector_stores_create_file).merge(get(api_v1_vector_stores_list_files)),
         )
         .route(
             "/v1/vector_stores/{vector_store_id}/files/{file_id}",
-            get(api_v1_vector_stores_get_file).delete(api_v1_vector_stores_delete_file),
+            get(api_v1_vector_stores_get_file).merge(delete(api_v1_vector_stores_delete_file)),
         )
         // Hadrian extension: chunk inspection (not in OpenAI API)
         .route(
@@ -810,12 +833,19 @@ pub fn get_api_routes(state: AppState) -> Router<AppState> {
         )
         .route(
             "/v1/vector_stores/{vector_store_id}/file_batches/{batch_id}",
-            get(api_v1_vector_stores_get_file_batch).delete(api_v1_vector_stores_cancel_file_batch),
+            get(api_v1_vector_stores_get_file_batch)
+                .merge(delete(api_v1_vector_stores_cancel_file_batch)),
         )
         .route(
             "/v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/files",
             get(api_v1_vector_stores_list_batch_files),
         )
+}
+
+/// Server-only: wraps [`api_v1_routes`] with auth, rate-limit, and authz middleware.
+#[cfg(feature = "server")]
+pub fn get_api_routes(state: AppState) -> Router<AppState> {
+    api_v1_routes()
         // Apply middleware layers in order (ServiceBuilder runs top-to-bottom):
         // 1. Rate limiting - reject requests early before auth overhead
         // 2. Auth, budget, usage - authenticates and sets AuthenticatedRequest
@@ -883,8 +913,8 @@ model_name = "secondary-model"
             db_id
         );
 
-        let config = crate::config::GatewayConfig::from_str(&config_str)
-            .expect("Failed to parse test config");
+        let config =
+            crate::config::GatewayConfig::parse(&config_str).expect("Failed to parse test config");
         let state = crate::AppState::new(config.clone())
             .await
             .expect("Failed to create AppState");
@@ -2751,8 +2781,8 @@ max_file_size_mb = {}
             db_id, max_file_size_mb
         );
 
-        let config = crate::config::GatewayConfig::from_str(&config_str)
-            .expect("Failed to parse test config");
+        let config =
+            crate::config::GatewayConfig::parse(&config_str).expect("Failed to parse test config");
         let state = crate::AppState::new(config.clone())
             .await
             .expect("Failed to create AppState");
@@ -2800,8 +2830,8 @@ model_name = "test-model"
             db_id
         );
 
-        let config = crate::config::GatewayConfig::from_str(&config_str)
-            .expect("Failed to parse test config");
+        let config =
+            crate::config::GatewayConfig::parse(&config_str).expect("Failed to parse test config");
         let mut state = crate::AppState::new(config.clone())
             .await
             .expect("Failed to create AppState");
@@ -2886,8 +2916,8 @@ model_name = "test-model"
             db_id
         );
 
-        let config = crate::config::GatewayConfig::from_str(&config_str)
-            .expect("Failed to parse test config");
+        let config =
+            crate::config::GatewayConfig::parse(&config_str).expect("Failed to parse test config");
         let mut state = crate::AppState::new(config.clone())
             .await
             .expect("Failed to create AppState");

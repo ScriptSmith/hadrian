@@ -66,6 +66,7 @@ pub fn classify_provider_error(error: &ProviderError) -> FallbackDecision {
 /// Classifies a `reqwest::Error` for fallback purposes.
 fn classify_reqwest_error(error: &reqwest::Error) -> FallbackDecision {
     // Connection errors are retryable - different provider might be reachable
+    #[cfg(not(target_arch = "wasm32"))]
     if error.is_connect() {
         return FallbackDecision::Retry;
     }

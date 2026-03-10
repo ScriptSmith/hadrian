@@ -1,6 +1,7 @@
 #[cfg(any(feature = "database-sqlite", feature = "database-postgres"))]
 mod database;
 mod error;
+#[cfg(feature = "server")]
 mod file;
 #[cfg(feature = "redis")]
 mod redis;
@@ -12,6 +13,7 @@ use std::sync::Arc;
 #[cfg(any(feature = "database-sqlite", feature = "database-postgres"))]
 pub use database::DatabaseDlq;
 pub use error::{DlqError, DlqResult};
+#[cfg(feature = "server")]
 pub use file::FileDlq;
 #[cfg(feature = "redis")]
 pub use redis::RedisDlq;
@@ -34,12 +36,19 @@ pub async fn create_dlq(
     };
 
     let dlq: Arc<dyn DeadLetterQueue> = match config {
+        #[cfg(feature = "server")]
         DeadLetterQueueConfig::File {
             path,
             max_file_size_mb,
             max_files,
             ..
         } => Arc::new(FileDlq::new(path, *max_file_size_mb, *max_files).await?),
+        #[cfg(not(feature = "server"))]
+        DeadLetterQueueConfig::File { .. } => {
+            return Err(DlqError::Internal(
+                "File DLQ configured but the 'server' feature is not enabled.".to_string(),
+            ));
+        }
 
         #[cfg(feature = "redis")]
         DeadLetterQueueConfig::Redis {

@@ -1,5 +1,6 @@
 mod api_keys;
 mod audit_logs;
+pub(crate) mod backend;
 mod common;
 mod conversations;
 #[cfg(feature = "sso")]

@@ -204,7 +204,8 @@ impl PostgresUserRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl UserRepo for PostgresUserRepo {
     async fn create(&self, input: CreateUser) -> DbResult<User> {
         let row = sqlx::query(
@@ -773,7 +774,7 @@ impl UserRepo for PostgresUserRepo {
                     org_slug: row.get("org_slug"),
                     org_name: row.get("org_name"),
                     role: row.get("role"),
-                    source: MembershipSource::from_str(&source_str).unwrap_or_default(),
+                    source: MembershipSource::parse(&source_str).unwrap_or_default(),
                     joined_at: row.get("joined_at"),
                 }
             })
@@ -814,7 +815,7 @@ impl UserRepo for PostgresUserRepo {
                     project_name: row.get("project_name"),
                     org_id: row.get("org_id"),
                     role: row.get("role"),
-                    source: MembershipSource::from_str(&source_str).unwrap_or_default(),
+                    source: MembershipSource::parse(&source_str).unwrap_or_default(),
                     joined_at: row.get("joined_at"),
                 }
             })
@@ -852,7 +853,7 @@ impl UserRepo for PostgresUserRepo {
                     team_name: row.get("team_name"),
                     org_id: row.get("org_id"),
                     role: row.get("role"),
-                    source: MembershipSource::from_str(&source_str).unwrap_or_default(),
+                    source: MembershipSource::parse(&source_str).unwrap_or_default(),
                     joined_at: row.get("joined_at"),
                 }
             })

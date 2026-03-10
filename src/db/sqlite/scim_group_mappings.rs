@@ -1,10 +1,12 @@
 //! SQLite implementation of the SCIM group mapping repository.
 
 use async_trait::async_trait;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::common::parse_uuid;
+use super::{
+    backend::{Pool, Row, RowExt, query},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -19,52 +21,53 @@ use crate::{
 };
 
 pub struct SqliteScimGroupMappingRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteScimGroupMappingRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
     /// Parse a ScimGroupMapping from a database row.
-    fn parse_mapping(row: &sqlx::sqlite::SqliteRow) -> DbResult<ScimGroupMapping> {
+    fn parse_mapping(row: &Row) -> DbResult<ScimGroupMapping> {
         Ok(ScimGroupMapping {
-            id: parse_uuid(&row.get::<String, _>("id"))?,
-            org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
-            scim_group_id: row.get("scim_group_id"),
-            team_id: parse_uuid(&row.get::<String, _>("team_id"))?,
-            display_name: row.get("display_name"),
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
+            id: parse_uuid(&row.col::<String>("id"))?,
+            org_id: parse_uuid(&row.col::<String>("org_id"))?,
+            scim_group_id: row.col("scim_group_id"),
+            team_id: parse_uuid(&row.col::<String>("team_id"))?,
+            display_name: row.col("display_name"),
+            created_at: row.col("created_at"),
+            updated_at: row.col("updated_at"),
         })
     }
 
     /// Parse a ScimGroupWithTeam from a joined row with aliased columns.
-    fn parse_mapping_with_team(row: &sqlx::sqlite::SqliteRow) -> DbResult<ScimGroupWithTeam> {
+    fn parse_mapping_with_team(row: &Row) -> DbResult<ScimGroupWithTeam> {
         Ok(ScimGroupWithTeam {
             mapping: ScimGroupMapping {
-                id: parse_uuid(&row.get::<String, _>("m_id"))?,
-                org_id: parse_uuid(&row.get::<String, _>("m_org_id"))?,
-                scim_group_id: row.get("m_scim_group_id"),
-                team_id: parse_uuid(&row.get::<String, _>("m_team_id"))?,
-                display_name: row.get("m_display_name"),
-                created_at: row.get("m_created_at"),
-                updated_at: row.get("m_updated_at"),
+                id: parse_uuid(&row.col::<String>("m_id"))?,
+                org_id: parse_uuid(&row.col::<String>("m_org_id"))?,
+                scim_group_id: row.col("m_scim_group_id"),
+                team_id: parse_uuid(&row.col::<String>("m_team_id"))?,
+                display_name: row.col("m_display_name"),
+                created_at: row.col("m_created_at"),
+                updated_at: row.col("m_updated_at"),
             },
             team: Team {
-                id: parse_uuid(&row.get::<String, _>("t_id"))?,
-                org_id: parse_uuid(&row.get::<String, _>("t_org_id"))?,
-                slug: row.get("t_slug"),
-                name: row.get("t_name"),
-                created_at: row.get("t_created_at"),
-                updated_at: row.get("t_updated_at"),
+                id: parse_uuid(&row.col::<String>("t_id"))?,
+                org_id: parse_uuid(&row.col::<String>("t_org_id"))?,
+                slug: row.col("t_slug"),
+                name: row.col("t_name"),
+                created_at: row.col("t_created_at"),
+                updated_at: row.col("t_updated_at"),
             },
         })
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
     async fn create(
         &self,
@@ -74,7 +77,7 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
         let id = Uuid::new_v4();
         let now = chrono::Utc::now();
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO scim_group_mappings (
                 id, org_id, scim_group_id, team_id, display_name, created_at, updated_at
@@ -91,14 +94,17 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                DbError::Conflict("SCIM group ID already mapped in this organization".into())
+        .map_err(|e| {
+            if super::backend::is_unique_violation(&e) {
+                return DbError::Conflict(
+                    "SCIM group ID already mapped in this organization".into(),
+                );
             }
-            sqlx::Error::Database(db_err) if db_err.is_foreign_key_violation() => {
-                DbError::Conflict("Referenced team or organization not found".into())
+            #[cfg(feature = "database-sqlite")]
+            if matches!(&e, sqlx::Error::Database(db_err) if db_err.is_foreign_key_violation()) {
+                return DbError::Conflict("Referenced team or organization not found".into());
             }
-            _ => DbError::from(e),
+            DbError::from(e)
         })?;
 
         Ok(ScimGroupMapping {
@@ -113,7 +119,7 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<ScimGroupMapping>> {
-        let row = sqlx::query("SELECT * FROM scim_group_mappings WHERE id = ?")
+        let row = query("SELECT * FROM scim_group_mappings WHERE id = ?")
             .bind(id.to_string())
             .fetch_optional(&self.pool)
             .await?;
@@ -126,12 +132,11 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
         org_id: Uuid,
         scim_group_id: &str,
     ) -> DbResult<Option<ScimGroupMapping>> {
-        let row =
-            sqlx::query("SELECT * FROM scim_group_mappings WHERE org_id = ? AND scim_group_id = ?")
-                .bind(org_id.to_string())
-                .bind(scim_group_id)
-                .fetch_optional(&self.pool)
-                .await?;
+        let row = query("SELECT * FROM scim_group_mappings WHERE org_id = ? AND scim_group_id = ?")
+            .bind(org_id.to_string())
+            .bind(scim_group_id)
+            .fetch_optional(&self.pool)
+            .await?;
 
         row.map(|r| Self::parse_mapping(&r)).transpose()
     }
@@ -141,7 +146,7 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
         org_id: Uuid,
         team_id: Uuid,
     ) -> DbResult<Option<ScimGroupMapping>> {
-        let row = sqlx::query("SELECT * FROM scim_group_mappings WHERE org_id = ? AND team_id = ?")
+        let row = query("SELECT * FROM scim_group_mappings WHERE org_id = ? AND team_id = ?")
             .bind(org_id.to_string())
             .bind(team_id.to_string())
             .fetch_optional(&self.pool)
@@ -162,7 +167,7 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
             params.sort_order.cursor_query_params(params.direction);
 
         let rows = if let Some(cursor) = &params.cursor {
-            let query = format!(
+            let sql = format!(
                 r#"
                 SELECT * FROM scim_group_mappings
                 WHERE org_id = ?
@@ -172,7 +177,7 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
                 "#,
                 comparison_op, order_dir, order_dir
             );
-            sqlx::query(&query)
+            query(&sql)
                 .bind(org_id.to_string())
                 .bind(cursor.created_at)
                 .bind(cursor.id.to_string())
@@ -180,7 +185,7 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            let query = format!(
+            let sql = format!(
                 r#"
                 SELECT * FROM scim_group_mappings
                 WHERE org_id = ?
@@ -189,7 +194,7 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
                 "#,
                 order_dir, order_dir
             );
-            sqlx::query(&query)
+            query(&sql)
                 .bind(org_id.to_string())
                 .bind(fetch_limit)
                 .fetch_all(&self.pool)
@@ -282,7 +287,7 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
         );
 
         // Execute count query
-        let mut count_query = sqlx::query(&count_sql).bind(org_id.to_string());
+        let mut count_query = query(&count_sql).bind(org_id.to_string());
         if let Some(f) = filter {
             for val in &f.bindings {
                 count_query = match val {
@@ -293,10 +298,10 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
             }
         }
         let count_row = count_query.fetch_one(&self.pool).await?;
-        let total: i64 = count_row.get("cnt");
+        let total: i64 = count_row.col("cnt");
 
         // Execute data query
-        let mut data_query = sqlx::query(&data_sql).bind(org_id.to_string());
+        let mut data_query = query(&data_sql).bind(org_id.to_string());
         if let Some(f) = filter {
             for val in &f.bindings {
                 data_query = match val {
@@ -327,7 +332,7 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
         };
         let now = chrono::Utc::now();
 
-        sqlx::query(
+        query(
             "UPDATE scim_group_mappings SET team_id = ?, display_name = ?, updated_at = ? WHERE id = ?",
         )
         .bind(team_id.to_string())
@@ -336,11 +341,13 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
         .bind(id.to_string())
         .execute(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_foreign_key_violation() => {
-                DbError::Conflict("Referenced team not found".into())
+        .map_err(|e| {
+            #[cfg(feature = "database-sqlite")]
+            if matches!(&e, sqlx::Error::Database(db_err) if db_err.is_foreign_key_violation())
+            {
+                return DbError::Conflict("Referenced team not found".into());
             }
-            _ => DbError::from(e),
+            DbError::from(e)
         })?;
 
         Ok(ScimGroupMapping {
@@ -355,7 +362,7 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
-        let result = sqlx::query("DELETE FROM scim_group_mappings WHERE id = ?")
+        let result = query("DELETE FROM scim_group_mappings WHERE id = ?")
             .bind(id.to_string())
             .execute(&self.pool)
             .await?;
@@ -368,7 +375,7 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
     }
 
     async fn delete_by_team(&self, team_id: Uuid) -> DbResult<u64> {
-        let result = sqlx::query("DELETE FROM scim_group_mappings WHERE team_id = ?")
+        let result = query("DELETE FROM scim_group_mappings WHERE team_id = ?")
             .bind(team_id.to_string())
             .execute(&self.pool)
             .await?;
@@ -377,11 +384,11 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
     }
 
     async fn count_by_org(&self, org_id: Uuid) -> DbResult<i64> {
-        let row = sqlx::query("SELECT COUNT(*) as count FROM scim_group_mappings WHERE org_id = ?")
+        let row = query("SELECT COUNT(*) as count FROM scim_group_mappings WHERE org_id = ?")
             .bind(org_id.to_string())
             .fetch_one(&self.pool)
             .await?;
 
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 }

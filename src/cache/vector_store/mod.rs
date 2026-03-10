@@ -252,7 +252,8 @@ pub struct ChunkFilter {
 ///     store.delete("unique-id").await?;
 /// }
 /// ```
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait VectorBackend: Send + Sync {
     /// Store an embedding with associated metadata.
     ///

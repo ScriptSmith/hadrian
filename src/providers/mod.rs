@@ -75,6 +75,7 @@ use http::{
 pub use registry::{CircuitBreakerRegistry, CircuitBreakerStatus};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+#[cfg(feature = "server")]
 use tokio_util::task::TaskTracker;
 
 use crate::{
@@ -121,6 +122,7 @@ pub struct CostInjectionParams<'a> {
     pub pricing: &'a crate::pricing::PricingConfig,
     pub db: Option<&'a std::sync::Arc<crate::db::DbPool>>,
     pub usage_entry: Option<crate::models::UsageLogEntry>,
+    #[cfg(feature = "server")]
     pub task_tracker: Option<&'a TaskTracker>,
     pub max_response_body_bytes: usize,
     /// Idle timeout for streaming responses in seconds.
@@ -199,7 +201,8 @@ impl From<retry::ProviderRequestError> for ProviderError {
 /// at startup and shared across all providers. This works well because reqwest maintains
 /// per-host connection pools internally, so each provider endpoint gets its own pool.
 /// See [`crate::config::HttpClientConfig`] for connection pool tuning options.
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait Provider: Send + Sync {
     async fn create_chat_completion(
         &self,
@@ -523,7 +526,15 @@ async fn build_response(
     let status = response.status();
 
     let body = if stream {
-        Body::from_stream(response.bytes_stream())
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Body::from_stream(response.bytes_stream())
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // WASM reqwest streams are !Send; buffer the full response instead
+            Body::from(response.bytes().await?)
+        }
     } else {
         Body::from(response.bytes().await?)
     };
@@ -543,6 +554,8 @@ async fn build_response(
 /// For non-streaming: adds usage/cost headers by parsing the body
 /// For streaming: wraps body to track tokens as they arrive via SSE parsing
 pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Response {
+    #[cfg(feature = "server")]
+    let task_tracker = params.task_tracker;
     let CostInjectionParams {
         response,
         provider,
@@ -550,11 +563,11 @@ pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Respo
         pricing,
         db,
         usage_entry,
-        task_tracker,
         max_response_body_bytes,
         streaming_idle_timeout_secs,
         validation_config,
         response_type,
+        ..
     } = params;
     // Only process successful JSON responses
     if !response.status().is_success() {
@@ -587,78 +600,88 @@ pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Respo
             .is_some_and(|s| s.contains("chunked"));
 
     if is_streaming {
-        // For streaming responses, wrap the body to track tokens as they arrive
-        if let (Some(db_pool), Some(entry), Some(tracker)) = (db, usage_entry, task_tracker) {
-            use futures_util::StreamExt;
+        #[cfg(feature = "server")]
+        {
+            // For streaming responses, wrap the body to track tokens as they arrive
+            if let (Some(db_pool), Some(entry), Some(tracker)) = (db, usage_entry, task_tracker) {
+                use futures_util::StreamExt;
 
-            let (parts, body) = response.into_parts();
+                let (parts, body) = response.into_parts();
 
-            // Convert body to byte stream with proper type annotations
-            let stream = body.into_data_stream().map(
+                // Convert body to byte stream with proper type annotations
+                let stream = body.into_data_stream().map(
                 |result: Result<bytes::Bytes, axum::Error>| -> Result<bytes::Bytes, std::io::Error> {
                     result.map_err(std::io::Error::other)
                 },
             );
 
-            // Apply validation wrapper if enabled
-            // This validates each SSE chunk against the OpenAPI schema
-            let validated_stream = if validation_config.enabled {
-                let validating = crate::validation::stream::ValidatingStream::new(
-                    stream,
-                    response_type,
-                    validation_config.mode,
+                // Apply validation wrapper if enabled
+                // This validates each SSE chunk against the OpenAPI schema
+                let validated_stream = if validation_config.enabled {
+                    let validating = crate::validation::stream::ValidatingStream::new(
+                        stream,
+                        response_type,
+                        validation_config.mode,
+                    );
+                    // Box to unify the stream types
+                    Box::new(validating)
+                        as Box<
+                            dyn futures_util::Stream<Item = Result<bytes::Bytes, std::io::Error>>
+                                + Send
+                                + Unpin,
+                        >
+                } else {
+                    Box::new(stream)
+                        as Box<
+                            dyn futures_util::Stream<Item = Result<bytes::Bytes, std::io::Error>>
+                                + Send
+                                + Unpin,
+                        >
+                };
+
+                // Apply idle timeout wrapper if enabled (timeout > 0)
+                // This terminates the stream if no chunk is received within the timeout,
+                // protecting against stalled providers and slow client attacks.
+                let idle_timeout = std::time::Duration::from_secs(streaming_idle_timeout_secs);
+                let timeout_stream =
+                    crate::streaming::IdleTimeoutStream::new(validated_stream, idle_timeout);
+
+                // Wrap with usage tracking (after idle timeout so usage is still logged on timeout)
+                let tracking_stream = crate::streaming::UsageTrackingStream::new(
+                    timeout_stream,
+                    db_pool.clone(),
+                    std::sync::Arc::new(pricing.clone()),
+                    entry,
+                    provider.to_string(),
+                    model.to_string(),
+                    tracker.clone(),
                 );
-                // Box to unify the stream types
-                Box::new(validating)
-                    as Box<
-                        dyn futures_util::Stream<Item = Result<bytes::Bytes, std::io::Error>>
-                            + Send
-                            + Unpin,
-                    >
+
+                let new_body = axum::body::Body::from_stream(tracking_stream);
+                if streaming_idle_timeout_secs > 0 {
+                    tracing::debug!(
+                        idle_timeout_secs = streaming_idle_timeout_secs,
+                        validation_enabled = validation_config.enabled,
+                        "Streaming response wrapped with idle timeout and usage tracking"
+                    );
+                } else {
+                    tracing::debug!(
+                        validation_enabled = validation_config.enabled,
+                        "Streaming response wrapped with usage tracking (idle timeout disabled)"
+                    );
+                }
+                return Response::from_parts(parts, new_body);
             } else {
-                Box::new(stream)
-                    as Box<
-                        dyn futures_util::Stream<Item = Result<bytes::Bytes, std::io::Error>>
-                            + Send
-                            + Unpin,
-                    >
-            };
-
-            // Apply idle timeout wrapper if enabled (timeout > 0)
-            // This terminates the stream if no chunk is received within the timeout,
-            // protecting against stalled providers and slow client attacks.
-            let idle_timeout = std::time::Duration::from_secs(streaming_idle_timeout_secs);
-            let timeout_stream =
-                crate::streaming::IdleTimeoutStream::new(validated_stream, idle_timeout);
-
-            // Wrap with usage tracking (after idle timeout so usage is still logged on timeout)
-            let tracking_stream = crate::streaming::UsageTrackingStream::new(
-                timeout_stream,
-                db_pool.clone(),
-                std::sync::Arc::new(pricing.clone()),
-                entry,
-                provider.to_string(),
-                model.to_string(),
-                tracker.clone(),
-            );
-
-            let new_body = axum::body::Body::from_stream(tracking_stream);
-            if streaming_idle_timeout_secs > 0 {
-                tracing::debug!(
-                    idle_timeout_secs = streaming_idle_timeout_secs,
-                    validation_enabled = validation_config.enabled,
-                    "Streaming response wrapped with idle timeout and usage tracking"
+                // No DB, entry, or tracker - return untracked streaming
+                tracing::warn!(
+                    "Streaming response without DB/entry/tracker - cost tracking disabled"
                 );
-            } else {
-                tracing::debug!(
-                    validation_enabled = validation_config.enabled,
-                    "Streaming response wrapped with usage tracking (idle timeout disabled)"
-                );
+                return response;
             }
-            return Response::from_parts(parts, new_body);
-        } else {
-            // No DB, entry, or tracker - return untracked streaming
-            tracing::warn!("Streaming response without DB/entry/tracker - cost tracking disabled");
+        }
+        #[cfg(not(feature = "server"))]
+        {
+            // No task tracker available - return untracked streaming
             return response;
         }
     }
@@ -878,6 +901,7 @@ pub struct MediaUsageParams<'a> {
     pub pricing: &'a crate::pricing::PricingConfig,
     pub db: Option<&'a std::sync::Arc<crate::db::DbPool>>,
     pub api_key_id: Option<uuid::Uuid>,
+    #[cfg(feature = "server")]
     pub task_tracker: &'a TaskTracker,
     pub usage: crate::pricing::TokenUsage,
 }
@@ -891,14 +915,16 @@ pub struct MediaUsageParams<'a> {
 ///
 /// Returns (cost_microcents, usage_logged) tuple
 pub async fn log_media_usage(params: MediaUsageParams<'_>) -> (Option<i64>, bool) {
+    #[cfg(feature = "server")]
+    let task_tracker = params.task_tracker;
     let MediaUsageParams {
         provider,
         model,
         pricing,
         db,
         api_key_id,
-        task_tracker,
         usage,
+        ..
     } = params;
 
     // Calculate cost
@@ -940,6 +966,7 @@ pub async fn log_media_usage(params: MediaUsageParams<'_>) -> (Option<i64>, bool
         };
 
         let db = db_pool.clone();
+        #[cfg(feature = "server")]
         task_tracker.spawn(async move {
             for attempt in 0..3 {
                 match db.usage().log(entry.clone()).await {

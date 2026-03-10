@@ -149,7 +149,11 @@ impl GuardrailsError {
 
     /// Creates a provider error from a reqwest error.
     pub fn from_reqwest(provider: impl Into<String>, err: reqwest::Error) -> Self {
-        let retryable = err.is_timeout() || err.is_connect();
+        let mut retryable = err.is_timeout();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            retryable = retryable || err.is_connect();
+        }
         Self::ProviderError {
             message: err.to_string(),
             provider: provider.into(),

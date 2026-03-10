@@ -3,20 +3,27 @@
 //! OpenTelemetry distributed tracing can be enabled via configuration.
 //! Requires the `otlp` feature for OTLP export support.
 
+#[cfg(feature = "server")]
 #[cfg(feature = "otlp")]
 use opentelemetry::trace::TracerProvider as _;
+#[cfg(feature = "server")]
 #[cfg(feature = "otlp")]
 use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
+#[cfg(feature = "server")]
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 // Stub types for when OTLP feature is disabled
+#[cfg(feature = "server")]
 #[cfg(not(feature = "otlp"))]
 struct SdkTracerProviderStub;
+#[cfg(feature = "server")]
 #[cfg(not(feature = "otlp"))]
 struct TracerStub;
 
+#[cfg(feature = "server")]
 #[cfg(feature = "otlp")]
 use crate::config::{OtlpProtocol, PropagationFormat, SamplingStrategy};
+#[cfg(feature = "server")]
 use crate::{
     config::{LogFormat, LoggingConfig, ObservabilityConfig},
     observability::siem::{CefConfig, CefLayer, LeefConfig, LeefLayer, SyslogConfig, SyslogLayer},
@@ -28,6 +35,7 @@ use crate::{
 /// - Console logging with configurable format (pretty, compact, JSON)
 /// - Environment-based log filtering
 /// - OpenTelemetry distributed tracing (if configured)
+#[cfg(feature = "server")]
 pub fn init_tracing(config: &ObservabilityConfig) -> Result<TracingGuard, TracingError> {
     let logging = &config.logging;
     let filter = build_env_filter(logging);
@@ -494,6 +502,7 @@ fn install_propagator(format: &PropagationFormat) {
 }
 
 /// Build the environment filter from logging config.
+#[cfg(feature = "server")]
 fn build_env_filter(config: &LoggingConfig) -> EnvFilter {
     // Start with the configured level
     let base_level = match config.level {
@@ -521,6 +530,7 @@ fn build_env_filter(config: &LoggingConfig) -> EnvFilter {
 }
 
 /// Guard that ensures OpenTelemetry is properly shut down.
+#[cfg(feature = "server")]
 pub struct TracingGuard {
     #[cfg(feature = "otlp")]
     provider: Option<SdkTracerProvider>,
@@ -529,6 +539,7 @@ pub struct TracingGuard {
     provider: Option<SdkTracerProviderStub>,
 }
 
+#[cfg(feature = "server")]
 impl Drop for TracingGuard {
     fn drop(&mut self) {
         // Shutdown the tracer provider to flush pending spans
@@ -542,6 +553,7 @@ impl Drop for TracingGuard {
 }
 
 /// Tracing initialization errors.
+#[cfg(feature = "server")]
 #[derive(Debug, thiserror::Error)]
 pub enum TracingError {
     #[error("Failed to initialize tracing: {0}")]

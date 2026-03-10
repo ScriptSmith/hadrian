@@ -16,7 +16,8 @@ use crate::{
 /// Note: The token_hash is stored in the database, not in a secret manager
 /// (unlike SSO client secrets), because SCIM tokens need fast lookup for
 /// every provisioning request.
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait OrgScimConfigRepo: Send + Sync {
     /// Create a new SCIM configuration for an organization.
     ///

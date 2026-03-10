@@ -1,8 +1,10 @@
 use async_trait::async_trait;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::common::parse_uuid;
+use super::{
+    backend::{Pool, RowExt, map_unique_violation, query},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::{DbError, DbResult},
@@ -15,11 +17,11 @@ use crate::{
 };
 
 pub struct SqliteProjectRepo {
-    pool: SqlitePool,
+    pool: Pool,
 }
 
 impl SqliteProjectRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
@@ -43,7 +45,7 @@ impl SqliteProjectRepo {
             "AND deleted_at IS NULL"
         };
 
-        let query = format!(
+        let sql = format!(
             r#"
             SELECT id, org_id, team_id, slug, name, created_at, updated_at
             FROM projects
@@ -55,7 +57,7 @@ impl SqliteProjectRepo {
             comparison, deleted_filter, order, order
         );
 
-        let rows = sqlx::query(&query)
+        let rows = query(&sql)
             .bind(org_id.to_string())
             .bind(cursor.created_at)
             .bind(cursor.id.to_string())
@@ -68,15 +70,15 @@ impl SqliteProjectRepo {
             .into_iter()
             .take(limit as usize)
             .map(|row| {
-                let team_id: Option<String> = row.get("team_id");
+                let team_id: Option<String> = row.col("team_id");
                 Ok(Project {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
-                    org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
+                    id: parse_uuid(&row.col::<String>("id"))?,
+                    org_id: parse_uuid(&row.col::<String>("org_id"))?,
                     team_id: team_id.as_deref().map(parse_uuid).transpose()?,
-                    slug: row.get("slug"),
-                    name: row.get("name"),
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    slug: row.col("slug"),
+                    name: row.col("name"),
+                    created_at: row.col("created_at"),
+                    updated_at: row.col("updated_at"),
                 })
             })
             .collect::<DbResult<Vec<_>>>()?;
@@ -95,13 +97,14 @@ impl SqliteProjectRepo {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl ProjectRepo for SqliteProjectRepo {
     async fn create(&self, org_id: Uuid, input: CreateProject) -> DbResult<Project> {
         let id = Uuid::new_v4();
         let now = chrono::Utc::now();
 
-        sqlx::query(
+        query(
             r#"
             INSERT INTO projects (id, org_id, team_id, slug, name, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -116,15 +119,10 @@ impl ProjectRepo for SqliteProjectRepo {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                DbError::Conflict(format!(
-                    "Project with slug '{}' already exists in this organization",
-                    input.slug
-                ))
-            }
-            _ => DbError::from(e),
-        })?;
+        .map_err(map_unique_violation(format!(
+            "Project with slug '{}' already exists in this organization",
+            input.slug
+        )))?;
 
         Ok(Project {
             id,
@@ -138,7 +136,7 @@ impl ProjectRepo for SqliteProjectRepo {
     }
 
     async fn get_by_id(&self, id: Uuid) -> DbResult<Option<Project>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, org_id, team_id, slug, name, created_at, updated_at
             FROM projects
@@ -151,15 +149,15 @@ impl ProjectRepo for SqliteProjectRepo {
 
         match result {
             Some(row) => {
-                let team_id: Option<String> = row.get("team_id");
+                let team_id: Option<String> = row.col("team_id");
                 Ok(Some(Project {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
-                    org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
+                    id: parse_uuid(&row.col::<String>("id"))?,
+                    org_id: parse_uuid(&row.col::<String>("org_id"))?,
                     team_id: team_id.as_deref().map(parse_uuid).transpose()?,
-                    slug: row.get("slug"),
-                    name: row.get("name"),
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    slug: row.col("slug"),
+                    name: row.col("name"),
+                    created_at: row.col("created_at"),
+                    updated_at: row.col("updated_at"),
                 }))
             }
             None => Ok(None),
@@ -167,7 +165,7 @@ impl ProjectRepo for SqliteProjectRepo {
     }
 
     async fn get_by_id_and_org(&self, id: Uuid, org_id: Uuid) -> DbResult<Option<Project>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, org_id, team_id, slug, name, created_at, updated_at
             FROM projects
@@ -181,15 +179,15 @@ impl ProjectRepo for SqliteProjectRepo {
 
         match result {
             Some(row) => {
-                let team_id: Option<String> = row.get("team_id");
+                let team_id: Option<String> = row.col("team_id");
                 Ok(Some(Project {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
-                    org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
+                    id: parse_uuid(&row.col::<String>("id"))?,
+                    org_id: parse_uuid(&row.col::<String>("org_id"))?,
                     team_id: team_id.as_deref().map(parse_uuid).transpose()?,
-                    slug: row.get("slug"),
-                    name: row.get("name"),
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    slug: row.col("slug"),
+                    name: row.col("name"),
+                    created_at: row.col("created_at"),
+                    updated_at: row.col("updated_at"),
                 }))
             }
             None => Ok(None),
@@ -197,7 +195,7 @@ impl ProjectRepo for SqliteProjectRepo {
     }
 
     async fn get_by_slug(&self, org_id: Uuid, slug: &str) -> DbResult<Option<Project>> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             SELECT id, org_id, team_id, slug, name, created_at, updated_at
             FROM projects
@@ -211,15 +209,15 @@ impl ProjectRepo for SqliteProjectRepo {
 
         match result {
             Some(row) => {
-                let team_id: Option<String> = row.get("team_id");
+                let team_id: Option<String> = row.col("team_id");
                 Ok(Some(Project {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
-                    org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
+                    id: parse_uuid(&row.col::<String>("id"))?,
+                    org_id: parse_uuid(&row.col::<String>("org_id"))?,
                     team_id: team_id.as_deref().map(parse_uuid).transpose()?,
-                    slug: row.get("slug"),
-                    name: row.get("name"),
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    slug: row.col("slug"),
+                    name: row.col("name"),
+                    created_at: row.col("created_at"),
+                    updated_at: row.col("updated_at"),
                 }))
             }
             None => Ok(None),
@@ -239,7 +237,7 @@ impl ProjectRepo for SqliteProjectRepo {
         }
 
         // First page (no cursor provided)
-        let query = if params.include_deleted {
+        let sql = if params.include_deleted {
             r#"
             SELECT id, org_id, team_id, slug, name, created_at, updated_at
             FROM projects
@@ -257,7 +255,7 @@ impl ProjectRepo for SqliteProjectRepo {
             "#
         };
 
-        let rows = sqlx::query(query)
+        let rows = query(sql)
             .bind(org_id.to_string())
             .bind(fetch_limit)
             .fetch_all(&self.pool)
@@ -268,15 +266,15 @@ impl ProjectRepo for SqliteProjectRepo {
             .into_iter()
             .take(limit as usize)
             .map(|row| {
-                let team_id: Option<String> = row.get("team_id");
+                let team_id: Option<String> = row.col("team_id");
                 Ok(Project {
-                    id: parse_uuid(&row.get::<String, _>("id"))?,
-                    org_id: parse_uuid(&row.get::<String, _>("org_id"))?,
+                    id: parse_uuid(&row.col::<String>("id"))?,
+                    org_id: parse_uuid(&row.col::<String>("org_id"))?,
                     team_id: team_id.as_deref().map(parse_uuid).transpose()?,
-                    slug: row.get("slug"),
-                    name: row.get("name"),
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    slug: row.col("slug"),
+                    name: row.col("name"),
+                    created_at: row.col("created_at"),
+                    updated_at: row.col("updated_at"),
                 })
             })
             .collect::<DbResult<Vec<_>>>()?;
@@ -291,17 +289,17 @@ impl ProjectRepo for SqliteProjectRepo {
     }
 
     async fn count_by_org(&self, org_id: Uuid, include_deleted: bool) -> DbResult<i64> {
-        let query = if include_deleted {
+        let sql = if include_deleted {
             "SELECT COUNT(*) as count FROM projects WHERE org_id = ?"
         } else {
             "SELECT COUNT(*) as count FROM projects WHERE org_id = ? AND deleted_at IS NULL"
         };
 
-        let row = sqlx::query(query)
+        let row = query(sql)
             .bind(org_id.to_string())
             .fetch_one(&self.pool)
             .await?;
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col::<i64>("count"))
     }
 
     async fn update(&self, id: Uuid, input: UpdateProject) -> DbResult<Project> {
@@ -323,12 +321,12 @@ impl ProjectRepo for SqliteProjectRepo {
             set_clauses.push("team_id = ?");
         }
 
-        let query = format!(
+        let sql = format!(
             "UPDATE projects SET {} WHERE id = ? AND deleted_at IS NULL",
             set_clauses.join(", ")
         );
 
-        let mut query_builder = sqlx::query(&query).bind(now);
+        let mut query_builder = query(&sql).bind(now);
 
         if let Some(ref name) = input.name {
             query_builder = query_builder.bind(name);
@@ -352,7 +350,7 @@ impl ProjectRepo for SqliteProjectRepo {
     async fn delete(&self, id: Uuid) -> DbResult<()> {
         let now = chrono::Utc::now();
 
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE projects
             SET deleted_at = ?
@@ -374,6 +372,8 @@ impl ProjectRepo for SqliteProjectRepo {
 
 #[cfg(test)]
 mod tests {
+    use sqlx::SqlitePool;
+
     use super::*;
     use crate::db::repos::ProjectRepo;
 
