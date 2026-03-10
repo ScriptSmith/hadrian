@@ -22,14 +22,19 @@ export async function registerWasmServiceWorker(): Promise<void> {
     // Wait for the SW to be active (handles installing, waiting, or already active)
     const sw = registration.active || registration.waiting || registration.installing;
     if (sw && sw.state !== "activated") {
-      await new Promise<void>((resolve) => {
-        sw.addEventListener("statechange", function handler() {
-          if (sw.state === "activated") {
-            sw.removeEventListener("statechange", handler);
-            resolve();
-          }
-        });
-      });
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          sw.addEventListener("statechange", function handler() {
+            if (sw.state === "activated") {
+              sw.removeEventListener("statechange", handler);
+              resolve();
+            }
+          });
+        }),
+        new Promise<void>((_, reject) =>
+          setTimeout(() => reject(new Error("Service worker activation timed out")), 10_000)
+        ),
+      ]);
     }
 
     // Ensure this page is controlled by the SW — even after activation,

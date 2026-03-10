@@ -172,7 +172,7 @@ impl HadrianGateway {
 
         let response = tower::ServiceExt::oneshot(self.router.clone(), http_request)
             .await
-            .unwrap();
+            .map_err(|e| JsError::new(&format!("Router error: {e}")))?;
 
         convert_response(response).await
     }

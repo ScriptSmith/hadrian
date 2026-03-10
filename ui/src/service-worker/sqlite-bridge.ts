@@ -47,19 +47,35 @@ function saveToIndexedDB(data: Uint8Array): void {
   req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
   req.onsuccess = () => {
     const tx = req.result.transaction(IDB_STORE, "readwrite");
-    tx.objectStore(IDB_STORE).put(data, IDB_KEY);
+    const putReq = tx.objectStore(IDB_STORE).put(data, IDB_KEY);
+    putReq.onerror = () => console.error("[sqlite-bridge] IndexedDB put failed:", putReq.error);
+    tx.onerror = () => console.error("[sqlite-bridge] IndexedDB transaction failed:", tx.error);
   };
+  req.onerror = () => console.error("[sqlite-bridge] IndexedDB open failed:", req.error);
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function flushSave(): void {
+  if (!db || !saveTimer) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  const data = db.export();
+  saveToIndexedDB(new Uint8Array(data));
+}
+
 function debouncedSave(): void {
   if (!db) return;
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
+    saveTimer = null;
     const data = db!.export();
     saveToIndexedDB(new Uint8Array(data));
   }, 500);
 }
+
+// Flush pending saves before the service worker terminates
+globalThis.addEventListener("unload", flushSave);
 
 // ---------------------------------------------------------------------------
 // Parameter binding
@@ -117,15 +133,18 @@ const bridge = {
     if (!db) throw new Error("Database not initialized — call init_database() first");
 
     const stmt = db.prepare(sql);
-    stmt.bind(bindParams(params));
+    try {
+      stmt.bind(bindParams(params));
 
-    const rows: Record<string, unknown>[] = [];
-    while (stmt.step()) {
-      const row = stmt.getAsObject();
-      rows.push(row as Record<string, unknown>);
+      const rows: Record<string, unknown>[] = [];
+      while (stmt.step()) {
+        const row = stmt.getAsObject();
+        rows.push(row as Record<string, unknown>);
+      }
+      return rows;
+    } finally {
+      stmt.free();
     }
-    stmt.free();
-    return rows;
   },
 
   async execute(
