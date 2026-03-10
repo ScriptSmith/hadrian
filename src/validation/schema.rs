@@ -217,7 +217,37 @@ impl OpenApiSchemas {
             .ok_or_else(|| format!("Schema '{}' not found in OpenAPI spec", name))?;
 
         // Resolve $ref references within the schema
-        self.resolve_refs(raw_schema.clone(), 0)
+        let mut resolved = self.resolve_refs(raw_schema.clone(), 0)?;
+        // Strip OpenAPI extension keys (x-*) from the entire tree — they aren't
+        // valid JSON Schema and can cause compilation failures (e.g. x-stainless-const: true)
+        Self::strip_openapi_extensions(&mut resolved);
+        Ok(resolved)
+    }
+
+    /// Recursively strip non-JSON-Schema keywords from a resolved value tree.
+    /// Removes OpenAPI extension keys (x-*) and Draft 2019-09 keywords not in Draft 2020-12.
+    fn strip_openapi_extensions(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                map.retain(|k, _| {
+                    !k.starts_with("x-") && k != "$recursiveAnchor" && k != "discriminator"
+                });
+                // Replace $recursiveRef with a permissive schema (circular ref)
+                if map.contains_key("$recursiveRef") {
+                    map.clear();
+                    return;
+                }
+                for v in map.values_mut() {
+                    Self::strip_openapi_extensions(v);
+                }
+            }
+            Value::Array(arr) => {
+                for v in arr {
+                    Self::strip_openapi_extensions(v);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Recursively resolve $ref references in a schema.
