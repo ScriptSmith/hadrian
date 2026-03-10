@@ -913,8 +913,8 @@ model_name = "secondary-model"
             db_id
         );
 
-        let config = crate::config::GatewayConfig::from_str(&config_str)
-            .expect("Failed to parse test config");
+        let config =
+            crate::config::GatewayConfig::parse(&config_str).expect("Failed to parse test config");
         let state = crate::AppState::new(config.clone())
             .await
             .expect("Failed to create AppState");
@@ -2781,8 +2781,8 @@ max_file_size_mb = {}
             db_id, max_file_size_mb
         );
 
-        let config = crate::config::GatewayConfig::from_str(&config_str)
-            .expect("Failed to parse test config");
+        let config =
+            crate::config::GatewayConfig::parse(&config_str).expect("Failed to parse test config");
         let state = crate::AppState::new(config.clone())
             .await
             .expect("Failed to create AppState");
@@ -2830,8 +2830,8 @@ model_name = "test-model"
             db_id
         );
 
-        let config = crate::config::GatewayConfig::from_str(&config_str)
-            .expect("Failed to parse test config");
+        let config =
+            crate::config::GatewayConfig::parse(&config_str).expect("Failed to parse test config");
         let mut state = crate::AppState::new(config.clone())
             .await
             .expect("Failed to create AppState");
@@ -2916,8 +2916,8 @@ model_name = "test-model"
             db_id
         );
 
-        let config = crate::config::GatewayConfig::from_str(&config_str)
-            .expect("Failed to parse test config");
+        let config =
+            crate::config::GatewayConfig::parse(&config_str).expect("Failed to parse test config");
         let mut state = crate::AppState::new(config.clone())
             .await
             .expect("Failed to create AppState");

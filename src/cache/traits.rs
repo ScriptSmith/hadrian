@@ -166,6 +166,7 @@ pub trait Cache: Send + Sync {
 }
 
 // Helper extension trait for working with JSON
+#[allow(async_fn_in_trait)]
 pub trait CacheExt: Cache {
     async fn get_json<T: serde::de::DeserializeOwned>(&self, key: &str) -> CacheResult<Option<T>> {
         use super::error::CacheError;

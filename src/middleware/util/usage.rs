@@ -98,7 +98,7 @@ pub fn extract_full_usage_from_response(response: &Response) -> ExtractedUsage {
     let pricing_source = headers
         .get("X-Pricing-Source")
         .and_then(|v| v.to_str().ok())
-        .map(crate::pricing::CostPricingSource::from_str)
+        .map(crate::pricing::CostPricingSource::parse)
         .unwrap_or_default();
 
     let image_count = headers

@@ -44,6 +44,12 @@ pub struct GatewayJwtRegistry {
     load_mutex: Mutex<()>,
 }
 
+impl Default for GatewayJwtRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GatewayJwtRegistry {
     /// Create an empty registry.
     pub fn new() -> Self {
@@ -236,6 +242,11 @@ impl GatewayJwtRegistry {
     /// Number of registered validators.
     pub async fn len(&self) -> usize {
         self.inner.read().await.validators.len()
+    }
+
+    /// Whether the registry has no validators.
+    pub async fn is_empty(&self) -> bool {
+        self.inner.read().await.validators.is_empty()
     }
 }
 

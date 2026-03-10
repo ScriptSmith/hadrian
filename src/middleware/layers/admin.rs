@@ -2326,7 +2326,7 @@ mod tests {
     /// Create a minimal AppState for testing with ProxyAuth config
     fn create_test_state(identity_header: &str, trusted_proxies: TrustedProxiesConfig) -> AppState {
         // Create minimal config from empty TOML
-        let mut config = GatewayConfig::from_str("").unwrap();
+        let mut config = GatewayConfig::parse("").unwrap();
         config.auth.mode = AuthMode::Iap(Box::new(IapConfig {
             identity_header: identity_header.to_string(),
             email_header: Some("X-Email".to_string()),
@@ -2635,7 +2635,7 @@ mod tests {
 
     /// Create a minimal AppState for testing with Emergency config
     fn create_emergency_test_state(emergency_config: Option<EmergencyAccessConfig>) -> AppState {
-        let mut config = GatewayConfig::from_str("").unwrap();
+        let mut config = GatewayConfig::parse("").unwrap();
         config.auth.emergency = emergency_config;
 
         AppState {

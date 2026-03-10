@@ -278,8 +278,8 @@ api_key = "sk-test-key"
             db_id
         );
 
-        let config = crate::config::GatewayConfig::from_str(&config_str)
-            .expect("Failed to parse test config");
+        let config =
+            crate::config::GatewayConfig::parse(&config_str).expect("Failed to parse test config");
         let state = crate::AppState::new(config.clone())
             .await
             .expect("Failed to create AppState");
@@ -296,8 +296,8 @@ type = "open_ai"
 api_key = "sk-test-key"
 "#;
 
-        let config = crate::config::GatewayConfig::from_str(config_str)
-            .expect("Failed to parse test config");
+        let config =
+            crate::config::GatewayConfig::parse(config_str).expect("Failed to parse test config");
         let state = crate::AppState::new(config.clone())
             .await
             .expect("Failed to create AppState");

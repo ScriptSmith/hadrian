@@ -67,7 +67,7 @@ impl PostgresModelPricingRepo {
             reasoning_per_1m_tokens: row.get("reasoning_per_1m_tokens"),
             per_second: row.get("per_second"),
             per_1m_characters: row.get("per_1m_characters"),
-            source: PricingSource::from_str(&source_str),
+            source: PricingSource::parse(&source_str),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         })

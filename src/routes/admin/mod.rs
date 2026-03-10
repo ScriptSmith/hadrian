@@ -810,8 +810,8 @@ api_key = "sk-test-key"
             db_id
         );
 
-        let config = crate::config::GatewayConfig::from_str(&config_str)
-            .expect("Failed to parse test config");
+        let config =
+            crate::config::GatewayConfig::parse(&config_str).expect("Failed to parse test config");
         let state = crate::AppState::new(config.clone())
             .await
             .expect("Failed to create AppState");
@@ -4114,8 +4114,8 @@ ttl_secs = 86400
             db_id
         );
 
-        let config = crate::config::GatewayConfig::from_str(&config_str)
-            .expect("Failed to parse test config");
+        let config =
+            crate::config::GatewayConfig::parse(&config_str).expect("Failed to parse test config");
         let state = crate::AppState::new(config.clone())
             .await
             .expect("Failed to create AppState");
@@ -5309,8 +5309,8 @@ ttl_secs = 86400
 
     /// Create a test application with a custom config string
     async fn test_app_with_config(config_str: &str) -> axum::Router {
-        let config = crate::config::GatewayConfig::from_str(config_str)
-            .expect("Failed to parse test config");
+        let config =
+            crate::config::GatewayConfig::parse(config_str).expect("Failed to parse test config");
         let state = crate::AppState::new(config.clone())
             .await
             .expect("Failed to create AppState");

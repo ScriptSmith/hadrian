@@ -879,7 +879,7 @@ default_provider = "mock-provider"
         db_id, provider_config, spec.extra_config
     );
 
-    let config = GatewayConfig::from_str(&config_str).expect("Failed to parse test config");
+    let config = GatewayConfig::parse(&config_str).expect("Failed to parse test config");
     let state = crate::AppState::new(config.clone())
         .await
         .expect("Failed to create AppState");
@@ -2487,7 +2487,7 @@ retryable_status_codes = [429, 500, 502, 503, 504]
         initial_delay_ms
     );
 
-    let config = GatewayConfig::from_str(&config_str).expect("Failed to parse test config");
+    let config = GatewayConfig::parse(&config_str).expect("Failed to parse test config");
     let state = crate::AppState::new(config.clone())
         .await
         .expect("Failed to create AppState");

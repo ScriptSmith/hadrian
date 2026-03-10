@@ -794,7 +794,7 @@ mod tests {
 
     /// Create a minimal AppState for testing with the given providers config.
     fn create_test_state(providers: ProvidersConfig) -> AppState {
-        let mut config = GatewayConfig::from_str("").expect("Empty config should parse");
+        let mut config = GatewayConfig::parse("").expect("Empty config should parse");
         config.providers = providers;
         let config = Arc::new(config);
 

@@ -73,7 +73,7 @@ impl SqliteModelPricingRepo {
             reasoning_per_1m_tokens: row.col("reasoning_per_1m_tokens"),
             per_second: row.col("per_second"),
             per_1m_characters: row.col("per_1m_characters"),
-            source: PricingSource::from_str(&source_str),
+            source: PricingSource::parse(&source_str),
             created_at: row.col("created_at"),
             updated_at: row.col("updated_at"),
         })

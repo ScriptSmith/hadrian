@@ -127,12 +127,12 @@ impl GatewayConfig {
         let contents = std::fs::read_to_string(path.as_ref())
             .map_err(|e| ConfigError::Io(e, path.as_ref().to_path_buf()))?;
 
-        Self::from_str(&contents)
+        Self::parse(&contents)
     }
 
     /// Parse configuration from a TOML string.
     #[cfg(feature = "server")]
-    pub fn from_str(contents: &str) -> Result<Self, ConfigError> {
+    pub fn parse(contents: &str) -> Result<Self, ConfigError> {
         // Expand environment variables
         let expanded = expand_env_vars(contents)?;
 
@@ -525,7 +525,7 @@ mod tests {
 
     #[test]
     fn test_minimal_config() {
-        let config = GatewayConfig::from_str(
+        let config = GatewayConfig::parse(
             r#"
             [providers.my-openai]
             type = "open_ai"
@@ -540,7 +540,7 @@ mod tests {
 
     #[test]
     fn test_multiple_providers_config() {
-        let config = GatewayConfig::from_str(
+        let config = GatewayConfig::parse(
             r#"
             [providers]
             default_provider = "openrouter"
@@ -614,7 +614,7 @@ key3 = "literal""#
     #[test]
     #[cfg(not(feature = "provider-bedrock"))]
     fn test_disabled_provider_bedrock_error() {
-        let err = GatewayConfig::from_str(
+        let err = GatewayConfig::parse(
             r#"
             [providers.my-bedrock]
             type = "bedrock"
@@ -641,7 +641,7 @@ key3 = "literal""#
     #[test]
     #[cfg(not(feature = "vault"))]
     fn test_disabled_secrets_vault_error() {
-        let err = GatewayConfig::from_str(
+        let err = GatewayConfig::parse(
             r#"
             [secrets]
             type = "vault"
@@ -666,7 +666,7 @@ key3 = "literal""#
     #[test]
     #[cfg(not(feature = "provider-bedrock"))]
     fn test_disabled_multiple_features_error() {
-        let err = GatewayConfig::from_str(
+        let err = GatewayConfig::parse(
             r#"
             [providers.my-bedrock]
             type = "bedrock"
@@ -694,7 +694,7 @@ key3 = "literal""#
     #[test]
     #[cfg(not(feature = "database-sqlite"))]
     fn test_disabled_database_sqlite_error() {
-        let err = GatewayConfig::from_str(
+        let err = GatewayConfig::parse(
             r#"
             [database]
             type = "sqlite"
@@ -721,7 +721,7 @@ key3 = "literal""#
     #[test]
     #[cfg(not(feature = "database-postgres"))]
     fn test_disabled_database_postgres_error() {
-        let err = GatewayConfig::from_str(
+        let err = GatewayConfig::parse(
             r#"
             [database]
             type = "postgres"
@@ -770,7 +770,7 @@ key3 = "literal""#
     #[cfg(feature = "database-sqlite")]
     fn test_iap_without_trusted_proxies_non_localhost_errors() {
         // IAP on 0.0.0.0 without trusted_proxies should fail
-        let err = GatewayConfig::from_str(
+        let err = GatewayConfig::parse(
             r#"
             [server]
             host = "0.0.0.0"
@@ -805,7 +805,7 @@ key3 = "literal""#
     #[cfg(feature = "database-sqlite")]
     fn test_iap_without_trusted_proxies_localhost_warns_but_ok() {
         // IAP on localhost without trusted_proxies should succeed (just warn)
-        let result = GatewayConfig::from_str(
+        let result = GatewayConfig::parse(
             r#"
             [server]
             host = "127.0.0.1"
@@ -835,7 +835,7 @@ key3 = "literal""#
     #[cfg(feature = "database-sqlite")]
     fn test_iap_with_trusted_proxies_non_localhost_ok() {
         // IAP on 0.0.0.0 with trusted_proxies configured should succeed
-        let result = GatewayConfig::from_str(
+        let result = GatewayConfig::parse(
             r#"
             [server]
             host = "0.0.0.0"
@@ -868,7 +868,7 @@ key3 = "literal""#
     #[cfg(feature = "database-sqlite")]
     fn test_iap_with_dangerously_trust_all_non_localhost_ok() {
         // IAP with dangerously_trust_all should also pass validation
-        let result = GatewayConfig::from_str(
+        let result = GatewayConfig::parse(
             r#"
             [server]
             host = "0.0.0.0"

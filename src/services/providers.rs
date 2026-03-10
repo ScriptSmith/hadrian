@@ -54,26 +54,6 @@ const FORBIDDEN_AWS_CREDENTIAL_TYPES: &[&str] = &["default", "profile", "assume_
 #[cfg(feature = "provider-vertex")]
 const FORBIDDEN_GCP_CREDENTIAL_TYPES: &[&str] = &["default", "service_account"];
 
-/// Validate provider-specific configuration.
-///
-/// Different provider types require different config fields:
-/// - Bedrock: requires `config.region` and `config.credentials.type` = "static"
-/// - Vertex: requires either `api_key` OR (`config.project` + `config.region`
-///   with `config.credentials.type` = "service_account_json")
-/// - Other types: no config validation needed
-///
-/// Dynamic providers must not use credential types that source from the server's
-/// environment or filesystem (e.g., "default", "profile", "assume_role" for AWS;
-/// "default", "service_account" for GCP). Only explicitly-provided credentials are
-/// allowed to prevent users from accessing the gateway's own cloud identity.
-pub fn validate_provider_config(
-    provider_type: &str,
-    config: Option<&serde_json::Value>,
-    api_key: Option<&str>,
-) -> Result<(), AdminError> {
-    validate_provider_config_inner(provider_type, config, api_key, false)
-}
-
 /// Validate provider-specific configuration with SSRF protection.
 ///
 /// On wasm32 SSRF validation is skipped — the browser enforces its own CORS/security,

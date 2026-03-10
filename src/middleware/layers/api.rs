@@ -2220,7 +2220,7 @@ mod tests {
 
     /// Create AppState with Idp configuration
     fn create_multi_auth_state(header_name: &str, key_prefix: &str) -> AppState {
-        let mut config = GatewayConfig::from_str("").unwrap();
+        let mut config = GatewayConfig::parse("").unwrap();
         #[cfg(feature = "sso")]
         {
             config.auth.mode = AuthMode::Idp;
@@ -2278,7 +2278,7 @@ mod tests {
 
     /// Create AppState with API key only authentication
     fn create_api_key_only_state(header_name: &str, key_prefix: &str) -> AppState {
-        let mut config = GatewayConfig::from_str("").unwrap();
+        let mut config = GatewayConfig::parse("").unwrap();
         config.auth.mode = AuthMode::ApiKey;
         config.auth.api_key = Some(ApiKeyAuthConfig {
             header_name: header_name.to_string(),
