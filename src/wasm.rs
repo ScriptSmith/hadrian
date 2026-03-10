@@ -248,7 +248,7 @@ async fn auth_me(State(state): State<crate::app::AppState>) -> Response {
         "email": "anonymous@localhost",
         "name": "Anonymous User",
         "user_id": state.default_user_id,
-        "roles": ["super_admin"],
+        "roles": ["admin"],
         "idp_groups": [],
     }))
     .into_response()
@@ -289,21 +289,26 @@ async fn convert_request(
         .parse()
         .map_err(|_| JsError::new("Invalid HTTP method"))?;
 
-    // Read body for methods that may have one
+    // Read body for methods that may have one.
+    // Use array_buffer() instead of text() to correctly handle binary content
+    // (multipart form-data, file uploads, audio).
     let body = if method == http::Method::POST
         || method == http::Method::PUT
         || method == http::Method::PATCH
     {
-        let text = wasm_bindgen_futures::JsFuture::from(
-            req.text()
+        let buf = wasm_bindgen_futures::JsFuture::from(
+            req.array_buffer()
                 .map_err(|_| JsError::new("Failed to read request body"))?,
         )
         .await
         .map_err(|_| JsError::new("Failed to read request body"))?;
 
-        match text.as_string() {
-            Some(s) => axum::body::Body::from(s),
-            None => axum::body::Body::empty(),
+        let uint8 = js_sys::Uint8Array::new(&buf);
+        let bytes = uint8.to_vec();
+        if bytes.is_empty() {
+            axum::body::Body::empty()
+        } else {
+            axum::body::Body::from(bytes)
         }
     } else {
         axum::body::Body::empty()

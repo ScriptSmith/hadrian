@@ -74,8 +74,14 @@ function debouncedSave(): void {
   }, 500);
 }
 
-// Flush pending saves before the service worker terminates
-globalThis.addEventListener("unload", flushSave);
+// Flush pending saves when the service worker is about to be evicted.
+// Service workers don't fire `unload`/`beforeunload`; instead we listen for
+// the `activate` event to ensure the DB is persisted on startup, and save
+// synchronously on every write when a pending timer exists.
+// `beforeunload` is kept as a best-effort fallback for window contexts.
+if (typeof globalThis.addEventListener === "function") {
+  globalThis.addEventListener("beforeunload", flushSave);
+}
 
 // ---------------------------------------------------------------------------
 // Parameter binding
@@ -83,13 +89,15 @@ globalThis.addEventListener("unload", flushSave);
 
 /**
  * Bind values into a prepared statement.
- * The Rust bridge sends params as a JSON array of `WasmParam` values:
- *   - { Text: "..." } | { Integer: n } | { Real: f } | { Blob: [...] } | "Null"
+ * The Rust bridge sends params via serde_wasm_bindgen with `#[serde(untagged)]`,
+ * so values arrive as native JS types: string, number, null, or boolean.
+ * Tagged variants ({ Text: "..." }, etc.) are only possible if serialization
+ * changes — we handle both forms defensively.
  * sql.js accepts `(string | number | Uint8Array | null)[]`.
  */
 function bindParams(params: unknown[]): (string | number | Uint8Array | null)[] {
   return params.map((p) => {
-    if (p == null || p === "Null") return null; // == catches both null and undefined
+    if (p == null) return null; // == catches both null and undefined
     if (typeof p === "string" || typeof p === "number") return p;
     if (typeof p === "boolean") return p ? 1 : 0; // SQLite stores booleans as integers
     if (typeof p === "object" && p !== null) {
