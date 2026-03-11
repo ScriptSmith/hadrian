@@ -21,7 +21,6 @@ use serde::Deserialize;
 use stream::{AnthropicToOpenAIStream, AnthropicToResponsesStream};
 use types::{AnthropicMetadata, AnthropicRequest, AnthropicResponse};
 
-use crate::providers::response::streaming_response;
 use crate::{
     api_types::{
         CreateChatCompletionPayload, CreateCompletionPayload, CreateEmbeddingPayload,
@@ -33,7 +32,7 @@ use crate::{
         circuit_breaker::CircuitBreaker,
         error::AnthropicErrorParser,
         image::{ImageFetchConfig, preprocess_messages_for_images},
-        response::{error_response, json_response},
+        response::{error_response, json_response, streaming_response},
         retry::with_circuit_breaker_and_retry,
     },
 };
@@ -257,10 +256,7 @@ impl Provider for AnthropicProvider {
             }
             #[cfg(target_arch = "wasm32")]
             {
-                streaming_response(
-                    status,
-                    crate::compat::AssertSendStream(transformed_stream),
-                )
+                streaming_response(status, crate::compat::AssertSendStream(transformed_stream))
             }
         } else {
             let anthropic_response: AnthropicResponse = response.json().await?;
@@ -396,10 +392,7 @@ impl Provider for AnthropicProvider {
             }
             #[cfg(target_arch = "wasm32")]
             {
-                streaming_response(
-                    status,
-                    crate::compat::AssertSendStream(transformed_stream),
-                )
+                streaming_response(status, crate::compat::AssertSendStream(transformed_stream))
             }
         } else {
             let anthropic_response: AnthropicResponse = response.json().await?;
