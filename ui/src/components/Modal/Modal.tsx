@@ -80,7 +80,7 @@ export function Modal({ open, onClose, children, className }: ModalProps) {
           firstInput.focus();
         } else {
           const firstFocusable = contentRef.current?.querySelector<HTMLElement>(
-            'button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
           );
           if (firstFocusable) {
             firstFocusable.focus();
