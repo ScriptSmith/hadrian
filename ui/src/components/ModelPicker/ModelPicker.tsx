@@ -241,27 +241,15 @@ export function ModelPicker({
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    // Grid columns vary by breakpoint (1/2/3), use 3 for desktop keyboard nav
-    const cols = 3;
     const total = filteredModels.length;
 
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
         setShouldScrollToFocused(true);
-        setFocusedIndex((prev) => Math.min(prev + cols, total - 1));
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        setShouldScrollToFocused(true);
-        setFocusedIndex((prev) => Math.max(prev - cols, 0));
-        break;
-      case "ArrowRight":
-        e.preventDefault();
-        setShouldScrollToFocused(true);
         setFocusedIndex((prev) => Math.min(prev + 1, total - 1));
         break;
-      case "ArrowLeft":
+      case "ArrowUp":
         e.preventDefault();
         setShouldScrollToFocused(true);
         setFocusedIndex((prev) => Math.max(prev - 1, 0));
@@ -286,8 +274,8 @@ export function ModelPicker({
         aria-hidden="true"
       />
 
-      {/* Dialog - responsive: fullscreen on mobile, centered modal on desktop */}
-      <div className="fixed inset-2 z-50 sm:inset-6 sm:top-[3%] sm:bottom-[3%] animate-in fade-in-0 zoom-in-95 slide-in-from-top-4">
+      {/* Dialog - responsive: fullscreen on mobile, constrained modal on desktop */}
+      <div className="fixed inset-2 z-50 sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:w-[min(90vw,960px)] sm:h-[min(85vh,720px)] animate-in fade-in-0 zoom-in-95 slide-in-from-top-4">
         <div className="flex h-full flex-col overflow-hidden rounded-xl border bg-popover shadow-2xl ring-1 ring-black/5">
           {/* Search input - full width */}
           <div className="flex items-center border-b px-4">
@@ -459,12 +447,10 @@ export function ModelPicker({
             </div>
           </div>
 
-          {/* Footer - simplified on mobile */}
+          {/* Footer */}
           <div className="flex items-center justify-between border-t px-4 py-2 text-xs text-muted-foreground">
             <div className="hidden items-center gap-4 sm:flex">
               <span className="flex items-center gap-1">
-                <kbd className="h-4 rounded border bg-muted px-1 text-[10px]">←</kbd>
-                <kbd className="h-4 rounded border bg-muted px-1 text-[10px]">→</kbd>
                 <kbd className="h-4 rounded border bg-muted px-1 text-[10px]">↑</kbd>
                 <kbd className="h-4 rounded border bg-muted px-1 text-[10px]">↓</kbd>
                 navigate
@@ -475,14 +461,22 @@ export function ModelPicker({
               </span>
             </div>
             <span className="text-muted-foreground sm:hidden">{filteredModels.length} models</span>
-            {selectedModels.length > 0 && (
+            <div className="flex items-center gap-3">
+              {selectedModels.length > 0 && (
+                <button
+                  onClick={() => onModelsChange([])}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  Clear all
+                </button>
+              )}
               <button
-                onClick={() => onModelsChange([])}
-                className="text-muted-foreground hover:text-foreground"
+                onClick={onClose}
+                className="rounded-md bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
               >
-                Clear all
+                Done
               </button>
-            )}
+            </div>
           </div>
         </div>
       </div>
