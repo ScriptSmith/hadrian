@@ -277,6 +277,9 @@ function generateMarkdownReport(
   lines.push("## Auth & Server");
   lines.push("");
   if (sessionData) {
+    lines.push(
+      `- **Runtime Mode:** ${sessionData.runtime_mode === "wasm" ? "Browser (WASM)" : "Server"}`
+    );
     lines.push(`- **Auth Method:** ${sessionData.auth_method}`);
     lines.push(`- **Server Time:** ${sessionData.server_time}`);
   }
@@ -714,6 +717,14 @@ export default function SessionInfoPage() {
                 <CardDescription>Authentication and server details</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
+                <DetailRow
+                  label="Runtime Mode"
+                  value={
+                    <Badge variant={data.runtime_mode === "wasm" ? "default" : "outline"}>
+                      {data.runtime_mode === "wasm" ? "Browser (WASM)" : "Server"}
+                    </Badge>
+                  }
+                />
                 <DetailRow
                   label="Auth Method"
                   value={<Badge variant="outline">{data.auth_method}</Badge>}

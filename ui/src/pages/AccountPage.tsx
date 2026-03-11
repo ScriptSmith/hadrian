@@ -130,6 +130,17 @@ export default function AccountPage() {
       try {
         // Clear IndexedDB (conversations)
         await deleteIndexedDBDatabase();
+        // Clear the WASM SQLite database (providers, users, etc.)
+        await new Promise<void>((resolve) => {
+          const req = indexedDB.deleteDatabase("hadrian-wasm");
+          req.onsuccess = () => resolve();
+          req.onerror = () => resolve();
+          req.onblocked = () => resolve();
+        });
+        // Unregister the service worker so its in-memory WASM gateway is
+        // discarded. A fresh worker will be registered on the next page load.
+        const registrations = await navigator.serviceWorker?.getRegistrations();
+        await Promise.all(registrations?.map((r) => r.unregister()) ?? []);
         // Clear localStorage
         clearLocalStorageData();
 
@@ -174,6 +185,14 @@ export default function AccountPage() {
         // Clear local data first (before logout clears auth state)
         try {
           await deleteIndexedDBDatabase();
+          await new Promise<void>((resolve) => {
+            const req = indexedDB.deleteDatabase("hadrian-wasm");
+            req.onsuccess = () => resolve();
+            req.onerror = () => resolve();
+            req.onblocked = () => resolve();
+          });
+          const registrations = await navigator.serviceWorker?.getRegistrations();
+          await Promise.all(registrations?.map((r) => r.unregister()) ?? []);
           clearLocalStorageData();
         } catch {
           // Continue with server deletion even if local clear fails

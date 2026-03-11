@@ -82,14 +82,16 @@ export async function deleteAudioFilesForEntry(entryId: string): Promise<void> {
   }
 }
 
-/** Remove the entire `audio/` directory from OPFS. */
+/** Remove the entire `audio/` directory from OPFS (no-op if it doesn't exist). */
 export async function clearAllAudioFiles(): Promise<void> {
   try {
     if (!isAvailable()) return;
     const root = await navigator.storage.getDirectory();
+    // Check if the directory exists before trying to remove it
+    await root.getDirectoryHandle(AUDIO_DIR);
     await root.removeEntry(AUDIO_DIR, { recursive: true });
-  } catch (e) {
-    console.warn("OPFS clearAllAudioFiles failed:", e);
+  } catch {
+    // NotFoundError is expected when the directory was never created
   }
 }
 

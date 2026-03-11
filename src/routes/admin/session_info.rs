@@ -47,6 +47,9 @@ pub struct SessionInfoResponse {
     /// Authentication method used for this session
     pub auth_method: String,
 
+    /// Runtime mode: "server" for native, "wasm" for browser
+    pub runtime_mode: String,
+
     /// Server timestamp for debugging timezone issues
     pub server_time: DateTime<Utc>,
 }
@@ -331,6 +334,13 @@ pub async fn get(
         crate::config::AuthMode::Iap(_) => "iap".to_string(),
     };
 
+    let runtime_mode = if cfg!(target_arch = "wasm32") {
+        "wasm"
+    } else {
+        "server"
+    }
+    .to_string();
+
     Ok(Json(SessionInfoResponse {
         identity: identity_info,
         user: user_info,
@@ -339,6 +349,7 @@ pub async fn get(
         projects,
         sso_connection,
         auth_method,
+        runtime_mode,
         server_time: Utc::now(),
     }))
 }

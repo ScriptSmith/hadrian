@@ -26978,6 +26978,7 @@
           "teams",
           "projects",
           "auth_method",
+          "runtime_mode",
           "server_time"
         ],
         "properties": {
@@ -27002,6 +27003,10 @@
               "$ref": "#/components/schemas/ProjectMembershipInfo"
             },
             "description": "Project access (direct memberships)"
+          },
+          "runtime_mode": {
+            "type": "string",
+            "description": "Runtime mode: \"server\" for native, \"wasm\" for browser"
           },
           "server_time": {
             "type": "string",

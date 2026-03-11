@@ -24,7 +24,6 @@ pub mod providers;
 #[cfg(feature = "sso")]
 pub mod scim_configs;
 pub mod service_accounts;
-#[cfg(feature = "sso")]
 pub mod session_info;
 #[cfg(feature = "sso")]
 pub mod sessions;
@@ -680,10 +679,12 @@ pub(crate) fn admin_v1_routes() -> Router<AppState> {
         )
         .route("/rbac-policies/validate", post(org_rbac_policies::validate));
 
+    // Session info (available in all builds including WASM)
+    let router = router.route("/session-info", get(session_info::get));
+
     // SSO routes (only available when sso feature is enabled)
     #[cfg(feature = "sso")]
     let router = router
-        .route("/session-info", get(session_info::get))
         // User Sessions
         .route(
             "/users/{user_id}/sessions",
