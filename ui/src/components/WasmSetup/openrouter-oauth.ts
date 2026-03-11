@@ -25,11 +25,28 @@ function base64url(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+/** True when running inside an iframe (e.g. embedded in docs). */
+export function isInIframe(): boolean {
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true; // cross-origin iframe throws, so we're definitely framed
+  }
+}
+
 /**
  * Start the OpenRouter OAuth PKCE flow.
  * Stores the code verifier in sessionStorage and redirects to OpenRouter.
+ *
+ * When running inside an iframe, opens the app in a new tab instead —
+ * OpenRouter refuses to load in iframes.
  */
 export async function startOpenRouterOAuth() {
+  if (isInIframe()) {
+    window.open(window.location.origin + window.location.pathname, "_blank");
+    return;
+  }
+
   const verifier = generateCodeVerifier();
   const challenge = await generateCodeChallenge(verifier);
   sessionStorage.setItem(VERIFIER_KEY, verifier);

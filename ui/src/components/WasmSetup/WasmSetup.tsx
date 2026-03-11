@@ -31,7 +31,7 @@ import { Button } from "@/components/Button/Button";
 import { Input } from "@/components/Input/Input";
 import { FormField } from "@/components/FormField/FormField";
 import { HadrianIcon } from "@/components/HadrianIcon/HadrianIcon";
-import { startOpenRouterOAuth } from "./openrouter-oauth";
+import { startOpenRouterOAuth, isInIframe } from "./openrouter-oauth";
 
 interface ProviderTemplate {
   id: string;
@@ -342,7 +342,7 @@ function WelcomeStep({
               ) : (
                 <ExternalLink className="mr-1.5 h-4 w-4" />
               )}
-              Connect with OpenRouter
+              {isInIframe() ? "Open in new tab to connect" : "Connect with OpenRouter"}
             </Button>
           </div>
         )}
@@ -563,7 +563,7 @@ function ProvidersStep({
                 ) : (
                   <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
                 )}
-                Connect
+                {isInIframe() ? "New tab" : "Connect"}
               </Button>
             </div>
           </div>
