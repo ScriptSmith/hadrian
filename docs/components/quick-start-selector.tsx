@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Copy, Download, X } from "lucide-react";
+import { Check, Copy, Download, ExternalLink, X } from "lucide-react";
 
-type Method = "binary" | "docker" | "cargo";
+type Method = "browser" | "binary" | "docker" | "cargo";
 type OS = "linux-x86_64" | "linux-arm64" | "macos-arm64" | "windows";
 type Profile = "full" | "headless" | "standard" | "minimal" | "tiny";
 type Libc = "gnu" | "musl";
@@ -219,10 +219,10 @@ export function QuickStartSelector() {
             Method
           </span>
           <ToggleGroup
-            options={["binary", "docker", "cargo"] as Method[]}
+            options={["binary", "browser", "docker", "cargo"] as Method[]}
             value={method}
             onChange={setMethod}
-            labels={{ binary: "Binary", docker: "Docker", cargo: "Cargo" }}
+            labels={{ binary: "Binary", browser: "Browser", docker: "Docker", cargo: "Cargo" }}
           />
         </div>
         {method === "binary" && (
@@ -296,34 +296,54 @@ export function QuickStartSelector() {
         </div>
       )}
 
-      <div className="relative">
-        <pre className="overflow-x-auto whitespace-pre-wrap break-all p-4 pr-12 text-sm">
-          <code className="text-fd-foreground">{command}</code>
-        </pre>
-        <button
-          onClick={handleCopy}
-          className="absolute right-3 top-3 rounded-md p-1.5 text-fd-muted-foreground transition-colors hover:bg-fd-muted hover:text-fd-foreground"
-          aria-label="Copy command"
-        >
-          {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-        </button>
-      </div>
-
-      {downloadUrl && (
-        <div className="border-t border-fd-border bg-fd-muted/30 px-4 py-3">
+      {method === "browser" ? (
+        <div className="p-4">
+          <p className="mb-3 text-sm text-fd-muted-foreground">
+            Run Hadrian entirely in your browser via WebAssembly. No server or installation
+            required.
+          </p>
           <a
-            href={downloadUrl}
+            href="https://app.hadriangateway.com"
+            target="_blank"
+            rel="noopener noreferrer"
             className="inline-flex items-center gap-2 rounded-lg bg-fd-primary px-4 py-2 text-sm font-medium text-fd-primary-foreground transition-colors hover:bg-fd-primary/90"
           >
-            <Download className="h-4 w-4" />
-            Download binary
+            <ExternalLink className="h-4 w-4" />
+            Open in browser
           </a>
-          <p className="mt-2 break-all text-xs text-fd-muted-foreground">
-            <a href={downloadUrl} className="underline">
-              {downloadUrl}
-            </a>
-          </p>
         </div>
+      ) : (
+        <>
+          <div className="relative">
+            <pre className="overflow-x-auto whitespace-pre-wrap break-all p-4 pr-12 text-sm">
+              <code className="text-fd-foreground">{command}</code>
+            </pre>
+            <button
+              onClick={handleCopy}
+              className="absolute right-3 top-3 rounded-md p-1.5 text-fd-muted-foreground transition-colors hover:bg-fd-muted hover:text-fd-foreground"
+              aria-label="Copy command"
+            >
+              {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+            </button>
+          </div>
+
+          {downloadUrl && (
+            <div className="border-t border-fd-border bg-fd-muted/30 px-4 py-3">
+              <a
+                href={downloadUrl}
+                className="inline-flex items-center gap-2 rounded-lg bg-fd-primary px-4 py-2 text-sm font-medium text-fd-primary-foreground transition-colors hover:bg-fd-primary/90"
+              >
+                <Download className="h-4 w-4" />
+                Download binary
+              </a>
+              <p className="mt-2 break-all text-xs text-fd-muted-foreground">
+                <a href={downloadUrl} className="underline">
+                  {downloadUrl}
+                </a>
+              </p>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
