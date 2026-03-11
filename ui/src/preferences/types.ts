@@ -29,7 +29,7 @@ export interface UserPreferences {
 }
 
 export const defaultPreferences: UserPreferences = {
-  theme: "system",
+  theme: "dark",
   defaultConversationOwner: { type: "user" },
   sidebarCollapsed: false,
   sidebarWidth: 256,

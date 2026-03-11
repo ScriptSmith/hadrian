@@ -10,6 +10,7 @@ export function Provider({ children }: { children: ReactNode }) {
       search={{
         SearchDialog,
       }}
+      theme={{ defaultTheme: "dark" }}
     >
       {children}
     </RootProvider>
