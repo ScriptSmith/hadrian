@@ -297,20 +297,28 @@ export function QuickStartSelector() {
       )}
 
       {method === "browser" ? (
-        <div className="p-4">
-          <p className="mb-3 text-sm text-fd-muted-foreground">
-            Run Hadrian entirely in your browser via WebAssembly. No server or installation
-            required.
-          </p>
-          <a
-            href="https://app.hadriangateway.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 rounded-lg bg-fd-primary px-4 py-2 text-sm font-medium text-fd-primary-foreground transition-colors hover:bg-fd-primary/90"
-          >
-            <ExternalLink className="h-4 w-4" />
-            Open in browser
-          </a>
+        <div className="flex flex-col">
+          <div className="flex items-center justify-between border-b border-fd-border px-4 py-2">
+            <p className="text-sm text-fd-muted-foreground">
+              Run Hadrian entirely in your browser via WebAssembly. No server or installation
+              required.
+            </p>
+            <a
+              href="https://app.hadriangateway.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-3 inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium text-fd-muted-foreground transition-colors hover:bg-fd-muted hover:text-fd-foreground"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open in new tab
+            </a>
+          </div>
+          <iframe
+            src="https://app.hadriangateway.com"
+            title="Hadrian Browser App"
+            className="h-[80vh] w-full border-0"
+            allow="clipboard-read; clipboard-write"
+          />
         </div>
       ) : (
         <>
