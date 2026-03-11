@@ -33,6 +33,17 @@ Workflow (`.github/workflows/deploy-wasm.yml`):
 - Deploys to Cloudflare Pages (app.hadriangateway.com)
 - Sets `Service-Worker-Allowed: /` and `Cache-Control: no-cache` headers on `sw.js`
 
+## Docs Deploy
+
+Workflow (`.github/workflows/docs.yml`):
+- Triggers on pushes to `main` touching `docs/**`, `openapi/hadrian.openapi.json`
+- Build job: installs UI deps, builds Storybook, builds docs (output: `docs/out/`)
+- Uploads both a GitHub Pages artifact and a generic artifact for reuse
+- Deploys in parallel to:
+  - **GitHub Pages** at hadriangateway.com (with CNAME file)
+  - **Cloudflare Pages** at docs.hadriangateway.com (project: `hadrian-docs`)
+- Uses same `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets as WASM deploy
+
 ## Helm Chart
 
 Workflow (`.github/workflows/helm.yml`) runs:
