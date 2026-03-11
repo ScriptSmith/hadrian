@@ -26,6 +26,11 @@ pub struct LimitsConfig {
 ///
 /// These limits prevent unbounded growth of resources that could cause
 /// performance issues or resource exhaustion. Set any limit to 0 for unlimited.
+///
+/// **Enforcement model:** Limits are best-effort. Under concurrent load, the
+/// `count → compare → create` pattern may allow a small number of requests
+/// to exceed the configured limit. This is acceptable for configuration
+/// guardrails; use database-level constraints for strict enforcement.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -105,6 +110,26 @@ pub struct ResourceLimits {
     /// Maximum SSO group mappings per organization. Default: 500.
     #[serde(default = "default_max_sso_group_mappings_per_org")]
     pub max_sso_group_mappings_per_org: u32,
+
+    /// Maximum members per organization. Default: 10,000.
+    #[serde(default = "default_max_members_per_org")]
+    pub max_members_per_org: u32,
+
+    /// Maximum members per team. Default: 10,000.
+    #[serde(default = "default_max_members_per_team")]
+    pub max_members_per_team: u32,
+
+    /// Maximum members per project. Default: 10,000.
+    #[serde(default = "default_max_members_per_project")]
+    pub max_members_per_project: u32,
+
+    /// Maximum uploaded files per owner (org/team/project/user). Default: 10,000.
+    #[serde(default = "default_max_files_per_owner")]
+    pub max_files_per_owner: u32,
+
+    /// Maximum projects per team. Default: 100.
+    #[serde(default = "default_max_projects_per_team")]
+    pub max_projects_per_team: u32,
 }
 
 impl Default for ResourceLimits {
@@ -129,6 +154,11 @@ impl Default for ResourceLimits {
             max_sso_configs_per_org: default_max_sso_configs_per_org(),
             max_domains_per_sso_config: default_max_domains_per_sso_config(),
             max_sso_group_mappings_per_org: default_max_sso_group_mappings_per_org(),
+            max_members_per_org: default_max_members_per_org(),
+            max_members_per_team: default_max_members_per_team(),
+            max_members_per_project: default_max_members_per_project(),
+            max_files_per_owner: default_max_files_per_owner(),
+            max_projects_per_team: default_max_projects_per_team(),
         }
     }
 }
@@ -207,6 +237,26 @@ fn default_max_domains_per_sso_config() -> u32 {
 
 fn default_max_sso_group_mappings_per_org() -> u32 {
     500
+}
+
+fn default_max_members_per_org() -> u32 {
+    10_000
+}
+
+fn default_max_members_per_team() -> u32 {
+    10_000
+}
+
+fn default_max_members_per_project() -> u32 {
+    10_000
+}
+
+fn default_max_files_per_owner() -> u32 {
+    10_000
+}
+
+fn default_max_projects_per_team() -> u32 {
+    100
 }
 
 /// Rate limiting defaults.

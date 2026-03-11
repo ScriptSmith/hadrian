@@ -281,6 +281,20 @@ impl ProjectRepo for PostgresProjectRepo {
         Ok(row.get::<i64, _>("count"))
     }
 
+    async fn count_by_team(&self, team_id: Uuid, include_deleted: bool) -> DbResult<i64> {
+        let query = if include_deleted {
+            "SELECT COUNT(*) as count FROM projects WHERE team_id = $1"
+        } else {
+            "SELECT COUNT(*) as count FROM projects WHERE team_id = $1 AND deleted_at IS NULL"
+        };
+
+        let row = sqlx::query(query)
+            .bind(team_id)
+            .fetch_one(&self.read_pool)
+            .await?;
+        Ok(row.get::<i64, _>("count"))
+    }
+
     async fn update(&self, id: Uuid, input: UpdateProject) -> DbResult<Project> {
         let has_name_update = input.name.is_some();
         let has_team_update = input.team_id.is_some();

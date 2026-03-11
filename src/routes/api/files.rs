@@ -375,6 +375,32 @@ pub async fn api_v1_files_upload(
         ));
     }
 
+    // Check file limit per owner
+    let max = state.config.limits.resource_limits.max_files_per_owner;
+    if max > 0 {
+        let count = services
+            .files
+            .count_by_owner(owner_type, owner_id)
+            .await
+            .map_err(|e| {
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "count_error",
+                    format!("Failed to count files: {}", e),
+                )
+            })?;
+        if count >= max as i64 {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "limit_exceeded",
+                format!(
+                    "{} has reached the maximum number of files ({max})",
+                    owner_type_name
+                ),
+            ));
+        }
+    }
+
     // Create file with configured storage backend
     let storage_backend = services.files.configured_backend();
     let input = FilesService::create_file_input(

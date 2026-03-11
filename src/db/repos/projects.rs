@@ -19,6 +19,7 @@ pub trait ProjectRepo: Send + Sync {
     async fn get_by_slug(&self, org_id: Uuid, slug: &str) -> DbResult<Option<Project>>;
     async fn list_by_org(&self, org_id: Uuid, params: ListParams) -> DbResult<ListResult<Project>>;
     async fn count_by_org(&self, org_id: Uuid, include_deleted: bool) -> DbResult<i64>;
+    async fn count_by_team(&self, team_id: Uuid, include_deleted: bool) -> DbResult<i64>;
     async fn update(&self, id: Uuid, input: UpdateProject) -> DbResult<Project>;
     async fn delete(&self, id: Uuid) -> DbResult<()>;
 }

@@ -1249,24 +1249,24 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         owner_type: VectorStoreOwnerType,
         owner_id: Uuid,
     ) -> DbResult<i64> {
-        let row = sqlx::query(
+        let row = query(
             "SELECT COUNT(*) as count FROM vector_stores WHERE owner_type = ? AND owner_id = ? AND deleted_at IS NULL",
         )
         .bind(owner_type.as_str())
         .bind(owner_id.to_string())
         .fetch_one(&self.pool)
         .await?;
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col("count"))
     }
 
     async fn count_files_in_vector_store(&self, vector_store_id: Uuid) -> DbResult<i64> {
-        let row = sqlx::query(
+        let row = query(
             "SELECT COUNT(*) as count FROM vector_store_files WHERE vector_store_id = ? AND deleted_at IS NULL",
         )
         .bind(vector_store_id.to_string())
         .fetch_one(&self.pool)
         .await?;
-        Ok(row.get::<i64, _>("count"))
+        Ok(row.col("count"))
     }
 
     // ==================== Aggregates ====================

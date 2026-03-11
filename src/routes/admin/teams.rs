@@ -540,6 +540,17 @@ pub async fn add_member(
         None,
     )?;
 
+    // Check team member limit
+    let max = state.config.limits.resource_limits.max_members_per_team;
+    if max > 0 {
+        let count = services.teams.count_members(team.id).await?;
+        if count >= max as i64 {
+            return Err(AdminError::Conflict(format!(
+                "Team has reached the maximum number of members ({max})"
+            )));
+        }
+    }
+
     let user_id = input.user_id;
     let role = input.role.clone();
     let member = services.teams.add_member(team.id, input).await?;

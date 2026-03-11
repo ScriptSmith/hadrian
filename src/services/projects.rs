@@ -57,6 +57,14 @@ impl ProjectService {
             .await
     }
 
+    /// Count projects for a team
+    pub async fn count_by_team(&self, team_id: Uuid, include_deleted: bool) -> DbResult<i64> {
+        self.db
+            .projects()
+            .count_by_team(team_id, include_deleted)
+            .await
+    }
+
     /// Update a project by ID
     pub async fn update(&self, id: Uuid, input: UpdateProject) -> DbResult<Project> {
         self.db.projects().update(id, input).await

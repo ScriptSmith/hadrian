@@ -405,6 +405,20 @@ impl FilesRepo for SqliteFilesRepo {
         Ok(())
     }
 
+    async fn count_by_owner(
+        &self,
+        owner_type: VectorStoreOwnerType,
+        owner_id: Uuid,
+    ) -> DbResult<i64> {
+        let row =
+            query("SELECT COUNT(*) as count FROM files WHERE owner_type = ? AND owner_id = ?")
+                .bind(owner_type.as_str())
+                .bind(owner_id.to_string())
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(row.col("count"))
+    }
+
     async fn count_file_references(&self, file_id: Uuid) -> DbResult<i64> {
         let result = query(
             r#"

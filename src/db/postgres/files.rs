@@ -406,6 +406,21 @@ impl FilesRepo for PostgresFilesRepo {
         Ok(())
     }
 
+    async fn count_by_owner(
+        &self,
+        owner_type: VectorStoreOwnerType,
+        owner_id: Uuid,
+    ) -> DbResult<i64> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) as count FROM files WHERE owner_type = $1 AND owner_id = $2",
+        )
+        .bind(owner_type.as_str())
+        .bind(owner_id)
+        .fetch_one(&self.read_pool)
+        .await?;
+        Ok(row.get("count"))
+    }
+
     async fn count_file_references(&self, file_id: Uuid) -> DbResult<i64> {
         let result = sqlx::query(
             r#"

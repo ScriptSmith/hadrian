@@ -282,7 +282,7 @@ pub async fn create(
         None,
     )?;
 
-    // Check SSO config limit (DB also enforces one-per-org via UNIQUE constraint)
+    // Check SSO config limit (best-effort; DB UNIQUE constraint is the hard guard)
     let max = state.config.limits.resource_limits.max_sso_configs_per_org;
     if max > 0 {
         let count = services.org_sso_configs.count_by_org(org.id).await?;
@@ -291,16 +291,6 @@ pub async fn create(
                 "Organization has reached the maximum number of SSO configurations ({max})"
             )));
         }
-    } else if services
-        .org_sso_configs
-        .get_by_org_id(org.id)
-        .await?
-        .is_some()
-    {
-        return Err(AdminError::Conflict(format!(
-            "Organization '{}' already has an SSO configuration",
-            org_slug
-        )));
     }
 
     // Validate default_team_id belongs to the org if provided
