@@ -22,14 +22,14 @@ import { usePreferences } from "@/preferences/PreferencesProvider";
 import { useAuth, hasAdminAccess } from "@/auth";
 import { cn } from "@/utils/cn";
 
-interface NavItem {
+export interface NavItem {
   to: string;
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   matchPrefix?: string;
 }
 
-const navItems: NavItem[] = [
+export const navItems: NavItem[] = [
   { to: "/chat", icon: MessageSquare, label: "Chat" },
   { to: "/studio", icon: Palette, label: "Studio" },
   { to: "/projects", icon: FolderOpen, label: "Projects" },
@@ -40,7 +40,7 @@ const navItems: NavItem[] = [
   { to: "/usage", icon: BarChart3, label: "Usage" },
 ];
 
-const adminNavItem: NavItem = {
+export const adminNavItem: NavItem = {
   to: "/admin",
   icon: Shield,
   label: "Admin",
@@ -112,7 +112,7 @@ export function Header({ onMenuClick, showMenuButton = false, className }: Heade
 
       {/* Center: Navigation tabs */}
       <nav
-        className="hidden sm:flex items-center gap-1"
+        className="hidden xl:flex items-center gap-1"
         role="navigation"
         aria-label="Main navigation"
       >

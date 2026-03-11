@@ -1,7 +1,8 @@
 import { useNavigate } from "react-router-dom";
 import { User, LogOut, Settings, Bug } from "lucide-react";
 
-import { useAuth } from "@/auth";
+import { useAuth, hasAdminAccess } from "@/auth";
+import { useConfig } from "@/config/ConfigProvider";
 import {
   Dropdown,
   DropdownContent,
@@ -10,6 +11,7 @@ import {
   DropdownLabel,
   DropdownTrigger,
 } from "@/components/Dropdown/Dropdown";
+import { navItems, adminNavItem } from "@/components/Header/Header";
 import { cn } from "@/utils/cn";
 
 interface UserMenuProps {
@@ -18,7 +20,10 @@ interface UserMenuProps {
 
 export function UserMenu({ className }: UserMenuProps) {
   const { user, logout, isAuthenticated } = useAuth();
+  const { config } = useConfig();
   const navigate = useNavigate();
+  const showAdmin = config?.admin.enabled && hasAdminAccess(user);
+  const allNavItems = showAdmin ? [...navItems, adminNavItem] : navItems;
 
   if (!isAuthenticated) {
     return null;
@@ -58,6 +63,20 @@ export function UserMenu({ className }: UserMenuProps) {
             )}
           </div>
         </DropdownLabel>
+        {/* Page navigation — only visible on mobile where the header tabs are hidden */}
+        <div className="xl:hidden">
+          <DropdownSeparator />
+          <DropdownLabel>Navigate</DropdownLabel>
+          {allNavItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <DropdownItem key={item.to} onClick={() => navigate(item.to)}>
+                <Icon className="mr-2 h-4 w-4" />
+                {item.label}
+              </DropdownItem>
+            );
+          })}
+        </div>
         <DropdownSeparator />
         <DropdownItem onClick={() => navigate("/account")}>
           <Settings className="mr-2 h-4 w-4" />
