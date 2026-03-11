@@ -80,7 +80,7 @@ export function Modal({ open, onClose, children, className }: ModalProps) {
           firstInput.focus();
         } else {
           const firstFocusable = contentRef.current?.querySelector<HTMLElement>(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+            'button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
           );
           if (firstFocusable) {
             firstFocusable.focus();
@@ -161,7 +161,7 @@ export function ModalHeader({ className, children, ...props }: HTMLAttributes<HT
   }
   // Stack title and description vertically, with padding-right for close button
   return (
-    <div className={cn("mb-4 space-y-1.5 pr-8", className)} {...props}>
+    <div className={cn("space-y-1.5 pr-8", className)} {...props}>
       {children}
     </div>
   );

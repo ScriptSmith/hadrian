@@ -9,7 +9,7 @@ import {
   Palette,
   Server,
   Shield,
-  Sparkles,
+  WandSparkles,
   UsersRound,
 } from "lucide-react";
 import { Button } from "@/components/Button/Button";
@@ -141,7 +141,7 @@ export function Header({ onMenuClick, showMenuButton = false, className }: Heade
         <ThemeToggle />
         {isWasm && (
           <Button variant="ghost" size="icon" onClick={openSetupWizard} aria-label="Setup Wizard">
-            <Sparkles className="h-4 w-4" />
+            <WandSparkles className="h-4 w-4" />
           </Button>
         )}
         <UserMenu />

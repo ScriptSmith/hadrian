@@ -30,6 +30,7 @@ import {
 import { Button } from "@/components/Button/Button";
 import { Input } from "@/components/Input/Input";
 import { FormField } from "@/components/FormField/FormField";
+import { HadrianIcon } from "@/components/HadrianIcon/HadrianIcon";
 import { startOpenRouterOAuth } from "./openrouter-oauth";
 
 interface ProviderTemplate {
@@ -130,10 +131,6 @@ export function WasmSetup({
     if (open) setStep("welcome");
   }, [open]);
 
-  // Jump to "done" when OAuth completes (oauthProviderName arrives async)
-  useEffect(() => {
-    if (oauthProviderName) setStep("done");
-  }, [oauthProviderName]);
   const [oauthLoading, setOauthLoading] = useState(false);
   const queryClient = useQueryClient();
 
@@ -303,29 +300,21 @@ function WelcomeStep({
   return (
     <>
       <ModalHeader>
-        <ModalTitle>Welcome to Hadrian</ModalTitle>
-        <ModalDescription>Open-source AI gateway</ModalDescription>
+        <div className="flex items-center gap-3">
+          <HadrianIcon size={36} className="text-foreground shrink-0" />
+          <ModalTitle>Welcome to Hadrian</ModalTitle>
+        </div>
       </ModalHeader>
       <ModalContent>
         <p className="text-sm text-muted-foreground mb-4">
           Hadrian is a free, open-source AI gateway that lets you chat with multiple models side by
           side. This is the browser edition: the gateway runs entirely in your browser.
         </p>
-        <p className="text-xs text-muted-foreground mb-6">
-          For the server version with teams, SSO, guardrails, and more providers, see{" "}
-          <a
-            href="https://hadriangateway.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary underline"
-          >
-            hadriangateway.com
-          </a>
-          .
-        </p>
+
+        <h3 className="text-base font-semibold">Connect your providers</h3>
 
         {hasExistingOpenRouter ? (
-          <div className="mt-6 rounded-lg border border-border bg-muted/30 p-4">
+          <div className="mt-4 rounded-lg border border-border bg-muted/30 p-4">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium">OpenRouter</p>
@@ -338,7 +327,7 @@ function WelcomeStep({
             </div>
           </div>
         ) : (
-          <div className="mt-6 rounded-lg border border-violet-200 bg-violet-50 p-4 dark:border-violet-500/20 dark:bg-violet-500/5">
+          <div className="mt-4 rounded-lg border border-violet-200 bg-violet-50 p-4 dark:border-violet-500/20 dark:bg-violet-500/5">
             <p className="text-sm font-medium mb-1">OpenRouter</p>
             <p className="text-xs text-muted-foreground mb-3">
               Sign in to access 200+ models. No manual API key entry required.
@@ -375,7 +364,18 @@ function WelcomeStep({
           <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-500/20 dark:bg-emerald-500/5">
             <p className="text-sm font-medium mb-1">Ollama</p>
             <p className="text-xs text-muted-foreground mb-3">
-              Found Ollama running at localhost:11434.
+              Found Ollama running at localhost:11434. Requires CORS to be enabled for this domain
+              &mdash;{" "}
+              <a
+                href="https://hadriangateway.com/docs/browser#enable-cors"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary underline"
+              >
+                see setup guide
+                <ExternalLink className="ml-0.5 inline h-3 w-3" />
+              </a>
+              .
             </p>
             <Button
               onClick={onOllamaConnect}
@@ -389,6 +389,17 @@ function WelcomeStep({
               )}
               Connect Ollama
             </Button>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Only models you&apos;ve pulled will appear. Try{" "}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                ollama pull llama3.2
+              </code>{" "}
+              or{" "}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                ollama pull deepseek-r1
+              </code>{" "}
+              to get started.
+            </p>
           </div>
         ) : (
           <div className="mt-3 rounded-lg border border-border bg-muted/30 p-4">
@@ -403,7 +414,7 @@ function WelcomeStep({
               </div>
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
-              Install and start{" "}
+              Use{" "}
               <a
                 href="https://ollama.com"
                 target="_blank"
@@ -413,7 +424,17 @@ function WelcomeStep({
                 Ollama
                 <ExternalLink className="ml-0.5 inline h-3 w-3" />
               </a>{" "}
-              to use local models for free. Re-open this wizard after starting it.
+              to run local models for free. If Ollama is already running, it may need{" "}
+              <a
+                href="https://hadriangateway.com/docs/browser#enable-cors"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary underline"
+              >
+                CORS enabled
+                <ExternalLink className="ml-0.5 inline h-3 w-3" />
+              </a>{" "}
+              to be detected.
             </p>
           </div>
         )}
@@ -422,6 +443,18 @@ function WelcomeStep({
           {hasProvider
             ? "You can also add API keys from OpenAI, Anthropic, or other providers."
             : "Or add your own API keys from OpenAI, Anthropic, or other providers."}
+        </p>
+        <p className="text-xs text-muted-foreground mt-4">
+          For the server version with teams, SSO, guardrails, and more, see{" "}
+          <a
+            href="https://hadriangateway.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary underline"
+          >
+            hadriangateway.com
+          </a>
+          .
         </p>
       </ModalContent>
       <ModalFooter>
@@ -562,7 +595,17 @@ function ProvidersStep({
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-sm font-medium">Ollama</p>
-                <p className="text-xs text-muted-foreground">Local models detected</p>
+                <p className="text-xs text-muted-foreground">
+                  Local models detected &mdash;{" "}
+                  <a
+                    href="https://hadriangateway.com/docs/browser#enable-cors"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary underline"
+                  >
+                    CORS required
+                  </a>
+                </p>
               </div>
               <Button
                 size="sm"

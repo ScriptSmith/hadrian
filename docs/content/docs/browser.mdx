@@ -1,0 +1,141 @@
+---
+title: Browser Edition
+description: Run Hadrian Gateway entirely in your browser with no server required
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The browser edition runs the full Hadrian Gateway in your browser using WebAssembly. No installation,
+no server, no Docker — just open the page and start chatting.
+
+## Quick Start
+
+1. Open [app.hadriangateway.com](https://app.hadriangateway.com)
+2. Connect a provider (OpenRouter is one click, or add your own API keys)
+3. Start chatting
+
+## Using Ollama
+
+[Ollama](https://ollama.com) lets you run LLMs locally for free. Because the browser edition makes
+API calls directly from your browser, Ollama needs to be configured to allow requests from the
+Hadrian origin.
+
+### 1. Install Ollama
+
+Download and install from [ollama.com](https://ollama.com).
+
+### 2. Enable CORS
+
+By default, Ollama only allows requests from `localhost`. The browser edition runs at a different
+origin, so you need to set the `OLLAMA_ORIGINS` environment variable.
+
+<Callout type="warn">
+  Without this step, the browser will block requests to Ollama with a CORS error.
+</Callout>
+
+#### macOS
+
+If you run Ollama as an application:
+
+```bash
+launchctl setenv OLLAMA_ORIGINS "https://app.hadriangateway.com"
+```
+
+Then restart the Ollama application. To allow all origins (less secure, but convenient for
+development):
+
+```bash
+launchctl setenv OLLAMA_ORIGINS "*"
+```
+
+#### Linux (systemd)
+
+```bash
+sudo systemctl edit ollama.service
+```
+
+Add the following under the `[Service]` section:
+
+```ini
+[Service]
+Environment="OLLAMA_ORIGINS=https://app.hadriangateway.com"
+```
+
+Then reload and restart:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart ollama
+```
+
+#### Linux / macOS (manual)
+
+If you run `ollama serve` directly in a terminal:
+
+```bash
+OLLAMA_ORIGINS=https://app.hadriangateway.com ollama serve
+```
+
+#### Windows
+
+1. Quit Ollama from the taskbar
+2. Open **Settings** → search for **"Edit environment variables for your account"**
+3. Add a new variable: `OLLAMA_ORIGINS` = `https://app.hadriangateway.com`
+4. Click OK and restart Ollama
+
+#### Docker
+
+```bash
+docker run -e OLLAMA_ORIGINS=https://app.hadriangateway.com -p 11434:11434 ollama/ollama
+```
+
+### 3. Pull Models
+
+Ollama only serves models that have been downloaded. Pull some models to get started:
+
+```bash
+# Small and fast — great for quick tasks
+ollama pull llama3.2
+
+# Larger and more capable
+ollama pull llama3.3
+
+# Reasoning model
+ollama pull deepseek-r1
+
+# Google's open model
+ollama pull gemma3
+
+# Lightweight and efficient
+ollama pull phi4
+
+# Multilingual with tool use
+ollama pull qwen3
+```
+
+See the full list of available models at [ollama.com/library](https://ollama.com/library).
+
+### 4. Connect in Hadrian
+
+Open the setup wizard (or re-open it from the user menu). If Ollama is running and CORS is
+configured, the wizard will auto-detect it and show a **Connect** button.
+
+If Ollama is not detected, check that:
+
+- Ollama is running (`ollama serve` or the Ollama app)
+- `OLLAMA_ORIGINS` includes the Hadrian origin
+- Ollama is accessible at `http://localhost:11434`
+
+## Limitations
+
+The browser edition has some limitations compared to the server version:
+
+- **No real-time streaming** — responses are buffered (the full response appears at once)
+- **No usage tracking** — token usage is not recorded
+- **No caching, rate limiting, or budgets**
+- **Requires a modern browser** — Chrome 91+, Edge 91+ (module service workers)
+- **Provider API keys are stored in your browser** — they never leave your device, but are only as
+  secure as your browser's storage
+
+For teams, SSO, guardrails, and full feature support, use the
+[server version](/docs/getting-started).
