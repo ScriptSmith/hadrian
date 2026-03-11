@@ -5,7 +5,7 @@ import {
   CheckCircle2,
   XCircle,
   Loader2,
-  Sparkles,
+  WandSparkles,
   Plus,
   Trash2,
   ExternalLink,
@@ -320,7 +320,7 @@ function WelcomeStep({
                 <p className="text-sm font-medium">OpenRouter</p>
                 <p className="text-xs text-muted-foreground">https://openrouter.ai/api/v1</p>
               </div>
-              <div className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400">
+              <div className="flex items-center gap-1.5 text-sm text-green-700 dark:text-green-400">
                 <CheckCircle2 className="h-4 w-4" />
                 Connected
               </div>
@@ -354,7 +354,7 @@ function WelcomeStep({
                 <p className="text-sm font-medium">Ollama</p>
                 <p className="text-xs text-muted-foreground">http://localhost:11434/v1</p>
               </div>
-              <div className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400">
+              <div className="flex items-center gap-1.5 text-sm text-green-700 dark:text-green-400">
                 <CheckCircle2 className="h-4 w-4" />
                 Connected
               </div>
@@ -539,7 +539,7 @@ function ProvidersStep({
                 <p className="text-sm font-medium">OpenRouter</p>
                 <p className="text-xs text-muted-foreground">https://openrouter.ai/api/v1</p>
               </div>
-              <div className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400">
+              <div className="flex items-center gap-1.5 text-sm text-green-700 dark:text-green-400">
                 <CheckCircle2 className="h-4 w-4" />
                 Connected
               </div>
@@ -584,7 +584,7 @@ function ProvidersStep({
                 <p className="text-sm font-medium">Ollama</p>
                 <p className="text-xs text-muted-foreground">http://localhost:11434/v1</p>
               </div>
-              <div className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400">
+              <div className="flex items-center gap-1.5 text-sm text-green-700 dark:text-green-400">
                 <CheckCircle2 className="h-4 w-4" />
                 Connected
               </div>
@@ -695,7 +695,7 @@ function ProviderKeyEntry({
             <p className="text-sm font-medium">{entry.name}</p>
             <p className="text-xs text-muted-foreground">{entry.baseUrl}</p>
           </div>
-          <div className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400">
+          <div className="flex items-center gap-1.5 text-sm text-green-700 dark:text-green-400">
             <CheckCircle2 className="h-4 w-4" />
             Connected
           </div>
@@ -774,7 +774,7 @@ function ProviderKeyEntry({
       {entry.testResult && (
         <div className="mt-2">
           {entry.testResult.status === "ok" ? (
-            <div className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+            <div className="flex items-center gap-1.5 text-xs text-green-700 dark:text-green-400">
               <CheckCircle2 className="h-3 w-3" />
               {entry.testResult.message}
               {entry.testResult.latency_ms != null && (
@@ -807,11 +807,11 @@ function DoneStep({ savedCount, onComplete }: { savedCount: number; onComplete: 
       <ModalContent>
         <div className="flex flex-col items-center py-4 text-center">
           <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-green-500/10">
-            <Sparkles className="h-6 w-6 text-green-600 dark:text-green-400" />
+            <WandSparkles className="h-6 w-6 text-green-700 dark:text-green-400" />
           </div>
           <p className="text-sm text-muted-foreground max-w-sm">
             Manage providers from the <strong>Providers</strong> page in the sidebar, or re-run this
-            wizard from the user menu.
+            wizard using the <WandSparkles className="inline h-3.5 w-3.5" /> icon in the top right.
           </p>
         </div>
       </ModalContent>
