@@ -217,6 +217,7 @@ export function ChatView({
             isStreaming={isStreaming}
             disabled={inputDisabled}
             noModelsSelected={selectedInstances.length === 0}
+            noModelsAvailable={!isLoadingModels && availableModels.length === 0}
             placeholder={inputPlaceholder}
             onSettingsClick={() => setSettingsModalOpen(true)}
             hasSystemPrompt={!!systemPrompt}

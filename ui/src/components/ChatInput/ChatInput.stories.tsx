@@ -168,6 +168,30 @@ export const NoModelsSelected: Story = {
 };
 
 /**
+ * Test: No models available shows "add a provider" message instead of "select a model"
+ */
+export const NoModelsAvailable: Story = {
+  args: {
+    disabled: true,
+    noModelsSelected: true,
+    noModelsAvailable: true,
+    placeholder: "Select a model to start chatting...",
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    // Verify the "no models available" overlay is visible
+    await expect(
+      canvas.getByText("No models available. Add a provider in settings to get started.")
+    ).toBeInTheDocument();
+
+    // Verify textarea is still disabled underneath
+    const textarea = canvas.getByPlaceholderText("Select a model to start chatting...");
+    await expect(textarea).toBeDisabled();
+  },
+};
+
+/**
  * Test: During streaming, send button shows "Stop" and is enabled
  */
 export const Streaming: Story = {

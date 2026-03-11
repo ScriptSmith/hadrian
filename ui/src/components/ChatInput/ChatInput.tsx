@@ -1,4 +1,5 @@
 import {
+  AlertCircle,
   ArrowsUpFromLine,
   MousePointerClick,
   Paperclip,
@@ -117,6 +118,8 @@ interface ChatInputProps {
   disabled?: boolean;
   /** Whether no models are selected (shows a prominent hint overlay) */
   noModelsSelected?: boolean;
+  /** Whether no models are available at all (e.g. no providers configured) */
+  noModelsAvailable?: boolean;
   placeholder?: string;
   hasSystemPrompt?: boolean;
   /** Whether multiple models are selected (shows history mode toggle) */
@@ -156,6 +159,7 @@ export function ChatInput({
   isStreaming = false,
   disabled = false,
   noModelsSelected = false,
+  noModelsAvailable = false,
   placeholder = "Type a message...",
   hasSystemPrompt = false,
   hasMultipleModels = false,
@@ -392,8 +396,17 @@ export function ChatInput({
         {noModelsSelected && (
           <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-card/80 backdrop-blur-[1px]">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <MousePointerClick className="h-4 w-4" />
-              <span>Select a model above to start chatting</span>
+              {noModelsAvailable ? (
+                <>
+                  <AlertCircle className="h-4 w-4" />
+                  <span>No models available. Add a provider in settings to get started.</span>
+                </>
+              ) : (
+                <>
+                  <MousePointerClick className="h-4 w-4" />
+                  <span>Select a model above to start chatting</span>
+                </>
+              )}
             </div>
           </div>
         )}
