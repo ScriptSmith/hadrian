@@ -7,6 +7,7 @@ import type {
   Organization,
   User,
   Project,
+  Team,
   ApiKey,
   DynamicProvider,
   DbModelPricing,
@@ -61,6 +62,33 @@ const mockProjects: Project[] = [
     team_id: null,
     created_at: daysAgo(90),
     updated_at: daysAgo(90),
+  },
+];
+
+const mockTeams: Team[] = [
+  {
+    id: "team-abc",
+    name: "Engineering",
+    slug: "engineering",
+    org_id: "org-123",
+    created_at: daysAgo(150),
+    updated_at: daysAgo(10),
+  },
+  {
+    id: "team-def",
+    name: "Data Science",
+    slug: "data-science",
+    org_id: "org-123",
+    created_at: daysAgo(120),
+    updated_at: daysAgo(25),
+  },
+  {
+    id: "team-ghi",
+    name: "Product",
+    slug: "product",
+    org_id: "org-123",
+    created_at: daysAgo(90),
+    updated_at: daysAgo(5),
   },
 ];
 
@@ -596,6 +624,10 @@ const createDecorator = () => (Story: React.ComponentType) => {
                 element={<div>Project Detail Page</div>}
               />
               <Route
+                path="/admin/organizations/:slug/teams/:teamSlug"
+                element={<div>Team Detail Page</div>}
+              />
+              <Route
                 path="/admin/organizations/:slug/sso-config"
                 element={<div>SSO Config Page</div>}
               />
@@ -625,6 +657,9 @@ const defaultHandlers = [
   }),
   http.get("*/admin/v1/organizations/:orgSlug/projects", () => {
     return HttpResponse.json({ data: mockProjects, pagination: { limit: 100, has_more: false } });
+  }),
+  http.get("*/admin/v1/organizations/:orgSlug/teams", () => {
+    return HttpResponse.json({ data: mockTeams, pagination: { limit: 100, has_more: false } });
   }),
   http.get("*/admin/v1/organizations/:orgSlug/members", () => {
     return HttpResponse.json({ data: mockMembers, pagination: { limit: 100, has_more: false } });
@@ -748,6 +783,12 @@ export const Empty: Story = {
           return HttpResponse.json(mockOrg);
         }),
         http.get("*/admin/v1/organizations/:orgSlug/projects", () => {
+          return HttpResponse.json({
+            data: [],
+            pagination: { limit: 100, has_more: false },
+          });
+        }),
+        http.get("*/admin/v1/organizations/:orgSlug/teams", () => {
           return HttpResponse.json({
             data: [],
             pagination: { limit: 100, has_more: false },

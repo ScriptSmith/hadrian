@@ -12,6 +12,7 @@ import {
   Trash2,
   Shield,
   BarChart3,
+  Building2,
 } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
@@ -25,6 +26,7 @@ import {
   apiKeyListByOrgOptions,
   dynamicProviderListByOrgOptions,
   modelPricingListByOrgOptions,
+  teamListOptions,
   orgMemberAddMutation,
   orgMemberRemoveMutation,
   userListOptions,
@@ -32,6 +34,7 @@ import {
 import type {
   User,
   Project,
+  Team,
   ApiKey,
   DynamicProvider,
   DbModelPricing,
@@ -58,10 +61,19 @@ import { Badge } from "@/components/Badge/Badge";
 import { formatDateTime, formatCurrency } from "@/utils/formatters";
 import UsageDashboard from "@/components/UsageDashboard/UsageDashboard";
 
-type TabId = "projects" | "members" | "api-keys" | "providers" | "pricing" | "sso" | "usage";
+type TabId =
+  | "projects"
+  | "teams"
+  | "members"
+  | "api-keys"
+  | "providers"
+  | "pricing"
+  | "sso"
+  | "usage";
 
 const tabs: Tab<TabId>[] = [
   { id: "projects", label: "Projects", icon: <FolderKanban className="h-4 w-4" /> },
+  { id: "teams", label: "Teams", icon: <Building2 className="h-4 w-4" /> },
   { id: "members", label: "Members", icon: <Users className="h-4 w-4" /> },
   { id: "api-keys", label: "API Keys", icon: <Key className="h-4 w-4" /> },
   { id: "providers", label: "Providers", icon: <Server className="h-4 w-4" /> },
@@ -71,6 +83,7 @@ const tabs: Tab<TabId>[] = [
 ];
 
 const projectColumnHelper = createColumnHelper<Project>();
+const teamColumnHelper = createColumnHelper<Team>();
 const userColumnHelper = createColumnHelper<User>();
 const apiKeyColumnHelper = createColumnHelper<ApiKey>();
 const providerColumnHelper = createColumnHelper<DynamicProvider>();
@@ -109,6 +122,12 @@ export default function OrganizationDetailPage() {
   const { data: projects, isLoading: projectsLoading } = useQuery({
     ...projectListOptions({ path: { org_slug: slug! } }),
     enabled: activeTab === "projects",
+  });
+
+  // Fetch teams
+  const { data: teams, isLoading: teamsLoading } = useQuery({
+    ...teamListOptions({ path: { org_slug: slug! } }),
+    enabled: activeTab === "teams",
   });
 
   // Fetch members
@@ -225,6 +244,28 @@ export default function OrganizationDetailPage() {
       cell: (info) => <CodeBadge>{info.getValue()}</CodeBadge>,
     }),
     projectColumnHelper.accessor("created_at", {
+      header: "Created",
+      cell: (info) => formatDateTime(info.getValue()),
+    }),
+  ];
+
+  const teamColumns = [
+    teamColumnHelper.accessor("name", {
+      header: "Name",
+      cell: (info) => (
+        <Link
+          to={`/admin/organizations/${slug}/teams/${info.row.original.slug}`}
+          className="font-medium text-primary hover:underline"
+        >
+          {info.getValue()}
+        </Link>
+      ),
+    }),
+    teamColumnHelper.accessor("slug", {
+      header: "Slug",
+      cell: (info) => <CodeBadge>{info.getValue()}</CodeBadge>,
+    }),
+    teamColumnHelper.accessor("created_at", {
       header: "Created",
       cell: (info) => formatDateTime(info.getValue()),
     }),
@@ -395,6 +436,16 @@ export default function OrganizationDetailPage() {
               emptyMessage="No projects in this organization."
               searchColumn="name"
               searchPlaceholder="Search projects..."
+            />
+          )}
+          {activeTab === "teams" && (
+            <DataTable
+              columns={teamColumns}
+              data={teams?.data || []}
+              isLoading={teamsLoading}
+              emptyMessage="No teams in this organization."
+              searchColumn="name"
+              searchPlaceholder="Search teams..."
             />
           )}
           {activeTab === "members" && (
