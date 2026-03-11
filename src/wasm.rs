@@ -342,13 +342,12 @@ async fn convert_request(
 }
 
 /// Convert `axum::Response` → `web_sys::Response`.
+///
+/// Streaming responses (SSE) are returned with a `ReadableStream` body so the
+/// browser receives chunks in real time. Non-streaming responses are fully
+/// buffered first (simpler and fine for small JSON payloads).
 async fn convert_response(response: Response) -> Result<web_sys::Response, JsError> {
     let (parts, body) = response.into_parts();
-
-    let bytes = http_body_util::BodyExt::collect(body)
-        .await
-        .map_err(|e| JsError::new(&format!("Failed to read response body: {e}")))?
-        .to_bytes();
 
     let init = web_sys::ResponseInit::new();
     init.set_status(parts.status.as_u16());
@@ -359,21 +358,82 @@ async fn convert_response(response: Response) -> Result<web_sys::Response, JsErr
             let _ = headers.set(key.as_str(), v);
         }
     }
-    // Ensure content-type is set for JSON responses
-    if !parts.headers.contains_key(http::header::CONTENT_TYPE) && !bytes.is_empty() {
-        let _ = headers.set("content-type", "application/json");
-    }
-    init.set_headers(&headers.into());
 
-    let body_js = if bytes.is_empty() {
-        None
+    let is_sse = parts
+        .headers
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.contains("text/event-stream"));
+
+    if is_sse {
+        init.set_headers(&headers.into());
+        let stream = body_to_readable_stream(body);
+        web_sys::Response::new_with_opt_readable_stream_and_init(Some(&stream), &init)
+            .map_err(|_| JsError::new("Failed to create streaming response"))
     } else {
-        let uint8 = js_sys::Uint8Array::from(bytes.as_ref());
-        Some(uint8.into())
-    };
+        let bytes = http_body_util::BodyExt::collect(body)
+            .await
+            .map_err(|e| JsError::new(&format!("Failed to read response body: {e}")))?
+            .to_bytes();
 
-    web_sys::Response::new_with_opt_buffer_source_and_init(body_js.as_ref(), &init)
-        .map_err(|_| JsError::new("Failed to create response"))
+        if !parts.headers.contains_key(http::header::CONTENT_TYPE) && !bytes.is_empty() {
+            let _ = headers.set("content-type", "application/json");
+        }
+        init.set_headers(&headers.into());
+
+        let body_js = if bytes.is_empty() {
+            None
+        } else {
+            let uint8 = js_sys::Uint8Array::from(bytes.as_ref());
+            Some(uint8.into())
+        };
+
+        web_sys::Response::new_with_opt_buffer_source_and_init(body_js.as_ref(), &init)
+            .map_err(|_| JsError::new("Failed to create response"))
+    }
+}
+
+/// Create a pull-based `ReadableStream` that yields body frames as they arrive.
+fn body_to_readable_stream(body: axum::body::Body) -> web_sys::ReadableStream {
+    use std::{cell::RefCell, rc::Rc};
+
+    let body = Rc::new(RefCell::new(body));
+
+    let pull = Closure::wrap(Box::new(move |controller: JsValue| -> js_sys::Promise {
+        let body = body.clone();
+        wasm_bindgen_futures::future_to_promise(async move {
+            use http_body_util::BodyExt;
+
+            let mut body = body.borrow_mut();
+            match body.frame().await {
+                Some(Ok(frame)) => {
+                    if let Some(data) = frame.data_ref() {
+                        let uint8 = js_sys::Uint8Array::from(data.as_ref());
+                        let enqueue: js_sys::Function =
+                            js_sys::Reflect::get(&controller, &"enqueue".into())
+                                .unwrap()
+                                .unchecked_into();
+                        let _ = enqueue.call1(&controller, &uint8);
+                    }
+                    // Non-data frames (trailers) are ignored; pull will be called again.
+                }
+                Some(Err(_)) | None => {
+                    let close: js_sys::Function =
+                        js_sys::Reflect::get(&controller, &"close".into())
+                            .unwrap()
+                            .unchecked_into();
+                    let _ = close.call0(&controller);
+                }
+            }
+            Ok(JsValue::UNDEFINED)
+        })
+    }) as Box<dyn FnMut(JsValue) -> js_sys::Promise>);
+
+    let source = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&source, &"pull".into(), pull.as_ref().unchecked_ref());
+    pull.forget(); // leak closure so it lives as long as the stream
+
+    web_sys::ReadableStream::new_with_underlying_source(&source).unwrap()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

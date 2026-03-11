@@ -18,11 +18,9 @@ use convert::{
     convert_stop, convert_tool_choice, convert_tools, supports_adaptive_thinking,
 };
 use serde::Deserialize;
-#[cfg(not(target_arch = "wasm32"))]
 use stream::{AnthropicToOpenAIStream, AnthropicToResponsesStream};
 use types::{AnthropicMetadata, AnthropicRequest, AnthropicResponse};
 
-#[cfg(not(target_arch = "wasm32"))]
 use crate::providers::response::streaming_response;
 use crate::{
     api_types::{
@@ -241,28 +239,28 @@ impl Provider for AnthropicProvider {
         }
 
         if stream {
+            // Transform Anthropic SSE events to OpenAI-compatible format
+            use futures_util::StreamExt;
+
+            let byte_stream =
+                response
+                    .bytes_stream()
+                    .map(|result| -> Result<bytes::Bytes, std::io::Error> {
+                        result.map_err(std::io::Error::other)
+                    });
+            let transformed_stream =
+                AnthropicToOpenAIStream::new(byte_stream, &self.streaming_buffer);
+
             #[cfg(not(target_arch = "wasm32"))]
             {
-                // Transform Anthropic SSE events to OpenAI-compatible format
-                use futures_util::StreamExt;
-
-                let byte_stream =
-                    response
-                        .bytes_stream()
-                        .map(|result| -> Result<bytes::Bytes, std::io::Error> {
-                            result.map_err(std::io::Error::other)
-                        });
-                let transformed_stream =
-                    AnthropicToOpenAIStream::new(byte_stream, &self.streaming_buffer);
-
                 streaming_response(status, transformed_stream)
             }
             #[cfg(target_arch = "wasm32")]
             {
-                // WASM reqwest streams are !Send; buffer the full response
-                let anthropic_response: AnthropicResponse = response.json().await?;
-                let openai_response = convert_response(anthropic_response);
-                json_response(status, &openai_response)
+                streaming_response(
+                    status,
+                    crate::compat::AssertSendStream(transformed_stream),
+                )
             }
         } else {
             let anthropic_response: AnthropicResponse = response.json().await?;
@@ -380,32 +378,28 @@ impl Provider for AnthropicProvider {
         }
 
         if stream {
+            // Transform Anthropic SSE events to OpenAI Responses API format
+            use futures_util::StreamExt;
+
+            let byte_stream =
+                response
+                    .bytes_stream()
+                    .map(|result| -> Result<bytes::Bytes, std::io::Error> {
+                        result.map_err(std::io::Error::other)
+                    });
+            let transformed_stream =
+                AnthropicToResponsesStream::new(byte_stream, &self.streaming_buffer);
+
             #[cfg(not(target_arch = "wasm32"))]
             {
-                // Transform Anthropic SSE events to OpenAI Responses API format
-                use futures_util::StreamExt;
-
-                let byte_stream =
-                    response
-                        .bytes_stream()
-                        .map(|result| -> Result<bytes::Bytes, std::io::Error> {
-                            result.map_err(std::io::Error::other)
-                        });
-                let transformed_stream =
-                    AnthropicToResponsesStream::new(byte_stream, &self.streaming_buffer);
-
                 streaming_response(status, transformed_stream)
             }
             #[cfg(target_arch = "wasm32")]
             {
-                // WASM reqwest streams are !Send; buffer the full response
-                let anthropic_response: AnthropicResponse = response.json().await?;
-                let responses_response = convert_anthropic_to_responses_response(
-                    anthropic_response,
-                    payload.reasoning.as_ref(),
-                    payload.user,
-                );
-                json_response(status, &responses_response)
+                streaming_response(
+                    status,
+                    crate::compat::AssertSendStream(transformed_stream),
+                )
             }
         } else {
             let anthropic_response: AnthropicResponse = response.json().await?;

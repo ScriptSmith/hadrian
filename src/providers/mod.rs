@@ -525,29 +525,20 @@ async fn build_response(
 ) -> Result<Response, ProviderError> {
     let status = response.status();
 
-    let body = if stream {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            Body::from_stream(response.bytes_stream())
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            // WASM reqwest streams are !Send; buffer the full response instead
-            Body::from(response.bytes().await?)
-        }
-    } else {
-        Body::from(response.bytes().await?)
-    };
-
-    let mut builder = Response::builder()
-        .status(status)
-        .header(CONTENT_TYPE, "application/json");
-
     if stream {
-        builder = builder.header("Transfer-Encoding", "chunked");
-    }
+        #[cfg(not(target_arch = "wasm32"))]
+        let byte_stream = response.bytes_stream();
+        #[cfg(target_arch = "wasm32")]
+        let byte_stream = crate::compat::AssertSendStream(response.bytes_stream());
 
-    Ok(builder.body(body)?)
+        response::streaming_response(status, byte_stream)
+    } else {
+        Response::builder()
+            .status(status)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(response.bytes().await?))
+            .map_err(ProviderError::ResponseBuilder)
+    }
 }
 
 /// Inject cost calculation into an existing response

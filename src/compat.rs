@@ -81,6 +81,34 @@ impl<F: std::future::Future> std::future::Future for AssertSend<F> {
     }
 }
 
+/// A stream wrapper that asserts `Send` for `!Send` streams on wasm32.
+///
+/// Like [`AssertSend`] but for `Stream` instead of `Future`. This enables
+/// `Body::from_stream()` with reqwest byte streams which are `!Send` on WASM.
+///
+/// # Safety
+///
+/// WASM is single-threaded, so `Send` is vacuously satisfied.
+#[cfg(target_arch = "wasm32")]
+pub struct AssertSendStream<S>(pub S);
+
+#[cfg(target_arch = "wasm32")]
+// SAFETY: wasm32 is single-threaded; Send is vacuously satisfied.
+unsafe impl<S> Send for AssertSendStream<S> {}
+
+#[cfg(target_arch = "wasm32")]
+impl<S: futures_util::Stream> futures_util::Stream for AssertSendStream<S> {
+    type Item = S::Item;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        // SAFETY: We only project through the newtype; pinning is preserved.
+        unsafe { self.map_unchecked_mut(|s| &mut s.0) }.poll_next(cx)
+    }
+}
+
 /// Wraps any handler function so its return future is `Send` (via [`AssertSend`]).
 ///
 /// This is a newtype used by the [`wasm_routing`] module's drop-in routing functions.

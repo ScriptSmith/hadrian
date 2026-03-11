@@ -20,9 +20,7 @@
 //! ```
 
 use axum::{body::Body, response::Response};
-#[cfg(not(target_arch = "wasm32"))]
 use bytes::Bytes;
-#[cfg(not(target_arch = "wasm32"))]
 use futures_util::Stream;
 use http::StatusCode;
 use serde::Serialize;
@@ -75,7 +73,6 @@ pub fn json_response<T: Serialize>(
 /// let transformed = AnthropicToOpenAIStream::new(byte_stream, &streaming_buffer);
 /// streaming_response(StatusCode::OK, transformed)
 /// ```
-#[cfg(not(target_arch = "wasm32"))]
 pub fn streaming_response<S, E>(status: StatusCode, stream: S) -> Result<Response, ProviderError>
 where
     S: Stream<Item = Result<Bytes, E>> + Send + 'static,
