@@ -302,6 +302,20 @@ impl ProjectRepo for SqliteProjectRepo {
         Ok(row.col::<i64>("count"))
     }
 
+    async fn count_by_team(&self, team_id: Uuid, include_deleted: bool) -> DbResult<i64> {
+        let sql = if include_deleted {
+            "SELECT COUNT(*) as count FROM projects WHERE team_id = ?"
+        } else {
+            "SELECT COUNT(*) as count FROM projects WHERE team_id = ? AND deleted_at IS NULL"
+        };
+
+        let row = query(sql)
+            .bind(team_id.to_string())
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.col::<i64>("count"))
+    }
+
     async fn update(&self, id: Uuid, input: UpdateProject) -> DbResult<Project> {
         let has_name_update = input.name.is_some();
         let has_team_update = input.team_id.is_some();

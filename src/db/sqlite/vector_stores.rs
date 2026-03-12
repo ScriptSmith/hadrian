@@ -1242,6 +1242,33 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         Ok(result.rows_affected())
     }
 
+    // ==================== Counts ====================
+
+    async fn count_by_owner(
+        &self,
+        owner_type: VectorStoreOwnerType,
+        owner_id: Uuid,
+    ) -> DbResult<i64> {
+        let row = query(
+            "SELECT COUNT(*) as count FROM vector_stores WHERE owner_type = ? AND owner_id = ? AND deleted_at IS NULL",
+        )
+        .bind(owner_type.as_str())
+        .bind(owner_id.to_string())
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.col("count"))
+    }
+
+    async fn count_files_in_vector_store(&self, vector_store_id: Uuid) -> DbResult<i64> {
+        let row = query(
+            "SELECT COUNT(*) as count FROM vector_store_files WHERE vector_store_id = ? AND deleted_at IS NULL",
+        )
+        .bind(vector_store_id.to_string())
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.col("count"))
+    }
+
     // ==================== Aggregates ====================
     // Note: Chunk operations are handled by the VectorStore trait,
     // as chunks are stored in the vector database (pgvector/Qdrant), not the relational database.

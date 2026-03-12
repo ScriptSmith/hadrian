@@ -319,6 +319,80 @@ pub async fn create(
         }
     }
 
+    // Check per-scope API key limits
+    let limits = &state.config.limits.resource_limits;
+    match &input.owner {
+        crate::models::ApiKeyOwner::Organization { org_id } => {
+            let max = limits.max_api_keys_per_org;
+            if max > 0 {
+                let count = services.api_keys.count_by_org(*org_id, false).await?;
+                if count >= max as i64 {
+                    return Err(AdminError::Conflict(format!(
+                        "Organization has reached the maximum number of API keys ({max})"
+                    )));
+                }
+            }
+        }
+        crate::models::ApiKeyOwner::Team { team_id } => {
+            let max = limits.max_api_keys_per_team;
+            if max > 0 {
+                let count = services.api_keys.count_by_team(*team_id, false).await?;
+                if count >= max as i64 {
+                    return Err(AdminError::Conflict(format!(
+                        "Team has reached the maximum number of API keys ({max})"
+                    )));
+                }
+            }
+        }
+        crate::models::ApiKeyOwner::Project { project_id } => {
+            let max = limits.max_api_keys_per_project;
+            if max > 0 {
+                let count = services
+                    .api_keys
+                    .count_by_project(*project_id, false)
+                    .await?;
+                if count >= max as i64 {
+                    return Err(AdminError::Conflict(format!(
+                        "Project has reached the maximum number of API keys ({max})"
+                    )));
+                }
+            }
+        }
+        crate::models::ApiKeyOwner::User { user_id } => {
+            let max = limits.max_api_keys_per_user;
+            if max > 0 {
+                let count = services.api_keys.count_by_user(*user_id, false).await?;
+                if count >= max as i64 {
+                    return Err(AdminError::Conflict(format!(
+                        "User has reached the maximum number of API keys ({max})"
+                    )));
+                }
+            }
+        }
+        crate::models::ApiKeyOwner::ServiceAccount { service_account_id } => {
+            // Service accounts belong to an org — apply the org-level limit
+            let sa = services
+                .service_accounts
+                .get_by_id(*service_account_id)
+                .await?
+                .ok_or_else(|| {
+                    AdminError::NotFound(format!(
+                        "Service account '{}' not found",
+                        service_account_id
+                    ))
+                })?;
+            let max = limits.max_api_keys_per_org;
+            if max > 0 {
+                let count = services.api_keys.count_by_org(sa.org_id, false).await?;
+                if count >= max as i64 {
+                    return Err(AdminError::Conflict(format!(
+                        "Organization has reached the maximum number of API keys ({max})"
+                    )));
+                }
+            }
+        }
+    }
+
     // Get the key generation prefix from config
     let prefix = state.config.auth.api_key_config().generation_prefix();
 

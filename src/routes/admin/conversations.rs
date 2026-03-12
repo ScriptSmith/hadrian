@@ -73,6 +73,24 @@ pub async fn create(
         }
     }
 
+    // Check conversation limit
+    let max = state
+        .config
+        .limits
+        .resource_limits
+        .max_conversations_per_owner;
+    if max > 0 {
+        let count = services
+            .conversations
+            .count_by_owner(input.owner.owner_type(), input.owner.owner_id(), false)
+            .await?;
+        if count >= max as i64 {
+            return Err(AdminError::Conflict(format!(
+                "Owner has reached the maximum number of conversations ({max})"
+            )));
+        }
+    }
+
     let conversation = services.conversations.create(input).await?;
     Ok((StatusCode::CREATED, Json(conversation)))
 }

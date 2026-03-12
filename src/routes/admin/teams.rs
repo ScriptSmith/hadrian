@@ -91,6 +91,17 @@ pub async fn create(
         None,
     )?;
 
+    // Check team limit
+    let max = state.config.limits.resource_limits.max_teams_per_org;
+    if max > 0 {
+        let count = services.teams.count_by_org(org.id, false).await?;
+        if count >= max as i64 {
+            return Err(AdminError::Conflict(format!(
+                "Organization has reached the maximum number of teams ({max})"
+            )));
+        }
+    }
+
     let team = services.teams.create(org.id, input).await?;
 
     // Log audit event (fire-and-forget)
@@ -528,6 +539,17 @@ pub async fn add_member(
         Some(&team.id.to_string()),
         None,
     )?;
+
+    // Check team member limit
+    let max = state.config.limits.resource_limits.max_members_per_team;
+    if max > 0 {
+        let count = services.teams.count_members(team.id).await?;
+        if count >= max as i64 {
+            return Err(AdminError::Conflict(format!(
+                "Team has reached the maximum number of members ({max})"
+            )));
+        }
+    }
 
     let user_id = input.user_id;
     let role = input.role.clone();

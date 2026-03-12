@@ -282,7 +282,8 @@ pub async fn create(
         None,
     )?;
 
-    // Check if org already has an SSO config
+    // Check if org already has an SSO config (DB UNIQUE constraint is the hard guard,
+    // but this gives a clean 409 instead of an unhandled constraint violation)
     if services
         .org_sso_configs
         .get_by_org_id(org.id)

@@ -175,6 +175,18 @@ pub trait VectorStoresRepo: Send + Sync {
     /// Used when deleting a file to clean up any soft-deleted references first.
     async fn hard_delete_soft_deleted_references(&self, file_id: Uuid) -> DbResult<u64>;
 
+    // ==================== Counts ====================
+
+    /// Count vector stores by owner (excluding soft-deleted).
+    async fn count_by_owner(
+        &self,
+        owner_type: VectorStoreOwnerType,
+        owner_id: Uuid,
+    ) -> DbResult<i64>;
+
+    /// Count active (non-deleted) files in a vector store.
+    async fn count_files_in_vector_store(&self, vector_store_id: Uuid) -> DbResult<i64>;
+
     // ==================== Aggregates ====================
     // Note: Chunk operations (create, get, delete) are handled by the VectorStore trait,
     // as chunks are stored in the vector database (pgvector/Qdrant), not the relational database.

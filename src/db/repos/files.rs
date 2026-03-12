@@ -40,6 +40,13 @@ pub trait FilesRepo: Send + Sync {
         status_details: Option<String>,
     ) -> DbResult<()>;
 
+    /// Count files by owner
+    async fn count_by_owner(
+        &self,
+        owner_type: VectorStoreOwnerType,
+        owner_id: Uuid,
+    ) -> DbResult<i64>;
+
     /// Count references to a file across collections
     /// Used to determine if a file can be deleted
     async fn count_file_references(&self, file_id: Uuid) -> DbResult<i64>;

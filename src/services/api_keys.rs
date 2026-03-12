@@ -75,6 +75,14 @@ impl ApiKeyService {
             .await
     }
 
+    /// Count API keys for a team
+    pub async fn count_by_team(&self, team_id: Uuid, include_revoked: bool) -> DbResult<i64> {
+        self.db
+            .api_keys()
+            .count_by_team(team_id, include_revoked)
+            .await
+    }
+
     /// Count API keys for a project
     pub async fn count_by_project(&self, project_id: Uuid, include_revoked: bool) -> DbResult<i64> {
         self.db

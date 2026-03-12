@@ -53,6 +53,15 @@ impl FilesService {
         self.storage.backend_name()
     }
 
+    /// Count files by owner.
+    pub async fn count_by_owner(
+        &self,
+        owner_type: VectorStoreOwnerType,
+        owner_id: Uuid,
+    ) -> DbResult<i64> {
+        self.db.files().count_by_owner(owner_type, owner_id).await
+    }
+
     /// Upload a new file.
     ///
     /// The file is stored according to the configured storage backend:

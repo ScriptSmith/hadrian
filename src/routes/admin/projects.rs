@@ -74,6 +74,31 @@ pub async fn create(
         None,
     )?;
 
+    // Check project limit per org
+    let limits = &state.config.limits.resource_limits;
+    let max = limits.max_projects_per_org;
+    if max > 0 {
+        let count = services.projects.count_by_org(org.id, false).await?;
+        if count >= max as i64 {
+            return Err(AdminError::Conflict(format!(
+                "Organization has reached the maximum number of projects ({max})"
+            )));
+        }
+    }
+
+    // Check project limit per team
+    if let Some(team_id) = input.team_id {
+        let max_per_team = limits.max_projects_per_team;
+        if max_per_team > 0 {
+            let count = services.projects.count_by_team(team_id, false).await?;
+            if count >= max_per_team as i64 {
+                return Err(AdminError::Conflict(format!(
+                    "Team has reached the maximum number of projects ({max_per_team})"
+                )));
+            }
+        }
+    }
+
     let project = services.projects.create(org.id, input).await?;
 
     // Auto-add the creator as an admin member of the project

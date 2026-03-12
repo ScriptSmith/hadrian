@@ -506,6 +506,17 @@ pub async fn add_org_member(
         None,
     )?;
 
+    // Check org member limit
+    let max = state.config.limits.resource_limits.max_members_per_org;
+    if max > 0 {
+        let count = services.users.count_org_members(org.id, false).await?;
+        if count >= max as i64 {
+            return Err(AdminError::Conflict(format!(
+                "Organization has reached the maximum number of members ({max})"
+            )));
+        }
+    }
+
     services
         .users
         .add_to_org(
@@ -817,6 +828,20 @@ pub async fn add_project_member(
         None,
         Some(&project.id.to_string()),
     )?;
+
+    // Check project member limit
+    let max = state.config.limits.resource_limits.max_members_per_project;
+    if max > 0 {
+        let count = services
+            .users
+            .count_project_members(project.id, false)
+            .await?;
+        if count >= max as i64 {
+            return Err(AdminError::Conflict(format!(
+                "Project has reached the maximum number of members ({max})"
+            )));
+        }
+    }
 
     services
         .users
