@@ -282,17 +282,6 @@ pub async fn create(
         None,
     )?;
 
-    // Check SSO config limit (best-effort; DB UNIQUE constraint is the hard guard)
-    let max = state.config.limits.resource_limits.max_sso_configs_per_org;
-    if max > 0 {
-        let count = services.org_sso_configs.count_by_org(org.id).await?;
-        if count >= max as i64 {
-            return Err(AdminError::Conflict(format!(
-                "Organization has reached the maximum number of SSO configurations ({max})"
-            )));
-        }
-    }
-
     // Validate default_team_id belongs to the org if provided
     if let Some(team_id) = input.default_team_id {
         let team = services

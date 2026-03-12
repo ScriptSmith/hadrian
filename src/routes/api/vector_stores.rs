@@ -1482,6 +1482,19 @@ pub async fn api_v1_vector_stores_create_file_batch(
         vector_store.owner_id,
     )?;
 
+    // Cap batch size to prevent oversized requests from causing expensive DB operations
+    const MAX_BATCH_SIZE: usize = 500;
+    if input.file_ids.len() > MAX_BATCH_SIZE {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "batch_too_large",
+            format!(
+                "Batch size {} exceeds maximum of {MAX_BATCH_SIZE}",
+                input.file_ids.len()
+            ),
+        ));
+    }
+
     // Check files-per-vector-store limit
     let max = state
         .config
