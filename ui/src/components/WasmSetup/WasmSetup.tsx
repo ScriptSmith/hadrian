@@ -380,7 +380,7 @@ function WelcomeStep({
             <Button
               onClick={onOllamaConnect}
               disabled={ollamaConnecting}
-              className="w-full bg-emerald-700 text-white hover:bg-emerald-800 dark:bg-emerald-600 dark:hover:bg-emerald-500"
+              className="w-full bg-emerald-700 text-white hover:bg-emerald-800 dark:bg-emerald-800 dark:hover:bg-emerald-700"
             >
               {ollamaConnecting ? (
                 <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
@@ -611,7 +611,7 @@ function ProvidersStep({
                 size="sm"
                 onClick={onOllamaConnect}
                 disabled={ollamaConnecting}
-                className="shrink-0 bg-emerald-700 text-white hover:bg-emerald-800 dark:bg-emerald-600 dark:hover:bg-emerald-500"
+                className="shrink-0 bg-emerald-700 text-white hover:bg-emerald-800 dark:bg-emerald-800 dark:hover:bg-emerald-700"
               >
                 {ollamaConnecting ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />

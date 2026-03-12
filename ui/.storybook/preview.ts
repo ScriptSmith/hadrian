@@ -3,6 +3,7 @@ import React from "react";
 import { initialize, mswLoader } from "msw-storybook-addon";
 import "../src/index.css";
 import { PreferencesProvider } from "../src/preferences/PreferencesProvider";
+import { defaultPreferences } from "../src/preferences/types";
 
 // Initialize MSW
 // Use relative URL so it works both standalone and when embedded in docs
@@ -40,6 +41,20 @@ const preview: Preview = {
       const theme = context.globals.theme || "light";
       document.documentElement.classList.remove("light", "dark");
       document.documentElement.classList.add(theme);
+      // Sync localStorage so PreferencesProvider doesn't override the storybook theme
+      try {
+        const raw = localStorage.getItem("hadrian-preferences");
+        const stored = raw ? JSON.parse(raw) : {};
+        localStorage.setItem(
+          "hadrian-preferences",
+          JSON.stringify({ ...defaultPreferences, ...stored, theme })
+        );
+      } catch {
+        localStorage.setItem(
+          "hadrian-preferences",
+          JSON.stringify({ ...defaultPreferences, theme })
+        );
+      }
       return React.createElement(PreferencesProvider, null, React.createElement(Story));
     },
   ],

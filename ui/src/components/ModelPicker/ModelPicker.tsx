@@ -333,7 +333,7 @@ export function ModelPicker({
                   "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
                   capabilityFilter === "reasoning"
                     ? "bg-purple-500 text-white"
-                    : "bg-purple-500/10 text-purple-700 hover:bg-purple-500/20"
+                    : "bg-purple-500/10 text-purple-700 dark:text-purple-400 hover:bg-purple-500/20"
                 )}
               >
                 <Brain className="h-3 w-3" />
@@ -348,7 +348,7 @@ export function ModelPicker({
                   "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
                   capabilityFilter === "tool_call"
                     ? "bg-green-500 text-white"
-                    : "bg-green-500/10 text-green-800 hover:bg-green-500/20"
+                    : "bg-green-500/10 text-green-800 dark:text-green-400 hover:bg-green-500/20"
                 )}
               >
                 <Wrench className="h-3 w-3" />
@@ -363,7 +363,7 @@ export function ModelPicker({
                   "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
                   capabilityFilter === "vision"
                     ? "bg-cyan-500 text-white"
-                    : "bg-cyan-500/10 text-cyan-800 hover:bg-cyan-500/20"
+                    : "bg-cyan-500/10 text-cyan-800 dark:text-cyan-400 hover:bg-cyan-500/20"
                 )}
               >
                 <Eye className="h-3 w-3" />
@@ -380,7 +380,7 @@ export function ModelPicker({
                   "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
                   capabilityFilter === "structured_output"
                     ? "bg-amber-500 text-white"
-                    : "bg-amber-500/10 text-amber-800 hover:bg-amber-500/20"
+                    : "bg-amber-500/10 text-amber-800 dark:text-amber-400 hover:bg-amber-500/20"
                 )}
               >
                 <Braces className="h-3 w-3" />
@@ -395,7 +395,7 @@ export function ModelPicker({
                   "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
                   capabilityFilter === "open_weights"
                     ? "bg-indigo-500 text-white"
-                    : "bg-indigo-500/10 text-indigo-700 hover:bg-indigo-500/20"
+                    : "bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 hover:bg-indigo-500/20"
                 )}
               >
                 <Scale className="h-3 w-3" />

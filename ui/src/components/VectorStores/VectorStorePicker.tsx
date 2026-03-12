@@ -19,14 +19,25 @@ interface VectorStorePickerProps {
 
 function getStatusInfo(status: string): { color: string; label: string } {
   const statuses: Record<string, { color: string; label: string }> = {
-    completed: { color: "bg-success/10 text-success", label: "Ready" },
+    completed: {
+      color: "bg-success/10 text-green-800 dark:text-green-300",
+      label: "Ready",
+    },
     in_progress: {
       color: "bg-amber-500/10 text-amber-800 dark:text-amber-400",
       label: "Processing",
     },
-    expired: { color: "bg-gray-500/10 text-gray-600", label: "Expired" },
+    expired: {
+      color: "bg-gray-500/10 text-gray-600 dark:text-gray-400",
+      label: "Expired",
+    },
   };
-  return statuses[status] || { color: "bg-gray-500/10 text-gray-600", label: status };
+  return (
+    statuses[status] || {
+      color: "bg-gray-500/10 text-gray-600 dark:text-gray-400",
+      label: status,
+    }
+  );
 }
 
 function formatFileCount(counts: {
@@ -165,7 +176,12 @@ export function VectorStorePicker({
         {/* Store info */}
         <div className="flex flex-1 flex-col min-w-0">
           <div className="flex items-center gap-2">
-            <Database className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <Database
+              className={cn(
+                "h-4 w-4 shrink-0",
+                isFocused ? "text-accent-foreground" : "text-muted-foreground"
+              )}
+            />
             <span className="font-medium truncate">{store.name || "Unnamed"}</span>
             <span
               className={cn(
@@ -176,16 +192,26 @@ export function VectorStorePicker({
               {statusInfo.label}
             </span>
           </div>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5 pl-6">
+          <div
+            className={cn(
+              "flex items-center gap-2 text-xs mt-0.5 pl-6",
+              isFocused ? "text-accent-foreground" : "text-muted-foreground"
+            )}
+          >
             <span className="flex items-center gap-1">
               <FileText className="h-3 w-3" />
               {fileCountText}
             </span>
-            <span className="text-muted-foreground/40">·</span>
+            <span className="opacity-40">·</span>
             <span className="truncate">{store.embedding_model}</span>
           </div>
           {store.description && (
-            <div className="text-xs text-muted-foreground mt-0.5 pl-6 truncate">
+            <div
+              className={cn(
+                "text-xs mt-0.5 pl-6 truncate",
+                isFocused ? "text-accent-foreground" : "text-muted-foreground"
+              )}
+            >
               {store.description}
             </div>
           )}

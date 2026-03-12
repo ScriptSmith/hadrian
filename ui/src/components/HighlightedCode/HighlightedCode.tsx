@@ -7,7 +7,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/Tooltip/To
 import { usePreferences } from "@/preferences/PreferencesProvider";
 import { cn } from "@/utils/cn";
 
-const THEMES = ["github-light-high-contrast", "github-dark"] as const;
+const THEMES = ["github-light-high-contrast", "github-dark-high-contrast"] as const;
 const PRELOADED_LANGS = [
   "python",
   "javascript",
@@ -58,7 +58,8 @@ function HighlightedCodeComponent({
   const [html, setHtml] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const theme = resolvedTheme === "dark" ? "github-dark" : "github-light-high-contrast";
+  const theme =
+    resolvedTheme === "dark" ? "github-dark-high-contrast" : "github-light-high-contrast";
 
   useEffect(() => {
     let cancelled = false;

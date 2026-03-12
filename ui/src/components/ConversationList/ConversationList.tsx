@@ -152,10 +152,20 @@ const ConversationItem = memo(
             className="flex min-w-0 flex-1 items-center gap-2 text-left"
             onClick={() => onSelect(conv.id)}
           >
-            <MessageSquare className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <MessageSquare
+              className={cn(
+                "h-4 w-4 shrink-0",
+                isSelected ? "text-accent-foreground" : "text-muted-foreground"
+              )}
+            />
             <div className="min-w-0 flex-1">
               <div className="truncate">{conv.title}</div>
-              <div className="text-xs text-muted-foreground">
+              <div
+                className={cn(
+                  "text-xs",
+                  isSelected ? "text-accent-foreground" : "text-muted-foreground"
+                )}
+              >
                 {conv.messages.length} messages
                 {conv.models.length > 0 && (
                   <span>
