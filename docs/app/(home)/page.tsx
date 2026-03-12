@@ -73,42 +73,44 @@ function DemoGallery() {
 
   return (
     <div className="mx-auto max-w-screen-2xl px-4">
-      <div
-        className="scrollbar-none mx-auto mb-6 flex max-w-6xl gap-2 overflow-x-auto px-4 pb-2 sm:flex-wrap sm:justify-center sm:overflow-visible sm:px-0 sm:pb-0"
-        role="tablist"
-        aria-label="Demo gallery"
-        tabIndex={0}
-      >
-        {demos.map((demo) => (
-          <button
-            key={demo.id}
-            role="tab"
-            aria-selected={active === demo.id}
-            aria-controls={`demo-panel-${demo.id}`}
-            onClick={() => setActive(demo.id)}
-            className={`shrink-0 cursor-pointer rounded-lg border px-4 py-3 text-left transition-colors ${
-              active === demo.id
-                ? "border-fd-primary bg-fd-primary/10 text-fd-foreground"
-                : "border-fd-border bg-fd-card text-fd-muted-foreground hover:border-fd-primary/50 hover:text-fd-foreground"
-            }`}
-          >
-            <span className="block text-sm font-semibold">{demo.title}</span>
-            <span className="mt-0.5 block max-w-48 text-xs">{demo.description}</span>
-          </button>
-        ))}
-      </div>
-      <div className="relative h-[500px] overflow-hidden rounded-xl border border-fd-border shadow-lg sm:h-[700px] lg:h-[950px]">
-        {demos.map((demo) => (
-          <div
-            key={demo.id}
-            id={`demo-panel-${demo.id}`}
-            role="tabpanel"
-            aria-label={demo.title}
-            className={active === demo.id ? "h-full" : "invisible absolute inset-0"}
-          >
-            <StoryEmbed storyId={demo.storyId} height="100%" />
-          </div>
-        ))}
+      <div className="flex flex-col lg:flex-row lg:items-stretch lg:gap-4">
+        <div
+          className="scrollbar-none mb-4 flex gap-2 overflow-x-auto pb-2 sm:flex-wrap sm:justify-center sm:overflow-visible sm:pb-0 lg:mb-0 lg:w-72 lg:shrink-0 lg:flex-col lg:justify-start lg:overflow-y-auto lg:pb-0"
+          role="tablist"
+          aria-label="Demo gallery"
+          tabIndex={0}
+        >
+          {demos.map((demo) => (
+            <button
+              key={demo.id}
+              role="tab"
+              aria-selected={active === demo.id}
+              aria-controls={`demo-panel-${demo.id}`}
+              onClick={() => setActive(demo.id)}
+              className={`shrink-0 cursor-pointer rounded-lg border px-4 py-3 text-left transition-colors ${
+                active === demo.id
+                  ? "border-fd-primary bg-fd-primary/10 text-fd-foreground"
+                  : "border-fd-border bg-fd-card text-fd-muted-foreground hover:border-fd-primary/50 hover:text-fd-foreground"
+              }`}
+            >
+              <span className="block text-sm font-semibold">{demo.title}</span>
+              <span className="mt-0.5 block max-w-48 text-xs">{demo.description}</span>
+            </button>
+          ))}
+        </div>
+        <div className="relative h-[500px] overflow-hidden rounded-xl border border-fd-border shadow-lg sm:h-[700px] lg:h-auto lg:flex-1">
+          {demos.map((demo) => (
+            <div
+              key={demo.id}
+              id={`demo-panel-${demo.id}`}
+              role="tabpanel"
+              aria-label={demo.title}
+              className={active === demo.id ? "h-full" : "invisible absolute inset-0"}
+            >
+              <StoryEmbed storyId={demo.storyId} height="100%" />
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
