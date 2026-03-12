@@ -369,7 +369,28 @@ pub async fn create(
                 }
             }
         }
-        crate::models::ApiKeyOwner::ServiceAccount { .. } => {}
+        crate::models::ApiKeyOwner::ServiceAccount { service_account_id } => {
+            // Service accounts belong to an org — apply the org-level limit
+            let sa = services
+                .service_accounts
+                .get_by_id(*service_account_id)
+                .await?
+                .ok_or_else(|| {
+                    AdminError::NotFound(format!(
+                        "Service account '{}' not found",
+                        service_account_id
+                    ))
+                })?;
+            let max = limits.max_api_keys_per_org;
+            if max > 0 {
+                let count = services.api_keys.count_by_org(sa.org_id, false).await?;
+                if count >= max as i64 {
+                    return Err(AdminError::Conflict(format!(
+                        "Organization has reached the maximum number of API keys ({max})"
+                    )));
+                }
+            }
+        }
     }
 
     // Get the key generation prefix from config

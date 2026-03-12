@@ -282,6 +282,20 @@ pub async fn create(
         None,
     )?;
 
+    // Check if org already has an SSO config (DB UNIQUE constraint is the hard guard,
+    // but this gives a clean 409 instead of an unhandled constraint violation)
+    if services
+        .org_sso_configs
+        .get_by_org_id(org.id)
+        .await?
+        .is_some()
+    {
+        return Err(AdminError::Conflict(format!(
+            "Organization '{}' already has an SSO configuration",
+            org_slug
+        )));
+    }
+
     // Validate default_team_id belongs to the org if provided
     if let Some(team_id) = input.default_team_id {
         let team = services
