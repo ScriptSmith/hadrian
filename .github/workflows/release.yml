@@ -68,6 +68,70 @@ jobs:
             docs/out/
           retention-days: 1
 
+  # Build WASM app as a static asset
+  build-wasm:
+    name: Build WASM
+    needs: build-frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack@0.13.1 --locked
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate API client
+        working-directory: ui
+        run: pnpm run generate-api
+
+      - name: Build WASM module
+        run: ./scripts/build-wasm.sh --release
+
+      - name: Build frontend (WASM mode)
+        working-directory: ui
+        run: pnpm build
+        env:
+          VITE_WASM_MODE: "true"
+
+      - name: Package WASM app
+        run: |
+          mkdir -p artifacts
+          ARCHIVE="hadrian-wasm.tar.gz"
+          tar czf "artifacts/$ARCHIVE" -C ui/dist .
+          (cd artifacts && sha256sum "$ARCHIVE") >> "artifacts/checksums.txt"
+          echo "Built $ARCHIVE"
+          ls -lh artifacts/
+
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-wasm
+          path: artifacts/
+          retention-days: 3
+
   # Build release binaries for each target (all feature profiles per target)
   build:
     name: Build (${{ matrix.target }})
@@ -185,7 +249,7 @@ jobs:
   # Create GitHub Release (only on tag push, not dry-run)
   release:
     name: Create Release
-    needs: build
+    needs: [build, build-wasm]
     if: github.ref_type == 'tag' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
     runs-on: ubuntu-latest
     steps:
@@ -367,7 +431,7 @@ jobs:
   # Dry-run summary (manual dispatch with dry_run=true)
   dry-run-summary:
     name: Dry Run Summary
-    needs: [build, docker-dry-run]
+    needs: [build, build-wasm, docker-dry-run]
     if: github.event_name == 'workflow_dispatch' && inputs.dry_run
     runs-on: ubuntu-latest
     steps:
