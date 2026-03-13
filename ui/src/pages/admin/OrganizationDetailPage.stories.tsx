@@ -117,6 +117,38 @@ const mockMembers: User[] = [
     created_at: daysAgo(110),
     updated_at: daysAgo(35),
   },
+  {
+    id: "usr-004",
+    external_id: "saml|diana",
+    name: "Diana Chen",
+    email: "diana@acme-corp.com",
+    created_at: daysAgo(80),
+    updated_at: daysAgo(80),
+  },
+  {
+    id: "usr-005",
+    external_id: "oidc|eve",
+    name: "Eve Taylor",
+    email: "eve@acme-corp.com",
+    created_at: daysAgo(60),
+    updated_at: daysAgo(60),
+  },
+  {
+    id: "usr-006",
+    external_id: "auth0|frank",
+    name: "Frank Okafor",
+    email: "frank@acme-corp.com",
+    created_at: daysAgo(45),
+    updated_at: daysAgo(15),
+  },
+  {
+    id: "usr-007",
+    external_id: "oidc|grace",
+    name: "Grace Kim",
+    email: "grace@acme-corp.com",
+    created_at: daysAgo(30),
+    updated_at: daysAgo(5),
+  },
 ];
 
 const mockApiKeys: ApiKey[] = [
@@ -205,20 +237,20 @@ const mockPricing: DbModelPricing[] = [
 const mockAllUsers: User[] = [
   ...mockMembers,
   {
-    id: "usr-004",
-    external_id: "saml|diana",
-    name: "Diana Chen",
-    email: "diana@acme-corp.com",
-    created_at: daysAgo(80),
-    updated_at: daysAgo(80),
+    id: "usr-008",
+    external_id: "saml|henry",
+    name: "Henry Patel",
+    email: "henry@acme-corp.com",
+    created_at: daysAgo(20),
+    updated_at: daysAgo(20),
   },
   {
-    id: "usr-005",
-    external_id: "oidc|eve",
-    name: "Eve Taylor",
-    email: "eve@acme-corp.com",
-    created_at: daysAgo(60),
-    updated_at: daysAgo(60),
+    id: "usr-009",
+    external_id: "auth0|iris",
+    name: "Iris Müller",
+    email: "iris@acme-corp.com",
+    created_at: daysAgo(10),
+    updated_at: daysAgo(10),
   },
 ];
 
