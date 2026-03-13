@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Check, Copy, Download, ExternalLink, X } from "lucide-react";
 
-type Method = "browser" | "binary" | "docker" | "cargo";
+type Method = "browser" | "binary" | "docker" | "cargo" | "helm";
 type OS = "linux-x86_64" | "linux-arm64" | "macos-arm64" | "windows";
 type Profile = "full" | "headless" | "standard" | "minimal" | "tiny";
 type Libc = "gnu" | "musl";
@@ -108,6 +108,14 @@ function getInstallCommand(method: Method, os: OS, profile: Profile, libc: Libc)
   }
   if (method === "cargo") {
     return `cargo install hadrian@${process.env.HADRIAN_VERSION}\nhadrian`;
+  }
+  if (method === "helm") {
+    return [
+      "git clone https://github.com/ScriptSmith/hadrian.git",
+      "cd gateway/helm/hadrian",
+      "helm dependency update",
+      "helm install my-gateway . -n hadrian --create-namespace",
+    ].join("\n");
   }
   const ext = os === "windows" ? "zip" : "tar.gz";
   const target = getTarget(os, libc);
@@ -219,10 +227,16 @@ export function QuickStartSelector() {
             Method
           </span>
           <ToggleGroup
-            options={["binary", "browser", "docker", "cargo"] as Method[]}
+            options={["binary", "browser", "docker", "helm", "cargo"] as Method[]}
             value={method}
             onChange={setMethod}
-            labels={{ binary: "Binary", browser: "Browser", docker: "Docker", cargo: "Cargo" }}
+            labels={{
+              binary: "Binary",
+              browser: "Browser",
+              docker: "Docker",
+              helm: "Helm",
+              cargo: "Cargo",
+            }}
           />
         </div>
         {method === "binary" && (
