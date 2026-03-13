@@ -12,6 +12,11 @@
   <a href="https://hadriangateway.com/docs"><strong>Documentation</strong></a> | <a href="https://hadriangateway.com/api/docs"><strong>API Reference</strong></a>
 </p>
 
+<p align="center">
+  <video src="https://github.com/user-attachments/assets/67a65abe-fe8c-45f7-b4cd-eaf8c4bd0c42" />
+</p>
+
+
 > [!WARNING]
 > Hadrian is experimental, alpha, vibe-coded software and is not ready for production use. The API, configuration format, and database schema are subject to breaking changes that will lead to data loss. Hadrian has not undergone a security audit. Do not expose it to untrusted networks or use it to handle sensitive data. We are not accepting pull requests at this time, but [issues](https://github.com/ScriptSmith/hadrian/issues) and [discussions](https://github.com/ScriptSmith/hadrian/discussions) are welcome.
 
