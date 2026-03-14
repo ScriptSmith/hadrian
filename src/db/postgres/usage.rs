@@ -7,8 +7,8 @@ use crate::{
     db::{
         error::DbResult,
         repos::{
-            Cursor, CursorDirection, DateRange, ListResult, PageCursors, UsageLogQuery, UsageRepo,
-            UsageStats, cursor_from_row,
+            Cursor, CursorDirection, DateRange, ListResult, PageCursors, SortOrder, UsageLogQuery,
+            UsageRepo, UsageStats, cursor_from_row,
         },
     },
     models::{
@@ -3826,12 +3826,9 @@ impl UsageRepo for PostgresUsageRepo {
             param_idx += 1;
         }
 
-        let order = if let Some(ref _c) = cursor {
-            let (comparison, order) = if direction == CursorDirection::Backward {
-                (">", "ASC")
-            } else {
-                ("<", "DESC")
-            };
+        let (comparison, order, should_reverse) = SortOrder::Desc.cursor_query_params(direction);
+
+        let order = if cursor.is_some() {
             conditions.push(format!(
                 "ROW(recorded_at, id) {} ROW(${}, ${})",
                 comparison,
@@ -3943,7 +3940,7 @@ impl UsageRepo for PostgresUsageRepo {
             })
             .collect();
 
-        if direction == CursorDirection::Backward {
+        if should_reverse {
             items.reverse();
         }
 

@@ -10,8 +10,8 @@ use crate::{
     db::{
         error::DbResult,
         repos::{
-            Cursor, CursorDirection, DateRange, ListResult, PageCursors, UsageLogQuery, UsageRepo,
-            UsageStats, cursor_from_row,
+            Cursor, CursorDirection, DateRange, ListResult, PageCursors, SortOrder, UsageLogQuery,
+            UsageRepo, UsageStats, cursor_from_row,
         },
     },
     models::{
@@ -3943,12 +3943,9 @@ impl UsageRepo for SqliteUsageRepo {
             params.push(to.to_rfc3339());
         }
 
+        let (comparison, order, should_reverse) = SortOrder::Desc.cursor_query_params(direction);
+
         let (order, cursor_condition) = if cursor.is_some() {
-            let (comparison, order) = if direction == CursorDirection::Backward {
-                (">", "ASC")
-            } else {
-                ("<", "DESC")
-            };
             (
                 order,
                 Some(format!("(recorded_at, id) {} (?, ?)", comparison)),
@@ -4039,7 +4036,7 @@ impl UsageRepo for SqliteUsageRepo {
             })
             .collect::<DbResult<Vec<_>>>()?;
 
-        if direction == CursorDirection::Backward {
+        if should_reverse {
             items.reverse();
         }
 

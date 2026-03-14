@@ -13,6 +13,7 @@ import { usageLogExport, meUsageLogExport } from "@/api/generated/sdk.gen";
 import type { UsageLogResponse } from "@/api/generated/types.gen";
 import { Badge } from "@/components/Badge/Badge";
 import { Button } from "@/components/Button/Button";
+import { useToast } from "@/components/Toast/Toast";
 import { CodeBadge } from "@/components/CodeBadge/CodeBadge";
 import { Input } from "@/components/Input/Input";
 import {
@@ -185,7 +186,7 @@ function scopeToQueryFilters(scope: UsageScope) {
     case "global":
       return {};
     case "organization":
-      return { org_id: scope.slug };
+      return { org_id: scope.orgId };
     case "user":
       return { user_id: scope.userId };
     case "apiKey":
@@ -221,6 +222,7 @@ function FilterableCell({
 }
 
 export default function UsageLogsTable({ scope }: UsageLogsTableProps) {
+  const toast = useToast();
   const [filters, setFilters] = useState({
     model: "",
     provider: "",
@@ -253,6 +255,8 @@ export default function UsageLogsTable({ scope }: UsageLogsTableProps) {
   });
 
   // Fetch users for name resolution (only for non-"me" scopes)
+  // TODO: This fetches all users client-side and doesn't scale. Replace with
+  // server-side user name resolution in the usage log response.
   const { data: usersData } = useQuery({
     ...userListOptions(),
     enabled: !isMe,
@@ -294,32 +298,36 @@ export default function UsageLogsTable({ scope }: UsageLogsTableProps) {
 
   const handleExport = useCallback(
     async (format: "csv" | "jsonl") => {
-      const exportFilters = {
-        model: filters.model || undefined,
-        provider: filters.provider || undefined,
-        provider_source: filters.provider_source || undefined,
-        from: filters.from ? new Date(filters.from).toISOString() : undefined,
-        to: filters.to ? new Date(filters.to).toISOString() : undefined,
-        format,
-        ...scopeFilters,
-      };
+      try {
+        const exportFilters = {
+          model: filters.model || undefined,
+          provider: filters.provider || undefined,
+          provider_source: filters.provider_source || undefined,
+          from: filters.from ? new Date(filters.from).toISOString() : undefined,
+          to: filters.to ? new Date(filters.to).toISOString() : undefined,
+          format,
+          ...scopeFilters,
+        };
 
-      const exportFn = isMe ? meUsageLogExport : usageLogExport;
-      const { data: blob } = await exportFn({
-        query: exportFilters,
-        responseType: "blob",
-      } as Parameters<typeof exportFn>[0]);
+        const exportFn = isMe ? meUsageLogExport : usageLogExport;
+        const { data: blob } = await exportFn({
+          query: exportFilters,
+          responseType: "blob",
+        } as Parameters<typeof exportFn>[0]);
 
-      if (blob instanceof Blob) {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `usage-logs.${format}`;
-        a.click();
-        URL.revokeObjectURL(url);
+        if (blob instanceof Blob) {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `usage-logs.${format}`;
+          a.click();
+          URL.revokeObjectURL(url);
+        }
+      } catch {
+        toast.error(`Failed to export usage logs as ${format.toUpperCase()}`);
       }
     },
-    [filters, scopeFilters, isMe]
+    [filters, scopeFilters, isMe, toast]
   );
 
   const columns = useMemo(
@@ -603,8 +611,9 @@ export default function UsageLogsTable({ scope }: UsageLogsTableProps) {
           pagination: data?.pagination,
           isFirstPage: pagination.info.isFirstPage,
           pageNumber: pagination.info.pageNumber,
-          onPrevious: () => pagination.actions.goToPreviousPage(data!.pagination),
-          onNext: () => pagination.actions.goToNextPage(data!.pagination),
+          onPrevious: () =>
+            data?.pagination && pagination.actions.goToPreviousPage(data.pagination),
+          onNext: () => data?.pagination && pagination.actions.goToNextPage(data.pagination),
           onFirst: () => pagination.actions.goToFirstPage(),
         }}
       />

@@ -619,6 +619,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_records_user_date ON usage_records(user_id,
 CREATE INDEX IF NOT EXISTS idx_usage_records_project_date ON usage_records(project_id, recorded_at);
 CREATE INDEX IF NOT EXISTS idx_usage_records_team_date ON usage_records(team_id, recorded_at);
 CREATE INDEX IF NOT EXISTS idx_usage_records_recorded_at ON usage_records(recorded_at);
+CREATE INDEX IF NOT EXISTS idx_usage_records_recorded_at_id ON usage_records(recorded_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_usage_records_model ON usage_records(model);
 CREATE INDEX IF NOT EXISTS idx_usage_records_request_id ON usage_records(request_id);
 

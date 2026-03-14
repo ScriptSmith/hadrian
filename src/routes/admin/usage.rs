@@ -3897,7 +3897,7 @@ impl UsageLogQueryParams {
             provider_source: self.provider_source,
             from: self.from,
             to: self.to,
-            limit: Some(100_000),
+            limit: Some(10_000),
             cursor: None,
             direction: None,
         }
@@ -4053,7 +4053,7 @@ pub async fn list_logs(
     authz.require("usage", "list", None, None, None, None)?;
     let services = get_services(&state)?;
 
-    let limit = params.limit.unwrap_or(100);
+    let limit = params.limit.unwrap_or(100).min(1000);
     if let Some(ref dir) = params.direction
         && dir != "forward"
         && dir != "backward"
@@ -4065,6 +4065,7 @@ pub async fn list_logs(
     }
 
     let result = services.usage.list_logs(params.into_query()).await?;
+    tracing::debug!(count = result.items.len(), "listed usage logs");
 
     let pagination = PaginationMeta::with_cursors(
         limit,
@@ -4102,7 +4103,7 @@ pub async fn list_me_logs(
     authz.require("usage", "read", None, None, None, None)?;
     let services = get_services(&state)?;
 
-    let limit = params.limit.unwrap_or(100);
+    let limit = params.limit.unwrap_or(100).min(1000);
     if let Some(ref dir) = params.direction
         && dir != "forward"
         && dir != "backward"
@@ -4117,6 +4118,7 @@ pub async fn list_me_logs(
     query.user_id = Some(user_id);
 
     let result = services.usage.list_logs(query).await?;
+    tracing::debug!(count = result.items.len(), %user_id, "listed user usage logs");
 
     let pagination = PaginationMeta::with_cursors(
         limit,
@@ -4131,12 +4133,33 @@ pub async fn list_me_logs(
     }))
 }
 
-fn escape_csv(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_string()
-    }
+/// Flattened row for usage log CSV export
+#[cfg(feature = "csv-export")]
+#[derive(serde::Serialize)]
+struct UsageLogCsvRow {
+    id: String,
+    recorded_at: String,
+    request_id: String,
+    model: String,
+    provider: String,
+    provider_source: String,
+    input_tokens: i32,
+    output_tokens: i32,
+    cached_tokens: i32,
+    reasoning_tokens: i32,
+    cost: f64,
+    streamed: bool,
+    finish_reason: String,
+    latency_ms: String,
+    cancelled: bool,
+    status_code: String,
+    user_id: String,
+    api_key_id: String,
+    org_id: String,
+    project_id: String,
+    team_id: String,
+    service_account_id: String,
+    pricing_source: String,
 }
 
 fn build_export_response(
@@ -4144,52 +4167,57 @@ fn build_export_response(
     format: UsageLogExportFormat,
 ) -> Result<Response, AdminError> {
     match format {
+        #[cfg(feature = "csv-export")]
         UsageLogExportFormat::Csv => {
-            let mut csv = String::new();
-            csv.push_str("id,recorded_at,request_id,model,provider,provider_source,input_tokens,output_tokens,cached_tokens,reasoning_tokens,cost,streamed,finish_reason,latency_ms,cancelled,status_code,user_id,api_key_id,org_id,project_id,team_id,service_account_id,pricing_source\n");
+            use super::csv_export::CsvResponse;
+
+            let mut wtr = csv::Writer::from_writer(vec![]);
             for r in records {
                 let resp: UsageLogResponse = r.into();
-                csv.push_str(&format!(
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
-                    resp.id,
-                    escape_csv(&resp.recorded_at),
-                    escape_csv(&resp.request_id),
-                    escape_csv(&resp.model),
-                    escape_csv(&resp.provider),
-                    resp.provider_source.as_deref().unwrap_or(""),
-                    resp.input_tokens,
-                    resp.output_tokens,
-                    resp.cached_tokens,
-                    resp.reasoning_tokens,
-                    resp.cost,
-                    resp.streamed,
-                    resp.finish_reason.as_deref().unwrap_or(""),
-                    resp.latency_ms.map(|v| v.to_string()).unwrap_or_default(),
-                    resp.cancelled,
-                    resp.status_code.map(|v| v.to_string()).unwrap_or_default(),
-                    resp.user_id.map(|v| v.to_string()).unwrap_or_default(),
-                    resp.api_key_id.map(|v| v.to_string()).unwrap_or_default(),
-                    resp.org_id.map(|v| v.to_string()).unwrap_or_default(),
-                    resp.project_id.map(|v| v.to_string()).unwrap_or_default(),
-                    resp.team_id.map(|v| v.to_string()).unwrap_or_default(),
-                    resp.service_account_id
+                let row = UsageLogCsvRow {
+                    id: resp.id.to_string(),
+                    recorded_at: resp.recorded_at,
+                    request_id: resp.request_id,
+                    model: resp.model,
+                    provider: resp.provider,
+                    provider_source: resp.provider_source.unwrap_or_default(),
+                    input_tokens: resp.input_tokens,
+                    output_tokens: resp.output_tokens,
+                    cached_tokens: resp.cached_tokens,
+                    reasoning_tokens: resp.reasoning_tokens,
+                    cost: resp.cost,
+                    streamed: resp.streamed,
+                    finish_reason: resp.finish_reason.unwrap_or_default(),
+                    latency_ms: resp.latency_ms.map(|v| v.to_string()).unwrap_or_default(),
+                    cancelled: resp.cancelled,
+                    status_code: resp.status_code.map(|v| v.to_string()).unwrap_or_default(),
+                    user_id: resp.user_id.map(|v| v.to_string()).unwrap_or_default(),
+                    api_key_id: resp.api_key_id.map(|v| v.to_string()).unwrap_or_default(),
+                    org_id: resp.org_id.map(|v| v.to_string()).unwrap_or_default(),
+                    project_id: resp.project_id.map(|v| v.to_string()).unwrap_or_default(),
+                    team_id: resp.team_id.map(|v| v.to_string()).unwrap_or_default(),
+                    service_account_id: resp
+                        .service_account_id
                         .map(|v| v.to_string())
                         .unwrap_or_default(),
-                    escape_csv(&resp.pricing_source),
-                ));
+                    pricing_source: resp.pricing_source,
+                };
+                wtr.serialize(&row)
+                    .map_err(|e| AdminError::Internal(format!("CSV serialization error: {}", e)))?;
             }
-            Ok((
-                [
-                    (axum::http::header::CONTENT_TYPE, "text/csv; charset=utf-8"),
-                    (
-                        axum::http::header::CONTENT_DISPOSITION,
-                        "attachment; filename=\"usage-logs.csv\"",
-                    ),
-                ],
-                csv,
-            )
-                .into_response())
+            let data = wtr
+                .into_inner()
+                .map_err(|e| AdminError::Internal(format!("CSV flush error: {}", e)))?;
+            Ok(CsvResponse {
+                data,
+                filename: "usage-logs.csv".to_string(),
+            }
+            .into_response())
         }
+        #[cfg(not(feature = "csv-export"))]
+        UsageLogExportFormat::Csv => Err(AdminError::BadRequest(
+            "CSV export is not available in this build".to_string(),
+        )),
         UsageLogExportFormat::Jsonl => {
             let mut jsonl = String::new();
             for r in records {
@@ -4239,6 +4267,7 @@ pub async fn export_logs(
 
     let (params, format) = export_query.into_params();
     let result = services.usage.list_logs(params.into_export_query()).await?;
+    tracing::debug!(count = result.items.len(), format = ?format, "exporting usage logs");
 
     build_export_response(result.items, format)
 }
@@ -4272,6 +4301,7 @@ pub async fn export_me_logs(
     query.user_id = Some(user_id);
 
     let result = services.usage.list_logs(query).await?;
+    tracing::debug!(count = result.items.len(), %user_id, format = ?format, "exporting user usage logs");
 
     build_export_response(result.items, format)
 }

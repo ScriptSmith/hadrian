@@ -454,7 +454,7 @@ type Story = StoryObj<typeof UsageDashboard>;
 
 export const Organization: Story = {
   args: {
-    scope: { type: "organization", slug: "acme-corp" },
+    scope: { type: "organization", slug: "acme-corp", orgId: "org-123" },
   },
 };
 

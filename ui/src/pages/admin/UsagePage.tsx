@@ -75,7 +75,11 @@ export default function UsagePage() {
         : selectedTeamSlug && effectiveOrg
           ? { type: "team", orgSlug: effectiveOrg, teamSlug: selectedTeamSlug }
           : effectiveOrg
-            ? { type: "organization", slug: effectiveOrg }
+            ? {
+                type: "organization",
+                slug: effectiveOrg,
+                orgId: organizations?.data?.find((o) => o.slug === effectiveOrg)?.id ?? "",
+              }
             : { type: "global" };
 
   return (

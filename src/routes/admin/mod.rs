@@ -3,7 +3,7 @@ pub mod api_keys;
 pub mod audit_logs;
 pub mod conversations;
 #[cfg(feature = "csv-export")]
-mod csv_export;
+pub(super) mod csv_export;
 pub mod dlq;
 #[cfg(feature = "sso")]
 pub mod domain_verifications;
