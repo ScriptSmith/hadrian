@@ -4,6 +4,42 @@ use uuid::Uuid;
 
 use crate::pricing::CostPricingSource;
 
+/// Individual usage log record — the read model for `usage_records` rows.
+///
+/// Distinct from `UsageLogEntry` (the write model) — includes database-assigned
+/// `id` and `recorded_at` fields.
+#[derive(Debug, Clone, Serialize)]
+pub struct UsageLogRecord {
+    pub id: Uuid,
+    pub recorded_at: DateTime<Utc>,
+    pub request_id: String,
+    pub api_key_id: Option<Uuid>,
+    pub user_id: Option<Uuid>,
+    pub org_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    pub service_account_id: Option<Uuid>,
+    pub model: String,
+    pub provider: String,
+    pub http_referer: Option<String>,
+    pub input_tokens: i32,
+    pub output_tokens: i32,
+    pub cached_tokens: i32,
+    pub reasoning_tokens: i32,
+    /// Cost in microcents (1/1,000,000 of a dollar)
+    pub cost_microcents: i64,
+    pub streamed: bool,
+    pub finish_reason: Option<String>,
+    pub latency_ms: Option<i32>,
+    pub cancelled: bool,
+    pub status_code: Option<i16>,
+    pub pricing_source: String,
+    pub image_count: Option<i32>,
+    pub audio_seconds: Option<i32>,
+    pub character_count: Option<i32>,
+    pub provider_source: Option<String>,
+}
+
 /// Usage log entry for a single API request.
 ///
 /// Costs are stored in microcents (1/1,000,000 of a dollar) for precision.

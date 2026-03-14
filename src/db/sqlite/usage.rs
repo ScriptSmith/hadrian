@@ -2,17 +2,23 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use super::backend::{Pool, RowExt, begin, query};
+use super::{
+    backend::{Pool, RowExt, begin, query},
+    common::parse_uuid,
+};
 use crate::{
     db::{
         error::DbResult,
-        repos::{DateRange, UsageRepo, UsageStats},
+        repos::{
+            Cursor, CursorDirection, DateRange, ListResult, PageCursors, UsageLogQuery, UsageRepo,
+            UsageStats, cursor_from_row,
+        },
     },
     models::{
         DailyModelSpend, DailyOrgSpend, DailyPricingSourceSpend, DailyProjectSpend,
         DailyProviderSpend, DailySpend, DailyTeamSpend, DailyUserSpend, ModelSpend, OrgSpend,
         PricingSourceSpend, ProjectSpend, ProviderSpend, RefererSpend, TeamSpend, UsageLogEntry,
-        UsageSummary, UserSpend,
+        UsageLogRecord, UsageSummary, UserSpend,
     },
 };
 
@@ -3869,6 +3875,180 @@ impl UsageRepo for SqliteUsageRepo {
                 }
             })
             .collect())
+    }
+
+    // ==================== Individual Log Queries ====================
+
+    async fn list_logs(&self, filter: UsageLogQuery) -> DbResult<ListResult<UsageLogRecord>> {
+        let limit = filter.limit.unwrap_or(100);
+        let fetch_limit = limit + 1;
+
+        let cursor = match &filter.cursor {
+            Some(c) => Some(Cursor::decode(c).map_err(|e| {
+                crate::db::error::DbError::Internal(format!("Invalid cursor: {}", e))
+            })?),
+            None => None,
+        };
+
+        let direction = match filter.direction.as_deref() {
+            Some("backward") => CursorDirection::Backward,
+            _ => CursorDirection::Forward,
+        };
+
+        let mut conditions = Vec::new();
+        let mut params: Vec<String> = Vec::new();
+
+        if let Some(org_id) = &filter.org_id {
+            conditions.push("org_id = ?".to_string());
+            params.push(org_id.to_string());
+        }
+        if let Some(user_id) = &filter.user_id {
+            conditions.push("user_id = ?".to_string());
+            params.push(user_id.to_string());
+        }
+        if let Some(project_id) = &filter.project_id {
+            conditions.push("project_id = ?".to_string());
+            params.push(project_id.to_string());
+        }
+        if let Some(team_id) = &filter.team_id {
+            conditions.push("team_id = ?".to_string());
+            params.push(team_id.to_string());
+        }
+        if let Some(api_key_id) = &filter.api_key_id {
+            conditions.push("api_key_id = ?".to_string());
+            params.push(api_key_id.to_string());
+        }
+        if let Some(service_account_id) = &filter.service_account_id {
+            conditions.push("service_account_id = ?".to_string());
+            params.push(service_account_id.to_string());
+        }
+        if let Some(model) = &filter.model {
+            conditions.push("model = ?".to_string());
+            params.push(model.clone());
+        }
+        if let Some(provider) = &filter.provider {
+            conditions.push("provider = ?".to_string());
+            params.push(provider.clone());
+        }
+        if let Some(provider_source) = &filter.provider_source {
+            conditions.push("provider_source = ?".to_string());
+            params.push(provider_source.clone());
+        }
+        if let Some(from) = &filter.from {
+            conditions.push("recorded_at >= ?".to_string());
+            params.push(from.to_rfc3339());
+        }
+        if let Some(to) = &filter.to {
+            conditions.push("recorded_at < ?".to_string());
+            params.push(to.to_rfc3339());
+        }
+
+        let (order, cursor_condition) = if cursor.is_some() {
+            let (comparison, order) = if direction == CursorDirection::Backward {
+                (">", "ASC")
+            } else {
+                ("<", "DESC")
+            };
+            (
+                order,
+                Some(format!("(recorded_at, id) {} (?, ?)", comparison)),
+            )
+        } else {
+            ("DESC", None)
+        };
+
+        if let Some(cond) = cursor_condition {
+            conditions.push(cond);
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+
+        let sql = format!(
+            r#"
+            SELECT id, recorded_at, request_id, api_key_id, user_id, org_id,
+                   project_id, team_id, service_account_id, model, provider,
+                   http_referer, input_tokens, output_tokens, cached_tokens,
+                   reasoning_tokens, cost_microcents, streamed, finish_reason,
+                   latency_ms, cancelled, status_code, pricing_source,
+                   image_count, audio_seconds, character_count, provider_source
+            FROM usage_records
+            {}
+            ORDER BY recorded_at {}, id {}
+            LIMIT ?
+            "#,
+            where_clause, order, order
+        );
+
+        let mut qb = query(&sql);
+        for param in &params {
+            qb = qb.bind(param);
+        }
+        if let Some(ref c) = cursor {
+            qb = qb.bind(c.created_at).bind(c.id.to_string());
+        }
+        qb = qb.bind(fetch_limit);
+
+        let rows = qb.fetch_all(&self.pool).await?;
+
+        let has_more = rows.len() as i64 > limit;
+        let mut items: Vec<UsageLogRecord> = rows
+            .into_iter()
+            .take(limit as usize)
+            .map(|row| {
+                let id: String = row.col("id");
+                let api_key_id: Option<String> = row.col("api_key_id");
+                let user_id: Option<String> = row.col("user_id");
+                let org_id: Option<String> = row.col("org_id");
+                let project_id: Option<String> = row.col("project_id");
+                let team_id: Option<String> = row.col("team_id");
+                let service_account_id: Option<String> = row.col("service_account_id");
+
+                Ok(UsageLogRecord {
+                    id: parse_uuid(&id)?,
+                    recorded_at: row.col("recorded_at"),
+                    request_id: row.col("request_id"),
+                    api_key_id: api_key_id.map(|s| parse_uuid(&s)).transpose()?,
+                    user_id: user_id.map(|s| parse_uuid(&s)).transpose()?,
+                    org_id: org_id.map(|s| parse_uuid(&s)).transpose()?,
+                    project_id: project_id.map(|s| parse_uuid(&s)).transpose()?,
+                    team_id: team_id.map(|s| parse_uuid(&s)).transpose()?,
+                    service_account_id: service_account_id.map(|s| parse_uuid(&s)).transpose()?,
+                    model: row.col("model"),
+                    provider: row.col("provider"),
+                    http_referer: row.col("http_referer"),
+                    input_tokens: row.col("input_tokens"),
+                    output_tokens: row.col("output_tokens"),
+                    cached_tokens: row.col("cached_tokens"),
+                    reasoning_tokens: row.col("reasoning_tokens"),
+                    cost_microcents: row.col("cost_microcents"),
+                    streamed: row.col("streamed"),
+                    finish_reason: row.col("finish_reason"),
+                    latency_ms: row.col("latency_ms"),
+                    cancelled: row.col("cancelled"),
+                    status_code: row.col("status_code"),
+                    pricing_source: row.col("pricing_source"),
+                    image_count: row.col("image_count"),
+                    audio_seconds: row.col("audio_seconds"),
+                    character_count: row.col("character_count"),
+                    provider_source: row.col("provider_source"),
+                })
+            })
+            .collect::<DbResult<Vec<_>>>()?;
+
+        if direction == CursorDirection::Backward {
+            items.reverse();
+        }
+
+        let cursors =
+            PageCursors::from_items(&items, has_more, direction, cursor.as_ref(), |rec| {
+                cursor_from_row(rec.recorded_at, rec.id)
+            });
+
+        Ok(ListResult::new(items, has_more, cursors))
     }
 
     // ==================== Retention Operations ====================

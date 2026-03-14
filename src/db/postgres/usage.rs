@@ -6,13 +6,16 @@ use uuid::Uuid;
 use crate::{
     db::{
         error::DbResult,
-        repos::{DateRange, UsageRepo, UsageStats},
+        repos::{
+            Cursor, CursorDirection, DateRange, ListResult, PageCursors, UsageLogQuery, UsageRepo,
+            UsageStats, cursor_from_row,
+        },
     },
     models::{
         DailyModelSpend, DailyOrgSpend, DailyPricingSourceSpend, DailyProjectSpend,
         DailyProviderSpend, DailySpend, DailyTeamSpend, DailyUserSpend, ModelSpend, OrgSpend,
         PricingSourceSpend, ProjectSpend, ProviderSpend, RefererSpend, TeamSpend, UsageLogEntry,
-        UsageSummary, UserSpend,
+        UsageLogRecord, UsageSummary, UserSpend,
     },
 };
 
@@ -3755,6 +3758,201 @@ impl UsageRepo for PostgresUsageRepo {
                 }
             })
             .collect())
+    }
+
+    // ==================== Individual Log Queries ====================
+
+    async fn list_logs(&self, query: UsageLogQuery) -> DbResult<ListResult<UsageLogRecord>> {
+        let limit = query.limit.unwrap_or(100);
+        let fetch_limit = limit + 1;
+
+        let cursor = match &query.cursor {
+            Some(c) => Some(Cursor::decode(c).map_err(|e| {
+                crate::db::error::DbError::Internal(format!("Invalid cursor: {}", e))
+            })?),
+            None => None,
+        };
+
+        let direction = match query.direction.as_deref() {
+            Some("backward") => CursorDirection::Backward,
+            _ => CursorDirection::Forward,
+        };
+
+        let mut conditions = Vec::new();
+        let mut param_idx = 1u32;
+
+        if query.org_id.is_some() {
+            conditions.push(format!("org_id = ${}", param_idx));
+            param_idx += 1;
+        }
+        if query.user_id.is_some() {
+            conditions.push(format!("user_id = ${}", param_idx));
+            param_idx += 1;
+        }
+        if query.project_id.is_some() {
+            conditions.push(format!("project_id = ${}", param_idx));
+            param_idx += 1;
+        }
+        if query.team_id.is_some() {
+            conditions.push(format!("team_id = ${}", param_idx));
+            param_idx += 1;
+        }
+        if query.api_key_id.is_some() {
+            conditions.push(format!("api_key_id = ${}", param_idx));
+            param_idx += 1;
+        }
+        if query.service_account_id.is_some() {
+            conditions.push(format!("service_account_id = ${}", param_idx));
+            param_idx += 1;
+        }
+        if query.model.is_some() {
+            conditions.push(format!("model = ${}", param_idx));
+            param_idx += 1;
+        }
+        if query.provider.is_some() {
+            conditions.push(format!("provider = ${}", param_idx));
+            param_idx += 1;
+        }
+        if query.provider_source.is_some() {
+            conditions.push(format!("provider_source = ${}", param_idx));
+            param_idx += 1;
+        }
+        if query.from.is_some() {
+            conditions.push(format!("recorded_at >= ${}", param_idx));
+            param_idx += 1;
+        }
+        if query.to.is_some() {
+            conditions.push(format!("recorded_at < ${}", param_idx));
+            param_idx += 1;
+        }
+
+        let order = if let Some(ref _c) = cursor {
+            let (comparison, order) = if direction == CursorDirection::Backward {
+                (">", "ASC")
+            } else {
+                ("<", "DESC")
+            };
+            conditions.push(format!(
+                "ROW(recorded_at, id) {} ROW(${}, ${})",
+                comparison,
+                param_idx,
+                param_idx + 1
+            ));
+            param_idx += 2;
+            order
+        } else {
+            "DESC"
+        };
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+
+        let sql = format!(
+            r#"
+            SELECT id, recorded_at, request_id, api_key_id, user_id, org_id,
+                   project_id, team_id, service_account_id, model, provider,
+                   http_referer, input_tokens, output_tokens, cached_tokens,
+                   reasoning_tokens, cost_microcents, streamed, finish_reason,
+                   latency_ms, cancelled, status_code, pricing_source,
+                   image_count, audio_seconds, character_count, provider_source
+            FROM usage_records
+            {}
+            ORDER BY recorded_at {}, id {}
+            LIMIT ${}
+            "#,
+            where_clause, order, order, param_idx
+        );
+
+        let mut qb = sqlx::query(&sql);
+
+        if let Some(org_id) = &query.org_id {
+            qb = qb.bind(org_id);
+        }
+        if let Some(user_id) = &query.user_id {
+            qb = qb.bind(user_id);
+        }
+        if let Some(project_id) = &query.project_id {
+            qb = qb.bind(project_id);
+        }
+        if let Some(team_id) = &query.team_id {
+            qb = qb.bind(team_id);
+        }
+        if let Some(api_key_id) = &query.api_key_id {
+            qb = qb.bind(api_key_id);
+        }
+        if let Some(service_account_id) = &query.service_account_id {
+            qb = qb.bind(service_account_id);
+        }
+        if let Some(model) = &query.model {
+            qb = qb.bind(model);
+        }
+        if let Some(provider) = &query.provider {
+            qb = qb.bind(provider);
+        }
+        if let Some(provider_source) = &query.provider_source {
+            qb = qb.bind(provider_source);
+        }
+        if let Some(from) = &query.from {
+            qb = qb.bind(from);
+        }
+        if let Some(to) = &query.to {
+            qb = qb.bind(to);
+        }
+        if let Some(ref c) = cursor {
+            qb = qb.bind(c.created_at).bind(c.id);
+        }
+        qb = qb.bind(fetch_limit);
+
+        let rows = qb.fetch_all(&self.read_pool).await?;
+
+        let has_more = rows.len() as i64 > limit;
+        let mut items: Vec<UsageLogRecord> = rows
+            .into_iter()
+            .take(limit as usize)
+            .map(|row| UsageLogRecord {
+                id: row.get("id"),
+                recorded_at: row.get("recorded_at"),
+                request_id: row.get("request_id"),
+                api_key_id: row.get("api_key_id"),
+                user_id: row.get("user_id"),
+                org_id: row.get("org_id"),
+                project_id: row.get("project_id"),
+                team_id: row.get("team_id"),
+                service_account_id: row.get("service_account_id"),
+                model: row.get("model"),
+                provider: row.get("provider"),
+                http_referer: row.get("http_referer"),
+                input_tokens: row.get("input_tokens"),
+                output_tokens: row.get("output_tokens"),
+                cached_tokens: row.get("cached_tokens"),
+                reasoning_tokens: row.get("reasoning_tokens"),
+                cost_microcents: row.get("cost_microcents"),
+                streamed: row.get("streamed"),
+                finish_reason: row.get("finish_reason"),
+                latency_ms: row.get("latency_ms"),
+                cancelled: row.get("cancelled"),
+                status_code: row.get("status_code"),
+                pricing_source: row.get("pricing_source"),
+                image_count: row.get("image_count"),
+                audio_seconds: row.get("audio_seconds"),
+                character_count: row.get("character_count"),
+                provider_source: row.get("provider_source"),
+            })
+            .collect();
+
+        if direction == CursorDirection::Backward {
+            items.reverse();
+        }
+
+        let cursors =
+            PageCursors::from_items(&items, has_more, direction, cursor.as_ref(), |rec| {
+                cursor_from_row(rec.recorded_at, rec.id)
+            });
+
+        Ok(ListResult::new(items, has_more, cursors))
     }
 
     // ==================== Retention Operations ====================

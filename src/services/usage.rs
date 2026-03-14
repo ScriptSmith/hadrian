@@ -8,12 +8,15 @@ use super::forecasting::{self, DEFAULT_FORECAST_DAYS};
 #[cfg(not(feature = "forecasting"))]
 const DEFAULT_FORECAST_DAYS: usize = 7;
 use crate::{
-    db::{DateRange, DbPool, DbResult},
+    db::{
+        DateRange, DbPool, DbResult,
+        repos::{ListResult, UsageLogQuery},
+    },
     models::{
         CostForecast, DailyModelSpend, DailyOrgSpend, DailyPricingSourceSpend, DailyProjectSpend,
         DailyProviderSpend, DailySpend, DailyTeamSpend, DailyUserSpend, ModelSpend, OrgSpend,
         PricingSourceSpend, ProjectSpend, ProviderSpend, RefererSpend, TeamSpend, UsageLogEntry,
-        UsageSummary, UserSpend,
+        UsageLogRecord, UsageSummary, UserSpend,
     },
 };
 
@@ -31,6 +34,11 @@ impl UsageService {
     /// Log a usage entry (async, fire-and-forget)
     pub async fn log(&self, entry: UsageLogEntry) -> DbResult<()> {
         self.db.usage().log(entry).await
+    }
+
+    /// List individual usage log records with optional filtering and cursor pagination.
+    pub async fn list_logs(&self, query: UsageLogQuery) -> DbResult<ListResult<UsageLogRecord>> {
+        self.db.usage().list_logs(query).await
     }
 
     /// Get usage summary for an API key within a date range

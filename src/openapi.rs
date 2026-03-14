@@ -547,6 +547,11 @@ requests_per_minute = 120
         admin::usage::get_me_by_date_provider,
         admin::usage::get_me_by_pricing_source,
         admin::usage::get_me_by_date_pricing_source,
+        // Admin routes - Usage Logs
+        admin::usage::list_logs,
+        admin::usage::list_me_logs,
+        admin::usage::export_logs,
+        admin::usage::export_me_logs,
         // Admin routes - Model Pricing
         admin::model_pricing::create,
         admin::model_pricing::get,
@@ -840,6 +845,9 @@ requests_per_minute = 120
         admin::usage::DailyTeamSpendResponse,
         admin::usage::OrgSpendResponse,
         admin::usage::DailyOrgSpendResponse,
+        admin::usage::UsageLogResponse,
+        admin::usage::UsageLogListResponse,
+        admin::usage::UsageLogExportFormat,
         // Admin routes - Users
         admin::users::AddMemberRequest,
         admin::users::UserListResponse,

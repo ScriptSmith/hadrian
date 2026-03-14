@@ -32,6 +32,8 @@ export interface ResourceTableProps<T> {
   errorMessage?: string;
   /** Optional pagination props for cursor-based pagination */
   paginationProps?: ResourceTablePaginationProps;
+  /** Optional callback when a row is clicked */
+  onRowClick?: (item: T) => void;
 }
 
 export function ResourceTable<T>({
@@ -44,6 +46,7 @@ export function ResourceTable<T>({
   noDataMessage,
   errorMessage = "Failed to load data. Please try again.",
   paginationProps,
+  onRowClick,
 }: ResourceTableProps<T>) {
   const table = useReactTable({
     data,
@@ -94,7 +97,11 @@ export function ResourceTable<T>({
                 </thead>
                 <tbody>
                   {table.getRowModel().rows.map((row) => (
-                    <tr key={row.id} className="border-b last:border-0">
+                    <tr
+                      key={row.id}
+                      className={`border-b last:border-0${onRowClick ? " cursor-pointer hover:bg-muted/50" : ""}`}
+                      onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+                    >
                       {row.getVisibleCells().map((cell) => (
                         <td key={cell.id} className="px-4 py-3 text-sm">
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}

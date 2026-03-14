@@ -1,22 +1,24 @@
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
+    response::{IntoResponse, Response},
 };
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::AdminError;
 use crate::{
     AppState,
-    db::DateRange,
+    db::{DateRange, repos::UsageLogQuery},
     middleware::{AdminAuth, AuthzContext},
     models::{
         CostForecast, DailyModelSpend, DailyOrgSpend, DailyPricingSourceSpend, DailyProjectSpend,
         DailyProviderSpend, DailySpend, DailyTeamSpend, DailyUserSpend, ModelSpend, OrgSpend,
-        PricingSourceSpend, ProjectSpend, ProviderSpend, RefererSpend, TeamSpend, UsageSummary,
-        UserSpend,
+        PricingSourceSpend, ProjectSpend, ProviderSpend, RefererSpend, TeamSpend, UsageLogRecord,
+        UsageSummary, UserSpend,
     },
+    openapi::PaginationMeta,
     services::Services,
 };
 
@@ -3838,4 +3840,438 @@ pub async fn get_global_by_date_org(
     let range = query.parse_date_range()?;
     let data = services.usage.get_by_date_org_global(range).await?;
     Ok(Json(data.into_iter().map(|s| s.into()).collect()))
+}
+
+// ==================== Usage Log Endpoints ====================
+
+/// Query parameters for usage log list endpoints
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::IntoParams))]
+pub struct UsageLogQueryParams {
+    pub org_id: Option<Uuid>,
+    pub user_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    pub api_key_id: Option<Uuid>,
+    pub service_account_id: Option<Uuid>,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub provider_source: Option<String>,
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+    pub limit: Option<i64>,
+    pub cursor: Option<String>,
+    pub direction: Option<String>,
+}
+
+impl UsageLogQueryParams {
+    fn into_query(self) -> UsageLogQuery {
+        UsageLogQuery {
+            org_id: self.org_id,
+            user_id: self.user_id,
+            project_id: self.project_id,
+            team_id: self.team_id,
+            api_key_id: self.api_key_id,
+            service_account_id: self.service_account_id,
+            model: self.model,
+            provider: self.provider,
+            provider_source: self.provider_source,
+            from: self.from,
+            to: self.to,
+            limit: self.limit,
+            cursor: self.cursor,
+            direction: self.direction,
+        }
+    }
+
+    fn into_export_query(self) -> UsageLogQuery {
+        UsageLogQuery {
+            org_id: self.org_id,
+            user_id: self.user_id,
+            project_id: self.project_id,
+            team_id: self.team_id,
+            api_key_id: self.api_key_id,
+            service_account_id: self.service_account_id,
+            model: self.model,
+            provider: self.provider,
+            provider_source: self.provider_source,
+            from: self.from,
+            to: self.to,
+            limit: Some(100_000),
+            cursor: None,
+            direction: None,
+        }
+    }
+}
+
+/// Individual usage log entry response
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct UsageLogResponse {
+    pub id: Uuid,
+    pub recorded_at: String,
+    pub request_id: String,
+    pub api_key_id: Option<Uuid>,
+    pub user_id: Option<Uuid>,
+    pub org_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    pub service_account_id: Option<Uuid>,
+    pub model: String,
+    pub provider: String,
+    pub http_referer: Option<String>,
+    pub input_tokens: i32,
+    pub output_tokens: i32,
+    pub cached_tokens: i32,
+    pub reasoning_tokens: i32,
+    /// Cost in dollars
+    pub cost: f64,
+    pub streamed: bool,
+    pub finish_reason: Option<String>,
+    pub latency_ms: Option<i32>,
+    pub cancelled: bool,
+    pub status_code: Option<i16>,
+    pub pricing_source: String,
+    pub image_count: Option<i32>,
+    pub audio_seconds: Option<i32>,
+    pub character_count: Option<i32>,
+    pub provider_source: Option<String>,
+}
+
+impl From<UsageLogRecord> for UsageLogResponse {
+    fn from(r: UsageLogRecord) -> Self {
+        Self {
+            id: r.id,
+            recorded_at: r.recorded_at.to_rfc3339(),
+            request_id: r.request_id,
+            api_key_id: r.api_key_id,
+            user_id: r.user_id,
+            org_id: r.org_id,
+            project_id: r.project_id,
+            team_id: r.team_id,
+            service_account_id: r.service_account_id,
+            model: r.model,
+            provider: r.provider,
+            http_referer: r.http_referer,
+            input_tokens: r.input_tokens,
+            output_tokens: r.output_tokens,
+            cached_tokens: r.cached_tokens,
+            reasoning_tokens: r.reasoning_tokens,
+            cost: r.cost_microcents as f64 / 1_000_000.0,
+            streamed: r.streamed,
+            finish_reason: r.finish_reason,
+            latency_ms: r.latency_ms,
+            cancelled: r.cancelled,
+            status_code: r.status_code,
+            pricing_source: r.pricing_source,
+            image_count: r.image_count,
+            audio_seconds: r.audio_seconds,
+            character_count: r.character_count,
+            provider_source: r.provider_source,
+        }
+    }
+}
+
+/// Paginated list of usage log records
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct UsageLogListResponse {
+    pub data: Vec<UsageLogResponse>,
+    pub pagination: PaginationMeta,
+}
+
+/// Export format for usage logs
+#[derive(Debug, Default, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum UsageLogExportFormat {
+    #[default]
+    Csv,
+    Jsonl,
+}
+
+/// Query parameters for usage log export
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::IntoParams))]
+pub struct UsageLogExportQuery {
+    pub org_id: Option<Uuid>,
+    pub user_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    pub api_key_id: Option<Uuid>,
+    pub service_account_id: Option<Uuid>,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub provider_source: Option<String>,
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub format: UsageLogExportFormat,
+}
+
+impl UsageLogExportQuery {
+    fn into_params(self) -> (UsageLogQueryParams, UsageLogExportFormat) {
+        let format = self.format;
+        (
+            UsageLogQueryParams {
+                org_id: self.org_id,
+                user_id: self.user_id,
+                project_id: self.project_id,
+                team_id: self.team_id,
+                api_key_id: self.api_key_id,
+                service_account_id: self.service_account_id,
+                model: self.model,
+                provider: self.provider,
+                provider_source: self.provider_source,
+                from: self.from,
+                to: self.to,
+                limit: None,
+                cursor: None,
+                direction: None,
+            },
+            format,
+        )
+    }
+}
+
+/// List usage logs (admin global)
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    get,
+    path = "/admin/v1/usage/logs",
+    tag = "usage",
+    operation_id = "usage_log_list",
+    params(UsageLogQueryParams),
+    responses(
+        (status = 200, description = "List of usage log records", body = UsageLogListResponse),
+    )
+))]
+pub async fn list_logs(
+    State(state): State<AppState>,
+    Extension(authz): Extension<AuthzContext>,
+    Query(params): Query<UsageLogQueryParams>,
+) -> Result<Json<UsageLogListResponse>, AdminError> {
+    authz.require("usage", "list", None, None, None, None)?;
+    let services = get_services(&state)?;
+
+    let limit = params.limit.unwrap_or(100);
+    if let Some(ref dir) = params.direction
+        && dir != "forward"
+        && dir != "backward"
+    {
+        return Err(AdminError::BadRequest(format!(
+            "Invalid direction '{}': must be 'forward' or 'backward'",
+            dir
+        )));
+    }
+
+    let result = services.usage.list_logs(params.into_query()).await?;
+
+    let pagination = PaginationMeta::with_cursors(
+        limit,
+        result.has_more,
+        result.cursors.next.map(|c| c.encode()),
+        result.cursors.prev.map(|c| c.encode()),
+    );
+
+    Ok(Json(UsageLogListResponse {
+        data: result.items.into_iter().map(|r| r.into()).collect(),
+        pagination,
+    }))
+}
+
+/// List current user's usage logs
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    get,
+    path = "/admin/v1/me/usage/logs",
+    tag = "me",
+    operation_id = "me_usage_log_list",
+    params(UsageLogQueryParams),
+    responses(
+        (status = 200, description = "List of usage log records", body = UsageLogListResponse),
+    )
+))]
+pub async fn list_me_logs(
+    State(state): State<AppState>,
+    Extension(admin_auth): Extension<AdminAuth>,
+    Extension(authz): Extension<AuthzContext>,
+    Query(params): Query<UsageLogQueryParams>,
+) -> Result<Json<UsageLogListResponse>, AdminError> {
+    let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
+        "User not found in database".to_string(),
+    ))?;
+    authz.require("usage", "read", None, None, None, None)?;
+    let services = get_services(&state)?;
+
+    let limit = params.limit.unwrap_or(100);
+    if let Some(ref dir) = params.direction
+        && dir != "forward"
+        && dir != "backward"
+    {
+        return Err(AdminError::BadRequest(format!(
+            "Invalid direction '{}': must be 'forward' or 'backward'",
+            dir
+        )));
+    }
+
+    let mut query = params.into_query();
+    query.user_id = Some(user_id);
+
+    let result = services.usage.list_logs(query).await?;
+
+    let pagination = PaginationMeta::with_cursors(
+        limit,
+        result.has_more,
+        result.cursors.next.map(|c| c.encode()),
+        result.cursors.prev.map(|c| c.encode()),
+    );
+
+    Ok(Json(UsageLogListResponse {
+        data: result.items.into_iter().map(|r| r.into()).collect(),
+        pagination,
+    }))
+}
+
+fn escape_csv(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+fn build_export_response(
+    records: Vec<UsageLogRecord>,
+    format: UsageLogExportFormat,
+) -> Result<Response, AdminError> {
+    match format {
+        UsageLogExportFormat::Csv => {
+            let mut csv = String::new();
+            csv.push_str("id,recorded_at,request_id,model,provider,provider_source,input_tokens,output_tokens,cached_tokens,reasoning_tokens,cost,streamed,finish_reason,latency_ms,cancelled,status_code,user_id,api_key_id,org_id,project_id,team_id,service_account_id,pricing_source\n");
+            for r in records {
+                let resp: UsageLogResponse = r.into();
+                csv.push_str(&format!(
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                    resp.id,
+                    escape_csv(&resp.recorded_at),
+                    escape_csv(&resp.request_id),
+                    escape_csv(&resp.model),
+                    escape_csv(&resp.provider),
+                    resp.provider_source.as_deref().unwrap_or(""),
+                    resp.input_tokens,
+                    resp.output_tokens,
+                    resp.cached_tokens,
+                    resp.reasoning_tokens,
+                    resp.cost,
+                    resp.streamed,
+                    resp.finish_reason.as_deref().unwrap_or(""),
+                    resp.latency_ms.map(|v| v.to_string()).unwrap_or_default(),
+                    resp.cancelled,
+                    resp.status_code.map(|v| v.to_string()).unwrap_or_default(),
+                    resp.user_id.map(|v| v.to_string()).unwrap_or_default(),
+                    resp.api_key_id.map(|v| v.to_string()).unwrap_or_default(),
+                    resp.org_id.map(|v| v.to_string()).unwrap_or_default(),
+                    resp.project_id.map(|v| v.to_string()).unwrap_or_default(),
+                    resp.team_id.map(|v| v.to_string()).unwrap_or_default(),
+                    resp.service_account_id
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
+                    escape_csv(&resp.pricing_source),
+                ));
+            }
+            Ok((
+                [
+                    (axum::http::header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+                    (
+                        axum::http::header::CONTENT_DISPOSITION,
+                        "attachment; filename=\"usage-logs.csv\"",
+                    ),
+                ],
+                csv,
+            )
+                .into_response())
+        }
+        UsageLogExportFormat::Jsonl => {
+            let mut jsonl = String::new();
+            for r in records {
+                let resp: UsageLogResponse = r.into();
+                jsonl.push_str(&serde_json::to_string(&resp).map_err(|e| {
+                    AdminError::Internal(format!("JSON serialization error: {}", e))
+                })?);
+                jsonl.push('\n');
+            }
+            Ok((
+                [
+                    (
+                        axum::http::header::CONTENT_TYPE,
+                        "application/x-ndjson; charset=utf-8",
+                    ),
+                    (
+                        axum::http::header::CONTENT_DISPOSITION,
+                        "attachment; filename=\"usage-logs.jsonl\"",
+                    ),
+                ],
+                jsonl,
+            )
+                .into_response())
+        }
+    }
+}
+
+/// Export usage logs (admin global)
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    get,
+    path = "/admin/v1/usage/logs/export",
+    tag = "usage",
+    operation_id = "usage_log_export",
+    params(UsageLogExportQuery),
+    responses(
+        (status = 200, description = "Exported usage logs", content_type = "text/csv"),
+        (status = 200, description = "Exported usage logs", content_type = "application/x-ndjson"),
+    )
+))]
+pub async fn export_logs(
+    State(state): State<AppState>,
+    Extension(authz): Extension<AuthzContext>,
+    Query(export_query): Query<UsageLogExportQuery>,
+) -> Result<Response, AdminError> {
+    authz.require("usage", "list", None, None, None, None)?;
+    let services = get_services(&state)?;
+
+    let (params, format) = export_query.into_params();
+    let result = services.usage.list_logs(params.into_export_query()).await?;
+
+    build_export_response(result.items, format)
+}
+
+/// Export current user's usage logs
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    get,
+    path = "/admin/v1/me/usage/logs/export",
+    tag = "me",
+    operation_id = "me_usage_log_export",
+    params(UsageLogExportQuery),
+    responses(
+        (status = 200, description = "Exported usage logs", content_type = "text/csv"),
+        (status = 200, description = "Exported usage logs", content_type = "application/x-ndjson"),
+    )
+))]
+pub async fn export_me_logs(
+    State(state): State<AppState>,
+    Extension(admin_auth): Extension<AdminAuth>,
+    Extension(authz): Extension<AuthzContext>,
+    Query(export_query): Query<UsageLogExportQuery>,
+) -> Result<Response, AdminError> {
+    let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
+        "User not found in database".to_string(),
+    ))?;
+    authz.require("usage", "read", None, None, None, None)?;
+    let services = get_services(&state)?;
+
+    let (params, format) = export_query.into_params();
+    let mut query = params.into_export_query();
+    query.user_id = Some(user_id);
+
+    let result = services.usage.list_logs(query).await?;
+
+    build_export_response(result.items, format)
 }
