@@ -4026,7 +4026,7 @@ impl UsageRepo for SqliteUsageRepo {
                     finish_reason: row.col("finish_reason"),
                     latency_ms: row.col("latency_ms"),
                     cancelled: row.col("cancelled"),
-                    status_code: row.col("status_code"),
+                    status_code: row.col::<Option<i32>>("status_code").map(|v| v as i16),
                     pricing_source: row.col("pricing_source"),
                     image_count: row.col("image_count"),
                     audio_seconds: row.col("audio_seconds"),
