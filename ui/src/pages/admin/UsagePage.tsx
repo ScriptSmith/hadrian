@@ -59,10 +59,12 @@ export default function UsagePage() {
 
   const selectedKeyInfo = apiKeys?.data?.find((k) => k.id === selectedApiKey);
 
-  // Resolve the selected team slug from ID
-  const selectedTeamSlug = selectedTeam
-    ? teams?.data?.find((t) => t.id === selectedTeam)?.slug
+  // Resolve IDs/slugs for scope filtering
+  const selectedTeamInfo = selectedTeam ? teams?.data?.find((t) => t.id === selectedTeam) : null;
+  const selectedProjectInfo = selectedProject
+    ? projects?.data?.find((p) => p.slug === selectedProject)
     : null;
+  const orgId = organizations?.data?.find((o) => o.slug === effectiveOrg)?.id;
 
   // Scope resolution: first match wins (most specific -> least specific)
   // When no org is selected, use global scope
@@ -70,16 +72,22 @@ export default function UsagePage() {
     ? { type: "apiKey", keyId: selectedApiKey }
     : selectedUser
       ? { type: "user", userId: selectedUser }
-      : selectedProject && effectiveOrg
-        ? { type: "project", orgSlug: effectiveOrg, projectSlug: selectedProject }
-        : selectedTeamSlug && effectiveOrg
-          ? { type: "team", orgSlug: effectiveOrg, teamSlug: selectedTeamSlug }
-          : effectiveOrg
-            ? {
-                type: "organization",
-                slug: effectiveOrg,
-                orgId: organizations?.data?.find((o) => o.slug === effectiveOrg)?.id ?? "",
-              }
+      : selectedProjectInfo && effectiveOrg
+        ? {
+            type: "project",
+            orgSlug: effectiveOrg,
+            projectSlug: selectedProjectInfo.slug,
+            projectId: selectedProjectInfo.id,
+          }
+        : selectedTeamInfo && effectiveOrg
+          ? {
+              type: "team",
+              orgSlug: effectiveOrg,
+              teamSlug: selectedTeamInfo.slug,
+              teamId: selectedTeamInfo.id,
+            }
+          : effectiveOrg && orgId
+            ? { type: "organization", slug: effectiveOrg, orgId }
             : { type: "global" };
 
   return (

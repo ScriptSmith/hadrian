@@ -460,13 +460,18 @@ export const Organization: Story = {
 
 export const Team: Story = {
   args: {
-    scope: { type: "team", orgSlug: "acme-corp", teamSlug: "engineering" },
+    scope: { type: "team", orgSlug: "acme-corp", teamSlug: "engineering", teamId: "team-1" },
   },
 };
 
 export const Project: Story = {
   args: {
-    scope: { type: "project", orgSlug: "acme-corp", projectSlug: "production-api" },
+    scope: {
+      type: "project",
+      orgSlug: "acme-corp",
+      projectSlug: "production-api",
+      projectId: "project-1",
+    },
   },
 };
 

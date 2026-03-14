@@ -189,6 +189,10 @@ function scopeToQueryFilters(scope: UsageScope) {
       return { org_id: scope.orgId };
     case "user":
       return { user_id: scope.userId };
+    case "project":
+      return { project_id: scope.projectId };
+    case "team":
+      return { team_id: scope.teamId };
     case "apiKey":
       return { api_key_id: scope.keyId };
     default:

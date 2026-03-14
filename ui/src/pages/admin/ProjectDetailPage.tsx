@@ -758,8 +758,10 @@ export default function ProjectDetailPage() {
               searchPlaceholder="Search models..."
             />
           )}
-          {activeTab === "usage" && orgSlug && projectSlug && (
-            <UsageDashboard scope={{ type: "project", orgSlug, projectSlug }} />
+          {activeTab === "usage" && orgSlug && projectSlug && project?.id && (
+            <UsageDashboard
+              scope={{ type: "project", orgSlug, projectSlug, projectId: project.id }}
+            />
           )}
         </CardContent>
       </Card>

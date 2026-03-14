@@ -4064,7 +4064,9 @@ pub async fn list_logs(
         )));
     }
 
-    let result = services.usage.list_logs(params.into_query()).await?;
+    let mut query = params.into_query();
+    query.limit = Some(limit);
+    let result = services.usage.list_logs(query).await?;
     tracing::debug!(count = result.items.len(), "listed usage logs");
 
     let pagination = PaginationMeta::with_cursors(
@@ -4115,6 +4117,7 @@ pub async fn list_me_logs(
     }
 
     let mut query = params.into_query();
+    query.limit = Some(limit);
     query.user_id = Some(user_id);
 
     let result = services.usage.list_logs(query).await?;

@@ -488,8 +488,8 @@ export default function OrganizationDetailPage() {
               searchPlaceholder="Search models..."
             />
           )}
-          {activeTab === "usage" && slug && (
-            <UsageDashboard scope={{ type: "organization", slug, orgId: org?.id ?? "" }} />
+          {activeTab === "usage" && slug && org?.id && (
+            <UsageDashboard scope={{ type: "organization", slug, orgId: org.id }} />
           )}
           {activeTab === "sso" && (
             <div className="space-y-4">

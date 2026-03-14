@@ -3,12 +3,13 @@ import UsageDashboard from "@/components/UsageDashboard/UsageDashboard";
 interface UsageTabProps {
   orgSlug: string;
   projectSlug: string;
+  projectId: string;
 }
 
-export function UsageTab({ orgSlug, projectSlug }: UsageTabProps) {
+export function UsageTab({ orgSlug, projectSlug, projectId }: UsageTabProps) {
   return (
     <div role="tabpanel" id="tabpanel-usage" aria-labelledby="tab-usage">
-      <UsageDashboard scope={{ type: "project", orgSlug, projectSlug }} />
+      <UsageDashboard scope={{ type: "project", orgSlug, projectSlug, projectId }} />
     </div>
   );
 }
