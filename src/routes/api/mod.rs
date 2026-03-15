@@ -20,6 +20,7 @@ use crate::compat::wasm_routing::{delete, get, post};
 use crate::{
     AppState, api_types,
     auth::AuthenticatedRequest,
+    config::{ProviderConfig, SovereigntyMetadata, SovereigntyRequirements},
     db::DbError,
     models::{VectorStore, VectorStoreOwnerType},
     routing::RoutingError,
@@ -68,6 +69,58 @@ fn should_bypass_cache(headers: &HeaderMap) -> bool {
     }
 
     false
+}
+
+/// Enforce sovereignty requirements against the resolved provider/model.
+///
+/// Merges API-key requirements and per-request requirements, then checks the
+/// merged result against the resolved sovereignty metadata. Returns the merged
+/// requirements on success (for use in fallback chain filtering), or an `ApiError`
+/// on violation.
+fn check_sovereignty(
+    auth: Option<&Extension<AuthenticatedRequest>>,
+    per_request: Option<&SovereigntyRequirements>,
+    provider_config: &ProviderConfig,
+    model_name: &str,
+    catalog: &crate::catalog::ModelCatalogRegistry,
+) -> Result<Option<SovereigntyRequirements>, ApiError> {
+    let key_reqs = auth
+        .and_then(|Extension(a)| a.api_key())
+        .and_then(|k| k.sovereignty_requirements());
+    let merged = SovereigntyRequirements::merge(key_reqs, per_request);
+    let Some(reqs) = merged else {
+        return Ok(None);
+    };
+
+    let model_config = provider_config.get_model_config(model_name);
+    let provider_sov = provider_config.sovereignty();
+    let model_sov = model_config.and_then(|mc| mc.sovereignty.as_ref());
+    let resolved = SovereigntyMetadata::merge(provider_sov, model_sov).unwrap_or_default();
+
+    // Open weights: config overrides catalog (matching /v1/models response)
+    let open_weights = model_config
+        .and_then(|mc| mc.open_weights)
+        .or_else(|| {
+            let catalog_provider_id = crate::catalog::resolve_catalog_provider_id(
+                provider_config.provider_type_name(),
+                provider_config.base_url(),
+                provider_config.catalog_provider(),
+            )?;
+            catalog
+                .lookup(&catalog_provider_id, model_name)
+                .map(|e| e.open_weights)
+        })
+        .unwrap_or(false);
+
+    reqs.check(&resolved, open_weights).map_err(|reason| {
+        ApiError::new(
+            StatusCode::FORBIDDEN,
+            "sovereignty_violation",
+            format!("Request blocked by sovereignty requirements: {reason}"),
+        )
+    })?;
+
+    Ok(Some(reqs))
 }
 
 /// Check if any messages contain image content (multimodal).

@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use super::ConfigError;
 use crate::{
     catalog::{ModelCapabilities, ModelModalities},
+    config::sovereignty::SovereigntyMetadata,
     pricing::ModelPricing,
 };
 
@@ -116,6 +117,10 @@ pub struct ModelConfig {
     /// Available voices for TTS models.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub voices: Vec<String>,
+
+    /// Sovereignty and compliance metadata override for this model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sovereignty: Option<SovereigntyMetadata>,
 }
 
 /// Provider configurations container.
@@ -496,6 +501,21 @@ impl ProviderConfig {
         }
     }
 
+    /// Get sovereignty metadata for this provider.
+    pub fn sovereignty(&self) -> Option<&SovereigntyMetadata> {
+        match self {
+            Self::OpenAi(c) => c.sovereignty.as_ref(),
+            Self::Anthropic(c) => c.sovereignty.as_ref(),
+            #[cfg(feature = "provider-bedrock")]
+            Self::Bedrock(c) => c.sovereignty.as_ref(),
+            #[cfg(feature = "provider-vertex")]
+            Self::Vertex(c) => c.sovereignty.as_ref(),
+            #[cfg(feature = "provider-azure")]
+            Self::AzureOpenAi(c) => c.sovereignty.as_ref(),
+            Self::Test(c) => c.sovereignty.as_ref(),
+        }
+    }
+
     /// Get the catalog provider ID override for this provider.
     pub fn catalog_provider(&self) -> Option<&str> {
         match self {
@@ -630,6 +650,10 @@ pub struct OpenAiProviderConfig {
     /// Use this for OpenAI-compatible providers that aren't auto-detected.
     #[serde(default)]
     pub catalog_provider: Option<String>,
+
+    /// Sovereignty and compliance metadata for this provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sovereignty: Option<SovereigntyMetadata>,
 }
 
 impl OpenAiProviderConfig {
@@ -667,6 +691,7 @@ impl std::fmt::Debug for OpenAiProviderConfig {
             .field("model_fallbacks", &self.model_fallbacks)
             .field("health_check", &self.health_check)
             .field("catalog_provider", &self.catalog_provider)
+            .field("sovereignty", &self.sovereignty)
             .finish()
     }
 }
@@ -739,6 +764,10 @@ pub struct AnthropicProviderConfig {
     /// Defaults to "anthropic".
     #[serde(default)]
     pub catalog_provider: Option<String>,
+
+    /// Sovereignty and compliance metadata for this provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sovereignty: Option<SovereigntyMetadata>,
 }
 
 impl AnthropicProviderConfig {
@@ -768,6 +797,7 @@ impl std::fmt::Debug for AnthropicProviderConfig {
             .field("model_fallbacks", &self.model_fallbacks)
             .field("health_check", &self.health_check)
             .field("catalog_provider", &self.catalog_provider)
+            .field("sovereignty", &self.sovereignty)
             .finish()
     }
 }
@@ -843,6 +873,10 @@ pub struct BedrockProviderConfig {
     /// Defaults to "amazon-bedrock".
     #[serde(default)]
     pub catalog_provider: Option<String>,
+
+    /// Sovereignty and compliance metadata for this provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sovereignty: Option<SovereigntyMetadata>,
 }
 
 #[cfg(feature = "provider-bedrock")]
@@ -1015,6 +1049,10 @@ pub struct VertexProviderConfig {
     /// Defaults to "google-vertex".
     #[serde(default)]
     pub catalog_provider: Option<String>,
+
+    /// Sovereignty and compliance metadata for this provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sovereignty: Option<SovereigntyMetadata>,
 }
 
 #[cfg(feature = "provider-vertex")]
@@ -1062,6 +1100,7 @@ impl std::fmt::Debug for VertexProviderConfig {
             .field("model_fallbacks", &self.model_fallbacks)
             .field("health_check", &self.health_check)
             .field("catalog_provider", &self.catalog_provider)
+            .field("sovereignty", &self.sovereignty)
             .finish()
     }
 }
@@ -1150,6 +1189,10 @@ pub struct AzureOpenAiProviderConfig {
     /// Defaults to "azure".
     #[serde(default)]
     pub catalog_provider: Option<String>,
+
+    /// Sovereignty and compliance metadata for this provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sovereignty: Option<SovereigntyMetadata>,
 }
 
 #[cfg(feature = "provider-azure")]
@@ -1872,6 +1915,10 @@ pub struct TestProviderConfig {
     /// Test providers typically don't need catalog enrichment.
     #[serde(default)]
     pub catalog_provider: Option<String>,
+
+    /// Sovereignty and compliance metadata for this provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sovereignty: Option<SovereigntyMetadata>,
 }
 
 impl TestProviderConfig {
@@ -2786,6 +2833,7 @@ mod tests {
             model_fallbacks: HashMap::new(),
             health_check: ProviderHealthCheckConfig::default(),
             catalog_provider: None,
+            sovereignty: None,
         };
 
         let debug_output = format!("{:?}", config);
@@ -2817,6 +2865,7 @@ mod tests {
             model_fallbacks: HashMap::new(),
             health_check: ProviderHealthCheckConfig::default(),
             catalog_provider: None,
+            sovereignty: None,
         };
 
         let debug_output = format!("{:?}", config);
@@ -2904,6 +2953,7 @@ mod tests {
             model_fallbacks: HashMap::new(),
             health_check: ProviderHealthCheckConfig::default(),
             catalog_provider: None,
+            sovereignty: None,
         };
 
         let debug_output = format!("{:?}", config);

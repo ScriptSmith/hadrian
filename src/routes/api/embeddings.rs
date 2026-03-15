@@ -2,7 +2,7 @@ use axum::{Extension, Json, body::Body, extract::State, http::HeaderMap, respons
 use axum_valid::Valid;
 use http::StatusCode;
 
-use super::{ApiError, CacheStatus, should_bypass_cache};
+use super::{ApiError, CacheStatus, check_sovereignty, should_bypass_cache};
 use crate::{
     AppState, api_types,
     auth::AuthenticatedRequest,
@@ -162,6 +162,15 @@ pub async fn api_v1_embeddings(
             })?;
     }
 
+    // Check sovereignty requirements (API key + per-request)
+    let sovereignty_reqs = check_sovereignty(
+        auth.as_ref(),
+        payload.sovereignty_requirements.as_ref(),
+        &provider_config,
+        &model_name,
+        &state.model_catalog,
+    )?;
+
     // Check if cache should be bypassed based on request headers
     let force_refresh = should_bypass_cache(&headers);
 
@@ -211,6 +220,7 @@ pub async fn api_v1_embeddings(
         provider_config,
         model_name,
         payload.clone(),
+        sovereignty_reqs.as_ref(),
     )
     .await?;
 

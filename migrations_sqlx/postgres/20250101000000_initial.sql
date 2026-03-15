@@ -562,6 +562,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
     -- Per-key rate limit overrides (null = use global defaults)
     rate_limit_rpm INTEGER,
     rate_limit_tpm INTEGER,
+    -- Sovereignty requirements (data residency constraints for this key)
+    sovereignty_requirements JSONB,
     -- Status timestamps
     revoked_at TIMESTAMPTZ,
     expires_at TIMESTAMPTZ,
@@ -604,6 +606,8 @@ CREATE TABLE IF NOT EXISTS dynamic_providers (
     config JSONB,
     -- Supported models (JSON array)
     models JSONB NOT NULL DEFAULT '[]',
+    -- Sovereignty metadata (data residency, compliance requirements)
+    sovereignty JSONB,
     is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

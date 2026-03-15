@@ -5,7 +5,10 @@ use super::{
     AuthError,
     principal::{Principal, derive_principal},
 };
-use crate::models::{ApiKey, ApiKeyOwner};
+use crate::{
+    config::SovereigntyRequirements,
+    models::{ApiKey, ApiKeyOwner},
+};
 
 /// Identity information from the request
 #[derive(Debug, Clone)]
@@ -44,7 +47,7 @@ pub struct Identity {
 #[derive(Debug, Clone)]
 pub enum IdentityKind {
     /// Authenticated via API key
-    ApiKey(ApiKeyAuth),
+    ApiKey(Box<ApiKeyAuth>),
 
     /// Authenticated via identity headers (Zero Trust / SSO)
     Identity(Identity),
@@ -118,6 +121,14 @@ impl ApiKeyAuth {
                 allowed_patterns: self.key.allowed_models.clone().unwrap_or_default(),
             })
         }
+    }
+
+    /// Check sovereignty requirements from the API key against the resolved provider/model metadata.
+    ///
+    /// Returns the key's sovereignty requirements (if any) so the caller can merge
+    /// them with per-request requirements.
+    pub fn sovereignty_requirements(&self) -> Option<&SovereigntyRequirements> {
+        self.key.sovereignty_requirements.as_ref()
     }
 }
 

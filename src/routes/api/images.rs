@@ -9,7 +9,7 @@ use axum::{
 use axum_valid::Valid;
 use http::StatusCode;
 
-use super::{ApiError, image_quality_to_string, image_size_to_string};
+use super::{ApiError, check_sovereignty, image_quality_to_string, image_size_to_string};
 #[cfg(feature = "provider-azure")]
 use crate::providers::azure_openai;
 use crate::{
@@ -131,6 +131,15 @@ pub async fn api_v1_images_generations(
                 ApiError::new(StatusCode::FORBIDDEN, "authorization_denied", e.to_string())
             })?;
     }
+
+    // Check sovereignty requirements (API key + per-request)
+    let _sovereignty_reqs = check_sovereignty(
+        auth.as_ref(),
+        payload.sovereignty_requirements.as_ref(),
+        &provider_config,
+        &model_name,
+        &state.model_catalog,
+    )?;
 
     // Replace model with resolved name (strip provider prefix like "openai/dall-e-3" → "dall-e-3")
     let mut payload = payload;

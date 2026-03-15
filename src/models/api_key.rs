@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use validator::Validate;
 
+use crate::config::sovereignty::SovereigntyRequirements;
+
 /// Permission scope for API keys.
 ///
 /// Scopes control which API endpoints an API key can access.
@@ -143,6 +145,8 @@ pub struct ApiKey {
     pub rotated_from_key_id: Option<Uuid>,
     /// If set, this key is being rotated out but still valid until this time
     pub rotation_grace_until: Option<DateTime<Utc>>,
+    /// Sovereignty requirements that restrict which models this key can access
+    pub sovereignty_requirements: Option<SovereigntyRequirements>,
 }
 
 impl ApiKey {
@@ -344,6 +348,8 @@ pub struct CreateApiKey {
     pub rate_limit_rpm: Option<i32>,
     /// Tokens per minute override
     pub rate_limit_tpm: Option<i32>,
+    /// Sovereignty requirements for model access
+    pub sovereignty_requirements: Option<SovereigntyRequirements>,
 }
 
 /// Self-service API key creation request (owner auto-set to current user).
@@ -366,6 +372,8 @@ pub struct CreateSelfServiceApiKey {
     pub rate_limit_rpm: Option<i32>,
     /// Tokens per minute override
     pub rate_limit_tpm: Option<i32>,
+    /// Sovereignty requirements for model access
+    pub sovereignty_requirements: Option<SovereigntyRequirements>,
 }
 
 /// Returned on creation only (contains the raw key)
@@ -527,6 +535,7 @@ mod tests {
             rate_limit_tpm: None,
             rotated_from_key_id: None,
             rotation_grace_until: None,
+            sovereignty_requirements: None,
         }
     }
 
@@ -576,6 +585,7 @@ mod tests {
             rate_limit_tpm: None,
             rotated_from_key_id: None,
             rotation_grace_until: None,
+            sovereignty_requirements: None,
         }
     }
 
@@ -767,6 +777,7 @@ mod tests {
             rate_limit_tpm: None,
             rotated_from_key_id: None,
             rotation_grace_until: None,
+            sovereignty_requirements: None,
         }
     }
 

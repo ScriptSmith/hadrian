@@ -971,6 +971,7 @@ mod url_tests {
             converse_base_url,
             health_check: Default::default(),
             catalog_provider: None,
+            sovereignty: None,
         };
         let registry = CircuitBreakerRegistry::default();
         BedrockProvider::from_config_with_registry(&config, "test", &registry)

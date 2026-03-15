@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use validator::Validate;
 
+use crate::config::sovereignty::SovereigntyMetadata;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct DynamicProvider {
@@ -18,6 +20,8 @@ pub struct DynamicProvider {
     pub config: Option<serde_json::Value>,
     /// List of supported model names
     pub models: Vec<String>,
+    /// Sovereignty and compliance metadata
+    pub sovereignty: Option<SovereigntyMetadata>,
     pub is_enabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -37,6 +41,8 @@ pub struct DynamicProviderResponse {
     /// Provider-specific configuration
     pub config: Option<serde_json::Value>,
     pub models: Vec<String>,
+    /// Sovereignty and compliance metadata
+    pub sovereignty: Option<SovereigntyMetadata>,
     pub is_enabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -87,6 +93,7 @@ impl From<DynamicProvider> for DynamicProviderResponse {
             has_api_key: p.api_key_secret_ref.is_some(),
             config: p.config.map(redact_config_credentials),
             models: p.models,
+            sovereignty: p.sovereignty,
             is_enabled: p.is_enabled,
             created_at: p.created_at,
             updated_at: p.updated_at,
@@ -147,6 +154,8 @@ pub struct CreateDynamicProvider {
     pub config: Option<serde_json::Value>,
     /// List of supported model names
     pub models: Option<Vec<String>>,
+    /// Sovereignty and compliance metadata
+    pub sovereignty: Option<SovereigntyMetadata>,
 }
 
 /// Self-service create DTO (owner is inferred from the authenticated user)
@@ -167,6 +176,8 @@ pub struct CreateSelfServiceProvider {
     pub config: Option<serde_json::Value>,
     /// List of supported model names
     pub models: Option<Vec<String>>,
+    /// Sovereignty and compliance metadata
+    pub sovereignty: Option<SovereigntyMetadata>,
 }
 
 #[derive(Debug, Clone, Deserialize, Validate)]
@@ -179,7 +190,20 @@ pub struct UpdateDynamicProvider {
     pub config: Option<serde_json::Value>,
     /// List of supported model names
     pub models: Option<Vec<String>>,
+    /// Sovereignty and compliance metadata (set to null to clear)
+    #[serde(default, deserialize_with = "deserialize_optional_sovereignty")]
+    pub sovereignty: Option<Option<SovereigntyMetadata>>,
     pub is_enabled: Option<bool>,
+}
+
+/// Custom deserializer: absent → None (don't update), null → Some(None) (clear), value → Some(Some(v)) (set).
+fn deserialize_optional_sovereignty<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<SovereigntyMetadata>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::deserialize(deserializer)?))
 }
 
 #[cfg(test)]

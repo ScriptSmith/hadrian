@@ -1378,6 +1378,7 @@ mod tests {
                     ip_allowlist: None,
                     rate_limit_rpm: None,
                     rate_limit_tpm: None,
+                    sovereignty_requirements: None,
                 },
                 &hash,
             )
@@ -1408,6 +1409,7 @@ mod tests {
                     ip_allowlist: None,
                     rate_limit_rpm: None,
                     rate_limit_tpm: None,
+                    sovereignty_requirements: None,
                 },
                 &hash,
             )

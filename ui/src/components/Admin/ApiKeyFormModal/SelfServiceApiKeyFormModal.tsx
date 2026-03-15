@@ -13,6 +13,12 @@ import { Textarea } from "@/components/Textarea/Textarea";
 import { Modal, ModalHeader, ModalContent, ModalFooter } from "@/components/Modal/Modal";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/Tooltip/Tooltip";
 import { cn } from "@/utils/cn";
+import {
+  sovereigntySchema,
+  sovereigntyDefaults,
+  buildSovereigntyRequirements,
+  SovereigntyFormFields,
+} from "./sovereigntyFields";
 
 // Available API key scopes
 const API_KEY_SCOPES = [
@@ -91,6 +97,8 @@ const schema = z
     ip_allowlist: z.string().optional(),
     rate_limit_rpm: z.string().optional(),
     rate_limit_tpm: z.string().optional(),
+    // Sovereignty requirements
+    ...sovereigntySchema,
   })
   .refine((data) => validateModelPatterns(data.allowed_models), {
     message:
@@ -114,6 +122,7 @@ const defaultValues: FormValues = {
   ip_allowlist: "",
   rate_limit_rpm: "",
   rate_limit_tpm: "",
+  ...sovereigntyDefaults,
 };
 
 export interface SelfServiceApiKeyFormModalProps {
@@ -160,7 +169,9 @@ export function SelfServiceApiKeyFormModal({
           .filter(Boolean)
       : null;
 
-    const body: CreateSelfServiceApiKey = {
+    const sovereigntyRequirements = buildSovereigntyRequirements(data);
+
+    const body: CreateSelfServiceApiKey & Record<string, unknown> = {
       name: data.name,
       budget_limit_cents: data.budget_limit_cents
         ? Math.round(parseFloat(data.budget_limit_cents) * 100)
@@ -172,13 +183,14 @@ export function SelfServiceApiKeyFormModal({
       ip_allowlist: ipAllowlist && ipAllowlist.length > 0 ? ipAllowlist : null,
       rate_limit_rpm: data.rate_limit_rpm ? parseInt(data.rate_limit_rpm) : null,
       rate_limit_tpm: data.rate_limit_tpm ? parseInt(data.rate_limit_tpm) : null,
+      ...(sovereigntyRequirements && { sovereignty_requirements: sovereigntyRequirements }),
     };
 
     onSubmit(body);
   });
 
   return (
-    <Modal open={isOpen} onClose={onClose}>
+    <Modal open={isOpen} onClose={onClose} className="max-w-3xl">
       <form onSubmit={handleSubmit}>
         <ModalHeader>Create API Key</ModalHeader>
         <ModalContent>
@@ -259,112 +271,119 @@ export function SelfServiceApiKeyFormModal({
               <div
                 className={cn(
                   "overflow-hidden transition-all duration-200",
-                  advancedOpen ? "max-h-[600px] opacity-100 mt-4" : "max-h-0 opacity-0"
+                  advancedOpen ? "max-h-[1200px] opacity-100 mt-4" : "max-h-0 opacity-0"
                 )}
               >
-                <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-x-6 gap-y-4">
                   {/* Scopes */}
-                  <FormField
-                    label={
-                      <span className="flex items-center gap-1">
-                        Permission Scopes
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
-                          </TooltipTrigger>
-                          <TooltipContent className="max-w-xs">
-                            <p>Restrict which API endpoints this key can access.</p>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              Leave empty for full access to all endpoints.
-                            </p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </span>
-                    }
-                    htmlFor="self-apikey-scopes"
-                    helpText={
-                      selectedScopes.length > 0
-                        ? `${selectedScopes.length} scope${selectedScopes.length === 1 ? "" : "s"} selected`
-                        : "No restrictions (full access)"
-                    }
-                  >
-                    <Controller
-                      name="scopes"
-                      control={form.control}
-                      render={({ field }) => (
-                        <Select
-                          multiple
-                          options={API_KEY_SCOPES}
-                          value={field.value || []}
-                          onChange={field.onChange}
-                          placeholder="Select scopes..."
-                          searchable
-                        />
-                      )}
-                    />
-                  </FormField>
+                  <div className="col-span-2">
+                    <FormField
+                      label={
+                        <span className="flex items-center gap-1">
+                          Permission Scopes
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-xs">
+                              <p>Restrict which API endpoints this key can access.</p>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                Leave empty for full access to all endpoints.
+                              </p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </span>
+                      }
+                      htmlFor="self-apikey-scopes"
+                      helpText={
+                        selectedScopes.length > 0
+                          ? `${selectedScopes.length} scope${selectedScopes.length === 1 ? "" : "s"} selected`
+                          : "No restrictions (full access)"
+                      }
+                    >
+                      <Controller
+                        name="scopes"
+                        control={form.control}
+                        render={({ field }) => (
+                          <Select
+                            multiple
+                            options={API_KEY_SCOPES}
+                            value={field.value || []}
+                            onChange={field.onChange}
+                            placeholder="Select scopes..."
+                            searchable
+                          />
+                        )}
+                      />
+                    </FormField>
+                  </div>
 
                   {/* Allowed Models */}
+                  <div className="col-span-2">
+                    <FormField
+                      label="Model Restrictions"
+                      htmlFor="self-apikey-models"
+                      helpText="Comma-separated. Supports wildcards: gpt-4, claude-*, anthropic/*"
+                      error={form.formState.errors.allowed_models?.message}
+                    >
+                      <Input
+                        id="self-apikey-models"
+                        {...form.register("allowed_models")}
+                        placeholder="gpt-4, claude-*, anthropic/claude-3-*"
+                      />
+                    </FormField>
+                  </div>
+
+                  {/* Rate Limits */}
                   <FormField
-                    label="Model Restrictions"
-                    htmlFor="self-apikey-models"
-                    helpText="Comma-separated. Supports wildcards: gpt-4, claude-*, anthropic/*"
-                    error={form.formState.errors.allowed_models?.message}
+                    label="Requests/min"
+                    htmlFor="self-apikey-rpm"
+                    helpText="Override global limit"
+                    error={form.formState.errors.rate_limit_rpm?.message}
                   >
                     <Input
-                      id="self-apikey-models"
-                      {...form.register("allowed_models")}
-                      placeholder="gpt-4, claude-*, anthropic/claude-3-*"
+                      id="self-apikey-rpm"
+                      type="number"
+                      min="1"
+                      {...form.register("rate_limit_rpm")}
+                      placeholder="Default"
+                    />
+                  </FormField>
+                  <FormField
+                    label="Tokens/min"
+                    htmlFor="self-apikey-tpm"
+                    helpText="Override global limit"
+                    error={form.formState.errors.rate_limit_tpm?.message}
+                  >
+                    <Input
+                      id="self-apikey-tpm"
+                      type="number"
+                      min="1"
+                      {...form.register("rate_limit_tpm")}
+                      placeholder="Default"
                     />
                   </FormField>
 
                   {/* IP Allowlist */}
-                  <FormField
-                    label="IP Allowlist"
-                    htmlFor="self-apikey-ips"
-                    helpText="One IP or CIDR per line. Leave empty to allow all IPs."
-                    error={form.formState.errors.ip_allowlist?.message}
-                  >
-                    <Textarea
-                      id="self-apikey-ips"
-                      {...form.register("ip_allowlist")}
-                      placeholder="192.168.1.0/24&#10;10.0.0.1&#10;2001:db8::/32"
-                      className="font-mono text-xs min-h-[80px]"
-                      rows={3}
-                    />
-                  </FormField>
-
-                  {/* Rate Limits */}
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2">
                     <FormField
-                      label="Requests/min"
-                      htmlFor="self-apikey-rpm"
-                      helpText="Override global limit"
-                      error={form.formState.errors.rate_limit_rpm?.message}
+                      label="IP Allowlist"
+                      htmlFor="self-apikey-ips"
+                      helpText="One IP or CIDR per line. Leave empty to allow all IPs."
+                      error={form.formState.errors.ip_allowlist?.message}
                     >
-                      <Input
-                        id="self-apikey-rpm"
-                        type="number"
-                        min="1"
-                        {...form.register("rate_limit_rpm")}
-                        placeholder="Default"
-                      />
-                    </FormField>
-                    <FormField
-                      label="Tokens/min"
-                      htmlFor="self-apikey-tpm"
-                      helpText="Override global limit"
-                      error={form.formState.errors.rate_limit_tpm?.message}
-                    >
-                      <Input
-                        id="self-apikey-tpm"
-                        type="number"
-                        min="1"
-                        {...form.register("rate_limit_tpm")}
-                        placeholder="Default"
+                      <Textarea
+                        id="self-apikey-ips"
+                        {...form.register("ip_allowlist")}
+                        placeholder="192.168.1.0/24&#10;10.0.0.1&#10;2001:db8::/32"
+                        className="font-mono text-xs min-h-[80px]"
+                        rows={3}
                       />
                     </FormField>
                   </div>
+
+                  {/* Sovereignty Requirements */}
+                  <SovereigntyFormFields register={form.register} idPrefix="self-apikey" />
                 </div>
               </div>
             </div>

@@ -430,4 +430,9 @@ pub struct CreateChatCompletionPayload {
     /// User identifier for abuse detection
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
+
+    /// **Hadrian Extension:** Per-request sovereignty requirements.
+    /// Merged with API key requirements (most restrictive wins).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sovereignty_requirements: Option<crate::config::SovereigntyRequirements>,
 }

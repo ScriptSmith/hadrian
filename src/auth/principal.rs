@@ -504,6 +504,7 @@ mod tests {
             rate_limit_tpm: None,
             rotated_from_key_id: None,
             rotation_grace_until: None,
+            sovereignty_requirements: None,
         }
     }
 
@@ -524,7 +525,7 @@ mod tests {
             service_account_roles: Some(vec!["deployer".to_string(), "viewer".to_string()]),
         };
 
-        let auth = AuthenticatedRequest::new(IdentityKind::ApiKey(api_key_auth));
+        let auth = AuthenticatedRequest::new(IdentityKind::ApiKey(Box::new(api_key_auth)));
         let principal = derive_principal(&auth);
 
         match principal {
@@ -555,7 +556,7 @@ mod tests {
             service_account_roles: None,
         };
 
-        let auth = AuthenticatedRequest::new(IdentityKind::ApiKey(api_key_auth));
+        let auth = AuthenticatedRequest::new(IdentityKind::ApiKey(Box::new(api_key_auth)));
         let principal = derive_principal(&auth);
 
         match principal {
@@ -585,7 +586,7 @@ mod tests {
             service_account_roles: None,
         };
 
-        let auth = AuthenticatedRequest::new(IdentityKind::ApiKey(api_key_auth));
+        let auth = AuthenticatedRequest::new(IdentityKind::ApiKey(Box::new(api_key_auth)));
         let principal = derive_principal(&auth);
 
         match principal {
@@ -613,7 +614,7 @@ mod tests {
             service_account_roles: None,
         };
 
-        let auth = AuthenticatedRequest::new(IdentityKind::ApiKey(api_key_auth));
+        let auth = AuthenticatedRequest::new(IdentityKind::ApiKey(Box::new(api_key_auth)));
         let principal = derive_principal(&auth);
 
         match principal {
@@ -646,7 +647,7 @@ mod tests {
             service_account_roles: None,
         };
 
-        let auth = AuthenticatedRequest::new(IdentityKind::ApiKey(api_key_auth));
+        let auth = AuthenticatedRequest::new(IdentityKind::ApiKey(Box::new(api_key_auth)));
         let principal = derive_principal(&auth);
 
         match principal {

@@ -146,6 +146,7 @@ impl EmbeddingService {
             user: None,
             provider: None,
             input_type: None,
+            sovereignty_requirements: None,
         };
 
         // Start timing
@@ -217,6 +218,7 @@ impl EmbeddingService {
             user: None,
             provider: None,
             input_type: None,
+            sovereignty_requirements: None,
         };
 
         // Start timing
@@ -457,6 +459,7 @@ mod tests {
             stream_options: None,
             top_p: None,
             user: None,
+            sovereignty_requirements: None,
         }
     }
 

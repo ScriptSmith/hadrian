@@ -421,6 +421,7 @@ pub trait Provider: Send + Sync {
                     stream_options: None,
                     metadata: None,
                     reasoning: None,
+                    sovereignty_requirements: None,
                 };
 
                 match self.create_chat_completion(client, payload).await {

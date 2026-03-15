@@ -297,6 +297,7 @@ pub async fn update(
         "base_url": input.base_url,
         "api_key": input.api_key.as_ref().map(|_| "****"),
         "models": input.models,
+        "sovereignty": input.sovereignty,
         "is_enabled": input.is_enabled,
     });
 
@@ -695,6 +696,7 @@ pub async fn test_credentials(
         api_key_secret_ref: input.api_key,
         config: input.config,
         models: input.models.unwrap_or_default(),
+        sovereignty: input.sovereignty,
         is_enabled: true,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),

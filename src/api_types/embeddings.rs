@@ -128,6 +128,11 @@ pub struct CreateEmbeddingPayload {
     /// **Hadrian Extension:** Input type hint for embedding providers that support it (e.g., Cohere)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_type: Option<String>,
+
+    /// **Hadrian Extension:** Per-request sovereignty requirements.
+    /// Merged with API key requirements (most restrictive wins).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sovereignty_requirements: Option<crate::config::SovereigntyRequirements>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

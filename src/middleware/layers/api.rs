@@ -1253,7 +1253,9 @@ async fn try_authenticate(
             // Optional auth: try API key if header present, don't require it
             let api_key = try_api_key_auth(headers, state).await?;
             match api_key {
-                Some(api_key) => Ok(AuthenticatedRequest::new(IdentityKind::ApiKey(api_key))),
+                Some(api_key) => Ok(AuthenticatedRequest::new(IdentityKind::ApiKey(Box::new(
+                    api_key,
+                )))),
                 None => Err(AuthError::MissingCredentials),
             }
         }
@@ -1261,7 +1263,9 @@ async fn try_authenticate(
             // Require API key
             let api_key = try_api_key_auth(headers, state).await?;
             match api_key {
-                Some(api_key) => Ok(AuthenticatedRequest::new(IdentityKind::ApiKey(api_key))),
+                Some(api_key) => Ok(AuthenticatedRequest::new(IdentityKind::ApiKey(Box::new(
+                    api_key,
+                )))),
                 None => Err(AuthError::MissingCredentials),
             }
         }
@@ -1288,7 +1292,7 @@ async fn try_authenticate(
                     api_key: Box::new(api_key),
                     identity,
                 },
-                (Some(api_key), None) => IdentityKind::ApiKey(api_key),
+                (Some(api_key), None) => IdentityKind::ApiKey(Box::new(api_key)),
                 (None, Some(identity)) => IdentityKind::Identity(identity),
                 (None, None) => return Err(AuthError::MissingCredentials),
             };
@@ -1303,7 +1307,7 @@ async fn try_authenticate(
                     api_key: Box::new(api_key),
                     identity,
                 },
-                (Some(api_key), None) => IdentityKind::ApiKey(api_key),
+                (Some(api_key), None) => IdentityKind::ApiKey(Box::new(api_key)),
                 (None, Some(identity)) => IdentityKind::Identity(identity),
                 (None, None) => return Err(AuthError::MissingCredentials),
             };

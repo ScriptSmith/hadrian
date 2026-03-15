@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { Button } from "@/components/Button/Button";
 import { TooltipProvider } from "@/components/Tooltip/Tooltip";
+import { ConfigProvider } from "@/config/ConfigProvider";
 import { PreferencesProvider } from "@/preferences/PreferencesProvider";
 
 import { ModelPicker, type ModelInfo } from "./ModelPicker";
@@ -15,11 +16,13 @@ const meta: Meta<typeof ModelPicker> = {
   },
   decorators: [
     (Story) => (
-      <PreferencesProvider>
-        <TooltipProvider>
-          <Story />
-        </TooltipProvider>
-      </PreferencesProvider>
+      <ConfigProvider>
+        <PreferencesProvider>
+          <TooltipProvider>
+            <Story />
+          </TooltipProvider>
+        </PreferencesProvider>
+      </ConfigProvider>
     ),
   ],
 };

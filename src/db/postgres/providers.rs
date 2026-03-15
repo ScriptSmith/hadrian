@@ -65,6 +65,13 @@ impl PostgresDynamicProviderRepo {
             api_key_secret_ref: row.get("api_key_secret_ref"),
             config: row.get("config"),
             models,
+            sovereignty: row
+                .get::<Option<serde_json::Value>, _>("sovereignty")
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e| {
+                    DbError::Internal(format!("failed to deserialize sovereignty metadata: {e}"))
+                })?,
             is_enabled: row.get("is_enabled"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
@@ -86,7 +93,7 @@ impl PostgresDynamicProviderRepo {
         let query = format!(
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'organization' AND owner_id = $1
             AND ROW(created_at, id) {} ROW($2, $3)
@@ -138,7 +145,7 @@ impl PostgresDynamicProviderRepo {
         let query = format!(
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'project' AND owner_id = $1
             AND ROW(created_at, id) {} ROW($2, $3)
@@ -190,7 +197,7 @@ impl PostgresDynamicProviderRepo {
         let query = format!(
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'team' AND owner_id = $1
             AND ROW(created_at, id) {} ROW($2, $3)
@@ -242,7 +249,7 @@ impl PostgresDynamicProviderRepo {
         let query = format!(
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'user' AND owner_id = $1
             AND ROW(created_at, id) {} ROW($2, $3)
@@ -293,9 +300,9 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
             r#"
             INSERT INTO dynamic_providers (
                 id, owner_type, owner_id, name, provider_type, base_url,
-                api_key_secret_ref, config, models, is_enabled
+                api_key_secret_ref, config, models, sovereignty, is_enabled
             )
-            VALUES ($1, $2::dynamic_provider_owner_type, $3, $4, $5, $6, $7, $8, $9, true)
+            VALUES ($1, $2::dynamic_provider_owner_type, $3, $4, $5, $6, $7, $8, $9, $10, true)
             RETURNING created_at, updated_at
             "#,
         )
@@ -308,6 +315,12 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
         .bind(&input.api_key)
         .bind(&input.config)
         .bind(&models_json)
+        .bind(
+            input
+                .sovereignty
+                .as_ref()
+                .and_then(|s| serde_json::to_value(s).ok()),
+        )
         .fetch_one(&self.write_pool)
         .await
         .map_err(|e| match e {
@@ -326,6 +339,7 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
             api_key_secret_ref: input.api_key,
             config: input.config,
             models,
+            sovereignty: input.sovereignty,
             is_enabled: true,
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
@@ -336,7 +350,7 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
         let row = sqlx::query(
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE id = $1
             "#,
@@ -358,7 +372,7 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
         let row = sqlx::query(
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = $1::dynamic_provider_owner_type AND owner_id = $2 AND name = $3
             "#,
@@ -391,7 +405,7 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
         let rows = sqlx::query(
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'organization' AND owner_id = $1
             ORDER BY created_at DESC, id DESC
@@ -451,7 +465,7 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
         let rows = sqlx::query(
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'team' AND owner_id = $1
             ORDER BY created_at DESC, id DESC
@@ -511,7 +525,7 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
         let rows = sqlx::query(
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'project' AND owner_id = $1
             ORDER BY created_at DESC, id DESC
@@ -571,7 +585,7 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
         let rows = sqlx::query(
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'user' AND owner_id = $1
             ORDER BY created_at DESC, id DESC
@@ -627,7 +641,7 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
             let query = format!(
                 r#"
                 SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                       api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                       api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
                 FROM dynamic_providers
                 WHERE owner_type = 'user' AND owner_id = $1 AND is_enabled = true
                 AND ROW(created_at, id) {} ROW($2, $3)
@@ -667,7 +681,7 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
         let rows = sqlx::query(
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'user' AND owner_id = $1 AND is_enabled = true
             ORDER BY created_at DESC, id DESC
@@ -708,7 +722,7 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
             let query = format!(
                 r#"
                 SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                       api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                       api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
                 FROM dynamic_providers
                 WHERE owner_type = 'organization' AND owner_id = $1 AND is_enabled = true
                 AND ROW(created_at, id) {} ROW($2, $3)
@@ -748,7 +762,7 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
         let rows = sqlx::query(
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'organization' AND owner_id = $1 AND is_enabled = true
             ORDER BY created_at DESC, id DESC
@@ -789,7 +803,7 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
             let query = format!(
                 r#"
                 SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                       api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                       api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
                 FROM dynamic_providers
                 WHERE owner_type = 'project' AND owner_id = $1 AND is_enabled = true
                 AND ROW(created_at, id) {} ROW($2, $3)
@@ -829,7 +843,7 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
         let rows = sqlx::query(
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'project' AND owner_id = $1 AND is_enabled = true
             ORDER BY created_at DESC, id DESC
@@ -870,7 +884,7 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
             let query = format!(
                 r#"
                 SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                       api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                       api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
                 FROM dynamic_providers
                 WHERE owner_type = 'team' AND owner_id = $1 AND is_enabled = true
                 AND ROW(created_at, id) {} ROW($2, $3)
@@ -910,7 +924,7 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
         let rows = sqlx::query(
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'team' AND owner_id = $1 AND is_enabled = true
             ORDER BY created_at DESC, id DESC
@@ -957,6 +971,11 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
             updates.push(format!("models = ${}", param_count));
             param_count += 1;
         }
+        if input.sovereignty.is_some() {
+            // Some(None) clears to NULL, Some(Some(v)) sets to v
+            updates.push(format!("sovereignty = ${}", param_count));
+            param_count += 1;
+        }
         if input.is_enabled.is_some() {
             updates.push(format!("is_enabled = ${}", param_count));
             param_count += 1;
@@ -987,6 +1006,15 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
             let models_json =
                 serde_json::to_value(models).map_err(|e| DbError::Internal(e.to_string()))?;
             query = query.bind(models_json);
+        }
+        if let Some(ref sovereignty) = input.sovereignty {
+            // Some(None) → bind NULL, Some(Some(v)) → bind JSON
+            let sovereignty_json: Option<serde_json::Value> = sovereignty
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|e| DbError::Internal(e.to_string()))?;
+            query = query.bind(sovereignty_json);
         }
         if let Some(is_enabled) = input.is_enabled {
             query = query.bind(is_enabled);

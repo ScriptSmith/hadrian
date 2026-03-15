@@ -232,6 +232,7 @@ impl ApiKeyService {
             ip_allowlist: old_key.ip_allowlist,
             rate_limit_rpm: old_key.rate_limit_rpm,
             rate_limit_tpm: old_key.rate_limit_tpm,
+            sovereignty_requirements: old_key.sovereignty_requirements,
         };
 
         // Generate new key

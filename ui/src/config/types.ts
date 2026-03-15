@@ -3,6 +3,7 @@ export interface UiConfig {
   chat: ChatConfig;
   admin: AdminConfig;
   auth: AuthConfig;
+  sovereignty: SovereigntyUiConfig;
 }
 
 export interface BrandingConfig {
@@ -78,6 +79,16 @@ export interface AuthConfig {
 }
 
 export type AuthMethod = "none" | "api_key" | "oidc" | "header" | "per_org_sso";
+
+export interface SovereigntyUiConfig {
+  custom_fields: CustomSovereigntyFieldDef[];
+}
+
+export interface CustomSovereigntyFieldDef {
+  key: string;
+  title: string;
+  description?: string;
+}
 
 export interface OidcConfig {
   provider: string;

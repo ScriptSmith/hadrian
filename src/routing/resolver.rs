@@ -609,6 +609,7 @@ pub async fn dynamic_provider_to_config(
                 model_fallbacks: std::collections::HashMap::new(),
                 health_check: Default::default(),
                 catalog_provider: None,
+                sovereignty: provider.sovereignty.clone(),
             },
         )),
         "anthropic" => Ok(ProviderConfig::Anthropic(
@@ -632,6 +633,7 @@ pub async fn dynamic_provider_to_config(
                 model_fallbacks: std::collections::HashMap::new(),
                 health_check: Default::default(),
                 catalog_provider: None,
+                sovereignty: provider.sovereignty.clone(),
             },
         )),
         #[cfg(feature = "provider-azure")]
@@ -663,6 +665,7 @@ pub async fn dynamic_provider_to_config(
                     model_fallbacks: std::collections::HashMap::new(),
                     health_check: Default::default(),
                     catalog_provider: None,
+                    sovereignty: provider.sovereignty.clone(),
                 },
             ))
         }
@@ -724,6 +727,7 @@ pub async fn dynamic_provider_to_config(
                     converse_base_url,
                     health_check: Default::default(),
                     catalog_provider: None,
+                    sovereignty: provider.sovereignty.clone(),
                 },
             ))
         }
@@ -755,6 +759,7 @@ pub async fn dynamic_provider_to_config(
                         model_fallbacks: std::collections::HashMap::new(),
                         health_check: Default::default(),
                         catalog_provider: None,
+                        sovereignty: provider.sovereignty.clone(),
                     },
                 ))
             } else {
@@ -807,6 +812,7 @@ pub async fn dynamic_provider_to_config(
                         model_fallbacks: std::collections::HashMap::new(),
                         health_check: Default::default(),
                         catalog_provider: None,
+                        sovereignty: provider.sovereignty.clone(),
                     },
                 ))
             }
@@ -824,6 +830,7 @@ pub async fn dynamic_provider_to_config(
             model_fallbacks: std::collections::HashMap::new(),
             health_check: Default::default(),
             catalog_provider: None,
+            sovereignty: provider.sovereignty.clone(),
         })),
         _ => Err(RoutingError::InvalidScope(format!(
             "Unsupported provider type: {}",

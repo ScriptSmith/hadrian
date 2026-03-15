@@ -16,6 +16,7 @@ pub struct UiConfigResponse {
     pub chat: ChatResponse,
     pub admin: AdminResponse,
     pub auth: AuthResponse,
+    pub sovereignty: SovereigntyUiResponse,
 }
 
 #[derive(Debug, Serialize)]
@@ -141,6 +142,19 @@ pub struct OidcResponse {
     pub client_id: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct SovereigntyUiResponse {
+    pub custom_fields: Vec<CustomFieldDefResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CustomFieldDefResponse {
+    pub key: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 impl From<&UiConfig> for UiConfigResponse {
     fn from(config: &UiConfig) -> Self {
         Self {
@@ -148,6 +162,9 @@ impl From<&UiConfig> for UiConfigResponse {
             chat: ChatResponse::from(&config.chat),
             admin: AdminResponse::from(&config.admin),
             auth: AuthResponse::default(),
+            sovereignty: SovereigntyUiResponse {
+                custom_fields: vec![],
+            },
         }
     }
 }
@@ -250,6 +267,21 @@ impl Default for AuthResponse {
 pub async fn get_ui_config(State(state): State<AppState>) -> Json<UiConfigResponse> {
     let ui_config = &state.config.ui;
     let mut response = UiConfigResponse::from(ui_config);
+
+    // Add sovereignty custom field definitions
+    response.sovereignty = SovereigntyUiResponse {
+        custom_fields: state
+            .config
+            .sovereignty
+            .custom_fields
+            .iter()
+            .map(|f| CustomFieldDefResponse {
+                key: f.key.clone(),
+                title: f.title.clone(),
+                description: f.description.clone(),
+            })
+            .collect(),
+    };
 
     // Add auth methods based on configuration
     let mut auth_methods = Vec::new();

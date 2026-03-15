@@ -99,6 +99,15 @@ impl PostgresApiKeyRepo {
             rate_limit_tpm: row.get("rate_limit_tpm"),
             rotated_from_key_id: row.get("rotated_from_key_id"),
             rotation_grace_until: row.get("rotation_grace_until"),
+            sovereignty_requirements: row
+                .get::<Option<serde_json::Value>, _>("sovereignty_requirements")
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e| {
+                    DbError::Internal(format!(
+                        "failed to deserialize sovereignty_requirements: {e}"
+                    ))
+                })?,
         })
     }
 
@@ -119,7 +128,7 @@ impl PostgresApiKeyRepo {
             SELECT id, key_prefix, name, owner_type::TEXT, owner_id, budget_amount, budget_period::TEXT,
                    expires_at, last_used_at, created_at, revoked_at,
                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                   rotated_from_key_id, rotation_grace_until
+                   rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'organization' AND owner_id = $1
             AND ROW(created_at, id) {} ROW($2, $3)
@@ -173,7 +182,7 @@ impl PostgresApiKeyRepo {
             SELECT id, key_prefix, name, owner_type::TEXT, owner_id, budget_amount, budget_period::TEXT,
                    expires_at, last_used_at, created_at, revoked_at,
                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                   rotated_from_key_id, rotation_grace_until
+                   rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'project' AND owner_id = $1
             AND ROW(created_at, id) {} ROW($2, $3)
@@ -227,7 +236,7 @@ impl PostgresApiKeyRepo {
             SELECT id, key_prefix, name, owner_type::TEXT, owner_id, budget_amount, budget_period::TEXT,
                    expires_at, last_used_at, created_at, revoked_at,
                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                   rotated_from_key_id, rotation_grace_until
+                   rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'team' AND owner_id = $1
             AND ROW(created_at, id) {} ROW($2, $3)
@@ -281,7 +290,7 @@ impl PostgresApiKeyRepo {
             SELECT id, key_prefix, name, owner_type::TEXT, owner_id, budget_amount, budget_period::TEXT,
                    expires_at, last_used_at, created_at, revoked_at,
                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                   rotated_from_key_id, rotation_grace_until
+                   rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'user' AND owner_id = $1
             AND ROW(created_at, id) {} ROW($2, $3)
@@ -335,7 +344,7 @@ impl PostgresApiKeyRepo {
             SELECT id, key_prefix, name, owner_type::TEXT, owner_id, budget_amount, budget_period::TEXT,
                    expires_at, last_used_at, created_at, revoked_at,
                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                   rotated_from_key_id, rotation_grace_until
+                   rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'service_account' AND owner_id = $1
             AND ROW(created_at, id) {} ROW($2, $3)
@@ -393,9 +402,10 @@ impl ApiKeyRepo for PostgresApiKeyRepo {
             INSERT INTO api_keys (
                 id, name, key_hash, key_prefix, owner_type, owner_id,
                 budget_amount, budget_period, expires_at,
-                scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm
+                scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
+                sovereignty_requirements
             )
-            VALUES ($1, $2, $3, $4, $5::api_key_owner_type, $6, $7, $8::budget_period, $9, $10, $11, $12, $13, $14)
+            VALUES ($1, $2, $3, $4, $5::api_key_owner_type, $6, $7, $8::budget_period, $9, $10, $11, $12, $13, $14, $15)
             RETURNING created_at
             "#,
         )
@@ -428,6 +438,12 @@ impl ApiKeyRepo for PostgresApiKeyRepo {
         )
         .bind(input.rate_limit_rpm)
         .bind(input.rate_limit_tpm)
+        .bind(
+            input
+                .sovereignty_requirements
+                .as_ref()
+                .and_then(|s| serde_json::to_value(s).ok()),
+        )
         .fetch_one(&self.write_pool)
         .await
         .map_err(|e| match e {
@@ -455,6 +471,7 @@ impl ApiKeyRepo for PostgresApiKeyRepo {
             rate_limit_tpm: input.rate_limit_tpm,
             rotated_from_key_id: None,
             rotation_grace_until: None,
+            sovereignty_requirements: input.sovereignty_requirements,
         })
     }
 
@@ -465,7 +482,7 @@ impl ApiKeyRepo for PostgresApiKeyRepo {
                 id, key_prefix, name, owner_type::TEXT, owner_id,
                 budget_amount, budget_period::TEXT, expires_at, last_used_at, created_at, revoked_at,
                 scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                rotated_from_key_id, rotation_grace_until
+                rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE id = $1
             "#,
@@ -489,7 +506,7 @@ impl ApiKeyRepo for PostgresApiKeyRepo {
                 k.budget_amount, k.budget_period::TEXT, k.expires_at, k.last_used_at, k.created_at,
                 k.revoked_at,
                 k.scopes, k.allowed_models, k.ip_allowlist, k.rate_limit_rpm, k.rate_limit_tpm,
-                k.rotated_from_key_id, k.rotation_grace_until,
+                k.rotated_from_key_id, k.rotation_grace_until, k.sovereignty_requirements,
                 CASE
                     WHEN k.owner_type = 'organization' THEN k.owner_id
                     WHEN k.owner_type = 'team' THEN t.org_id
@@ -554,7 +571,7 @@ impl ApiKeyRepo for PostgresApiKeyRepo {
                 id, key_prefix, name, owner_type::TEXT, owner_id,
                 budget_amount, budget_period::TEXT, expires_at, last_used_at, created_at, revoked_at,
                 scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                rotated_from_key_id, rotation_grace_until
+                rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'organization' AND owner_id = $1
             ORDER BY created_at DESC, id DESC
@@ -613,7 +630,7 @@ impl ApiKeyRepo for PostgresApiKeyRepo {
                 id, key_prefix, name, owner_type::TEXT, owner_id,
                 budget_amount, budget_period::TEXT, expires_at, last_used_at, created_at, revoked_at,
                 scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                rotated_from_key_id, rotation_grace_until
+                rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'team' AND owner_id = $1
             ORDER BY created_at DESC, id DESC
@@ -672,7 +689,7 @@ impl ApiKeyRepo for PostgresApiKeyRepo {
                 id, key_prefix, name, owner_type::TEXT, owner_id,
                 budget_amount, budget_period::TEXT, expires_at, last_used_at, created_at, revoked_at,
                 scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                rotated_from_key_id, rotation_grace_until
+                rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'project' AND owner_id = $1
             ORDER BY created_at DESC, id DESC
@@ -731,7 +748,7 @@ impl ApiKeyRepo for PostgresApiKeyRepo {
                 id, key_prefix, name, owner_type::TEXT, owner_id,
                 budget_amount, budget_period::TEXT, expires_at, last_used_at, created_at, revoked_at,
                 scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                rotated_from_key_id, rotation_grace_until
+                rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'user' AND owner_id = $1
             ORDER BY created_at DESC, id DESC
@@ -841,7 +858,7 @@ impl ApiKeyRepo for PostgresApiKeyRepo {
                 id, key_prefix, name, owner_type::TEXT, owner_id,
                 budget_amount, budget_period::TEXT, expires_at, last_used_at, created_at, revoked_at,
                 scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                rotated_from_key_id, rotation_grace_until
+                rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'service_account' AND owner_id = $1
             ORDER BY created_at DESC, id DESC
@@ -941,9 +958,9 @@ impl ApiKeyRepo for PostgresApiKeyRepo {
                 id, name, key_hash, key_prefix, owner_type, owner_id,
                 budget_amount, budget_period, expires_at,
                 scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                rotated_from_key_id
+                sovereignty_requirements, rotated_from_key_id
             )
-            VALUES ($1, $2, $3, $4, $5::api_key_owner_type, $6, $7, $8::budget_period, $9, $10, $11, $12, $13, $14, $15)
+            VALUES ($1, $2, $3, $4, $5::api_key_owner_type, $6, $7, $8::budget_period, $9, $10, $11, $12, $13, $14, $15, $16)
             RETURNING created_at
             "#,
         )
@@ -976,6 +993,12 @@ impl ApiKeyRepo for PostgresApiKeyRepo {
         )
         .bind(new_key_input.rate_limit_rpm)
         .bind(new_key_input.rate_limit_tpm)
+        .bind(
+            new_key_input
+                .sovereignty_requirements
+                .as_ref()
+                .and_then(|s| serde_json::to_value(s).ok()),
+        )
         .bind(old_key_id)
         .fetch_one(&mut *tx)
         .await
@@ -1006,6 +1029,7 @@ impl ApiKeyRepo for PostgresApiKeyRepo {
             rate_limit_tpm: new_key_input.rate_limit_tpm,
             rotated_from_key_id: Some(old_key_id),
             rotation_grace_until: None,
+            sovereignty_requirements: new_key_input.sovereignty_requirements,
         })
     }
 
@@ -1053,7 +1077,7 @@ impl ApiKeyRepo for PostgresApiKeyRepo {
                 id, key_prefix, name, owner_type::TEXT, owner_id,
                 budget_amount, budget_period::TEXT, expires_at, last_used_at, created_at, revoked_at,
                 scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                rotated_from_key_id, rotation_grace_until
+                rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE name = $1 AND owner_type = 'organization' AND owner_id = $2 AND revoked_at IS NULL
             "#,
