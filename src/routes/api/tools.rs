@@ -1,6 +1,7 @@
 use axum::{Extension, Json, extract::State};
 use axum_valid::Valid;
 use chrono::Utc;
+use futures_util::StreamExt;
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
@@ -402,8 +403,8 @@ pub async fn web_fetch(
         ));
     }
 
-    // SSRF protection — use server config flags
-    validate_base_url_opts(
+    // SSRF protection — validate URL and capture resolved IPs to pin the request
+    let validated = validate_base_url_opts(
         &payload.url,
         UrlValidationOptions {
             allow_loopback: state.config.server.allow_loopback_urls,
@@ -425,9 +426,23 @@ pub async fn web_fetch(
         .min(config.max_response_bytes);
     let timeout = std::time::Duration::from_secs(config.timeout_secs);
 
-    // Use the no-redirect client to prevent SSRF via open redirects
-    let resp = state
-        .no_redirect_http_client
+    // Build a one-shot client pinned to the validated IPs to prevent DNS rebinding
+    let mut builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(config.timeout_secs));
+    for addr in &validated.addrs {
+        builder = builder.resolve(&validated.host, *addr);
+    }
+    let client = builder.build().map_err(|e| {
+        tracing::error!(error = %e, "Failed to build pinned HTTP client");
+        ApiError::new(
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            "client_error",
+            "Failed to build HTTP client",
+        )
+    })?;
+
+    let resp = client
         .get(&payload.url)
         .timeout(timeout)
         .send()
@@ -488,18 +503,27 @@ pub async fn web_fetch(
         }
     }
 
-    // Read body with byte limit
-    let bytes = resp.bytes().await.map_err(|e| {
-        tracing::error!(error = %e, "Failed to read response body");
-        ApiError::new(
-            http::StatusCode::BAD_GATEWAY,
-            "fetch_failed",
-            "Failed to read response body",
-        )
-    })?;
+    // Stream body with byte limit — stop reading once we have enough
+    let mut buf = Vec::with_capacity(max_bytes.min(65_536));
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| {
+            tracing::error!(error = %e, "Failed to read response body");
+            ApiError::new(
+                http::StatusCode::BAD_GATEWAY,
+                "fetch_failed",
+                "Failed to read response body",
+            )
+        })?;
+        buf.extend_from_slice(&chunk);
+        if buf.len() >= max_bytes {
+            buf.truncate(max_bytes);
+            break;
+        }
+    }
 
     // UTF-8 safe truncation
-    let lossy = String::from_utf8_lossy(&bytes);
+    let lossy = String::from_utf8_lossy(&buf);
     let text = if lossy.len() > max_bytes {
         let mut end = max_bytes;
         while end > 0 && !lossy.is_char_boundary(end) {

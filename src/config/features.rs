@@ -2161,7 +2161,7 @@ fn default_true() -> bool {
 /// max_results = 10
 /// timeout_secs = 30
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct WebSearchConfig {
@@ -2169,6 +2169,7 @@ pub struct WebSearchConfig {
     pub provider: WebSearchProvider,
 
     /// API key for the search provider. Supports `${ENV_VAR}` interpolation.
+    #[serde(skip_serializing)]
     pub api_key: String,
 
     /// Maximum number of results to return per search.
@@ -2183,6 +2184,21 @@ pub struct WebSearchConfig {
     /// Default: 10000 = $0.01
     #[serde(default = "default_web_search_cost")]
     pub cost_microcents_per_request: i64,
+}
+
+impl std::fmt::Debug for WebSearchConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebSearchConfig")
+            .field("provider", &self.provider)
+            .field("api_key", &"****")
+            .field("max_results", &self.max_results)
+            .field("timeout_secs", &self.timeout_secs)
+            .field(
+                "cost_microcents_per_request",
+                &self.cost_microcents_per_request,
+            )
+            .finish()
+    }
 }
 
 /// Supported web search providers.
