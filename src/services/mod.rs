@@ -42,6 +42,7 @@ mod users;
 mod vector_stores;
 #[cfg(feature = "virus-scan")]
 mod virus_scan;
+pub mod web_search_tool;
 
 use std::sync::Arc;
 
@@ -108,6 +109,9 @@ pub use vector_stores::VectorStoresService;
 #[cfg(feature = "virus-scan")]
 pub use virus_scan::{
     ClamAvScanner, NoOpScanner, ScanResult, VirusScanError, VirusScanResult, VirusScanner,
+};
+pub use web_search_tool::{
+    WebSearchContext, preprocess_web_search_tools, wrap_streaming_with_web_search,
 };
 
 use crate::{db::DbPool, events::EventBus};

@@ -3881,6 +3881,7 @@ impl UsageLogQueryParams {
             limit: self.limit,
             cursor: self.cursor,
             direction: self.direction,
+            record_type: None,
         }
     }
 
@@ -3900,6 +3901,7 @@ impl UsageLogQueryParams {
             limit: Some(10_000),
             cursor: None,
             direction: None,
+            record_type: None,
         }
     }
 }

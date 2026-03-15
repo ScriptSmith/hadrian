@@ -341,6 +341,12 @@ mod buffer {
                 audio_seconds: None,
                 character_count: None,
                 provider_source: None,
+                record_type: "model".to_string(),
+                tool_name: None,
+                tool_query: None,
+                tool_url: None,
+                tool_bytes_fetched: None,
+                tool_results_count: None,
             }
         }
 

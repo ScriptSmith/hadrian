@@ -38,6 +38,18 @@ pub struct UsageLogRecord {
     pub audio_seconds: Option<i32>,
     pub character_count: Option<i32>,
     pub provider_source: Option<String>,
+    /// Record type: "model" for LLM requests, "tool" for tool invocations
+    pub record_type: String,
+    /// Tool name (e.g. "web_search", "web_fetch") — only for tool records
+    pub tool_name: Option<String>,
+    /// Search query or target URL — only for tool records
+    pub tool_query: Option<String>,
+    /// URL fetched — only for web_fetch records
+    pub tool_url: Option<String>,
+    /// Response body size in bytes — only for tool records
+    pub tool_bytes_fetched: Option<i64>,
+    /// Number of search results returned — only for web_search records
+    pub tool_results_count: Option<i32>,
 }
 
 /// Usage log entry for a single API request.
@@ -100,6 +112,28 @@ pub struct UsageLogEntry {
     /// Whether this request used a static or dynamic provider
     #[serde(default)]
     pub provider_source: Option<String>,
+    /// Record type: "model" for LLM requests, "tool" for tool invocations
+    #[serde(default = "default_record_type")]
+    pub record_type: String,
+    /// Tool name (e.g. "web_search", "web_fetch") — only for tool records
+    #[serde(default)]
+    pub tool_name: Option<String>,
+    /// Search query or target URL — only for tool records
+    #[serde(default)]
+    pub tool_query: Option<String>,
+    /// URL fetched — only for web_fetch records
+    #[serde(default)]
+    pub tool_url: Option<String>,
+    /// Response body size in bytes — only for tool records
+    #[serde(default)]
+    pub tool_bytes_fetched: Option<i64>,
+    /// Number of search results returned — only for web_search records
+    #[serde(default)]
+    pub tool_results_count: Option<i32>,
+}
+
+fn default_record_type() -> String {
+    "model".to_string()
 }
 
 #[derive(Debug, Clone, Serialize)]

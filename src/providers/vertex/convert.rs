@@ -774,7 +774,8 @@ pub(super) fn convert_responses_tools_to_vertex(
             | ResponsesToolDefinition::WebSearchPreview20250311(_)
             | ResponsesToolDefinition::WebSearch(_)
             | ResponsesToolDefinition::WebSearch20250826(_) => {
-                tracing::warn!("Web search tools not supported by Vertex AI");
+                // Dead code: preprocessed to function tools in execution.rs
+                tracing::warn!("Unexpected web_search tool variant reached Vertex conversion");
             }
             ResponsesToolDefinition::FileSearch(_) => {
                 // File search is handled by the gateway middleware, but the model needs to know

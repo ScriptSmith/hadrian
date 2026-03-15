@@ -23,7 +23,8 @@ use crate::{
     },
     routing::{resolver, route_model_extended, route_models_extended},
     services::{
-        FileSearchAuthContext, FileSearchContext, ProviderCallback, wrap_streaming_with_file_search,
+        FileSearchAuthContext, FileSearchContext, ProviderCallback, WebSearchContext,
+        wrap_streaming_with_file_search, wrap_streaming_with_web_search,
     },
 };
 
@@ -210,6 +211,12 @@ pub(super) fn build_streaming_usage_entry(
             audio_seconds: None,
             character_count: None,
             provider_source: None,
+            record_type: "model".to_string(),
+            tool_name: None,
+            tool_query: None,
+            tool_url: None,
+            tool_bytes_fetched: None,
+            tool_results_count: None,
         })
     } else if state.default_user_id.is_some() || state.default_org_id.is_some() {
         // Anonymous mode: attribute to the default user/org so streaming usage
@@ -241,6 +248,12 @@ pub(super) fn build_streaming_usage_entry(
             audio_seconds: None,
             character_count: None,
             provider_source: None,
+            record_type: "model".to_string(),
+            tool_name: None,
+            tool_query: None,
+            tool_url: None,
+            tool_bytes_fetched: None,
+            tool_results_count: None,
         })
     } else {
         None
@@ -1420,7 +1433,7 @@ pub async fn api_v1_responses(
 
     // Apply file_search tool interception for streaming responses
     // This wraps the stream to detect and execute file_search tool calls
-    let mut final_response = if is_streaming
+    let final_response = if is_streaming
         && final_response.status().is_success()
         && let Some(ref file_search_service) = state.file_search_service
         && let Some(ref file_search_config) = state.config.features.file_search
@@ -1481,6 +1494,55 @@ pub async fn api_v1_responses(
             );
 
             wrap_streaming_with_file_search(final_response, context)
+        } else {
+            final_response
+        }
+    } else {
+        final_response
+    };
+
+    // Apply web_search tool interception for streaming responses
+    let mut final_response = if is_streaming
+        && final_response.status().is_success()
+        && let Some(ref web_search_config) = state.config.features.web_search
+    {
+        let has_web_search = payload
+            .tools
+            .as_ref()
+            .map(|tools| tools.iter().any(|t| t.is_web_search()))
+            .unwrap_or(false);
+
+        if has_web_search {
+            let callback_state = state.clone();
+            let callback_provider_name = provider_name.clone();
+            let callback_provider_config = provider_config.clone();
+            let callback_model_name = model_name.clone();
+
+            let provider_callback: ProviderCallback = std::sync::Arc::new(move |payload| {
+                let state = callback_state.clone();
+                let provider_name = callback_provider_name.clone();
+                let provider_config = callback_provider_config.clone();
+                let model_name = callback_model_name.clone();
+
+                Box::pin(async move {
+                    let mut payload = payload;
+                    payload.model = Some(model_name);
+                    ResponsesExecutor::execute(&state, &provider_name, &provider_config, payload)
+                        .await
+                })
+            });
+
+            let context = WebSearchContext::new(
+                state.http_client.clone(),
+                web_search_config.clone(),
+                web_search_config.max_iterations,
+                payload.clone(),
+            )
+            .with_provider_callback(provider_callback);
+
+            tracing::debug!("Web search middleware enabled for request with multi-turn support");
+
+            wrap_streaming_with_web_search(final_response, context)
         } else {
             final_response
         }

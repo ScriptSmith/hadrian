@@ -64,9 +64,11 @@ impl UsageRepo for PostgresUsageRepo {
                 streamed, cached_tokens, reasoning_tokens, finish_reason,
                 latency_ms, cancelled, status_code,
                 user_id, org_id, project_id, team_id, service_account_id, pricing_source,
-                image_count, audio_seconds, character_count, provider_source
+                image_count, audio_seconds, character_count, provider_source,
+                record_type, tool_name, tool_query, tool_url,
+                tool_bytes_fetched, tool_results_count
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34)
             ON CONFLICT (request_id) DO NOTHING
             "#,
         )
@@ -98,6 +100,12 @@ impl UsageRepo for PostgresUsageRepo {
         .bind(entry.audio_seconds)
         .bind(entry.character_count)
         .bind(entry.provider_source)
+        .bind(&entry.record_type)
+        .bind(&entry.tool_name)
+        .bind(&entry.tool_query)
+        .bind(&entry.tool_url)
+        .bind(entry.tool_bytes_fetched)
+        .bind(entry.tool_results_count)
         .execute(&self.write_pool)
         .await?;
 
@@ -110,7 +118,7 @@ impl UsageRepo for PostgresUsageRepo {
         }
 
         // PostgreSQL allows up to 65535 parameters per query
-        // Each entry uses 27 parameters, so we can insert ~2427 entries per batch
+        // Each entry uses 34 parameters, so we can insert ~1927 entries per batch
         // Use 1000 as a reasonable batch size for performance
         const MAX_ENTRIES_PER_BATCH: usize = 1000;
 
@@ -128,14 +136,15 @@ impl UsageRepo for PostgresUsageRepo {
                 .iter()
                 .enumerate()
                 .map(|(i, _)| {
-                    let o = i * 28;
+                    let o = i * 34;
                     format!(
-                        "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                        "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
                         o + 1, o + 2, o + 3, o + 4, o + 5, o + 6,
                         o + 7, o + 8, o + 9, o + 10, o + 11, o + 12,
                         o + 13, o + 14, o + 15, o + 16, o + 17, o + 18,
                         o + 19, o + 20, o + 21, o + 22, o + 23, o + 24,
-                        o + 25, o + 26, o + 27, o + 28
+                        o + 25, o + 26, o + 27, o + 28, o + 29, o + 30,
+                        o + 31, o + 32, o + 33, o + 34
                     )
                 })
                 .collect();
@@ -148,7 +157,9 @@ impl UsageRepo for PostgresUsageRepo {
                     streamed, cached_tokens, reasoning_tokens, finish_reason,
                     latency_ms, cancelled, status_code,
                     user_id, org_id, project_id, team_id, service_account_id, pricing_source,
-                    image_count, audio_seconds, character_count, provider_source
+                    image_count, audio_seconds, character_count, provider_source,
+                    record_type, tool_name, tool_query, tool_url,
+                    tool_bytes_fetched, tool_results_count
                 )
                 VALUES {}
                 ON CONFLICT (request_id) DO NOTHING
@@ -190,7 +201,13 @@ impl UsageRepo for PostgresUsageRepo {
                     .bind(entry.image_count)
                     .bind(entry.audio_seconds)
                     .bind(entry.character_count)
-                    .bind(&entry.provider_source);
+                    .bind(&entry.provider_source)
+                    .bind(&entry.record_type)
+                    .bind(&entry.tool_name)
+                    .bind(&entry.tool_query)
+                    .bind(&entry.tool_url)
+                    .bind(entry.tool_bytes_fetched)
+                    .bind(entry.tool_results_count);
             }
 
             let result = query_builder.execute(&mut *tx).await?;
@@ -3817,6 +3834,10 @@ impl UsageRepo for PostgresUsageRepo {
             conditions.push(format!("provider_source = ${}", param_idx));
             param_idx += 1;
         }
+        if query.record_type.is_some() {
+            conditions.push(format!("record_type = ${}", param_idx));
+            param_idx += 1;
+        }
         if query.from.is_some() {
             conditions.push(format!("recorded_at >= ${}", param_idx));
             param_idx += 1;
@@ -3854,7 +3875,9 @@ impl UsageRepo for PostgresUsageRepo {
                    http_referer, input_tokens, output_tokens, cached_tokens,
                    reasoning_tokens, cost_microcents, streamed, finish_reason,
                    latency_ms, cancelled, status_code, pricing_source,
-                   image_count, audio_seconds, character_count, provider_source
+                   image_count, audio_seconds, character_count, provider_source,
+                   record_type, tool_name, tool_query, tool_url,
+                   tool_bytes_fetched, tool_results_count
             FROM usage_records
             {}
             ORDER BY recorded_at {}, id {}
@@ -3891,6 +3914,9 @@ impl UsageRepo for PostgresUsageRepo {
         }
         if let Some(provider_source) = &query.provider_source {
             qb = qb.bind(provider_source);
+        }
+        if let Some(record_type) = &query.record_type {
+            qb = qb.bind(record_type);
         }
         if let Some(from) = &query.from {
             qb = qb.bind(from);
@@ -3937,6 +3963,14 @@ impl UsageRepo for PostgresUsageRepo {
                 audio_seconds: row.get("audio_seconds"),
                 character_count: row.get("character_count"),
                 provider_source: row.get("provider_source"),
+                record_type: row
+                    .try_get("record_type")
+                    .unwrap_or_else(|_| "model".to_string()),
+                tool_name: row.get("tool_name"),
+                tool_query: row.get("tool_query"),
+                tool_url: row.get("tool_url"),
+                tool_bytes_fetched: row.get("tool_bytes_fetched"),
+                tool_results_count: row.get("tool_results_count"),
             })
             .collect();
 

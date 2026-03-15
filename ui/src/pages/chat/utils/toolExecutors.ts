@@ -10,25 +10,25 @@
  * 1. Create an executor function matching the `ToolExecutor` signature
  * 2. Register it in `defaultToolExecutors` or pass custom executors to `executeTools`
  *
- * ## Example: Adding a hypothetical `web_search` tool
+ * ## Example: Adding a hypothetical `translation` tool
  *
  * ```typescript
- * const webSearchExecutor: ToolExecutor = async (toolCall, context) => {
- *   if (toolCall.name !== "web_search") {
+ * const translationExecutor: ToolExecutor = async (toolCall, context) => {
+ *   if (toolCall.name !== "translation") {
  *     return { success: false, error: "Invalid tool type" };
  *   }
- *   const args = toolCall.arguments as { query: string };
- *   const results = await searchWeb(args.query);
+ *   const args = toolCall.arguments as { text: string; target_lang: string };
+ *   const result = await translateText(args.text, args.target_lang);
  *   return {
  *     success: true,
- *     output: JSON.stringify(results),
+ *     output: JSON.stringify(result),
  *   };
  * };
  *
  * // Register it
  * const executors = {
  *   ...defaultToolExecutors,
- *   web_search: webSearchExecutor,
+ *   translation: translationExecutor,
  * };
  * ```
  */
@@ -800,11 +800,11 @@ export const jsInterpreterExecutor: ToolExecutor = async (
 };
 
 /**
- * Placeholder executor for web_search (not yet implemented)
+ * Web search executor — calls backend /v1/tools/web-search endpoint
  */
 export const webSearchExecutor: ToolExecutor = async (
   toolCall,
-  _context
+  context
 ): Promise<ToolExecutionResult> => {
   if (toolCall.name !== "web_search") {
     return {
@@ -813,13 +813,127 @@ export const webSearchExecutor: ToolExecutor = async (
     };
   }
 
-  // Placeholder - web_search requires backend support
+  const args = toolCall.arguments as { query: string; max_results?: number };
+
+  context.onStatusMessage?.(toolCall.id, "Searching the web...");
+
+  const resp = await fetch("/api/v1/tools/web-search", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(context.token && { Authorization: `Bearer ${context.token}` }),
+    },
+    body: JSON.stringify({ query: args.query, max_results: args.max_results }),
+    signal: context.signal,
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    return {
+      success: false,
+      error: `Web search failed: ${resp.status} ${body}`,
+      output: JSON.stringify({ error: `Web search request failed with status ${resp.status}` }),
+    };
+  }
+
+  const data = (await resp.json()) as {
+    results?: Array<{ title: string; url: string; content: string; score?: number }>;
+  };
+
+  if (!Array.isArray(data?.results)) {
+    return {
+      success: false,
+      error: "Invalid response: missing results array",
+      output: JSON.stringify(data),
+    };
+  }
+
+  // Build table artifact for results
+  const artifacts: Artifact[] = [];
+  if (data.results.length > 0) {
+    const rows = data.results.map((r) => ({
+      title: r.title,
+      url: r.url,
+      snippet: r.content.substring(0, 200) + (r.content.length > 200 ? "..." : ""),
+    }));
+    artifacts.push({
+      id: `search-results-${toolCall.id}`,
+      type: "table",
+      title: `Search: ${args.query}`,
+      data: {
+        columns: [
+          { key: "title", label: "Title" },
+          { key: "url", label: "URL" },
+          { key: "snippet", label: "Snippet" },
+        ],
+        rows,
+      },
+      role: "output",
+    });
+  }
+
   return {
-    success: false,
-    error: "web_search is not yet supported for client-side execution",
-    output: JSON.stringify({
-      error: "Web search execution is not available in client-side mode.",
-    }),
+    success: true,
+    output: JSON.stringify(data),
+    artifacts,
+  };
+};
+
+/**
+ * Web fetch executor — calls backend /v1/tools/web-fetch endpoint
+ */
+export const webFetchExecutor: ToolExecutor = async (
+  toolCall,
+  context
+): Promise<ToolExecutionResult> => {
+  if (toolCall.name !== "web_fetch") {
+    return {
+      success: false,
+      error: `Expected web_fetch tool, got ${toolCall.name}`,
+    };
+  }
+
+  const args = toolCall.arguments as { url: string; max_length?: number };
+
+  context.onStatusMessage?.(toolCall.id, "Fetching URL...");
+
+  const resp = await fetch("/api/v1/tools/web-fetch", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(context.token && { Authorization: `Bearer ${context.token}` }),
+    },
+    body: JSON.stringify({ url: args.url, max_length: args.max_length }),
+    signal: context.signal,
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    return {
+      success: false,
+      error: `Web fetch failed: ${resp.status} ${body}`,
+      output: JSON.stringify({ error: `Web fetch request failed with status ${resp.status}` }),
+    };
+  }
+
+  const data = (await resp.json()) as {
+    url: string;
+    content_type: string | null;
+    content?: string;
+    content_length: number;
+  };
+
+  if (typeof data?.content !== "string") {
+    return {
+      success: false,
+      error: "Invalid response: missing content string",
+      output: JSON.stringify(data),
+    };
+  }
+
+  return {
+    success: true,
+    output: JSON.stringify(data),
   };
 };
 
@@ -2344,6 +2458,7 @@ export const defaultToolExecutors: ToolExecutorRegistry = {
   chart_render: chartRenderExecutor,
   html_render: htmlRenderExecutor,
   web_search: webSearchExecutor,
+  web_fetch: webFetchExecutor,
   display_artifacts: displayArtifactsExecutor,
   sub_agent: subAgentExecutor,
   wikipedia: wikipediaExecutor,
@@ -2423,9 +2538,16 @@ export const TOOL_METADATA: ToolMetadata[] = [
   {
     id: "web_search",
     name: "Web Search",
-    description: "Search the web for current information",
+    description: "Search the web for current information (requires backend configuration)",
     icon: "Globe",
-    implemented: false,
+    implemented: true,
+  },
+  {
+    id: "web_fetch",
+    name: "Web Fetch",
+    description: "Fetch content from a URL (requires backend configuration)",
+    icon: "Download",
+    implemented: true,
   },
   {
     id: "wikipedia",

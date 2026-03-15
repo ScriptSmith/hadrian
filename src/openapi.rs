@@ -700,6 +700,9 @@ requests_per_minute = 120
         // API routes - Vector Store Chunks & Search (Hadrian extensions)
         api::api_v1_vector_stores_list_file_chunks,
         api::api_v1_vector_stores_search,
+        // API routes - Tools (Hadrian extensions)
+        api::web_search,
+        api::web_fetch,
     ),
     components(schemas(
         // API types - Chat Completion
@@ -1062,6 +1065,12 @@ requests_per_minute = 120
         // Ranking options (OpenAI-compatible)
         models::FileSearchRankingOptions,
         models::FileSearchRanker,
+        // Tools types (Hadrian extensions)
+        api::WebSearchRequest,
+        api::WebSearchResponse,
+        api::WebSearchResult,
+        api::WebFetchRequest,
+        api::WebFetchResponse,
         // Error response
         ErrorResponse,
         ErrorInfo,

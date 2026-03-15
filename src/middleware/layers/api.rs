@@ -971,6 +971,12 @@ pub async fn api_middleware(
                     audio_seconds: usage.audio_seconds,
                     character_count: usage.character_count,
                     provider_source: tracker.provider_source.clone(),
+                    record_type: "model".to_string(),
+                    tool_name: None,
+                    tool_query: None,
+                    tool_url: None,
+                    tool_bytes_fetched: None,
+                    tool_results_count: None,
                 });
             }
         }
@@ -1126,6 +1132,12 @@ fn track_usage_async(ctx: UsageTrackingContext<'_>) {
         audio_seconds: usage.audio_seconds,
         character_count: usage.character_count,
         provider_source,
+        record_type: "model".to_string(),
+        tool_name: None,
+        tool_query: None,
+        tool_url: None,
+        tool_bytes_fetched: None,
+        tool_results_count: None,
     };
 
     let is_success = response.status().is_success();

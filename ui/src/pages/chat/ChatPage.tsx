@@ -103,6 +103,8 @@ export default function ChatPage() {
   // 9. mcp is enabled (MCP tools are executed client-side)
   // 10. wikipedia is enabled (it's a client-side only tool)
   // 11. wikidata is enabled (it's a client-side only tool)
+  // 12. web_search is enabled (backend-proxied tool)
+  // 13. web_fetch is enabled (backend-proxied tool)
   const clientSideToolExecution =
     clientSideRAG ||
     enabledTools.includes("file_search") ||
@@ -114,7 +116,9 @@ export default function ChatPage() {
     enabledTools.includes("sub_agent") ||
     enabledTools.includes("mcp") ||
     enabledTools.includes("wikipedia") ||
-    enabledTools.includes("wikidata");
+    enabledTools.includes("wikidata") ||
+    enabledTools.includes("web_search") ||
+    enabledTools.includes("web_fetch");
 
   // Pass only active (non-disabled) models to useChat
   // Filter to only registered data files for SQL context

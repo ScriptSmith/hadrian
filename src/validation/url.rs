@@ -3,7 +3,7 @@
 //! Validates user-supplied URLs before the server makes outbound HTTP requests to them.
 //! Blocks private/internal IP ranges, non-HTTP schemes, and cloud metadata endpoints.
 
-use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 
 /// Errors from URL validation.
 #[derive(Debug, thiserror::Error)]
@@ -19,6 +19,15 @@ pub enum UrlValidationError {
 
     #[error("URL resolves to a blocked address")]
     BlockedAddress,
+}
+
+/// A URL that has passed SSRF validation, carrying the resolved socket addresses.
+///
+/// Use the `addrs` field to pin the HTTP client to the validated IPs, preventing
+/// DNS rebinding between validation and the actual request.
+pub struct ValidatedUrl {
+    pub host: String,
+    pub addrs: Vec<SocketAddr>,
 }
 
 /// Options controlling which IP ranges are permitted in SSRF validation.
@@ -115,13 +124,18 @@ pub fn validate_base_url(url: &str, allow_loopback: bool) -> Result<(), UrlValid
             allow_private: false,
         },
     )
+    .map(|_| ())
 }
 
 /// Validate a user-supplied URL with full options control.
+///
+/// Returns a [`ValidatedUrl`] containing the resolved socket addresses so callers
+/// can pin the HTTP client to those IPs, preventing DNS rebinding between
+/// validation and the actual request.
 pub fn validate_base_url_opts(
     url: &str,
     opts: UrlValidationOptions,
-) -> Result<(), UrlValidationError> {
+) -> Result<ValidatedUrl, UrlValidationError> {
     let parsed = url::Url::parse(url).map_err(|e| UrlValidationError::InvalidUrl(e.to_string()))?;
 
     // Scheme check
@@ -141,20 +155,23 @@ pub fn validate_base_url_opts(
         return Err(UrlValidationError::BlockedAddress);
     }
 
-    // Try to parse as IP directly first
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        if is_blocked_ip(ip, opts) {
-            return Err(UrlValidationError::BlockedAddress);
-        }
-        return Ok(());
-    }
-
-    // Resolve hostname to IP addresses and check each one
     let port = parsed.port().unwrap_or(match parsed.scheme() {
         "https" => 443,
         _ => 80,
     });
 
+    // Try to parse as IP directly first — no DNS rebinding risk for literal IPs
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_blocked_ip(ip, opts) {
+            return Err(UrlValidationError::BlockedAddress);
+        }
+        return Ok(ValidatedUrl {
+            host: host.to_string(),
+            addrs: vec![SocketAddr::new(ip, port)],
+        });
+    }
+
+    // Resolve hostname to IP addresses and check each one
     let socket_addrs: Vec<_> = format!("{host}:{port}")
         .to_socket_addrs()
         .map_err(|e| UrlValidationError::InvalidUrl(format!("DNS resolution failed: {e}")))?
@@ -181,7 +198,10 @@ pub fn validate_base_url_opts(
         }
     }
 
-    Ok(())
+    Ok(ValidatedUrl {
+        host: host.to_string(),
+        addrs: socket_addrs,
+    })
 }
 
 /// Validate that a URL uses HTTPS scheme.
