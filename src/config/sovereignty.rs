@@ -292,18 +292,24 @@ impl SovereigntyRequirements {
 }
 
 /// For "allowed" lists, take the intersection if both are set, or whichever is set.
+/// Uses case-insensitive comparison to match `check()` behavior.
 fn merge_allowed_lists(a: &Option<Vec<String>>, b: &Option<Vec<String>>) -> Option<Vec<String>> {
     match (a, b) {
         (None, None) => None,
         (Some(x), None) | (None, Some(x)) => Some(x.clone()),
         (Some(a), Some(b)) => {
-            let intersection: Vec<String> = a.iter().filter(|v| b.contains(v)).cloned().collect();
+            let intersection: Vec<String> = a
+                .iter()
+                .filter(|v| b.iter().any(|bv| bv.eq_ignore_ascii_case(v)))
+                .cloned()
+                .collect();
             Some(intersection)
         }
     }
 }
 
 /// For "required" lists, take the union — both sources' requirements must be met.
+/// Uses case-insensitive comparison to match `check()` behavior.
 fn merge_required_lists(a: &Option<Vec<String>>, b: &Option<Vec<String>>) -> Option<Vec<String>> {
     match (a, b) {
         (None, None) => None,
@@ -311,7 +317,7 @@ fn merge_required_lists(a: &Option<Vec<String>>, b: &Option<Vec<String>>) -> Opt
         (Some(a), Some(b)) => {
             let mut merged = a.clone();
             for v in b {
-                if !merged.contains(v) {
+                if !merged.iter().any(|m| m.eq_ignore_ascii_case(v)) {
                     merged.push(v.clone());
                 }
             }
@@ -682,5 +688,55 @@ mod tests {
             ..Default::default()
         };
         assert!(reqs.check(&meta, false).is_ok());
+    }
+
+    #[test]
+    fn test_merge_allowed_lists_case_insensitive() {
+        let a = SovereigntyRequirements {
+            allowed_inference_countries: Some(vec!["US".into(), "DE".into()]),
+            ..Default::default()
+        };
+        let b = SovereigntyRequirements {
+            allowed_inference_countries: Some(vec!["us".into(), "fr".into()]),
+            ..Default::default()
+        };
+        let merged = SovereigntyRequirements::merge(Some(&a), Some(&b)).unwrap();
+        assert_eq!(merged.allowed_inference_countries, Some(vec!["US".into()]));
+    }
+
+    #[test]
+    fn test_merge_required_lists_case_insensitive() {
+        let a = SovereigntyRequirements {
+            required_certifications: Some(vec!["SOC2".into()]),
+            ..Default::default()
+        };
+        let b = SovereigntyRequirements {
+            required_certifications: Some(vec!["soc2".into(), "gdpr".into()]),
+            ..Default::default()
+        };
+        let merged = SovereigntyRequirements::merge(Some(&a), Some(&b)).unwrap();
+        let certs = merged.required_certifications.unwrap();
+        // "soc2" should not be added as a duplicate of "SOC2"
+        assert_eq!(certs.len(), 2);
+        assert!(certs.contains(&"SOC2".into()));
+        assert!(certs.contains(&"gdpr".into()));
+    }
+
+    #[test]
+    fn test_merge_blocked_lists_case_insensitive() {
+        let a = SovereigntyRequirements {
+            blocked_hq_countries: Some(vec!["CN".into()]),
+            ..Default::default()
+        };
+        let b = SovereigntyRequirements {
+            blocked_hq_countries: Some(vec!["cn".into(), "RU".into()]),
+            ..Default::default()
+        };
+        let merged = SovereigntyRequirements::merge(Some(&a), Some(&b)).unwrap();
+        let blocked = merged.blocked_hq_countries.unwrap();
+        // "cn" should not be added as a duplicate of "CN"
+        assert_eq!(blocked.len(), 2);
+        assert!(blocked.contains(&"CN".into()));
+        assert!(blocked.contains(&"RU".into()));
     }
 }

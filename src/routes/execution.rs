@@ -15,7 +15,7 @@ use crate::providers::bedrock;
 use crate::providers::vertex;
 use crate::{
     AppState, api_types,
-    config::ProviderConfig,
+    config::{ProviderConfig, SovereigntyMetadata, SovereigntyRequirements},
     observability::metrics,
     providers::{
         FallbackDecision, Provider, ProviderError, anthropic, build_fallback_chain,
@@ -536,6 +536,7 @@ pub async fn execute_with_fallback<E: ProviderExecutor>(
     primary_provider_config: ProviderConfig,
     primary_model_name: String,
     payload: E::Payload,
+    sovereignty_requirements: Option<&SovereigntyRequirements>,
 ) -> Result<ExecutionResult, ApiError> {
     // Build fallback chain
     let fallback_chain = build_fallback_chain(
@@ -619,6 +620,25 @@ pub async fn execute_with_fallback<E: ProviderExecutor>(
             );
             continue;
         };
+
+        // Check sovereignty requirements for fallback provider/model
+        if let Some(reqs) = sovereignty_requirements {
+            let model_config = fallback_config.get_model_config(&fallback.model_name);
+            let provider_sov = fallback_config.sovereignty();
+            let model_sov = model_config.and_then(|mc| mc.sovereignty.as_ref());
+            let resolved = SovereigntyMetadata::merge(provider_sov, model_sov).unwrap_or_default();
+            let open_weights = model_config.is_some_and(|mc| mc.open_weights == Some(true));
+
+            if let Err(reason) = reqs.check(&resolved, open_weights) {
+                tracing::debug!(
+                    provider = %fallback.provider_name,
+                    model = %fallback.model_name,
+                    reason = %reason,
+                    "Fallback provider skipped due to sovereignty requirements"
+                );
+                continue;
+            }
+        }
 
         // Update payload with fallback model
         let mut fallback_payload = payload.clone();
@@ -910,6 +930,7 @@ mod tests {
             primary_config,
             "test-model".to_string(),
             make_chat_payload("test-model"),
+            None,
         )
         .await;
 
@@ -943,6 +964,7 @@ mod tests {
             primary_config,
             "test-model".to_string(),
             make_chat_payload("test-model"),
+            None,
         )
         .await;
 
@@ -974,6 +996,7 @@ mod tests {
             primary_config,
             "test-model".to_string(),
             make_chat_payload("test-model"),
+            None,
         )
         .await;
 
@@ -1009,6 +1032,7 @@ mod tests {
             primary_config,
             "test-model".to_string(),
             make_chat_payload("test-model"),
+            None,
         )
         .await;
 
@@ -1050,6 +1074,7 @@ mod tests {
             primary_config,
             "test-model".to_string(),
             make_chat_payload("test-model"),
+            None,
         )
         .await;
 
@@ -1092,6 +1117,7 @@ mod tests {
             primary_config,
             "test-model".to_string(),
             make_chat_payload("test-model"),
+            None,
         )
         .await;
 
@@ -1125,6 +1151,7 @@ mod tests {
             primary_config,
             "test-model".to_string(),
             make_chat_payload("test-model"),
+            None,
         )
         .await;
 
@@ -1167,6 +1194,7 @@ mod tests {
             primary_config,
             "test-model".to_string(),
             make_chat_payload("test-model"),
+            None,
         )
         .await;
 
@@ -1201,6 +1229,7 @@ mod tests {
             primary_config,
             "test-model".to_string(),
             make_chat_payload("test-model"),
+            None,
         )
         .await;
 
@@ -1242,6 +1271,7 @@ mod tests {
             primary_config,
             "gpt-4".to_string(),
             make_chat_payload("gpt-4"),
+            None,
         )
         .await;
 
@@ -1282,6 +1312,7 @@ mod tests {
             primary_config,
             "gpt-4".to_string(),
             make_chat_payload("gpt-4"),
+            None,
         )
         .await;
 
@@ -1325,6 +1356,7 @@ mod tests {
             primary_config,
             "gpt-4".to_string(),
             make_chat_payload("gpt-4"),
+            None,
         )
         .await;
 
@@ -1366,6 +1398,7 @@ mod tests {
             primary_config,
             "test-model".to_string(),
             make_chat_payload("test-model"),
+            None,
         )
         .await;
 
@@ -1408,6 +1441,7 @@ mod tests {
             primary_config,
             "test-model".to_string(),
             make_chat_payload("test-model"),
+            None,
         )
         .await;
 

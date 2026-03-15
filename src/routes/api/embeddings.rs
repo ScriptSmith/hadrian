@@ -131,7 +131,7 @@ pub async fn api_v1_embeddings(
     }
 
     // Check sovereignty requirements (API key only — no per-request field for embeddings)
-    check_sovereignty(auth.as_ref(), None, &provider_config, &model_name)?;
+    let sovereignty_reqs = check_sovereignty(auth.as_ref(), None, &provider_config, &model_name)?;
 
     // Check authorization if authz context is available and API RBAC is enabled
     if let Some(Extension(ref authz)) = authz {
@@ -214,6 +214,7 @@ pub async fn api_v1_embeddings(
         provider_config,
         model_name,
         payload.clone(),
+        sovereignty_reqs.as_ref(),
     )
     .await?;
 

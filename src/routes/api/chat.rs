@@ -518,7 +518,7 @@ pub async fn api_v1_chat_completions(
     }
 
     // Check sovereignty requirements (API key + per-request)
-    check_sovereignty(
+    let sovereignty_reqs = check_sovereignty(
         auth.as_ref(),
         payload.sovereignty_requirements.as_ref(),
         &provider_config,
@@ -777,6 +777,7 @@ pub async fn api_v1_chat_completions(
         let llm_provider_config = provider_config.clone();
         let llm_model_name = model_name.clone();
         let llm_payload = payload.clone();
+        let llm_sovereignty_reqs = sovereignty_reqs.clone();
         let llm_future = async move {
             execute_with_fallback::<ChatCompletionExecutor>(
                 &llm_state,
@@ -784,6 +785,7 @@ pub async fn api_v1_chat_completions(
                 llm_provider_config,
                 llm_model_name,
                 llm_payload,
+                llm_sovereignty_reqs.as_ref(),
             )
             .await
         };
@@ -850,6 +852,7 @@ pub async fn api_v1_chat_completions(
             provider_config,
             model_name,
             payload.clone(),
+            sovereignty_reqs.as_ref(),
         )
         .await?;
         (response, provider_name, model_name)
@@ -1135,7 +1138,7 @@ pub async fn api_v1_responses(
     }
 
     // Check sovereignty requirements (API key + per-request)
-    check_sovereignty(
+    let sovereignty_reqs = check_sovereignty(
         auth.as_ref(),
         payload.sovereignty_requirements.as_ref(),
         &provider_config,
@@ -1336,6 +1339,7 @@ pub async fn api_v1_responses(
         let llm_provider_config = provider_config.clone();
         let llm_model_name = model_name.clone();
         let llm_payload = payload.clone();
+        let llm_sovereignty_reqs = sovereignty_reqs.clone();
         let llm_future = async move {
             execute_with_fallback::<ResponsesExecutor>(
                 &llm_state,
@@ -1343,6 +1347,7 @@ pub async fn api_v1_responses(
                 llm_provider_config,
                 llm_model_name,
                 llm_payload,
+                llm_sovereignty_reqs.as_ref(),
             )
             .await
         };
@@ -1411,6 +1416,7 @@ pub async fn api_v1_responses(
             provider_config,
             model_name,
             payload.clone(),
+            sovereignty_reqs.as_ref(),
         )
         .await?;
         (response, provider_name, model_name, saved_provider_config)
@@ -1913,7 +1919,7 @@ pub async fn api_v1_completions(
     }
 
     // Check sovereignty requirements (API key + per-request)
-    check_sovereignty(
+    let sovereignty_reqs = check_sovereignty(
         auth.as_ref(),
         payload.sovereignty_requirements.as_ref(),
         &provider_config,
@@ -2054,6 +2060,7 @@ pub async fn api_v1_completions(
         let llm_provider_config = provider_config.clone();
         let llm_model_name = model_name.clone();
         let llm_payload = payload.clone();
+        let llm_sovereignty_reqs = sovereignty_reqs.clone();
         let llm_future = async move {
             execute_with_fallback::<CompletionExecutor>(
                 &llm_state,
@@ -2061,6 +2068,7 @@ pub async fn api_v1_completions(
                 llm_provider_config,
                 llm_model_name,
                 llm_payload,
+                llm_sovereignty_reqs.as_ref(),
             )
             .await
         };
@@ -2125,6 +2133,7 @@ pub async fn api_v1_completions(
             provider_config,
             model_name,
             payload.clone(),
+            sovereignty_reqs.as_ref(),
         )
         .await?;
         (response, provider_name, model_name)

@@ -74,19 +74,22 @@ fn should_bypass_cache(headers: &HeaderMap) -> bool {
 /// Enforce sovereignty requirements against the resolved provider/model.
 ///
 /// Merges API-key requirements and per-request requirements, then checks the
-/// merged result against the resolved sovereignty metadata. Returns an `ApiError`
+/// merged result against the resolved sovereignty metadata. Returns the merged
+/// requirements on success (for use in fallback chain filtering), or an `ApiError`
 /// on violation.
 fn check_sovereignty(
     auth: Option<&Extension<AuthenticatedRequest>>,
     per_request: Option<&SovereigntyRequirements>,
     provider_config: &ProviderConfig,
     model_name: &str,
-) -> Result<(), ApiError> {
+) -> Result<Option<SovereigntyRequirements>, ApiError> {
     let key_reqs = auth
         .and_then(|Extension(a)| a.api_key())
         .and_then(|k| k.sovereignty_requirements());
     let merged = SovereigntyRequirements::merge(key_reqs, per_request);
-    let Some(reqs) = merged else { return Ok(()) };
+    let Some(reqs) = merged else {
+        return Ok(None);
+    };
 
     let model_config = provider_config.get_model_config(model_name);
     let provider_sov = provider_config.sovereignty();
@@ -100,7 +103,9 @@ fn check_sovereignty(
             "sovereignty_violation",
             format!("Request blocked by sovereignty requirements: {reason}"),
         )
-    })
+    })?;
+
+    Ok(Some(reqs))
 }
 
 /// Check if any messages contain image content (multimodal).
