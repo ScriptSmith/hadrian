@@ -43,10 +43,16 @@ const demos = [
     storyId: "pages-studiopage--images",
   },
   {
-    id: "usage",
-    title: "Usage Dashboard",
+    id: "analytics",
+    title: "Analytics",
     description: "Track costs per user, team, and project with microcent precision.",
     storyId: "components-usagedashboard--organization",
+  },
+  {
+    id: "usage-logs",
+    title: "Usage Logs",
+    description: "Inspect individual requests with model, tokens, cost, and latency details.",
+    storyId: "admin-usagelogstable--default",
   },
   {
     id: "provider-health",
@@ -169,6 +175,7 @@ const featureCategories = [
       "Image generation",
       "TTS & transcription",
       "Knowledge bases / RAG",
+      "Web search",
       "Model catalog",
     ],
   },
@@ -181,6 +188,7 @@ const featureCategories = [
       "CEL-based RBAC",
       "Guardrails & content moderation",
       "Rate limiting",
+      "Sovereignty enforcement",
     ],
   },
   {
