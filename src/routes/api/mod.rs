@@ -32,6 +32,7 @@ mod embeddings;
 mod files;
 mod images;
 mod models;
+mod tools;
 mod vector_stores;
 
 // Re-export all public items from submodules
@@ -41,6 +42,7 @@ pub use embeddings::*;
 pub use files::*;
 pub use images::*;
 pub use models::*;
+pub use tools::*;
 pub use vector_stores::*;
 
 /// Check if cache should be bypassed based on request headers.
@@ -768,7 +770,10 @@ pub(crate) fn api_v1_routes() -> Router<AppState> {
         .route("/v1/embeddings", post(api_v1_embeddings))
         .route("/v1/models", get(api_v1_models))
         // Images API (OpenAI-compatible)
-        .route("/v1/images/generations", post(api_v1_images_generations));
+        .route("/v1/images/generations", post(api_v1_images_generations))
+        // Tools API (Hadrian extension)
+        .route("/v1/tools/web-search", post(web_search))
+        .route("/v1/tools/web-fetch", post(web_fetch));
     #[cfg(feature = "server")]
     let router = router
         .route("/v1/images/edits", post(api_v1_images_edits))

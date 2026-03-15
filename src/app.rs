@@ -303,6 +303,9 @@ fn add_docs_routes(app: Router<AppState>, config: &config::GatewayConfig) -> Rou
 #[derive(Clone)]
 pub struct AppState {
     pub http_client: Client,
+    /// HTTP client that does not follow redirects (SSRF protection for web_fetch).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub no_redirect_http_client: Client,
     pub config: Arc<config::GatewayConfig>,
     pub db: Option<Arc<db::DbPool>>,
     pub services: Option<services::Services>,
@@ -389,6 +392,13 @@ impl AppState {
             .http_client
             .build_client()
             .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let no_redirect_http_client = config
+            .server
+            .http_client
+            .build_client_no_redirects()
+            .map_err(|e| format!("Failed to build no-redirect HTTP client: {}", e))?;
 
         tracing::debug!(
             timeout_secs = config.server.http_client.timeout_secs,
@@ -1061,6 +1071,8 @@ impl AppState {
 
         Ok(Self {
             http_client,
+            #[cfg(not(target_arch = "wasm32"))]
+            no_redirect_http_client,
             config: Arc::new(config),
             db,
             services,

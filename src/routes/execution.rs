@@ -800,6 +800,8 @@ mod tests {
 
         AppState {
             http_client: reqwest::Client::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            no_redirect_http_client: reqwest::Client::new(),
             config: config.clone(),
             db: None,
             services: None,

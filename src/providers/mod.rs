@@ -954,6 +954,12 @@ pub async fn log_media_usage(params: MediaUsageParams<'_>) -> (Option<i64>, bool
             audio_seconds: usage.audio_seconds.map(|v| v as i32),
             character_count: usage.character_count.map(|v| v as i32),
             provider_source: None,
+            record_type: "model".to_string(),
+            tool_name: None,
+            tool_query: None,
+            tool_url: None,
+            tool_bytes_fetched: None,
+            tool_results_count: None,
         };
 
         let db = db_pool.clone();

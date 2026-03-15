@@ -62,9 +62,11 @@ impl UsageRepo for SqliteUsageRepo {
                 total_tokens, cost_microcents, http_referer, recorded_at,
                 streamed, cached_tokens, reasoning_tokens, finish_reason,
                 latency_ms, cancelled, status_code, pricing_source,
-                image_count, audio_seconds, character_count, provider_source
+                image_count, audio_seconds, character_count, provider_source,
+                record_type, tool_name, tool_query, tool_url,
+                tool_bytes_fetched, tool_results_count
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(id.to_string())
@@ -95,6 +97,12 @@ impl UsageRepo for SqliteUsageRepo {
         .bind(entry.audio_seconds)
         .bind(entry.character_count)
         .bind(&entry.provider_source)
+        .bind(&entry.record_type)
+        .bind(&entry.tool_name)
+        .bind(&entry.tool_query)
+        .bind(&entry.tool_url)
+        .bind(entry.tool_bytes_fetched)
+        .bind(entry.tool_results_count)
         .execute(&self.pool)
         .await?;
 
@@ -107,9 +115,8 @@ impl UsageRepo for SqliteUsageRepo {
         }
 
         // SQLite has a limit of 999 parameters per query (SQLITE_LIMIT_VARIABLE_NUMBER)
-        // Each entry uses 28 parameters. Use 35 entries (28*35=980) to leave headroom
-        // for future columns.
-        const MAX_ENTRIES_PER_BATCH: usize = 35;
+        // Each entry uses 34 parameters. Use 29 entries (34*29=986) to stay under limit.
+        const MAX_ENTRIES_PER_BATCH: usize = 29;
 
         let mut total_inserted = 0;
 
@@ -118,7 +125,7 @@ impl UsageRepo for SqliteUsageRepo {
         for chunk in entries.chunks(MAX_ENTRIES_PER_BATCH) {
             let placeholders: Vec<&str> = chunk
                 .iter()
-                .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                 .collect();
 
             let sql = format!(
@@ -129,7 +136,9 @@ impl UsageRepo for SqliteUsageRepo {
                     total_tokens, cost_microcents, http_referer, recorded_at,
                     streamed, cached_tokens, reasoning_tokens, finish_reason,
                     latency_ms, cancelled, status_code, pricing_source,
-                    image_count, audio_seconds, character_count, provider_source
+                    image_count, audio_seconds, character_count, provider_source,
+                    record_type, tool_name, tool_query, tool_url,
+                    tool_bytes_fetched, tool_results_count
                 )
                 VALUES {}
                 "#,
@@ -170,7 +179,13 @@ impl UsageRepo for SqliteUsageRepo {
                     .bind(entry.image_count)
                     .bind(entry.audio_seconds)
                     .bind(entry.character_count)
-                    .bind(&entry.provider_source);
+                    .bind(&entry.provider_source)
+                    .bind(&entry.record_type)
+                    .bind(&entry.tool_name)
+                    .bind(&entry.tool_query)
+                    .bind(&entry.tool_url)
+                    .bind(entry.tool_bytes_fetched)
+                    .bind(entry.tool_results_count);
             }
 
             let result = query_builder.execute(&mut *tx).await?;
@@ -3934,6 +3949,10 @@ impl UsageRepo for SqliteUsageRepo {
             conditions.push("provider_source = ?".to_string());
             params.push(provider_source.clone());
         }
+        if let Some(ref record_type) = filter.record_type {
+            conditions.push("record_type = ?".to_string());
+            params.push(record_type.clone());
+        }
         if let Some(from) = &filter.from {
             conditions.push("recorded_at >= ?".to_string());
             params.push(from.to_rfc3339());
@@ -3971,7 +3990,9 @@ impl UsageRepo for SqliteUsageRepo {
                    http_referer, input_tokens, output_tokens, cached_tokens,
                    reasoning_tokens, cost_microcents, streamed, finish_reason,
                    latency_ms, cancelled, status_code, pricing_source,
-                   image_count, audio_seconds, character_count, provider_source
+                   image_count, audio_seconds, character_count, provider_source,
+                   record_type, tool_name, tool_query, tool_url,
+                   tool_bytes_fetched, tool_results_count
             FROM usage_records
             {}
             ORDER BY recorded_at {}, id {}
@@ -4032,6 +4053,14 @@ impl UsageRepo for SqliteUsageRepo {
                     audio_seconds: row.col("audio_seconds"),
                     character_count: row.col("character_count"),
                     provider_source: row.col("provider_source"),
+                    record_type: row
+                        .col::<Option<String>>("record_type")
+                        .unwrap_or_else(|| "model".to_string()),
+                    tool_name: row.col("tool_name"),
+                    tool_query: row.col("tool_query"),
+                    tool_url: row.col("tool_url"),
+                    tool_bytes_fetched: row.col("tool_bytes_fetched"),
+                    tool_results_count: row.col("tool_results_count"),
                 })
             })
             .collect::<DbResult<Vec<_>>>()?;

@@ -1,0 +1,794 @@
+use axum::{Extension, Json, extract::State};
+use axum_valid::Valid;
+use chrono::Utc;
+use http::StatusCode;
+use serde::{Deserialize, Serialize};
+use validator::Validate;
+
+use super::ApiError;
+use crate::{
+    AppState,
+    auth::AuthenticatedRequest,
+    config::WebSearchProvider,
+    middleware::AuthzContext,
+    models::UsageLogEntry,
+    pricing::CostPricingSource,
+    validation::url::{UrlValidationOptions, validate_base_url_opts},
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Web Search
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, Validate)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct WebSearchRequest {
+    #[validate(length(min = 1, max = 2000))]
+    pub query: String,
+    #[validate(range(min = 1, max = 100))]
+    pub max_results: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct WebSearchResponse {
+    pub results: Vec<WebSearchResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct WebSearchResult {
+    pub title: String,
+    pub url: String,
+    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+struct TavilySearchRequest {
+    query: String,
+    max_results: usize,
+    api_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TavilySearchResponse {
+    results: Vec<TavilyResult>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TavilyResult {
+    title: String,
+    url: String,
+    content: String,
+    score: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+struct ExaSearchRequest {
+    query: String,
+    num_results: usize,
+    contents: ExaContents,
+}
+
+#[derive(Debug, Serialize)]
+struct ExaContents {
+    text: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExaSearchResponse {
+    results: Vec<ExaResult>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExaResult {
+    title: Option<String>,
+    url: String,
+    text: Option<String>,
+    score: Option<f64>,
+}
+
+/// Search the web
+///
+/// Performs a web search using the configured search provider (Tavily or Exa).
+///
+/// **Hadrian Extension:** This endpoint is not part of the OpenAI API specification.
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    post,
+    path = "/api/v1/tools/web-search",
+    tag = "Tools",
+    request_body = WebSearchRequest,
+    responses(
+        (status = 200, description = "Search results", body = WebSearchResponse),
+        (status = 400, description = "Bad request"),
+        (status = 404, description = "Web search not configured"),
+    ),
+    security(("api_key" = []))
+))]
+#[tracing::instrument(name = "api.tools.web_search", skip(state, auth, authz))]
+pub async fn web_search(
+    State(state): State<AppState>,
+    auth: Option<Extension<AuthenticatedRequest>>,
+    authz: Option<Extension<AuthzContext>>,
+    Valid(Json(payload)): Valid<Json<WebSearchRequest>>,
+) -> Result<Json<WebSearchResponse>, ApiError> {
+    // Authz check
+    if let Some(Extension(ref authz)) = authz {
+        let org_id = auth.as_ref().and_then(|a| {
+            a.api_key()
+                .and_then(|k| k.org_id.map(|id| id.to_string()))
+                .or_else(|| a.identity().and_then(|i| i.org_ids.first().cloned()))
+        });
+        let project_id = auth.as_ref().and_then(|a| {
+            a.api_key()
+                .and_then(|k| k.project_id.map(|id| id.to_string()))
+                .or_else(|| a.identity().and_then(|i| i.project_ids.first().cloned()))
+        });
+        authz
+            .require_api(
+                "tool",
+                "execute",
+                Some("web_search"),
+                None,
+                org_id.as_deref(),
+                project_id.as_deref(),
+            )
+            .await
+            .map_err(|e| {
+                ApiError::new(StatusCode::FORBIDDEN, "authorization_denied", e.to_string())
+            })?;
+    }
+
+    let config = state.config.features.web_search.as_ref().ok_or_else(|| {
+        ApiError::new(
+            http::StatusCode::NOT_FOUND,
+            "feature_not_configured",
+            "Web search is not configured",
+        )
+    })?;
+
+    let max_results = payload
+        .max_results
+        .unwrap_or(config.max_results)
+        .min(config.max_results);
+    let timeout = std::time::Duration::from_secs(config.timeout_secs);
+
+    let results: Vec<WebSearchResult> = match config.provider {
+        WebSearchProvider::Tavily => {
+            let req = TavilySearchRequest {
+                query: payload.query.clone(),
+                max_results,
+                api_key: config.api_key.clone(),
+            };
+            let resp = state
+                .http_client
+                .post("https://api.tavily.com/search")
+                .timeout(timeout)
+                .json(&req)
+                .send()
+                .await
+                .map_err(|e| {
+                    tracing::error!(error = %e, "Tavily search request failed");
+                    ApiError::new(
+                        http::StatusCode::BAD_GATEWAY,
+                        "search_provider_error",
+                        "Search provider request failed",
+                    )
+                })?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                tracing::error!(status = %status, body = %body, "Tavily API error");
+                return Err(ApiError::new(
+                    http::StatusCode::BAD_GATEWAY,
+                    "search_provider_error",
+                    "Search provider returned an error",
+                ));
+            }
+
+            let tavily: TavilySearchResponse = resp.json().await.map_err(|e| {
+                tracing::error!(error = %e, "Failed to parse Tavily response");
+                ApiError::new(
+                    http::StatusCode::BAD_GATEWAY,
+                    "search_provider_error",
+                    "Invalid search provider response",
+                )
+            })?;
+
+            tavily
+                .results
+                .into_iter()
+                .map(|r| WebSearchResult {
+                    title: r.title,
+                    url: r.url,
+                    content: r.content,
+                    score: r.score,
+                })
+                .collect()
+        }
+        WebSearchProvider::Exa => {
+            let req = ExaSearchRequest {
+                query: payload.query.clone(),
+                num_results: max_results,
+                contents: ExaContents { text: true },
+            };
+            let resp = state
+                .http_client
+                .post("https://api.exa.ai/search")
+                .timeout(timeout)
+                .header("x-api-key", &config.api_key)
+                .json(&req)
+                .send()
+                .await
+                .map_err(|e| {
+                    tracing::error!(error = %e, "Exa search request failed");
+                    ApiError::new(
+                        http::StatusCode::BAD_GATEWAY,
+                        "search_provider_error",
+                        "Search provider request failed",
+                    )
+                })?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                tracing::error!(status = %status, body = %body, "Exa API error");
+                return Err(ApiError::new(
+                    http::StatusCode::BAD_GATEWAY,
+                    "search_provider_error",
+                    "Search provider returned an error",
+                ));
+            }
+
+            let exa: ExaSearchResponse = resp.json().await.map_err(|e| {
+                tracing::error!(error = %e, "Failed to parse Exa response");
+                ApiError::new(
+                    http::StatusCode::BAD_GATEWAY,
+                    "search_provider_error",
+                    "Invalid search provider response",
+                )
+            })?;
+
+            exa.results
+                .into_iter()
+                .map(|r| WebSearchResult {
+                    title: r.title.unwrap_or_default(),
+                    url: r.url,
+                    content: r.text.unwrap_or_default(),
+                    score: r.score,
+                })
+                .collect()
+        }
+    };
+
+    let results_count = results.len() as i32;
+    let provider_name = match config.provider {
+        WebSearchProvider::Tavily => "tavily",
+        WebSearchProvider::Exa => "exa",
+    };
+
+    // Log tool usage with identity
+    if let Some(ref usage_buffer) = state.usage_buffer {
+        let (api_key_id, user_id, org_id, project_id, team_id, service_account_id) =
+            extract_identity(&auth, &state);
+        usage_buffer.push(UsageLogEntry {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            api_key_id,
+            user_id,
+            org_id,
+            project_id,
+            team_id,
+            service_account_id,
+            model: "web-search".to_string(),
+            provider: provider_name.to_string(),
+            http_referer: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cost_microcents: Some(config.cost_microcents_per_request),
+            request_at: Utc::now(),
+            streamed: false,
+            cached_tokens: 0,
+            reasoning_tokens: 0,
+            finish_reason: None,
+            latency_ms: None,
+            cancelled: false,
+            status_code: Some(200),
+            pricing_source: CostPricingSource::ProviderConfig,
+            image_count: None,
+            audio_seconds: None,
+            character_count: None,
+            provider_source: None,
+            record_type: "tool".to_string(),
+            tool_name: Some("web_search".to_string()),
+            tool_query: Some(payload.query),
+            tool_url: None,
+            tool_bytes_fetched: None,
+            tool_results_count: Some(results_count),
+        });
+    }
+
+    Ok(Json(WebSearchResponse { results }))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Web Fetch
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, Validate)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct WebFetchRequest {
+    #[validate(length(min = 1, max = 2083))]
+    pub url: String,
+    #[validate(range(min = 1))]
+    pub max_length: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct WebFetchResponse {
+    pub url: String,
+    pub content_type: Option<String>,
+    pub content: String,
+    pub content_length: usize,
+}
+
+/// Fetch a web page
+///
+/// Fetches a URL and returns its content, optionally stripping HTML tags.
+///
+/// **Hadrian Extension:** This endpoint is not part of the OpenAI API specification.
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    post,
+    path = "/api/v1/tools/web-fetch",
+    tag = "Tools",
+    request_body = WebFetchRequest,
+    responses(
+        (status = 200, description = "Fetched content", body = WebFetchResponse),
+        (status = 400, description = "Bad request or blocked URL"),
+        (status = 404, description = "Web fetch not configured"),
+    ),
+    security(("api_key" = []))
+))]
+#[tracing::instrument(name = "api.tools.web_fetch", skip(state, auth, authz))]
+pub async fn web_fetch(
+    State(state): State<AppState>,
+    auth: Option<Extension<AuthenticatedRequest>>,
+    authz: Option<Extension<AuthzContext>>,
+    Valid(Json(payload)): Valid<Json<WebFetchRequest>>,
+) -> Result<Json<WebFetchResponse>, ApiError> {
+    // Authz check
+    if let Some(Extension(ref authz)) = authz {
+        let org_id = auth.as_ref().and_then(|a| {
+            a.api_key()
+                .and_then(|k| k.org_id.map(|id| id.to_string()))
+                .or_else(|| a.identity().and_then(|i| i.org_ids.first().cloned()))
+        });
+        let project_id = auth.as_ref().and_then(|a| {
+            a.api_key()
+                .and_then(|k| k.project_id.map(|id| id.to_string()))
+                .or_else(|| a.identity().and_then(|i| i.project_ids.first().cloned()))
+        });
+        authz
+            .require_api(
+                "tool",
+                "execute",
+                Some("web_fetch"),
+                None,
+                org_id.as_deref(),
+                project_id.as_deref(),
+            )
+            .await
+            .map_err(|e| {
+                ApiError::new(StatusCode::FORBIDDEN, "authorization_denied", e.to_string())
+            })?;
+    }
+
+    let config = state.config.features.web_fetch.as_ref().ok_or_else(|| {
+        ApiError::new(
+            http::StatusCode::NOT_FOUND,
+            "feature_not_configured",
+            "Web fetch is not configured",
+        )
+    })?;
+
+    if !config.enabled {
+        return Err(ApiError::new(
+            http::StatusCode::NOT_FOUND,
+            "feature_disabled",
+            "Web fetch is disabled",
+        ));
+    }
+
+    // SSRF protection — use server config flags
+    validate_base_url_opts(
+        &payload.url,
+        UrlValidationOptions {
+            allow_loopback: state.config.server.allow_loopback_urls,
+            allow_private: state.config.server.allow_private_urls,
+        },
+    )
+    .map_err(|e| {
+        tracing::warn!(url = %payload.url, error = %e, "URL validation failed");
+        ApiError::new(
+            http::StatusCode::BAD_REQUEST,
+            "invalid_url",
+            "Invalid or blocked URL",
+        )
+    })?;
+
+    let max_bytes = payload
+        .max_length
+        .unwrap_or(config.max_response_bytes)
+        .min(config.max_response_bytes);
+    let timeout = std::time::Duration::from_secs(config.timeout_secs);
+
+    // Use the no-redirect client to prevent SSRF via open redirects
+    let resp = state
+        .no_redirect_http_client
+        .get(&payload.url)
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, url = %payload.url, "Web fetch request failed");
+            ApiError::new(
+                http::StatusCode::BAD_GATEWAY,
+                "fetch_failed",
+                "Failed to fetch URL",
+            )
+        })?;
+
+    // Reject redirects — the validated URL must be the final destination
+    if resp.status().is_redirection() {
+        tracing::warn!(
+            url = %payload.url,
+            status = %resp.status(),
+            "URL returned a redirect, which is blocked for SSRF protection"
+        );
+        return Err(ApiError::new(
+            http::StatusCode::BAD_REQUEST,
+            "redirect_blocked",
+            "URL returned a redirect, which is not allowed",
+        ));
+    }
+
+    if !resp.status().is_success() {
+        let status_code = resp.status().as_u16();
+        return Err(ApiError::new(
+            http::StatusCode::BAD_GATEWAY,
+            "upstream_error",
+            format!("URL returned status {status_code}"),
+        ));
+    }
+
+    let content_type = resp
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    // Check content type
+    if !config.allowed_content_types.is_empty()
+        && let Some(ref ct) = content_type
+    {
+        let ct_lower = ct.to_lowercase();
+        let allowed = config
+            .allowed_content_types
+            .iter()
+            .any(|allowed| ct_lower.starts_with(allowed));
+        if !allowed {
+            return Err(ApiError::new(
+                http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupported_content_type",
+                format!("Content type '{ct}' is not allowed"),
+            ));
+        }
+    }
+
+    // Read body with byte limit
+    let bytes = resp.bytes().await.map_err(|e| {
+        tracing::error!(error = %e, "Failed to read response body");
+        ApiError::new(
+            http::StatusCode::BAD_GATEWAY,
+            "fetch_failed",
+            "Failed to read response body",
+        )
+    })?;
+
+    // UTF-8 safe truncation
+    let lossy = String::from_utf8_lossy(&bytes);
+    let text = if lossy.len() > max_bytes {
+        let mut end = max_bytes;
+        while end > 0 && !lossy.is_char_boundary(end) {
+            end -= 1;
+        }
+        &lossy[..end]
+    } else {
+        &lossy
+    };
+    let bytes_fetched = text.len() as i64;
+
+    // Strip HTML tags for text/html content
+    let is_html = content_type
+        .as_deref()
+        .is_some_and(|ct| ct.starts_with("text/html"));
+
+    let content = if is_html {
+        strip_html_tags(text)
+    } else {
+        text.to_string()
+    };
+
+    let content_length = content.len();
+
+    // Log tool usage with identity
+    if let Some(ref usage_buffer) = state.usage_buffer {
+        let (api_key_id, user_id, org_id, project_id, team_id, service_account_id) =
+            extract_identity(&auth, &state);
+        usage_buffer.push(UsageLogEntry {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            api_key_id,
+            user_id,
+            org_id,
+            project_id,
+            team_id,
+            service_account_id,
+            model: "web-fetch".to_string(),
+            provider: "reqwest".to_string(),
+            http_referer: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cost_microcents: Some(config.cost_microcents_per_request),
+            request_at: Utc::now(),
+            streamed: false,
+            cached_tokens: 0,
+            reasoning_tokens: 0,
+            finish_reason: None,
+            latency_ms: None,
+            cancelled: false,
+            status_code: Some(200),
+            pricing_source: CostPricingSource::ProviderConfig,
+            image_count: None,
+            audio_seconds: None,
+            character_count: None,
+            provider_source: None,
+            record_type: "tool".to_string(),
+            tool_name: Some("web_fetch".to_string()),
+            tool_query: None,
+            tool_url: Some(payload.url.clone()),
+            tool_bytes_fetched: Some(bytes_fetched),
+            tool_results_count: None,
+        });
+    }
+
+    Ok(Json(WebFetchResponse {
+        url: payload.url,
+        content_type,
+        content,
+        content_length,
+    }))
+}
+
+/// Identity fields extracted from auth context for usage logging.
+type IdentityFields = (
+    Option<uuid::Uuid>, // api_key_id
+    Option<uuid::Uuid>, // user_id
+    Option<uuid::Uuid>, // org_id
+    Option<uuid::Uuid>, // project_id
+    Option<uuid::Uuid>, // team_id
+    Option<uuid::Uuid>, // service_account_id
+);
+
+/// Extract identity fields from the auth context for usage logging.
+fn extract_identity(
+    auth: &Option<Extension<AuthenticatedRequest>>,
+    state: &AppState,
+) -> IdentityFields {
+    if let Some(Extension(auth)) = auth {
+        let api_key = auth.api_key();
+        (
+            api_key.map(|k| k.key.id),
+            auth.user_id(),
+            api_key
+                .and_then(|k| k.org_id)
+                .or_else(|| auth.principal().org_id()),
+            api_key.and_then(|k| k.project_id),
+            api_key.and_then(|k| k.team_id),
+            api_key.and_then(|k| k.service_account_id),
+        )
+    } else {
+        (
+            None,
+            state.default_user_id,
+            state.default_org_id,
+            None,
+            None,
+            None,
+        )
+    }
+}
+
+/// Basic HTML tag stripping — removes tags and decodes common entities.
+///
+/// Uses char-based iteration to correctly handle multi-byte UTF-8.
+/// Strips `<script>` and `<style>` elements entirely (content + tags).
+fn strip_html_tags(html: &str) -> String {
+    let mut result = String::with_capacity(html.len());
+    let mut in_tag = false;
+    let mut in_script = false;
+    let mut in_style = false;
+
+    let lower = html.to_lowercase();
+    let chars: Vec<char> = html.chars().collect();
+    let mut byte_idx = 0; // tracks byte position in `lower`
+
+    for &ch in &chars {
+        let ch_len = ch.len_utf8();
+
+        if !in_tag && !in_script && !in_style {
+            // Check for opening <script or <style tags
+            if lower[byte_idx..].starts_with("<script") && is_tag_boundary(&lower, byte_idx + 7) {
+                in_script = true;
+                in_tag = true;
+            } else if lower[byte_idx..].starts_with("<style")
+                && is_tag_boundary(&lower, byte_idx + 6)
+            {
+                in_style = true;
+                in_tag = true;
+            } else if ch == '<' {
+                in_tag = true;
+            } else {
+                result.push(ch);
+            }
+        } else if in_script {
+            if lower[byte_idx..].starts_with("</script>") {
+                // Skip past the closing tag — we'll advance char-by-char naturally,
+                // but we need to consume the remaining chars of "</script>"
+                // We handle this by just clearing the flag when we see '>' at the
+                // end of the tag. For simplicity, use the in_tag mechanism.
+                in_script = false;
+                in_tag = true; // we're at '<' of </script>, wait for '>'
+            }
+        } else if in_style {
+            if lower[byte_idx..].starts_with("</style>") {
+                in_style = false;
+                in_tag = true;
+            }
+        } else if in_tag && ch == '>' {
+            in_tag = false;
+            result.push(' ');
+        }
+
+        byte_idx += ch_len;
+    }
+
+    // Decode common HTML entities
+    result
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+        // Collapse whitespace
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Returns true if position `pos` in `s` is at a tag boundary character
+/// (end of string, '>', ' ', '\t', '\n', '/').
+fn is_tag_boundary(s: &str, pos: usize) -> bool {
+    match s.as_bytes().get(pos) {
+        None => true, // end of string
+        Some(b) => matches!(b, b'>' | b' ' | b'\t' | b'\n' | b'\r' | b'/'),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_basic_tags() {
+        assert_eq!(strip_html_tags("<p>Hello</p>"), "Hello");
+    }
+
+    #[test]
+    fn test_strip_nested_tags() {
+        assert_eq!(
+            strip_html_tags("<div><p>Hello <b>World</b></p></div>"),
+            "Hello World"
+        );
+    }
+
+    #[test]
+    fn test_strip_script_content() {
+        assert_eq!(
+            strip_html_tags("<p>Before</p><script>alert('xss')</script><p>After</p>"),
+            "Before After"
+        );
+    }
+
+    #[test]
+    fn test_strip_style_content() {
+        assert_eq!(
+            strip_html_tags("<p>Before</p><style>body { color: red; }</style><p>After</p>"),
+            "Before After"
+        );
+    }
+
+    #[test]
+    fn test_strip_script_with_attributes() {
+        assert_eq!(
+            strip_html_tags(r#"<script type="text/javascript">var x = 1;</script>text"#),
+            "text"
+        );
+    }
+
+    #[test]
+    fn test_scripting_tag_not_stripped() {
+        // <scripting> should NOT be treated as <script>
+        assert_eq!(strip_html_tags("<scripting>visible</scripting>"), "visible");
+    }
+
+    #[test]
+    fn test_self_closing_tags() {
+        assert_eq!(strip_html_tags("Hello<br/>World"), "Hello World");
+    }
+
+    #[test]
+    fn test_multibyte_utf8() {
+        assert_eq!(strip_html_tags("<p>こんにちは</p>"), "こんにちは");
+    }
+
+    #[test]
+    fn test_multibyte_utf8_with_script() {
+        assert_eq!(
+            strip_html_tags("<p>日本語</p><script>var x = '🎉';</script><p>テスト</p>"),
+            "日本語 テスト"
+        );
+    }
+
+    #[test]
+    fn test_entity_decoding() {
+        assert_eq!(
+            strip_html_tags("&amp; &lt; &gt; &quot; &#39; &nbsp;"),
+            "& < > \" '"
+        );
+    }
+
+    #[test]
+    fn test_whitespace_collapsing() {
+        assert_eq!(strip_html_tags("<p>  Hello   World  </p>"), "Hello World");
+    }
+
+    #[test]
+    fn test_empty_input() {
+        assert_eq!(strip_html_tags(""), "");
+    }
+
+    #[test]
+    fn test_no_tags() {
+        assert_eq!(strip_html_tags("plain text"), "plain text");
+    }
+
+    #[test]
+    fn test_case_insensitive_script() {
+        assert_eq!(
+            strip_html_tags("<SCRIPT>alert(1)</SCRIPT>visible"),
+            "visible"
+        );
+    }
+
+    #[test]
+    fn test_style_with_newlines() {
+        assert_eq!(
+            strip_html_tags("<style>\n.foo {\n  color: red;\n}\n</style>content"),
+            "content"
+        );
+    }
+}

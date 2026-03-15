@@ -30,6 +30,8 @@ pub struct UsageLogQuery {
     pub limit: Option<i64>,
     pub cursor: Option<String>,
     pub direction: Option<String>,
+    /// Filter by record type: "model" or "tool"
+    pub record_type: Option<String>,
 }
 
 /// Statistics for computing cost forecasts

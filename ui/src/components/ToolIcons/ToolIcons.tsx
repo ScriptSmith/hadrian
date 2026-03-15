@@ -5,7 +5,7 @@
  * and ArtifactThumbnail for consistent tool identification.
  */
 
-import { FileSearch, Globe, BarChart3, Wrench, Bot, Plug } from "lucide-react";
+import { FileSearch, Globe, BarChart3, Wrench, Bot, Plug, Download } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 /** Python icon - "Py" text in a rounded box */
@@ -194,6 +194,7 @@ export const TOOL_ICON_MAP: Record<string, ToolIconComponent> = {
   chart_render: BarChart3,
   html_render: HtmlIcon,
   web_search: Globe,
+  web_fetch: Download,
   wikipedia: WikipediaIcon,
   wikidata: WikidataIcon,
   sub_agent: Bot,
@@ -215,6 +216,7 @@ export const TOOL_SHORT_NAMES: Record<string, string> = {
   chart_render: "Chart",
   html_render: "HTML",
   web_search: "Web",
+  web_fetch: "Fetch",
   wikipedia: "Wikipedia",
   wikidata: "Wikidata",
   sub_agent: "Agent",

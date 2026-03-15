@@ -210,6 +210,12 @@ pub(super) fn build_streaming_usage_entry(
             audio_seconds: None,
             character_count: None,
             provider_source: None,
+            record_type: "model".to_string(),
+            tool_name: None,
+            tool_query: None,
+            tool_url: None,
+            tool_bytes_fetched: None,
+            tool_results_count: None,
         })
     } else if state.default_user_id.is_some() || state.default_org_id.is_some() {
         // Anonymous mode: attribute to the default user/org so streaming usage
@@ -241,6 +247,12 @@ pub(super) fn build_streaming_usage_entry(
             audio_seconds: None,
             character_count: None,
             provider_source: None,
+            record_type: "model".to_string(),
+            tool_name: None,
+            tool_query: None,
+            tool_url: None,
+            tool_bytes_fetched: None,
+            tool_results_count: None,
         })
     } else {
         None
