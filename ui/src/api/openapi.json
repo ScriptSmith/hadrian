@@ -17298,6 +17298,92 @@
         ]
       }
     },
+    "/api/v1/tools/web-fetch": {
+      "post": {
+        "tags": [
+          "Tools"
+        ],
+        "summary": "Fetch a web page",
+        "description": "Fetches a URL and returns its content, optionally stripping HTML tags.\n\n**Hadrian Extension:** This endpoint is not part of the OpenAI API specification.",
+        "operationId": "web_fetch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebFetchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Fetched content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebFetchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request or blocked URL"
+          },
+          "404": {
+            "description": "Web fetch not configured"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/api/v1/tools/web-search": {
+      "post": {
+        "tags": [
+          "Tools"
+        ],
+        "summary": "Search the web",
+        "description": "Performs a web search using the configured search provider (Tavily or Exa).\n\n**Hadrian Extension:** This endpoint is not part of the OpenAI API specification.",
+        "operationId": "web_search",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebSearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "404": {
+            "description": "Web search not configured"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/api/v1/vector_stores": {
       "get": {
         "tags": [
@@ -32196,6 +32282,108 @@
           "marin",
           "cedar"
         ]
+      },
+      "WebFetchRequest": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "max_length": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "WebFetchResponse": {
+        "type": "object",
+        "required": [
+          "url",
+          "content",
+          "content_length"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "content_length": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "WebSearchRequest": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "max_results": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "query": {
+            "type": "string"
+          }
+        }
+      },
+      "WebSearchResponse": {
+        "type": "object",
+        "required": [
+          "results"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebSearchResult"
+            }
+          }
+        }
+      },
+      "WebSearchResult": {
+        "type": "object",
+        "required": [
+          "title",
+          "url",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
       }
     },
     "securitySchemes": {
