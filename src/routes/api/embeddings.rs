@@ -2,7 +2,7 @@ use axum::{Extension, Json, body::Body, extract::State, http::HeaderMap, respons
 use axum_valid::Valid;
 use http::StatusCode;
 
-use super::{ApiError, CacheStatus, should_bypass_cache};
+use super::{ApiError, CacheStatus, check_sovereignty, should_bypass_cache};
 use crate::{
     AppState, api_types,
     auth::AuthenticatedRequest,
@@ -129,6 +129,9 @@ pub async fn api_v1_embeddings(
             ApiError::new(StatusCode::FORBIDDEN, "model_not_allowed", e.to_string())
         })?;
     }
+
+    // Check sovereignty requirements (API key only — no per-request field for embeddings)
+    check_sovereignty(auth.as_ref(), None, &provider_config, &model_name)?;
 
     // Check authorization if authz context is available and API RBAC is enabled
     if let Some(Extension(ref authz)) = authz {

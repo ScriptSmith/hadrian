@@ -2322,6 +2322,7 @@ mod tests {
             provider: None,
             plugins: None,
             user: None,
+            sovereignty_requirements: None,
         };
 
         let tool_call_1 = FileSearchToolCall {
@@ -2458,6 +2459,7 @@ mod tests {
             provider: None,
             plugins: None,
             user: None,
+            sovereignty_requirements: None,
         };
 
         let tool_call = FileSearchToolCall {
@@ -2543,6 +2545,7 @@ mod tests {
             provider: None,
             plugins: None,
             user: None,
+            sovereignty_requirements: None,
         };
 
         let tool_call = FileSearchToolCall {
@@ -2618,6 +2621,7 @@ mod tests {
             provider: None,
             plugins: None,
             user: None,
+            sovereignty_requirements: None,
         };
 
         let tool_call = FileSearchToolCall {
@@ -3350,6 +3354,7 @@ mod tests {
             provider: None,
             plugins: None,
             user: None,
+            sovereignty_requirements: None,
         };
 
         // Should not panic with no tools
@@ -3398,6 +3403,7 @@ mod tests {
             provider: None,
             plugins: None,
             user: None,
+            sovereignty_requirements: None,
         };
 
         preprocess_file_search_tools(&mut payload);
@@ -3472,6 +3478,7 @@ mod tests {
             provider: None,
             plugins: None,
             user: None,
+            sovereignty_requirements: None,
         };
 
         preprocess_file_search_tools(&mut payload);

@@ -872,6 +872,7 @@ mod tests {
             tools: None,
             top_p: None,
             user: None,
+            sovereignty_requirements: None,
         }
     }
 

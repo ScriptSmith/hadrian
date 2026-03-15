@@ -157,6 +157,7 @@ pub async fn create(
         api_key: input.api_key,
         config: input.config,
         models: input.models,
+        sovereignty: input.sovereignty,
     };
 
     let provider = services
@@ -424,6 +425,7 @@ pub async fn test_credentials(
         api_key_secret_ref: input.api_key,
         config: input.config,
         models: input.models.unwrap_or_default(),
+        sovereignty: input.sovereignty,
         is_enabled: true,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),

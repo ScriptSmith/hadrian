@@ -24,6 +24,19 @@ export interface CatalogPricing {
   cache_write?: number;
 }
 
+/** Sovereignty and compliance metadata for providers and models */
+export interface SovereigntyMetadata {
+  hq_country?: string;
+  inference_countries?: string[];
+  certifications?: string[];
+  on_prem?: boolean;
+  trains_on_data?: boolean;
+  data_retention?: string;
+  license?: string;
+  notes?: string;
+  custom?: Record<string, string>;
+}
+
 export interface ModelInfo {
   id: string;
   object?: string;
@@ -64,6 +77,8 @@ export interface ModelInfo {
   max_images?: number;
   /** Available voices for TTS models */
   voices?: string[];
+  /** Sovereignty and compliance metadata */
+  sovereignty?: SovereigntyMetadata;
   [key: string]: unknown;
 }
 
@@ -216,7 +231,8 @@ export type CapabilityFilter =
   | "tool_call"
   | "vision"
   | "structured_output"
-  | "open_weights";
+  | "open_weights"
+  | "on_prem";
 
 /** Check if a model matches a capability filter */
 export function matchesCapabilityFilter(model: ModelInfo, filter: CapabilityFilter): boolean {
@@ -236,6 +252,8 @@ export function matchesCapabilityFilter(model: ModelInfo, filter: CapabilityFilt
       return capabilities?.structured_output === true;
     case "open_weights":
       return model.open_weights === true;
+    case "on_prem":
+      return model.sovereignty?.on_prem === true;
     default:
       return true;
   }
@@ -270,6 +288,26 @@ export function formatDate(dateStr?: string): string {
   } catch {
     return dateStr;
   }
+}
+
+/**
+ * Check if a model matches an inference country filter.
+ * "all" matches everything; otherwise the country code must appear in inference_countries.
+ */
+export function matchesCountryFilter(model: ModelInfo, country: string): boolean {
+  if (country === "all") return true;
+  return model.sovereignty?.inference_countries?.includes(country) === true;
+}
+
+/** Collect sorted unique inference countries across a list of models. */
+export function getUniqueInferenceCountries(models: ModelInfo[]): string[] {
+  const set = new Set<string>();
+  for (const m of models) {
+    for (const c of m.sovereignty?.inference_countries ?? []) {
+      set.add(c);
+    }
+  }
+  return [...set].sort();
 }
 
 /**

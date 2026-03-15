@@ -751,6 +751,7 @@ mod tests {
             stream_options: None,
             top_p: None,
             user: None,
+            sovereignty_requirements: None,
         }
     }
 

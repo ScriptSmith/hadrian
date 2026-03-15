@@ -181,6 +181,7 @@ pub async fn create(
         ip_allowlist: input.ip_allowlist,
         rate_limit_rpm: input.rate_limit_rpm,
         rate_limit_tpm: input.rate_limit_tpm,
+        sovereignty_requirements: input.sovereignty_requirements,
     };
 
     let created = services.api_keys.create(create_input, &prefix).await?;

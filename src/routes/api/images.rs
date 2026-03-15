@@ -9,7 +9,7 @@ use axum::{
 use axum_valid::Valid;
 use http::StatusCode;
 
-use super::{ApiError, image_quality_to_string, image_size_to_string};
+use super::{ApiError, check_sovereignty, image_quality_to_string, image_size_to_string};
 #[cfg(feature = "provider-azure")]
 use crate::providers::azure_openai;
 use crate::{
@@ -89,6 +89,9 @@ pub async fn api_v1_images_generations(
             ApiError::new(StatusCode::FORBIDDEN, "model_not_allowed", e.to_string())
         })?;
     }
+
+    // Check sovereignty requirements (API key only — no per-request field for images)
+    check_sovereignty(auth.as_ref(), None, &provider_config, &model_name)?;
 
     // Check authorization if authz context is available and API RBAC is enabled
     if let Some(Extension(ref authz)) = authz {

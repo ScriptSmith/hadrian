@@ -695,6 +695,7 @@ pub async fn test_credentials(
         api_key_secret_ref: input.api_key,
         config: input.config,
         models: input.models.unwrap_or_default(),
+        sovereignty: input.sovereignty.clone(),
         is_enabled: true,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),

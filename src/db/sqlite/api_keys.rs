@@ -94,6 +94,15 @@ impl SqliteApiKeyRepo {
                 .col::<Option<String>>("rotated_from_key_id")
                 .and_then(|s| Uuid::parse_str(&s).ok()),
             rotation_grace_until: row.col("rotation_grace_until"),
+            sovereignty_requirements: row
+                .col::<Option<String>>("sovereignty_requirements")
+                .and_then(|s| match serde_json::from_str(&s) {
+                    Ok(r) => Some(r),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to deserialize sovereignty_requirements");
+                        None
+                    }
+                }),
         })
     }
 
@@ -114,7 +123,7 @@ impl SqliteApiKeyRepo {
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                   rotated_from_key_id, rotation_grace_until
+                   rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'organization' AND owner_id = ?
             AND (created_at, id) {} (?, ?)
@@ -168,7 +177,7 @@ impl SqliteApiKeyRepo {
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                   rotated_from_key_id, rotation_grace_until
+                   rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'project' AND owner_id = ?
             AND (created_at, id) {} (?, ?)
@@ -222,7 +231,7 @@ impl SqliteApiKeyRepo {
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                   rotated_from_key_id, rotation_grace_until
+                   rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'team' AND owner_id = ?
             AND (created_at, id) {} (?, ?)
@@ -276,7 +285,7 @@ impl SqliteApiKeyRepo {
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                   rotated_from_key_id, rotation_grace_until
+                   rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'user' AND owner_id = ?
             AND (created_at, id) {} (?, ?)
@@ -330,7 +339,7 @@ impl SqliteApiKeyRepo {
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                   rotated_from_key_id, rotation_grace_until
+                   rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'service_account' AND owner_id = ?
             AND (created_at, id) {} (?, ?)
@@ -390,9 +399,10 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
                 id, name, key_hash, key_prefix, owner_type, owner_id,
                 budget_amount, budget_period, expires_at,
                 scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
+                sovereignty_requirements,
                 created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(id.to_string())
@@ -424,6 +434,12 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
         )
         .bind(input.rate_limit_rpm)
         .bind(input.rate_limit_tpm)
+        .bind(
+            input
+                .sovereignty_requirements
+                .as_ref()
+                .and_then(|s| serde_json::to_string(s).ok()),
+        )
         .bind(now)
         .bind(now)
         .execute(&self.pool)
@@ -450,6 +466,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
             rate_limit_tpm: input.rate_limit_tpm,
             rotated_from_key_id: None,
             rotation_grace_until: None,
+            sovereignty_requirements: input.sovereignty_requirements,
         })
     }
 
@@ -459,7 +476,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                   rotated_from_key_id, rotation_grace_until
+                   rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE id = ?
             "#,
@@ -484,7 +501,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
                 k.budget_amount, k.budget_period, k.expires_at, k.last_used_at, k.created_at,
                 k.revoked_at,
                 k.scopes, k.allowed_models, k.ip_allowlist, k.rate_limit_rpm, k.rate_limit_tpm,
-                k.rotated_from_key_id, k.rotation_grace_until,
+                k.rotated_from_key_id, k.rotation_grace_until, k.sovereignty_requirements,
                 CASE
                     WHEN k.owner_type = 'organization' THEN k.owner_id
                     WHEN k.owner_type = 'team' THEN t.org_id
@@ -555,7 +572,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                   rotated_from_key_id, rotation_grace_until
+                   rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'organization' AND owner_id = ?
             ORDER BY created_at DESC, id DESC
@@ -613,7 +630,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                   rotated_from_key_id, rotation_grace_until
+                   rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'team' AND owner_id = ?
             ORDER BY created_at DESC, id DESC
@@ -671,7 +688,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                   rotated_from_key_id, rotation_grace_until
+                   rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'project' AND owner_id = ?
             ORDER BY created_at DESC, id DESC
@@ -729,7 +746,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                   rotated_from_key_id, rotation_grace_until
+                   rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'user' AND owner_id = ?
             ORDER BY created_at DESC, id DESC
@@ -839,7 +856,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
                 id, key_prefix, name, owner_type, owner_id,
                 budget_amount, budget_period, expires_at, last_used_at, created_at, revoked_at,
                 scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                rotated_from_key_id, rotation_grace_until
+                rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE owner_type = 'service_account' AND owner_id = ?
             ORDER BY created_at DESC, id DESC
@@ -939,10 +956,10 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
                 id, name, key_hash, key_prefix, owner_type, owner_id,
                 budget_amount, budget_period, expires_at,
                 scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                rotated_from_key_id,
+                sovereignty_requirements, rotated_from_key_id,
                 created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(new_id.to_string())
@@ -974,6 +991,12 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
         )
         .bind(new_key_input.rate_limit_rpm)
         .bind(new_key_input.rate_limit_tpm)
+        .bind(
+            new_key_input
+                .sovereignty_requirements
+                .as_ref()
+                .and_then(|s| serde_json::to_string(s).ok()),
+        )
         .bind(old_key_id.to_string())
         .bind(now)
         .bind(now)
@@ -1003,6 +1026,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
             rate_limit_tpm: new_key_input.rate_limit_tpm,
             rotated_from_key_id: Some(old_key_id),
             rotation_grace_until: None,
+            sovereignty_requirements: new_key_input.sovereignty_requirements,
         })
     }
 
@@ -1049,7 +1073,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
             SELECT id, key_prefix, name, owner_type, owner_id, budget_amount, budget_period,
                    expires_at, last_used_at, created_at, revoked_at,
                    scopes, allowed_models, ip_allowlist, rate_limit_rpm, rate_limit_tpm,
-                   rotated_from_key_id, rotation_grace_until
+                   rotated_from_key_id, rotation_grace_until, sovereignty_requirements
             FROM api_keys
             WHERE name = ? AND owner_type = 'organization' AND owner_id = ? AND revoked_at IS NULL
             "#,
@@ -1180,6 +1204,7 @@ mod tests {
                 rate_limit_tpm INTEGER,
                 rotated_from_key_id TEXT REFERENCES api_keys(id) ON DELETE SET NULL,
                 rotation_grace_until TEXT,
+                sovereignty_requirements TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
@@ -1204,6 +1229,7 @@ mod tests {
             ip_allowlist: None,
             rate_limit_rpm: None,
             rate_limit_tpm: None,
+            sovereignty_requirements: None,
         }
     }
 
@@ -1219,6 +1245,7 @@ mod tests {
             ip_allowlist: None,
             rate_limit_rpm: None,
             rate_limit_tpm: None,
+            sovereignty_requirements: None,
         }
     }
 
@@ -1234,6 +1261,7 @@ mod tests {
             ip_allowlist: None,
             rate_limit_rpm: None,
             rate_limit_tpm: None,
+            sovereignty_requirements: None,
         }
     }
 
@@ -1311,6 +1339,7 @@ mod tests {
             ip_allowlist: None,
             rate_limit_rpm: None,
             rate_limit_tpm: None,
+            sovereignty_requirements: None,
         };
 
         let key = repo
@@ -1339,6 +1368,7 @@ mod tests {
             ip_allowlist: Some(vec!["10.0.0.0/8".to_string()]),
             rate_limit_rpm: Some(100),
             rate_limit_tpm: Some(50000),
+            sovereignty_requirements: None,
         };
 
         let key = repo
@@ -1966,6 +1996,7 @@ mod tests {
             ip_allowlist: None,
             rate_limit_rpm: None,
             rate_limit_tpm: None,
+            sovereignty_requirements: None,
         };
 
         let created = repo
@@ -2204,6 +2235,7 @@ mod tests {
             ip_allowlist: Some(vec!["10.0.0.0/8".to_string()]),
             rate_limit_rpm: Some(100),
             rate_limit_tpm: Some(50000),
+            sovereignty_requirements: None,
         };
 
         let old_key = repo
@@ -2223,6 +2255,7 @@ mod tests {
             ip_allowlist: Some(vec!["10.0.0.0/8".to_string()]),
             rate_limit_rpm: Some(100),
             rate_limit_tpm: Some(50000),
+            sovereignty_requirements: None,
         };
 
         let new_key = repo

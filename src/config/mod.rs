@@ -26,6 +26,7 @@ mod providers;
 mod retention;
 mod secrets;
 mod server;
+pub mod sovereignty;
 mod storage;
 mod ui;
 
@@ -44,6 +45,7 @@ pub use retention::*;
 pub use secrets::*;
 use serde::{Deserialize, Serialize};
 pub use server::*;
+pub use sovereignty::*;
 pub use storage::*;
 pub use ui::*;
 
@@ -115,6 +117,10 @@ pub struct GatewayConfig {
     /// Storage configuration for files and binary data.
     #[serde(default)]
     pub storage: StorageConfig,
+
+    /// Sovereignty and compliance metadata configuration.
+    #[serde(default)]
+    pub sovereignty: SovereigntyConfig,
 }
 
 impl GatewayConfig {

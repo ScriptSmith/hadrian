@@ -72,6 +72,15 @@ impl SqliteDynamicProviderRepo {
             api_key_secret_ref: row.col("api_key_secret_ref"),
             config,
             models,
+            sovereignty: row.col::<Option<String>>("sovereignty").and_then(|s| {
+                match serde_json::from_str(&s) {
+                    Ok(r) => Some(r),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to deserialize sovereignty metadata");
+                        None
+                    }
+                }
+            }),
             is_enabled: row.col::<i32>("is_enabled") != 0,
             created_at: row.col("created_at"),
             updated_at: row.col("updated_at"),
@@ -93,7 +102,7 @@ impl SqliteDynamicProviderRepo {
         let sql = format!(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'organization' AND owner_id = ?
             AND (created_at, id) {} (?, ?)
@@ -145,7 +154,7 @@ impl SqliteDynamicProviderRepo {
         let sql = format!(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'project' AND owner_id = ?
             AND (created_at, id) {} (?, ?)
@@ -197,7 +206,7 @@ impl SqliteDynamicProviderRepo {
         let sql = format!(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'team' AND owner_id = ?
             AND (created_at, id) {} (?, ?)
@@ -249,7 +258,7 @@ impl SqliteDynamicProviderRepo {
         let sql = format!(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'user' AND owner_id = ?
             AND (created_at, id) {} (?, ?)
@@ -306,9 +315,9 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             r#"
             INSERT INTO dynamic_providers (
                 id, owner_type, owner_id, name, provider_type, base_url,
-                api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
             "#,
         )
         .bind(id.to_string())
@@ -320,6 +329,12 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         .bind(&input.api_key)
         .bind(&config_json)
         .bind(&models_json)
+        .bind(
+            input
+                .sovereignty
+                .as_ref()
+                .and_then(|s| serde_json::to_string(s).ok()),
+        )
         .bind(now)
         .bind(now)
         .execute(&self.pool)
@@ -338,6 +353,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             api_key_secret_ref: input.api_key,
             config: input.config,
             models: input.models.unwrap_or_default(),
+            sovereignty: input.sovereignty,
             is_enabled: true,
             created_at: now,
             updated_at: now,
@@ -348,7 +364,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         let row = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE id = ?
             "#,
@@ -370,7 +386,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         let row = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = ? AND owner_id = ? AND name = ?
             "#,
@@ -403,7 +419,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         let rows = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'organization' AND owner_id = ?
             ORDER BY created_at DESC, id DESC
@@ -463,7 +479,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         let rows = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'team' AND owner_id = ?
             ORDER BY created_at DESC, id DESC
@@ -523,7 +539,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         let rows = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'project' AND owner_id = ?
             ORDER BY created_at DESC, id DESC
@@ -583,7 +599,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         let rows = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'user' AND owner_id = ?
             ORDER BY created_at DESC, id DESC
@@ -639,7 +655,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             let sql = format!(
                 r#"
                 SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                       api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                       api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
                 FROM dynamic_providers
                 WHERE owner_type = 'user' AND owner_id = ? AND is_enabled = 1
                 AND (created_at, id) {} (?, ?)
@@ -679,7 +695,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         let rows = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'user' AND owner_id = ? AND is_enabled = 1
             ORDER BY created_at DESC, id DESC
@@ -720,7 +736,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             let sql = format!(
                 r#"
                 SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                       api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                       api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
                 FROM dynamic_providers
                 WHERE owner_type = 'organization' AND owner_id = ? AND is_enabled = 1
                 AND (created_at, id) {} (?, ?)
@@ -760,7 +776,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         let rows = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'organization' AND owner_id = ? AND is_enabled = 1
             ORDER BY created_at DESC, id DESC
@@ -801,7 +817,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             let sql = format!(
                 r#"
                 SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                       api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                       api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
                 FROM dynamic_providers
                 WHERE owner_type = 'project' AND owner_id = ? AND is_enabled = 1
                 AND (created_at, id) {} (?, ?)
@@ -841,7 +857,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         let rows = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'project' AND owner_id = ? AND is_enabled = 1
             ORDER BY created_at DESC, id DESC
@@ -882,7 +898,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             let sql = format!(
                 r#"
                 SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                       api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                       api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
                 FROM dynamic_providers
                 WHERE owner_type = 'team' AND owner_id = ? AND is_enabled = 1
                 AND (created_at, id) {} (?, ?)
@@ -922,7 +938,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         let rows = query(
             r#"
             SELECT id, owner_type, owner_id, name, provider_type, base_url,
-                   api_key_secret_ref, config, models, is_enabled, created_at, updated_at
+                   api_key_secret_ref, config, models, sovereignty, is_enabled, created_at, updated_at
             FROM dynamic_providers
             WHERE owner_type = 'team' AND owner_id = ? AND is_enabled = 1
             ORDER BY created_at DESC, id DESC
@@ -958,6 +974,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         let mut has_config = false;
         let mut has_models = false;
         let mut has_is_enabled = false;
+        let mut has_sovereignty = false;
 
         if input.base_url.is_some() {
             updates.push("base_url = ?");
@@ -978,6 +995,10 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         if input.is_enabled.is_some() {
             updates.push("is_enabled = ?");
             has_is_enabled = true;
+        }
+        if input.sovereignty.is_some() {
+            updates.push("sovereignty = ?");
+            has_sovereignty = true;
         }
 
         let query_str = format!(
@@ -1008,6 +1029,13 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
         }
         if has_is_enabled {
             q = q.bind(input.is_enabled.map(|b| if b { 1 } else { 0 }));
+        }
+        if has_sovereignty {
+            let sovereignty_json = input
+                .sovereignty
+                .as_ref()
+                .and_then(|s| serde_json::to_string(s).ok());
+            q = q.bind(sovereignty_json);
         }
         q = q.bind(id.to_string());
 

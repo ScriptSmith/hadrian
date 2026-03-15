@@ -222,6 +222,19 @@ pub async fn api_v1_models(
                             }
                         }
                     }
+
+                    // Sovereignty: merge provider → model override (independent of catalog)
+                    let provider_sov = provider_config.and_then(|pc| pc.sovereignty());
+                    let model_sov = model_config.and_then(|mc| mc.sovereignty.as_ref());
+                    if let Some(merged) =
+                        crate::config::SovereigntyMetadata::merge(provider_sov, model_sov)
+                            .filter(|m| !m.is_empty())
+                    {
+                        obj.insert(
+                            "sovereignty".to_string(),
+                            serde_json::to_value(&merged).unwrap_or_default(),
+                        );
+                    }
                 } else {
                     model_json = serde_json::json!({ "id": prefixed_id });
                 }

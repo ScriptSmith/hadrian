@@ -31,6 +31,9 @@ export const defaultConfig: UiConfig = {
     methods: ["none"], // Default to no auth for easy development
     oidc: null,
   },
+  sovereignty: {
+    custom_fields: [],
+  },
 };
 
 export function getApiBaseUrl(): string {

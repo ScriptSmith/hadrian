@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react";
 
 import { TooltipProvider } from "@/components/Tooltip/Tooltip";
+import { ConfigProvider } from "@/config/ConfigProvider";
 
 import { ModelDetailsPanel } from "./ModelDetailsPanel";
 import type { ModelInfo } from "./model-utils";
@@ -13,11 +14,13 @@ const meta = {
   },
   decorators: [
     (Story) => (
-      <TooltipProvider>
-        <div className="w-[280px] h-[500px] border rounded-lg bg-popover">
-          <Story />
-        </div>
-      </TooltipProvider>
+      <ConfigProvider>
+        <TooltipProvider>
+          <div className="w-[280px] h-[500px] border rounded-lg bg-popover">
+            <Story />
+          </div>
+        </TooltipProvider>
+      </ConfigProvider>
     ),
   ],
 } satisfies Meta<typeof ModelDetailsPanel>;

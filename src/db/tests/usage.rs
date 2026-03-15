@@ -51,6 +51,7 @@ impl<'a> UsageTestContext<'a> {
                     ip_allowlist: None,
                     rate_limit_rpm: None,
                     rate_limit_tpm: None,
+                    sovereignty_requirements: None,
                 },
                 &hash,
             )

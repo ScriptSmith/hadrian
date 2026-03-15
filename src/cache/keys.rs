@@ -586,6 +586,7 @@ mod tests {
             stream_options: None,
             top_p: None,
             user: None,
+            sovereignty_requirements: None,
         };
 
         let key_components = CacheKeyComponents::default();
@@ -628,6 +629,7 @@ mod tests {
             stream_options: None,
             top_p: None,
             user: None,
+            sovereignty_requirements: None,
         };
 
         let payload2 = CreateChatCompletionPayload {
@@ -680,6 +682,7 @@ mod tests {
             stream_options: None,
             top_p: None,
             user: None,
+            sovereignty_requirements: None,
         };
 
         let payload2 = CreateChatCompletionPayload {
@@ -724,6 +727,7 @@ mod tests {
             stream_options: None,
             top_p: None,
             user: None,
+            sovereignty_requirements: None,
         };
 
         let key1 = CacheKeys::response_cache(&payload, "gpt-4", &key_components);

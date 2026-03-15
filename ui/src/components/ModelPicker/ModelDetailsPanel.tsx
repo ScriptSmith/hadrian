@@ -14,8 +14,15 @@ import {
   Cpu,
   X,
   Info,
+  Server,
+  Globe,
+  Shield,
+  FileText,
+  Database,
+  Tag,
 } from "lucide-react";
 
+import { useConfig } from "@/config/ConfigProvider";
 import { cn } from "@/utils/cn";
 
 import { CapabilityBadge } from "./CapabilityBadge";
@@ -43,6 +50,9 @@ interface ModelDetailsPanelProps {
  * Shows when user clicks the info button on a model card.
  */
 export function ModelDetailsPanel({ model, className, onClose }: ModelDetailsPanelProps) {
+  const { config } = useConfig();
+  const customFieldDefs = config.sovereignty?.custom_fields ?? [];
+
   if (!model) {
     return (
       <div
@@ -219,6 +229,71 @@ export function ModelDetailsPanel({ model, className, onClose }: ModelDetailsPan
                 value={`${formatCatalogPricing(catalogPricing.reasoning)} / 1M tokens`}
               />
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Sovereignty & Compliance */}
+      {model.sovereignty && (
+        <div className="py-4 border-b border-border">
+          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-3">
+            Sovereignty & Compliance
+          </h4>
+          <div className="space-y-2.5">
+            {model.sovereignty.hq_country && (
+              <DetailRow icon={Globe} label="HQ Country" value={model.sovereignty.hq_country} />
+            )}
+            {model.sovereignty.inference_countries &&
+              model.sovereignty.inference_countries.length > 0 && (
+                <DetailRow
+                  icon={Server}
+                  label="Inference"
+                  value={model.sovereignty.inference_countries.join(", ")}
+                />
+              )}
+            {model.sovereignty.certifications && model.sovereignty.certifications.length > 0 && (
+              <div className="flex items-start justify-between gap-2 text-sm">
+                <span className="flex items-center gap-2 text-muted-foreground shrink-0">
+                  <Shield className="h-4 w-4" />
+                  Certifications
+                </span>
+                <div className="flex flex-wrap gap-1 justify-end">
+                  {model.sovereignty.certifications.map((cert) => (
+                    <span
+                      key={cert}
+                      className="rounded-full px-2 py-0.5 text-[10px] font-medium bg-blue-500/10 text-blue-700 dark:text-blue-400"
+                    >
+                      {cert.toUpperCase()}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {model.sovereignty.on_prem === true && (
+              <DetailRow icon={Server} label="On-Premises" value="Yes" />
+            )}
+            {model.sovereignty.trains_on_data !== undefined && (
+              <DetailRow
+                icon={Database}
+                label="Trains on data"
+                value={model.sovereignty.trains_on_data ? "Yes" : "No"}
+              />
+            )}
+            {model.sovereignty.data_retention && (
+              <DetailRow
+                icon={Clock}
+                label="Data retention"
+                value={model.sovereignty.data_retention}
+              />
+            )}
+            {model.sovereignty.license && (
+              <DetailRow icon={FileText} label="License" value={model.sovereignty.license} />
+            )}
+            {model.sovereignty.custom &&
+              Object.entries(model.sovereignty.custom).map(([key, value]) => {
+                const def = customFieldDefs.find((f) => f.key === key);
+                return <DetailRow key={key} icon={Tag} label={def?.title ?? key} value={value} />;
+              })}
           </div>
         </div>
       )}

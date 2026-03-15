@@ -25,6 +25,7 @@ fn create_org_provider(name: &str, org_id: Uuid) -> CreateDynamicProvider {
         api_key: Some("vault://openai-key".to_string()),
         config: None,
         models: Some(vec!["gpt-4".to_string(), "gpt-3.5-turbo".to_string()]),
+        sovereignty: None,
     }
 }
 
@@ -37,6 +38,7 @@ fn create_project_provider(name: &str, project_id: Uuid) -> CreateDynamicProvide
         api_key: None,
         config: None,
         models: None,
+        sovereignty: None,
     }
 }
 
@@ -49,6 +51,7 @@ fn create_user_provider(name: &str, user_id: Uuid) -> CreateDynamicProvider {
         api_key: Some("env://AZURE_KEY".to_string()),
         config: None,
         models: Some(vec!["gpt-4".to_string()]),
+        sovereignty: None,
     }
 }
 
@@ -393,6 +396,7 @@ pub async fn test_list_enabled_by_user(repo: &dyn DynamicProviderRepo) {
             config: None,
             models: None,
             is_enabled: Some(false),
+            sovereignty: None,
         },
     )
     .await
@@ -455,6 +459,7 @@ pub async fn test_list_enabled_by_org(repo: &dyn DynamicProviderRepo) {
             config: None,
             models: None,
             is_enabled: Some(false),
+            sovereignty: None,
         },
     )
     .await
@@ -516,6 +521,7 @@ pub async fn test_list_enabled_by_project(repo: &dyn DynamicProviderRepo) {
             config: None,
             models: None,
             is_enabled: Some(false),
+            sovereignty: None,
         },
     )
     .await
@@ -568,6 +574,7 @@ pub async fn test_update_base_url(repo: &dyn DynamicProviderRepo) {
         config: None,
         models: None,
         is_enabled: None,
+        sovereignty: None,
     };
 
     let updated = repo
@@ -596,6 +603,7 @@ pub async fn test_update_api_key(repo: &dyn DynamicProviderRepo) {
         config: None,
         models: None,
         is_enabled: None,
+        sovereignty: None,
     };
 
     let updated = repo
@@ -624,6 +632,7 @@ pub async fn test_update_models(repo: &dyn DynamicProviderRepo) {
         config: None,
         models: Some(vec!["o1".to_string(), "o1-mini".to_string()]),
         is_enabled: None,
+        sovereignty: None,
     };
 
     let updated = repo
@@ -649,6 +658,7 @@ pub async fn test_update_is_enabled(repo: &dyn DynamicProviderRepo) {
         config: None,
         models: None,
         is_enabled: Some(false),
+        sovereignty: None,
     };
 
     let updated = repo
@@ -673,6 +683,7 @@ pub async fn test_update_multiple_fields(repo: &dyn DynamicProviderRepo) {
         config: None,
         models: Some(vec!["new-model".to_string()]),
         is_enabled: Some(false),
+        sovereignty: None,
     };
 
     let updated = repo
@@ -696,6 +707,7 @@ pub async fn test_update_nonexistent_returns_not_found(repo: &dyn DynamicProvide
         config: None,
         models: None,
         is_enabled: None,
+        sovereignty: None,
     };
 
     let result = repo.update(Uuid::new_v4(), update).await;
@@ -745,6 +757,7 @@ pub async fn test_models_empty_vec(repo: &dyn DynamicProviderRepo) {
         api_key: None,
         config: None,
         models: Some(vec![]),
+        sovereignty: None,
     };
 
     let created = repo

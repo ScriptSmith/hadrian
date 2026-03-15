@@ -30,6 +30,7 @@ fn create_org_api_key(name: &str, org_id: Uuid) -> CreateApiKey {
         ip_allowlist: None,
         rate_limit_rpm: None,
         rate_limit_tpm: None,
+        sovereignty_requirements: None,
     }
 }
 
@@ -45,6 +46,7 @@ fn create_project_api_key(name: &str, project_id: Uuid) -> CreateApiKey {
         ip_allowlist: None,
         rate_limit_rpm: None,
         rate_limit_tpm: None,
+        sovereignty_requirements: None,
     }
 }
 
@@ -60,6 +62,7 @@ fn create_user_api_key(name: &str, user_id: Uuid) -> CreateApiKey {
         ip_allowlist: None,
         rate_limit_rpm: None,
         rate_limit_tpm: None,
+        sovereignty_requirements: None,
     }
 }
 
@@ -174,6 +177,7 @@ pub async fn test_create_api_key_with_budget(ctx: &ApiKeyTestContext<'_>) {
         ip_allowlist: None,
         rate_limit_rpm: None,
         rate_limit_tpm: None,
+        sovereignty_requirements: None,
     };
 
     let key = ctx
@@ -761,6 +765,7 @@ pub async fn test_budget_period_daily(ctx: &ApiKeyTestContext<'_>) {
         ip_allowlist: None,
         rate_limit_rpm: None,
         rate_limit_tpm: None,
+        sovereignty_requirements: None,
     };
 
     let created = ctx

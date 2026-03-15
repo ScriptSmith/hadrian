@@ -6,9 +6,9 @@ use chrono::Utc;
 use http::StatusCode;
 
 use super::{
-    ApiError, log_guardrails_evaluation, log_output_guardrails_evaluation, messages_contain_images,
-    reasoning_effort_to_string, response_format_to_string, responses_reasoning_effort_to_string,
-    should_bypass_cache,
+    ApiError, check_sovereignty, log_guardrails_evaluation, log_output_guardrails_evaluation,
+    messages_contain_images, reasoning_effort_to_string, response_format_to_string,
+    responses_reasoning_effort_to_string, should_bypass_cache,
 };
 use crate::{
     AppState, api_types,
@@ -516,6 +516,14 @@ pub async fn api_v1_chat_completions(
             ApiError::new(StatusCode::FORBIDDEN, "model_not_allowed", e.to_string())
         })?;
     }
+
+    // Check sovereignty requirements (API key + per-request)
+    check_sovereignty(
+        auth.as_ref(),
+        payload.sovereignty_requirements.as_ref(),
+        &provider_config,
+        &model_name,
+    )?;
 
     // Check authorization if authz context is available and API RBAC is enabled
     if let Some(Extension(ref authz)) = authz {
@@ -1125,6 +1133,14 @@ pub async fn api_v1_responses(
             ApiError::new(StatusCode::FORBIDDEN, "model_not_allowed", e.to_string())
         })?;
     }
+
+    // Check sovereignty requirements (API key + per-request)
+    check_sovereignty(
+        auth.as_ref(),
+        payload.sovereignty_requirements.as_ref(),
+        &provider_config,
+        &model_name,
+    )?;
 
     // Check authorization if authz context is available and API RBAC is enabled
     if let Some(Extension(ref authz)) = authz {
@@ -1895,6 +1911,14 @@ pub async fn api_v1_completions(
             ApiError::new(StatusCode::FORBIDDEN, "model_not_allowed", e.to_string())
         })?;
     }
+
+    // Check sovereignty requirements (API key + per-request)
+    check_sovereignty(
+        auth.as_ref(),
+        payload.sovereignty_requirements.as_ref(),
+        &provider_config,
+        &model_name,
+    )?;
 
     // Check if cache should be bypassed based on request headers
     let force_refresh = should_bypass_cache(&headers);

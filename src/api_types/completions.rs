@@ -149,6 +149,11 @@ pub struct CreateCompletionPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "utoipa", schema(value_type = Object))]
     pub response_format: Option<CompletionResponseFormat>,
+
+    /// **Hadrian Extension:** Per-request sovereignty requirements.
+    /// Merged with API key requirements (most restrictive wins).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sovereignty_requirements: Option<crate::config::SovereigntyRequirements>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

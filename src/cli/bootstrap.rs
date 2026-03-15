@@ -246,6 +246,7 @@ pub(crate) async fn run_bootstrap(explicit_config_path: Option<&str>, dry_run: b
                             ip_allowlist: None,
                             rate_limit_rpm: None,
                             rate_limit_tpm: None,
+                            sovereignty_requirements: None,
                         },
                         &api_key_prefix,
                     )

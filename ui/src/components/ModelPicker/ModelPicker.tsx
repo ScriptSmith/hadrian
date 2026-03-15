@@ -1,4 +1,4 @@
-import { Search, X, Brain, Wrench, Eye, Braces, Scale } from "lucide-react";
+import { Search, X, Brain, Wrench, Eye, Braces, Scale, Server, Globe } from "lucide-react";
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 
@@ -14,6 +14,8 @@ import {
   getProviderInfo,
   getDynamicScope,
   matchesCapabilityFilter,
+  matchesCountryFilter,
+  getUniqueInferenceCountries,
 } from "./model-utils";
 import { ProviderList } from "./ProviderList";
 import type { ProviderFilter, ProviderInfo } from "./ProviderList";
@@ -48,6 +50,7 @@ export function ModelPicker({
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedProvider, setSelectedProvider] = useState<ProviderFilter>("all");
   const [capabilityFilter, setCapabilityFilter] = useState<CapabilityFilter>("all");
+  const [countryFilter, setCountryFilter] = useState("all");
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [shouldScrollToFocused, setShouldScrollToFocused] = useState(false);
   const [detailModel, setDetailModel] = useState<ModelInfo | null>(null);
@@ -74,6 +77,7 @@ export function ModelPicker({
       setSearchQuery("");
       setSelectedProvider("all");
       setCapabilityFilter("all");
+      setCountryFilter("all");
       setFocusedIndex(0);
       setDetailModel(null);
       setTimeout(() => inputRef.current?.focus(), 0);
@@ -91,6 +95,11 @@ export function ModelPicker({
   }, [open, onClose]);
 
   // Compute providers and filtered models
+  const inferenceCountries = useMemo(
+    () => getUniqueInferenceCountries(availableModels),
+    [availableModels]
+  );
+
   const { providers, filteredModels, totalCount, favoriteCount } = useMemo(() => {
     // Deduplicate models
     const seenIds = new Set<string>();
@@ -165,6 +174,11 @@ export function ModelPicker({
       filtered = filtered.filter((m) => matchesCapabilityFilter(m, capabilityFilter));
     }
 
+    // Apply country filter
+    if (countryFilter !== "all") {
+      filtered = filtered.filter((m) => matchesCountryFilter(m, countryFilter));
+    }
+
     // Sort: selected first, then favorites, then rest alphabetically
     filtered = [...filtered].sort((a, b) => {
       const aSelected = selectedSet.has(a.id) ? 0 : 1;
@@ -189,6 +203,7 @@ export function ModelPicker({
     searchQuery,
     selectedProvider,
     capabilityFilter,
+    countryFilter,
     selectedSet,
     favoriteSet,
     task,
@@ -197,7 +212,7 @@ export function ModelPicker({
   // Reset focus when filter changes
   useEffect(() => {
     setFocusedIndex(0);
-  }, [searchQuery, selectedProvider, capabilityFilter]);
+  }, [searchQuery, selectedProvider, capabilityFilter, countryFilter]);
 
   const handleToggleModel = useCallback(
     (modelId: string) => {
@@ -401,6 +416,49 @@ export function ModelPicker({
                 <Scale className="h-3 w-3" />
                 Open
               </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setCapabilityFilter(capabilityFilter === "on_prem" ? "all" : "on_prem")
+                }
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+                  capabilityFilter === "on_prem"
+                    ? "bg-teal-500 text-white"
+                    : "bg-teal-500/10 text-teal-800 dark:text-teal-400 hover:bg-teal-500/20"
+                )}
+              >
+                <Server className="h-3 w-3" />
+                On-Prem
+              </button>
+              {inferenceCountries.length > 0 && (
+                <div
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full pl-2.5 pr-1 py-0.5 text-xs font-medium transition-colors",
+                    countryFilter !== "all"
+                      ? "bg-sky-500 text-white"
+                      : "bg-sky-500/10 text-sky-800 dark:text-sky-400"
+                  )}
+                >
+                  <Globe className="h-3 w-3" />
+                  <select
+                    value={countryFilter}
+                    onChange={(e) => setCountryFilter(e.target.value)}
+                    aria-label="Filter by inference country"
+                    className={cn(
+                      "bg-transparent text-xs font-medium outline-none cursor-pointer appearance-none pr-1.5",
+                      countryFilter !== "all" ? "text-white" : "text-sky-800 dark:text-sky-400"
+                    )}
+                  >
+                    <option value="all">Country</option>
+                    {inferenceCountries.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
           </div>
 

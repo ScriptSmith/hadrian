@@ -583,6 +583,7 @@ Respond with a JSON object containing a "scores" array with objects having "inde
             tools: None,
             top_p: None,
             user: None,
+            sovereignty_requirements: None,
         };
 
         event!(

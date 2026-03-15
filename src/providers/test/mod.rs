@@ -1048,6 +1048,7 @@ mod tests {
             tools: None,
             top_p: None,
             user: None,
+            sovereignty_requirements: None,
         }
     }
 
@@ -1217,6 +1218,7 @@ mod tests {
             model_fallbacks: std::collections::HashMap::new(),
             health_check: Default::default(),
             catalog_provider: None,
+            sovereignty: None,
         };
 
         let provider = TestProvider::from_config(&config);
