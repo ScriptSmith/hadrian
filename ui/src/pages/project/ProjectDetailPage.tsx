@@ -166,7 +166,9 @@ export default function ProjectDetailPage() {
         <ProvidersTab orgSlug={orgSlug!} projectSlug={projectSlug!} projectId={project.id} />
       )}
       {activeTab === "pricing" && <PricingTab orgSlug={orgSlug!} projectSlug={projectSlug!} />}
-      {activeTab === "usage" && <UsageTab orgSlug={orgSlug!} projectSlug={projectSlug!} />}
+      {activeTab === "usage" && (
+        <UsageTab orgSlug={orgSlug!} projectSlug={projectSlug!} projectId={project.id} />
+      )}
 
       {/* Edit Modal */}
       <Modal open={isEditModalOpen} onClose={() => setIsEditModalOpen(false)}>

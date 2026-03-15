@@ -2,16 +2,35 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use super::DateRange;
+use super::{DateRange, ListResult};
 use crate::{
     db::error::DbResult,
     models::{
         DailyModelSpend, DailyOrgSpend, DailyPricingSourceSpend, DailyProjectSpend,
         DailyProviderSpend, DailySpend, DailyTeamSpend, DailyUserSpend, ModelSpend, OrgSpend,
         PricingSourceSpend, ProjectSpend, ProviderSpend, RefererSpend, TeamSpend, UsageLogEntry,
-        UsageSummary, UserSpend,
+        UsageLogRecord, UsageSummary, UserSpend,
     },
 };
+
+/// Query parameters for listing individual usage log records.
+#[derive(Debug, Default)]
+pub struct UsageLogQuery {
+    pub org_id: Option<Uuid>,
+    pub user_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    pub api_key_id: Option<Uuid>,
+    pub service_account_id: Option<Uuid>,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub provider_source: Option<String>,
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+    pub limit: Option<i64>,
+    pub cursor: Option<String>,
+    pub direction: Option<String>,
+}
 
 /// Statistics for computing cost forecasts
 #[derive(Debug, Clone)]
@@ -521,6 +540,11 @@ pub trait UsageRepo: Send + Sync {
 
     /// Get daily usage grouped by organization (global).
     async fn get_daily_org_usage_global(&self, range: DateRange) -> DbResult<Vec<DailyOrgSpend>>;
+
+    // ==================== Individual Log Queries ====================
+
+    /// List individual usage log records with optional filtering and cursor pagination.
+    async fn list_logs(&self, query: UsageLogQuery) -> DbResult<ListResult<UsageLogRecord>>;
 
     // ==================== Retention Operations ====================
     // These methods support data retention policies.

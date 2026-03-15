@@ -135,9 +135,9 @@ import { formatCurrency, formatNumber, formatDateTime } from "@/utils/formatters
 
 export type UsageScope =
   | { type: "apiKey"; keyId: string }
-  | { type: "organization"; slug: string }
-  | { type: "project"; orgSlug: string; projectSlug: string }
-  | { type: "team"; orgSlug: string; teamSlug: string }
+  | { type: "organization"; slug: string; orgId: string }
+  | { type: "project"; orgSlug: string; projectSlug: string; projectId: string }
+  | { type: "team"; orgSlug: string; teamSlug: string; teamId: string }
   | { type: "user"; userId: string }
   | { type: "me" }
   | { type: "global" };

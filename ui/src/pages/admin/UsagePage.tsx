@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/Card/Card
 import { CodeBadge } from "@/components/CodeBadge/CodeBadge";
 import {
   PageHeader,
+  TabNavigation,
   TeamSelect,
   ProjectSelect,
   UserSelect,
@@ -19,6 +20,9 @@ import {
 } from "@/components/Admin";
 import { formatCurrency } from "@/utils/formatters";
 import UsageDashboard, { type UsageScope } from "@/components/UsageDashboard/UsageDashboard";
+import UsageLogsTable from "@/components/UsageLogs/UsageLogsTable";
+
+type UsageTab = "analytics" | "logs";
 
 export default function UsagePage() {
   const [selectedOrg, setSelectedOrg] = useState<string | null>(null);
@@ -26,6 +30,7 @@ export default function UsagePage() {
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [selectedApiKey, setSelectedApiKey] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<UsageTab>("analytics");
 
   const { data: organizations } = useQuery(organizationListOptions());
 
@@ -54,10 +59,12 @@ export default function UsagePage() {
 
   const selectedKeyInfo = apiKeys?.data?.find((k) => k.id === selectedApiKey);
 
-  // Resolve the selected team slug from ID
-  const selectedTeamSlug = selectedTeam
-    ? teams?.data?.find((t) => t.id === selectedTeam)?.slug
+  // Resolve IDs/slugs for scope filtering
+  const selectedTeamInfo = selectedTeam ? teams?.data?.find((t) => t.id === selectedTeam) : null;
+  const selectedProjectInfo = selectedProject
+    ? projects?.data?.find((p) => p.slug === selectedProject)
     : null;
+  const orgId = organizations?.data?.find((o) => o.slug === effectiveOrg)?.id;
 
   // Scope resolution: first match wins (most specific -> least specific)
   // When no org is selected, use global scope
@@ -65,12 +72,22 @@ export default function UsagePage() {
     ? { type: "apiKey", keyId: selectedApiKey }
     : selectedUser
       ? { type: "user", userId: selectedUser }
-      : selectedProject && effectiveOrg
-        ? { type: "project", orgSlug: effectiveOrg, projectSlug: selectedProject }
-        : selectedTeamSlug && effectiveOrg
-          ? { type: "team", orgSlug: effectiveOrg, teamSlug: selectedTeamSlug }
-          : effectiveOrg
-            ? { type: "organization", slug: effectiveOrg }
+      : selectedProjectInfo && effectiveOrg
+        ? {
+            type: "project",
+            orgSlug: effectiveOrg,
+            projectSlug: selectedProjectInfo.slug,
+            projectId: selectedProjectInfo.id,
+          }
+        : selectedTeamInfo && effectiveOrg
+          ? {
+              type: "team",
+              orgSlug: effectiveOrg,
+              teamSlug: selectedTeamInfo.slug,
+              teamId: selectedTeamInfo.id,
+            }
+          : effectiveOrg && orgId
+            ? { type: "organization", slug: effectiveOrg, orgId }
             : { type: "global" };
 
   return (
@@ -169,54 +186,76 @@ export default function UsagePage() {
         )}
       </div>
 
-      <UsageDashboard scope={scope} />
+      <TabNavigation
+        tabs={[
+          { id: "analytics" as const, label: "Analytics" },
+          { id: "logs" as const, label: "Logs" },
+        ]}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+      />
 
-      {/* API Key Details (when drilled into a specific key) */}
-      {selectedKeyInfo && (
-        <Card className="mt-6">
-          <CardHeader>
-            <CardTitle>API Key Details</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div>
-                <div className="text-sm text-muted-foreground">Name</div>
-                <div className="font-medium">{selectedKeyInfo.name}</div>
-              </div>
-              <div>
-                <div className="text-sm text-muted-foreground">Key Prefix</div>
-                <CodeBadge>{selectedKeyInfo.key_prefix}...</CodeBadge>
-              </div>
-              <div>
-                <div className="text-sm text-muted-foreground">Budget</div>
-                <div className="font-medium">
-                  {selectedKeyInfo.budget_limit_cents ? (
-                    <>
-                      {formatCurrency(selectedKeyInfo.budget_limit_cents / 100)}
-                      {selectedKeyInfo.budget_period && (
-                        <span className="text-muted-foreground">
-                          /{selectedKeyInfo.budget_period}
-                        </span>
-                      )}
-                    </>
-                  ) : (
-                    <span className="text-muted-foreground">No limit</span>
-                  )}
-                </div>
-              </div>
-              <div>
-                <div className="text-sm text-muted-foreground">Status</div>
-                <div>
-                  <ApiKeyStatusBadge
-                    revokedAt={selectedKeyInfo.revoked_at}
-                    expiresAt={selectedKeyInfo.expires_at}
-                  />
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      <div
+        role="tabpanel"
+        id={`tabpanel-${activeTab}`}
+        aria-labelledby={`tab-${activeTab}`}
+        className="mt-6"
+      >
+        {activeTab === "analytics" ? (
+          <>
+            <UsageDashboard scope={scope} />
+
+            {/* API Key Details (when drilled into a specific key) */}
+            {selectedKeyInfo && (
+              <Card className="mt-6">
+                <CardHeader>
+                  <CardTitle>API Key Details</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div>
+                      <div className="text-sm text-muted-foreground">Name</div>
+                      <div className="font-medium">{selectedKeyInfo.name}</div>
+                    </div>
+                    <div>
+                      <div className="text-sm text-muted-foreground">Key Prefix</div>
+                      <CodeBadge>{selectedKeyInfo.key_prefix}...</CodeBadge>
+                    </div>
+                    <div>
+                      <div className="text-sm text-muted-foreground">Budget</div>
+                      <div className="font-medium">
+                        {selectedKeyInfo.budget_limit_cents ? (
+                          <>
+                            {formatCurrency(selectedKeyInfo.budget_limit_cents / 100)}
+                            {selectedKeyInfo.budget_period && (
+                              <span className="text-muted-foreground">
+                                /{selectedKeyInfo.budget_period}
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <span className="text-muted-foreground">No limit</span>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-sm text-muted-foreground">Status</div>
+                      <div>
+                        <ApiKeyStatusBadge
+                          revokedAt={selectedKeyInfo.revoked_at}
+                          expiresAt={selectedKeyInfo.expires_at}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </>
+        ) : (
+          <UsageLogsTable scope={scope} />
+        )}
+      </div>
     </div>
   );
 }

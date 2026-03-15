@@ -258,8 +258,8 @@ export default function TeamDetailPage() {
               searchPlaceholder="Search members..."
             />
           )}
-          {activeTab === "usage" && orgSlug && teamSlug && (
-            <UsageDashboard scope={{ type: "team", orgSlug, teamSlug }} />
+          {activeTab === "usage" && orgSlug && teamSlug && team?.id && (
+            <UsageDashboard scope={{ type: "team", orgSlug, teamSlug, teamId: team.id }} />
           )}
         </CardContent>
       </Card>

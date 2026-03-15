@@ -3,7 +3,7 @@ pub mod api_keys;
 pub mod audit_logs;
 pub mod conversations;
 #[cfg(feature = "csv-export")]
-mod csv_export;
+pub(super) mod csv_export;
 pub mod dlq;
 #[cfg(feature = "sso")]
 pub mod domain_verifications;
@@ -500,6 +500,8 @@ pub(crate) fn admin_v1_routes() -> Router<AppState> {
             "/me/usage/by-date-pricing-source",
             get(usage::get_me_by_date_pricing_source),
         )
+        .route("/me/usage/logs", get(usage::list_me_logs))
+        .route("/me/usage/logs/export", get(usage::export_me_logs))
         // Usage endpoints - Global (all organizations)
         .route("/usage", get(usage::get_global_summary))
         .route("/usage/by-date", get(usage::get_global_by_date))
@@ -529,6 +531,8 @@ pub(crate) fn admin_v1_routes() -> Router<AppState> {
         .route("/usage/by-date-team", get(usage::get_global_by_date_team))
         .route("/usage/by-org", get(usage::get_global_by_org))
         .route("/usage/by-date-org", get(usage::get_global_by_date_org))
+        .route("/usage/logs", get(usage::list_logs))
+        .route("/usage/logs/export", get(usage::export_logs))
         // Model Pricing
         .route(
             "/model-pricing",
