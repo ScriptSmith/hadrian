@@ -446,10 +446,7 @@ impl UsageSink for OtlpSink {
 
             // Tool usage (for record_type = "tool")
             if let Some(tool_name) = &entry.tool_name {
-                record.add_attribute(
-                    Key::from_static_str("hadrian.tool_name"),
-                    tool_name.clone(),
-                );
+                record.add_attribute(Key::from_static_str("hadrian.tool_name"), tool_name.clone());
             }
             if let Some(tool_query) = &entry.tool_query {
                 record.add_attribute(
@@ -458,10 +455,7 @@ impl UsageSink for OtlpSink {
                 );
             }
             if let Some(tool_url) = &entry.tool_url {
-                record.add_attribute(
-                    Key::from_static_str("hadrian.tool_url"),
-                    tool_url.clone(),
-                );
+                record.add_attribute(Key::from_static_str("hadrian.tool_url"), tool_url.clone());
             }
             if let Some(tool_bytes_fetched) = entry.tool_bytes_fetched {
                 record.add_attribute(

@@ -2279,8 +2279,6 @@ mod tests {
             ))]
             document_processor: None,
             http_client: reqwest::Client::new(),
-            #[cfg(not(target_arch = "wasm32"))]
-            no_redirect_http_client: reqwest::Client::new(),
             default_user_id: None,
             default_org_id: None,
             provider_metrics: Arc::new(
@@ -2332,8 +2330,6 @@ mod tests {
             ))]
             document_processor: None,
             http_client: reqwest::Client::new(),
-            #[cfg(not(target_arch = "wasm32"))]
-            no_redirect_http_client: reqwest::Client::new(),
             default_user_id: None,
             default_org_id: None,
             provider_metrics: Arc::new(

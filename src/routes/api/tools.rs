@@ -46,7 +46,7 @@ pub struct WebSearchResult {
     pub score: Option<f64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 struct TavilySearchRequest {
     query: String,
     max_results: usize,
@@ -486,20 +486,29 @@ pub async fn web_fetch(
         .map(|s| s.to_string());
 
     // Check content type
-    if !config.allowed_content_types.is_empty()
-        && let Some(ref ct) = content_type
-    {
-        let ct_lower = ct.to_lowercase();
-        let allowed = config
-            .allowed_content_types
-            .iter()
-            .any(|allowed| ct_lower.starts_with(allowed));
-        if !allowed {
-            return Err(ApiError::new(
-                http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "unsupported_content_type",
-                format!("Content type '{ct}' is not allowed"),
-            ));
+    if !config.allowed_content_types.is_empty() {
+        match content_type {
+            Some(ref ct) => {
+                let ct_lower = ct.to_lowercase();
+                let allowed = config
+                    .allowed_content_types
+                    .iter()
+                    .any(|allowed| ct_lower.starts_with(allowed));
+                if !allowed {
+                    return Err(ApiError::new(
+                        http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                        "unsupported_content_type",
+                        format!("Content type '{ct}' is not allowed"),
+                    ));
+                }
+            }
+            None => {
+                return Err(ApiError::new(
+                    http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "unsupported_content_type",
+                    "Response has no Content-Type header",
+                ));
+            }
         }
     }
 

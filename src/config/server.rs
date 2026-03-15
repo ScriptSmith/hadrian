@@ -633,21 +633,6 @@ impl Default for HttpClientConfig {
 }
 
 impl HttpClientConfig {
-    /// Build a reqwest Client that does not follow redirects.
-    ///
-    /// Used for `web_fetch` to prevent SSRF via open redirects. Uses the
-    /// connect-timeout from the main config but a shorter overall timeout
-    /// since the caller supplies its own per-request timeout.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn build_client_no_redirects(&self) -> Result<reqwest::Client, reqwest::Error> {
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(self.connect_timeout_secs))
-            .tcp_nodelay(self.tcp_nodelay)
-            .user_agent(&self.user_agent)
-            .build()
-    }
-
     /// Build a reqwest Client from this configuration.
     pub fn build_client(&self) -> Result<reqwest::Client, reqwest::Error> {
         #[cfg(not(target_arch = "wasm32"))]
