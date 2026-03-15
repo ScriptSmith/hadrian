@@ -272,6 +272,7 @@ pub async fn web_search(
     };
 
     // Log tool usage with identity
+    #[cfg(feature = "concurrency")]
     if let Some(ref usage_buffer) = state.usage_buffer {
         let (api_key_id, user_id, org_id, project_id, team_id, service_account_id) =
             extract_identity(&auth, &state);
@@ -426,10 +427,14 @@ pub async fn web_fetch(
         .min(config.max_response_bytes);
     let timeout = std::time::Duration::from_secs(config.timeout_secs);
 
-    // Build a one-shot client pinned to the validated IPs to prevent DNS rebinding
-    let mut builder = reqwest::Client::builder()
+    // Build a one-shot client pinned to the validated IPs to prevent DNS rebinding.
+    // redirect/resolve/connect_timeout are unavailable in WASM reqwest.
+    let builder = reqwest::Client::builder();
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut builder = builder
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(config.timeout_secs));
+    #[cfg(not(target_arch = "wasm32"))]
     for addr in &validated.addrs {
         builder = builder.resolve(&validated.host, *addr);
     }
@@ -558,6 +563,7 @@ pub async fn web_fetch(
     let content_length = content.len();
 
     // Log tool usage with identity
+    #[cfg(feature = "concurrency")]
     if let Some(ref usage_buffer) = state.usage_buffer {
         let (api_key_id, user_id, org_id, project_id, team_id, service_account_id) =
             extract_identity(&auth, &state);
