@@ -32,7 +32,7 @@ mod embeddings;
 mod files;
 mod images;
 mod models;
-mod tools;
+pub(crate) mod tools;
 mod vector_stores;
 
 // Re-export all public items from submodules

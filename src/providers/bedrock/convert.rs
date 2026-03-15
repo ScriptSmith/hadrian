@@ -740,7 +740,8 @@ pub(super) fn convert_responses_tools_to_bedrock(
             | ResponsesToolDefinition::WebSearchPreview20250311(_)
             | ResponsesToolDefinition::WebSearch(_)
             | ResponsesToolDefinition::WebSearch20250826(_) => {
-                tracing::warn!("Web search tools not supported by Bedrock Converse API");
+                // Dead code: preprocessed to function tools in execution.rs
+                tracing::warn!("Unexpected web_search tool variant reached Bedrock conversion");
             }
             ResponsesToolDefinition::FileSearch(file_search) => {
                 // File search is handled by the gateway middleware

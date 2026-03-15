@@ -91,6 +91,121 @@ struct ExaResult {
     score: Option<f64>,
 }
 
+/// Execute a web search against the configured provider (Tavily or Exa).
+///
+/// This is the core search logic, shared by both the REST endpoint and the
+/// server-side web_search tool middleware.
+pub async fn execute_web_search(
+    client: &reqwest::Client,
+    config: &crate::config::WebSearchConfig,
+    query: &str,
+    max_results: usize,
+) -> Result<Vec<WebSearchResult>, WebSearchError> {
+    let timeout = std::time::Duration::from_secs(config.timeout_secs);
+
+    match config.provider {
+        WebSearchProvider::Tavily => {
+            let req = TavilySearchRequest {
+                query: query.to_string(),
+                max_results,
+                api_key: config.api_key.clone(),
+            };
+            let resp = client
+                .post("https://api.tavily.com/search")
+                .timeout(timeout)
+                .json(&req)
+                .send()
+                .await
+                .map_err(|e| {
+                    tracing::error!(error = %e, "Tavily search request failed");
+                    WebSearchError::ProviderRequestFailed
+                })?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                tracing::error!(status = %status, body = %body, "Tavily API error");
+                return Err(WebSearchError::ProviderError);
+            }
+
+            let tavily: TavilySearchResponse = resp.json().await.map_err(|e| {
+                tracing::error!(error = %e, "Failed to parse Tavily response");
+                WebSearchError::InvalidResponse
+            })?;
+
+            Ok(tavily
+                .results
+                .into_iter()
+                .map(|r| WebSearchResult {
+                    title: r.title,
+                    url: r.url,
+                    content: r.content,
+                    score: r.score,
+                })
+                .collect())
+        }
+        WebSearchProvider::Exa => {
+            let req = ExaSearchRequest {
+                query: query.to_string(),
+                num_results: max_results,
+                contents: ExaContents { text: true },
+            };
+            let resp = client
+                .post("https://api.exa.ai/search")
+                .timeout(timeout)
+                .header("x-api-key", &config.api_key)
+                .json(&req)
+                .send()
+                .await
+                .map_err(|e| {
+                    tracing::error!(error = %e, "Exa search request failed");
+                    WebSearchError::ProviderRequestFailed
+                })?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                tracing::error!(status = %status, body = %body, "Exa API error");
+                return Err(WebSearchError::ProviderError);
+            }
+
+            let exa: ExaSearchResponse = resp.json().await.map_err(|e| {
+                tracing::error!(error = %e, "Failed to parse Exa response");
+                WebSearchError::InvalidResponse
+            })?;
+
+            Ok(exa
+                .results
+                .into_iter()
+                .map(|r| WebSearchResult {
+                    title: r.title.unwrap_or_default(),
+                    url: r.url,
+                    content: r.text.unwrap_or_default(),
+                    score: r.score,
+                })
+                .collect())
+        }
+    }
+}
+
+/// Errors from the core web search execution.
+#[derive(Debug)]
+pub enum WebSearchError {
+    ProviderRequestFailed,
+    ProviderError,
+    InvalidResponse,
+}
+
+impl std::fmt::Display for WebSearchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ProviderRequestFailed => write!(f, "Search provider request failed"),
+            Self::ProviderError => write!(f, "Search provider returned an error"),
+            Self::InvalidResponse => write!(f, "Invalid search provider response"),
+        }
+    }
+}
+
 /// Search the web
 ///
 /// Performs a web search using the configured search provider (Tavily or Exa).
@@ -154,116 +269,16 @@ pub async fn web_search(
         .max_results
         .unwrap_or(config.max_results)
         .min(config.max_results);
-    let timeout = std::time::Duration::from_secs(config.timeout_secs);
 
-    let results: Vec<WebSearchResult> = match config.provider {
-        WebSearchProvider::Tavily => {
-            let req = TavilySearchRequest {
-                query: payload.query.clone(),
-                max_results,
-                api_key: config.api_key.clone(),
-            };
-            let resp = state
-                .http_client
-                .post("https://api.tavily.com/search")
-                .timeout(timeout)
-                .json(&req)
-                .send()
-                .await
-                .map_err(|e| {
-                    tracing::error!(error = %e, "Tavily search request failed");
-                    ApiError::new(
-                        http::StatusCode::BAD_GATEWAY,
-                        "search_provider_error",
-                        "Search provider request failed",
-                    )
-                })?;
-
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
-                tracing::error!(status = %status, body = %body, "Tavily API error");
-                return Err(ApiError::new(
-                    http::StatusCode::BAD_GATEWAY,
-                    "search_provider_error",
-                    "Search provider returned an error",
-                ));
-            }
-
-            let tavily: TavilySearchResponse = resp.json().await.map_err(|e| {
-                tracing::error!(error = %e, "Failed to parse Tavily response");
-                ApiError::new(
-                    http::StatusCode::BAD_GATEWAY,
-                    "search_provider_error",
-                    "Invalid search provider response",
-                )
-            })?;
-
-            tavily
-                .results
-                .into_iter()
-                .map(|r| WebSearchResult {
-                    title: r.title,
-                    url: r.url,
-                    content: r.content,
-                    score: r.score,
-                })
-                .collect()
-        }
-        WebSearchProvider::Exa => {
-            let req = ExaSearchRequest {
-                query: payload.query.clone(),
-                num_results: max_results,
-                contents: ExaContents { text: true },
-            };
-            let resp = state
-                .http_client
-                .post("https://api.exa.ai/search")
-                .timeout(timeout)
-                .header("x-api-key", &config.api_key)
-                .json(&req)
-                .send()
-                .await
-                .map_err(|e| {
-                    tracing::error!(error = %e, "Exa search request failed");
-                    ApiError::new(
-                        http::StatusCode::BAD_GATEWAY,
-                        "search_provider_error",
-                        "Search provider request failed",
-                    )
-                })?;
-
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
-                tracing::error!(status = %status, body = %body, "Exa API error");
-                return Err(ApiError::new(
-                    http::StatusCode::BAD_GATEWAY,
-                    "search_provider_error",
-                    "Search provider returned an error",
-                ));
-            }
-
-            let exa: ExaSearchResponse = resp.json().await.map_err(|e| {
-                tracing::error!(error = %e, "Failed to parse Exa response");
-                ApiError::new(
-                    http::StatusCode::BAD_GATEWAY,
-                    "search_provider_error",
-                    "Invalid search provider response",
-                )
-            })?;
-
-            exa.results
-                .into_iter()
-                .map(|r| WebSearchResult {
-                    title: r.title.unwrap_or_default(),
-                    url: r.url,
-                    content: r.text.unwrap_or_default(),
-                    score: r.score,
-                })
-                .collect()
-        }
-    };
+    let results = execute_web_search(&state.http_client, config, &payload.query, max_results)
+        .await
+        .map_err(|e| {
+            ApiError::new(
+                http::StatusCode::BAD_GATEWAY,
+                "search_provider_error",
+                e.to_string(),
+            )
+        })?;
 
     let results_count = results.len() as i32;
     let provider_name = match config.provider {

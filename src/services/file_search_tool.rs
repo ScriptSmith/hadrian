@@ -668,20 +668,20 @@ impl CitationTracker {
 /// assert_eq!(events.len(), 1);
 /// ```
 #[derive(Debug, Default)]
-struct SseBuffer {
+pub(crate) struct SseBuffer {
     buffer: BytesMut,
 }
 
 impl SseBuffer {
     /// Create a new empty SSE buffer.
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             buffer: BytesMut::new(),
         }
     }
 
     /// Append data to the buffer.
-    fn extend(&mut self, data: &[u8]) {
+    pub(crate) fn extend(&mut self, data: &[u8]) {
         self.buffer.extend_from_slice(data);
     }
 
@@ -689,7 +689,7 @@ impl SseBuffer {
     ///
     /// Returns a vector of complete events (each ending with `\n\n` or `\r\n\r\n`)
     /// and retains any incomplete data for the next call.
-    fn extract_complete_events(&mut self) -> Vec<Bytes> {
+    pub(crate) fn extract_complete_events(&mut self) -> Vec<Bytes> {
         let mut events = Vec::new();
 
         while let Some(end_pos) = self.find_event_boundary() {
@@ -733,12 +733,12 @@ impl SseBuffer {
     ///
     /// This is useful for forwarding partial data when the stream ends
     /// or when we need to pass through data that couldn't be parsed.
-    fn take_remaining(&mut self) -> Bytes {
+    pub(crate) fn take_remaining(&mut self) -> Bytes {
         self.buffer.split().freeze()
     }
 
     /// Check if the buffer is empty.
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
 }

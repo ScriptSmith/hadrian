@@ -2184,6 +2184,11 @@ pub struct WebSearchConfig {
     /// Default: 10000 = $0.01
     #[serde(default = "default_web_search_cost")]
     pub cost_microcents_per_request: i64,
+
+    /// Maximum web search tool call iterations before forcing text completion.
+    /// Lower than file_search since web search rarely needs multiple rounds.
+    #[serde(default = "default_web_search_max_iterations")]
+    pub max_iterations: usize,
 }
 
 impl std::fmt::Debug for WebSearchConfig {
@@ -2197,6 +2202,7 @@ impl std::fmt::Debug for WebSearchConfig {
                 "cost_microcents_per_request",
                 &self.cost_microcents_per_request,
             )
+            .field("max_iterations", &self.max_iterations)
             .finish()
     }
 }
@@ -2220,6 +2226,10 @@ fn default_web_search_timeout_secs() -> u64 {
 
 fn default_web_search_cost() -> i64 {
     10000
+}
+
+fn default_web_search_max_iterations() -> usize {
+    3
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
