@@ -480,5 +480,6 @@ fn wasm_default_config() -> config::GatewayConfig {
         secrets: config::SecretsConfig::None,
         retention: config::RetentionConfig::default(),
         storage: config::StorageConfig::default(),
+        sovereignty: config::SovereigntyConfig::default(),
     }
 }
