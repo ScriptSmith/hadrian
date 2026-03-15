@@ -93,6 +93,15 @@ function LogDetailModal({
           {log.reasoning_tokens > 0 && (
             <DetailRow label="Reasoning Tokens">{log.reasoning_tokens.toLocaleString()}</DetailRow>
           )}
+          {log.image_count != null && log.image_count > 0 && (
+            <DetailRow label="Images">{log.image_count.toLocaleString()}</DetailRow>
+          )}
+          {log.audio_seconds != null && log.audio_seconds > 0 && (
+            <DetailRow label="Audio Seconds">{log.audio_seconds.toLocaleString()}</DetailRow>
+          )}
+          {log.character_count != null && log.character_count > 0 && (
+            <DetailRow label="Character Count">{log.character_count.toLocaleString()}</DetailRow>
+          )}
           <DetailRow label="Cost">{formatCurrency(log.cost)}</DetailRow>
           <DetailRow label="Latency">
             {log.latency_ms != null ? `${log.latency_ms.toLocaleString()}ms` : "-"}
@@ -368,13 +377,13 @@ export default function UsageLogsTable({ scope }: UsageLogsTableProps) {
         ),
       }),
       columnHelper.accessor("input_tokens", {
-        header: "In",
+        header: "In Tokens",
         cell: (info) => (
           <span className="text-sm tabular-nums">{info.getValue().toLocaleString()}</span>
         ),
       }),
       columnHelper.accessor("output_tokens", {
-        header: "Out",
+        header: "Out Tokens",
         cell: (info) => (
           <span className="text-sm tabular-nums">{info.getValue().toLocaleString()}</span>
         ),
@@ -392,6 +401,39 @@ export default function UsageLogsTable({ scope }: UsageLogsTableProps) {
       }),
       columnHelper.accessor("reasoning_tokens", {
         header: "Reasoning",
+        cell: (info) => {
+          const val = info.getValue();
+          return val ? (
+            <span className="text-sm tabular-nums">{val.toLocaleString()}</span>
+          ) : (
+            <span className="text-muted-foreground">-</span>
+          );
+        },
+      }),
+      columnHelper.accessor("image_count", {
+        header: "Images",
+        cell: (info) => {
+          const val = info.getValue();
+          return val ? (
+            <span className="text-sm tabular-nums">{val.toLocaleString()}</span>
+          ) : (
+            <span className="text-muted-foreground">-</span>
+          );
+        },
+      }),
+      columnHelper.accessor("audio_seconds", {
+        header: "Audio (s)",
+        cell: (info) => {
+          const val = info.getValue();
+          return val ? (
+            <span className="text-sm tabular-nums">{val.toLocaleString()}</span>
+          ) : (
+            <span className="text-muted-foreground">-</span>
+          );
+        },
+      }),
+      columnHelper.accessor("character_count", {
+        header: "Chars",
         cell: (info) => {
           const val = info.getValue();
           return val ? (
