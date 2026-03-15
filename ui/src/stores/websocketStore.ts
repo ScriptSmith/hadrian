@@ -144,6 +144,9 @@ export const useWebSocketStore = create<WebSocketStore>((set, get) => ({
   // ===========================================================================
 
   connect: (topics = ["health"]) => {
+    // No WebSocket server in Storybook
+    if (import.meta.env.STORYBOOK) return;
+
     const currentStatus = get().status;
 
     // Already connected or connecting
