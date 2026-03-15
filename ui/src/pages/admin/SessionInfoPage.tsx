@@ -763,10 +763,7 @@ export default function SessionInfoPage() {
                     <DetailRow
                       label="User Agent"
                       value={
-                        <span
-                          className="max-w-xs truncate text-xs font-mono"
-                          title={browserInfo.userAgent}
-                        >
+                        <span className="break-all text-xs font-mono" title={browserInfo.userAgent}>
                           {browserInfo.userAgent}
                         </span>
                       }
@@ -994,8 +991,8 @@ function DetailRow({ label, value, compact }: DetailRowProps) {
 
   return (
     <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-      <span className="text-sm text-muted-foreground">{label}</span>
-      <span className="text-sm">{value}</span>
+      <span className="shrink-0 text-sm text-muted-foreground">{label}</span>
+      <span className="min-w-0 text-sm">{value}</span>
     </div>
   );
 }
