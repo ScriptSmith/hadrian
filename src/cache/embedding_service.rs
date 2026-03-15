@@ -146,6 +146,7 @@ impl EmbeddingService {
             user: None,
             provider: None,
             input_type: None,
+            sovereignty_requirements: None,
         };
 
         // Start timing
@@ -217,6 +218,7 @@ impl EmbeddingService {
             user: None,
             provider: None,
             input_type: None,
+            sovereignty_requirements: None,
         };
 
         // Start timing

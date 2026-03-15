@@ -209,6 +209,11 @@ pub struct CreateImageRequest {
     /// Unique identifier for the end-user for abuse detection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
+
+    /// **Hadrian Extension:** Per-request sovereignty requirements.
+    /// Merged with API key requirements (most restrictive wins).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sovereignty_requirements: Option<crate::config::SovereigntyRequirements>,
 }
 
 /// Create image edit request (POST /v1/images/edits)
@@ -446,6 +451,7 @@ mod tests {
             background: None,
             style: Some(ImageStyle::Vivid),
             user: None,
+            sovereignty_requirements: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -573,6 +579,7 @@ mod tests {
             background: Some(ImageBackground::Transparent),
             style: Some(ImageStyle::Vivid),
             user: Some("user-1".to_string()),
+            sovereignty_requirements: None,
         }
     }
 

@@ -972,6 +972,7 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
             param_count += 1;
         }
         if input.sovereignty.is_some() {
+            // Some(None) clears to NULL, Some(Some(v)) sets to v
             updates.push(format!("sovereignty = ${}", param_count));
             param_count += 1;
         }
@@ -1007,8 +1008,12 @@ impl DynamicProviderRepo for PostgresDynamicProviderRepo {
             query = query.bind(models_json);
         }
         if let Some(ref sovereignty) = input.sovereignty {
-            let sovereignty_json =
-                serde_json::to_value(sovereignty).map_err(|e| DbError::Internal(e.to_string()))?;
+            // Some(None) → bind NULL, Some(Some(v)) → bind JSON
+            let sovereignty_json: Option<serde_json::Value> = sovereignty
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|e| DbError::Internal(e.to_string()))?;
             query = query.bind(sovereignty_json);
         }
         if let Some(is_enabled) = input.is_enabled {

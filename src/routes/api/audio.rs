@@ -125,8 +125,14 @@ pub async fn api_v1_audio_speech(
             })?;
     }
 
-    // Check sovereignty requirements (API key only — no per-request field for audio)
-    check_sovereignty(auth.as_ref(), None, &provider_config, &model_name)?;
+    // Check sovereignty requirements (API key + per-request)
+    let _sovereignty_reqs = check_sovereignty(
+        auth.as_ref(),
+        payload.sovereignty_requirements.as_ref(),
+        &provider_config,
+        &model_name,
+        &state.model_catalog,
+    )?;
 
     // Replace model with resolved name (strip provider prefix)
     let mut payload = payload;
@@ -247,6 +253,7 @@ pub async fn api_v1_audio_transcriptions(
     let mut response_format: Option<api_types::audio::AudioResponseFormat> = None;
     let mut temperature: Option<f32> = None;
     let mut timestamp_granularities: Option<Vec<api_types::audio::TimestampGranularity>> = None;
+    let mut sovereignty_requirements: Option<crate::config::SovereigntyRequirements> = None;
 
     while let Some(field) = multipart.next_field().await.map_err(|e| {
         ApiError::new(
@@ -348,6 +355,22 @@ pub async fn api_v1_audio_transcriptions(
                 timestamp_granularities
                     .get_or_insert_with(Vec::new)
                     .push(granularity);
+            }
+            "sovereignty_requirements" => {
+                let value = field.text().await.map_err(|e| {
+                    ApiError::new(
+                        StatusCode::BAD_REQUEST,
+                        "sovereignty_requirements_read_error",
+                        format!("Failed to read sovereignty_requirements: {}", e),
+                    )
+                })?;
+                sovereignty_requirements = Some(serde_json::from_str(&value).map_err(|e| {
+                    ApiError::new(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_sovereignty_requirements",
+                        format!("Invalid sovereignty_requirements: {}", e),
+                    )
+                })?);
             }
             _ => {
                 // Ignore unknown fields
@@ -468,8 +491,14 @@ pub async fn api_v1_audio_transcriptions(
             })?;
     }
 
-    // Check sovereignty requirements (API key only — no per-request field for audio)
-    check_sovereignty(auth.as_ref(), None, &provider_config, &model_name)?;
+    // Check sovereignty requirements (API key + per-request)
+    let _sovereignty_reqs = check_sovereignty(
+        auth.as_ref(),
+        sovereignty_requirements.as_ref(),
+        &provider_config,
+        &model_name,
+        &state.model_catalog,
+    )?;
 
     // Replace model with resolved name (strip provider prefix)
     let mut request = request;
@@ -588,6 +617,7 @@ pub async fn api_v1_audio_translations(
     let mut prompt: Option<String> = None;
     let mut response_format: Option<api_types::audio::AudioResponseFormat> = None;
     let mut temperature: Option<f32> = None;
+    let mut sovereignty_requirements: Option<crate::config::SovereigntyRequirements> = None;
 
     while let Some(field) = multipart.next_field().await.map_err(|e| {
         ApiError::new(
@@ -658,6 +688,22 @@ pub async fn api_v1_audio_translations(
                         StatusCode::BAD_REQUEST,
                         "invalid_temperature",
                         "Invalid value for temperature",
+                    )
+                })?);
+            }
+            "sovereignty_requirements" => {
+                let value = field.text().await.map_err(|e| {
+                    ApiError::new(
+                        StatusCode::BAD_REQUEST,
+                        "sovereignty_requirements_read_error",
+                        format!("Failed to read sovereignty_requirements: {}", e),
+                    )
+                })?;
+                sovereignty_requirements = Some(serde_json::from_str(&value).map_err(|e| {
+                    ApiError::new(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_sovereignty_requirements",
+                        format!("Invalid sovereignty_requirements: {}", e),
                     )
                 })?);
             }
@@ -769,8 +815,14 @@ pub async fn api_v1_audio_translations(
             })?;
     }
 
-    // Check sovereignty requirements (API key only — no per-request field for audio)
-    check_sovereignty(auth.as_ref(), None, &provider_config, &model_name)?;
+    // Check sovereignty requirements (API key + per-request)
+    let _sovereignty_reqs = check_sovereignty(
+        auth.as_ref(),
+        sovereignty_requirements.as_ref(),
+        &provider_config,
+        &model_name,
+        &state.model_catalog,
+    )?;
 
     // Replace model with resolved name (strip provider prefix)
     let mut request = request;

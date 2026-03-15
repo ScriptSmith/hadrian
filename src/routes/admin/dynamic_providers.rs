@@ -297,6 +297,7 @@ pub async fn update(
         "base_url": input.base_url,
         "api_key": input.api_key.as_ref().map(|_| "****"),
         "models": input.models,
+        "sovereignty": input.sovereignty,
         "is_enabled": input.is_enabled,
     });
 

@@ -132,8 +132,14 @@ pub async fn api_v1_images_generations(
             })?;
     }
 
-    // Check sovereignty requirements (API key only — no per-request field for images)
-    check_sovereignty(auth.as_ref(), None, &provider_config, &model_name)?;
+    // Check sovereignty requirements (API key + per-request)
+    let _sovereignty_reqs = check_sovereignty(
+        auth.as_ref(),
+        payload.sovereignty_requirements.as_ref(),
+        &provider_config,
+        &model_name,
+        &state.model_catalog,
+    )?;
 
     // Replace model with resolved name (strip provider prefix like "openai/dall-e-3" → "dall-e-3")
     let mut payload = payload;

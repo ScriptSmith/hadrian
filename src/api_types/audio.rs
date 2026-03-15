@@ -136,6 +136,11 @@ pub struct CreateSpeechRequest {
     /// The format to stream the audio in. Supported formats are sse and audio.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_format: Option<SpeechStreamFormat>,
+
+    /// **Hadrian Extension:** Per-request sovereignty requirements.
+    /// Merged with API key requirements (most restrictive wins).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sovereignty_requirements: Option<crate::config::SovereigntyRequirements>,
 }
 
 /// Create transcription request (POST /v1/audio/transcriptions)
@@ -488,6 +493,7 @@ mod tests {
             speed: Some(1.0),
             instructions: None,
             stream_format: None,
+            sovereignty_requirements: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();

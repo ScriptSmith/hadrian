@@ -627,7 +627,20 @@ pub async fn execute_with_fallback<E: ProviderExecutor>(
             let provider_sov = fallback_config.sovereignty();
             let model_sov = model_config.and_then(|mc| mc.sovereignty.as_ref());
             let resolved = SovereigntyMetadata::merge(provider_sov, model_sov).unwrap_or_default();
-            let open_weights = model_config.is_some_and(|mc| mc.open_weights == Some(true));
+            let open_weights = model_config
+                .and_then(|mc| mc.open_weights)
+                .or_else(|| {
+                    let catalog_provider_id = crate::catalog::resolve_catalog_provider_id(
+                        fallback_config.provider_type_name(),
+                        fallback_config.base_url(),
+                        fallback_config.catalog_provider(),
+                    )?;
+                    state
+                        .model_catalog
+                        .lookup(&catalog_provider_id, &fallback.model_name)
+                        .map(|e| e.open_weights)
+                })
+                .unwrap_or(false);
 
             if let Err(reason) = reqs.check(&resolved, open_weights) {
                 tracing::debug!(

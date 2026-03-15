@@ -82,6 +82,7 @@ fn check_sovereignty(
     per_request: Option<&SovereigntyRequirements>,
     provider_config: &ProviderConfig,
     model_name: &str,
+    catalog: &crate::catalog::ModelCatalogRegistry,
 ) -> Result<Option<SovereigntyRequirements>, ApiError> {
     let key_reqs = auth
         .and_then(|Extension(a)| a.api_key())
@@ -95,7 +96,21 @@ fn check_sovereignty(
     let provider_sov = provider_config.sovereignty();
     let model_sov = model_config.and_then(|mc| mc.sovereignty.as_ref());
     let resolved = SovereigntyMetadata::merge(provider_sov, model_sov).unwrap_or_default();
-    let open_weights = model_config.is_some_and(|mc| mc.open_weights == Some(true));
+
+    // Open weights: config overrides catalog (matching /v1/models response)
+    let open_weights = model_config
+        .and_then(|mc| mc.open_weights)
+        .or_else(|| {
+            let catalog_provider_id = crate::catalog::resolve_catalog_provider_id(
+                provider_config.provider_type_name(),
+                provider_config.base_url(),
+                provider_config.catalog_provider(),
+            )?;
+            catalog
+                .lookup(&catalog_provider_id, model_name)
+                .map(|e| e.open_weights)
+        })
+        .unwrap_or(false);
 
     reqs.check(&resolved, open_weights).map_err(|reason| {
         ApiError::new(

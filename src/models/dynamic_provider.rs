@@ -190,9 +190,20 @@ pub struct UpdateDynamicProvider {
     pub config: Option<serde_json::Value>,
     /// List of supported model names
     pub models: Option<Vec<String>>,
-    /// Sovereignty and compliance metadata
-    pub sovereignty: Option<SovereigntyMetadata>,
+    /// Sovereignty and compliance metadata (set to null to clear)
+    #[serde(default, deserialize_with = "deserialize_optional_sovereignty")]
+    pub sovereignty: Option<Option<SovereigntyMetadata>>,
     pub is_enabled: Option<bool>,
+}
+
+/// Custom deserializer: absent → None (don't update), null → Some(None) (clear), value → Some(Some(v)) (set).
+fn deserialize_optional_sovereignty<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<SovereigntyMetadata>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::deserialize(deserializer)?))
 }
 
 #[cfg(test)]

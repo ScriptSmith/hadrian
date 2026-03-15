@@ -580,6 +580,7 @@ pub async fn api_v1_chat_completions(
         payload.sovereignty_requirements.as_ref(),
         &provider_config,
         &model_name,
+        &state.model_catalog,
     )?;
 
     // Check if input guardrails are configured and what mode they're in
@@ -1202,6 +1203,7 @@ pub async fn api_v1_responses(
         payload.sovereignty_requirements.as_ref(),
         &provider_config,
         &model_name,
+        &state.model_catalog,
     )?;
 
     // Check if cache should be bypassed based on request headers
@@ -1924,6 +1926,7 @@ pub async fn api_v1_completions(
         payload.sovereignty_requirements.as_ref(),
         &provider_config,
         &model_name,
+        &state.model_catalog,
     )?;
 
     // Check if cache should be bypassed based on request headers

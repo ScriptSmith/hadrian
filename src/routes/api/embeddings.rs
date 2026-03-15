@@ -162,8 +162,14 @@ pub async fn api_v1_embeddings(
             })?;
     }
 
-    // Check sovereignty requirements (API key only — no per-request field for embeddings)
-    let sovereignty_reqs = check_sovereignty(auth.as_ref(), None, &provider_config, &model_name)?;
+    // Check sovereignty requirements (API key + per-request)
+    let sovereignty_reqs = check_sovereignty(
+        auth.as_ref(),
+        payload.sovereignty_requirements.as_ref(),
+        &provider_config,
+        &model_name,
+        &state.model_catalog,
+    )?;
 
     // Check if cache should be bypassed based on request headers
     let force_refresh = should_bypass_cache(&headers);

@@ -995,6 +995,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             has_is_enabled = true;
         }
         if input.sovereignty.is_some() {
+            // Some(None) clears to NULL, Some(Some(v)) sets to v
             updates.push("sovereignty = ?");
             has_sovereignty = true;
         }
@@ -1029,9 +1030,11 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
             q = q.bind(input.is_enabled.map(|b| if b { 1 } else { 0 }));
         }
         if has_sovereignty {
-            let sovereignty_json = input
+            // Some(None) → bind None (NULL), Some(Some(v)) → bind JSON string
+            let sovereignty_json: Option<String> = input
                 .sovereignty
                 .as_ref()
+                .and_then(|inner| inner.as_ref())
                 .and_then(|s| serde_json::to_string(s).ok());
             q = q.bind(sovereignty_json);
         }
