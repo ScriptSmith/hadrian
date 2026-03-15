@@ -517,14 +517,6 @@ pub async fn api_v1_chat_completions(
         })?;
     }
 
-    // Check sovereignty requirements (API key + per-request)
-    let sovereignty_reqs = check_sovereignty(
-        auth.as_ref(),
-        payload.sovereignty_requirements.as_ref(),
-        &provider_config,
-        &model_name,
-    )?;
-
     // Check authorization if authz context is available and API RBAC is enabled
     if let Some(Extension(ref authz)) = authz {
         // Build request context from payload
@@ -581,6 +573,14 @@ pub async fn api_v1_chat_completions(
                 ApiError::new(StatusCode::FORBIDDEN, "authorization_denied", e.to_string())
             })?;
     }
+
+    // Check sovereignty requirements (API key + per-request)
+    let sovereignty_reqs = check_sovereignty(
+        auth.as_ref(),
+        payload.sovereignty_requirements.as_ref(),
+        &provider_config,
+        &model_name,
+    )?;
 
     // Check if input guardrails are configured and what mode they're in
     let use_concurrent_guardrails = state
@@ -1137,14 +1137,6 @@ pub async fn api_v1_responses(
         })?;
     }
 
-    // Check sovereignty requirements (API key + per-request)
-    let sovereignty_reqs = check_sovereignty(
-        auth.as_ref(),
-        payload.sovereignty_requirements.as_ref(),
-        &provider_config,
-        &model_name,
-    )?;
-
     // Check authorization if authz context is available and API RBAC is enabled
     if let Some(Extension(ref authz)) = authz {
         // Check if file_search tool is present
@@ -1203,6 +1195,14 @@ pub async fn api_v1_responses(
                 ApiError::new(StatusCode::FORBIDDEN, "authorization_denied", e.to_string())
             })?;
     }
+
+    // Check sovereignty requirements (API key + per-request)
+    let sovereignty_reqs = check_sovereignty(
+        auth.as_ref(),
+        payload.sovereignty_requirements.as_ref(),
+        &provider_config,
+        &model_name,
+    )?;
 
     // Check if cache should be bypassed based on request headers
     let force_refresh = should_bypass_cache(&headers);

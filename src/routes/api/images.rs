@@ -90,9 +90,6 @@ pub async fn api_v1_images_generations(
         })?;
     }
 
-    // Check sovereignty requirements (API key only — no per-request field for images)
-    check_sovereignty(auth.as_ref(), None, &provider_config, &model_name)?;
-
     // Check authorization if authz context is available and API RBAC is enabled
     if let Some(Extension(ref authz)) = authz {
         // Build request context with image-specific fields
@@ -134,6 +131,9 @@ pub async fn api_v1_images_generations(
                 ApiError::new(StatusCode::FORBIDDEN, "authorization_denied", e.to_string())
             })?;
     }
+
+    // Check sovereignty requirements (API key only — no per-request field for images)
+    check_sovereignty(auth.as_ref(), None, &provider_config, &model_name)?;
 
     // Replace model with resolved name (strip provider prefix like "openai/dall-e-3" → "dall-e-3")
     let mut payload = payload;

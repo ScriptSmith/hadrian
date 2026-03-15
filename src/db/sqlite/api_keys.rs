@@ -96,13 +96,13 @@ impl SqliteApiKeyRepo {
             rotation_grace_until: row.col("rotation_grace_until"),
             sovereignty_requirements: row
                 .col::<Option<String>>("sovereignty_requirements")
-                .and_then(|s| match serde_json::from_str(&s) {
-                    Ok(r) => Some(r),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed to deserialize sovereignty_requirements");
-                        None
-                    }
-                }),
+                .map(|s| serde_json::from_str(&s))
+                .transpose()
+                .map_err(|e| {
+                    DbError::Internal(format!(
+                        "failed to deserialize sovereignty_requirements: {e}"
+                    ))
+                })?,
         })
     }
 

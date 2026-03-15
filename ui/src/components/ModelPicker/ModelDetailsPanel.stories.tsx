@@ -45,6 +45,15 @@ const sampleModel: ModelInfo = {
   knowledge_cutoff: "2024-10",
   release_date: "2024-05-13",
   description: "GPT-4o is OpenAI's most advanced multimodal model with vision capabilities.",
+  sovereignty: {
+    hq_country: "US",
+    inference_countries: ["US", "EU"],
+    certifications: ["soc2", "gdpr", "hipaa-baa"],
+    on_prem: false,
+    trains_on_data: false,
+    data_retention: "30d",
+    license: "proprietary",
+  },
 };
 
 const reasoningModel: ModelInfo = {
@@ -142,6 +151,12 @@ export const WithCloseButton: Story = {
   args: {
     model: sampleModel,
     onClose: () => alert("Close clicked"),
+  },
+};
+
+export const WithSovereignty: Story = {
+  args: {
+    model: sampleModel,
   },
 };
 

@@ -101,13 +101,13 @@ impl PostgresApiKeyRepo {
             rotation_grace_until: row.get("rotation_grace_until"),
             sovereignty_requirements: row
                 .get::<Option<serde_json::Value>, _>("sovereignty_requirements")
-                .and_then(|v| match serde_json::from_value(v) {
-                    Ok(r) => Some(r),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed to deserialize sovereignty_requirements");
-                        None
-                    }
-                }),
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e| {
+                    DbError::Internal(format!(
+                        "failed to deserialize sovereignty_requirements: {e}"
+                    ))
+                })?,
         })
     }
 

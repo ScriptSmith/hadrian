@@ -67,13 +67,11 @@ impl PostgresDynamicProviderRepo {
             models,
             sovereignty: row
                 .get::<Option<serde_json::Value>, _>("sovereignty")
-                .and_then(|v| match serde_json::from_value(v) {
-                    Ok(r) => Some(r),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed to deserialize sovereignty metadata");
-                        None
-                    }
-                }),
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e| {
+                    DbError::Internal(format!("failed to deserialize sovereignty metadata: {e}"))
+                })?,
             is_enabled: row.get("is_enabled"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),

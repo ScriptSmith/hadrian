@@ -88,9 +88,6 @@ pub async fn api_v1_audio_speech(
         })?;
     }
 
-    // Check sovereignty requirements (API key only — no per-request field for audio)
-    check_sovereignty(auth.as_ref(), None, &provider_config, &model_name)?;
-
     // Check authorization if authz context is available and API RBAC is enabled
     if let Some(Extension(ref authz)) = authz {
         // Build request context with audio TTS-specific fields
@@ -127,6 +124,9 @@ pub async fn api_v1_audio_speech(
                 ApiError::new(StatusCode::FORBIDDEN, "authorization_denied", e.to_string())
             })?;
     }
+
+    // Check sovereignty requirements (API key only — no per-request field for audio)
+    check_sovereignty(auth.as_ref(), None, &provider_config, &model_name)?;
 
     // Replace model with resolved name (strip provider prefix)
     let mut payload = payload;
@@ -429,9 +429,6 @@ pub async fn api_v1_audio_transcriptions(
         })?;
     }
 
-    // Check sovereignty requirements (API key only — no per-request field for audio)
-    check_sovereignty(auth.as_ref(), None, &provider_config, &model_name)?;
-
     // Check authorization if authz context is available and API RBAC is enabled
     if let Some(Extension(ref authz)) = authz {
         // Build request context with audio transcription-specific fields
@@ -470,6 +467,9 @@ pub async fn api_v1_audio_transcriptions(
                 ApiError::new(StatusCode::FORBIDDEN, "authorization_denied", e.to_string())
             })?;
     }
+
+    // Check sovereignty requirements (API key only — no per-request field for audio)
+    check_sovereignty(auth.as_ref(), None, &provider_config, &model_name)?;
 
     // Replace model with resolved name (strip provider prefix)
     let mut request = request;
@@ -734,9 +734,6 @@ pub async fn api_v1_audio_translations(
         })?;
     }
 
-    // Check sovereignty requirements (API key only — no per-request field for audio)
-    check_sovereignty(auth.as_ref(), None, &provider_config, &model_name)?;
-
     // Check authorization if authz context is available and API RBAC is enabled
     if let Some(Extension(ref authz)) = authz {
         // Build request context (translation has minimal context - just model)
@@ -771,6 +768,9 @@ pub async fn api_v1_audio_translations(
                 ApiError::new(StatusCode::FORBIDDEN, "authorization_denied", e.to_string())
             })?;
     }
+
+    // Check sovereignty requirements (API key only — no per-request field for audio)
+    check_sovereignty(auth.as_ref(), None, &provider_config, &model_name)?;
 
     // Replace model with resolved name (strip provider prefix)
     let mut request = request;

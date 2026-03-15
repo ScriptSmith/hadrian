@@ -72,15 +72,13 @@ impl SqliteDynamicProviderRepo {
             api_key_secret_ref: row.col("api_key_secret_ref"),
             config,
             models,
-            sovereignty: row.col::<Option<String>>("sovereignty").and_then(|s| {
-                match serde_json::from_str(&s) {
-                    Ok(r) => Some(r),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed to deserialize sovereignty metadata");
-                        None
-                    }
-                }
-            }),
+            sovereignty: row
+                .col::<Option<String>>("sovereignty")
+                .map(|s| serde_json::from_str(&s))
+                .transpose()
+                .map_err(|e| {
+                    DbError::Internal(format!("failed to deserialize sovereignty metadata: {e}"))
+                })?,
             is_enabled: row.col::<i32>("is_enabled") != 0,
             created_at: row.col("created_at"),
             updated_at: row.col("updated_at"),

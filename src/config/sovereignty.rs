@@ -225,6 +225,13 @@ impl SovereigntyRequirements {
     ) -> Result<(), String> {
         // Check inference countries
         if let Some(allowed) = &self.allowed_inference_countries
+            && allowed.is_empty()
+        {
+            return Err(
+                "allowed inference countries list is empty (conflicting requirements)".into(),
+            );
+        }
+        if let Some(allowed) = &self.allowed_inference_countries
             && !sovereignty
                 .inference_countries
                 .iter()
@@ -275,6 +282,11 @@ impl SovereigntyRequirements {
         }
 
         // Check allowed licenses
+        if let Some(allowed) = &self.allowed_licenses
+            && allowed.is_empty()
+        {
+            return Err("allowed licenses list is empty (conflicting requirements)".into());
+        }
         if let Some(allowed) = &self.allowed_licenses {
             match &sovereignty.license {
                 Some(license) if allowed.iter().any(|a| a.eq_ignore_ascii_case(license)) => {}
@@ -626,6 +638,34 @@ mod tests {
             ..Default::default()
         };
         assert!(merged.check(&meta, false).is_err());
+    }
+
+    #[test]
+    fn test_requirements_check_empty_inference_countries_error_message() {
+        let reqs = SovereigntyRequirements {
+            allowed_inference_countries: Some(vec![]),
+            ..Default::default()
+        };
+        let meta = SovereigntyMetadata {
+            inference_countries: vec!["US".into()],
+            ..Default::default()
+        };
+        let err = reqs.check(&meta, false).unwrap_err();
+        assert!(err.contains("conflicting requirements"), "{err}");
+    }
+
+    #[test]
+    fn test_requirements_check_empty_licenses_error_message() {
+        let reqs = SovereigntyRequirements {
+            allowed_licenses: Some(vec![]),
+            ..Default::default()
+        };
+        let meta = SovereigntyMetadata {
+            license: Some("mit".into()),
+            ..Default::default()
+        };
+        let err = reqs.check(&meta, false).unwrap_err();
+        assert!(err.contains("conflicting requirements"), "{err}");
     }
 
     #[test]
