@@ -1,0 +1,163 @@
+---
+title: Web Tools
+description: Configure server-side web search and URL fetching tools
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The `[features.web_search]` and `[features.web_fetch]` sections configure server-side web tools used by the chat UI. Web search requires an external provider API key; web fetch works out of the box.
+
+## Web Search
+
+### Configuration Reference
+
+```toml
+[features.web_search]
+provider = "tavily"
+api_key = "${TAVILY_API_KEY}"
+max_results = 10
+timeout_secs = 30
+cost_microcents_per_request = 10000
+```
+
+| Key                           | Type    | Default | Description                                              |
+| ----------------------------- | ------- | ------- | -------------------------------------------------------- |
+| `provider`                    | string  | —       | Search provider: `"tavily"` or `"exa"` (required)        |
+| `api_key`                     | string  | —       | Provider API key, supports `${ENV_VAR}` (required)       |
+| `max_results`                 | integer | `10`    | Maximum results per search (also caps per-request limit) |
+| `timeout_secs`                | integer | `30`    | Request timeout in seconds                               |
+| `cost_microcents_per_request` | integer | `10000` | Cost per request in microcents ($0.01 default)           |
+
+<Callout type="info">
+  Omit the `[features.web_search]` section entirely to disable web search. There is no separate
+  `enabled` flag — the presence of the section enables the feature.
+</Callout>
+
+### Provider Setup
+
+#### Tavily
+
+1. Sign up at [tavily.com](https://tavily.com) and obtain an API key
+2. Set the environment variable or inline the key:
+
+```toml
+[features.web_search]
+provider = "tavily"
+api_key = "${TAVILY_API_KEY}"
+```
+
+#### Exa
+
+1. Sign up at [exa.ai](https://exa.ai) and obtain an API key
+2. Configure with the `exa` provider:
+
+```toml
+[features.web_search]
+provider = "exa"
+api_key = "${EXA_API_KEY}"
+```
+
+Exa returns full-text content for each result rather than snippets.
+
+### Cost Tracking
+
+Each search request is logged with the configured `cost_microcents_per_request`. The default of `10000` represents $0.01 per search. Adjust to match your provider's actual pricing.
+
+## Web Fetch
+
+### Configuration Reference
+
+```toml
+[features.web_fetch]
+enabled = true
+max_response_bytes = 1048576
+timeout_secs = 30
+allowed_content_types = ["text/html", "text/plain", "application/json", "application/xml", "text/xml", "text/csv", "text/markdown"]
+cost_microcents_per_request = 0
+```
+
+| Key                           | Type     | Default          | Description                                      |
+| ----------------------------- | -------- | ---------------- | ------------------------------------------------ |
+| `enabled`                     | boolean  | `true`           | Enable/disable the web fetch tool                |
+| `max_response_bytes`          | integer  | `1048576` (1 MB) | Maximum response body size in bytes              |
+| `timeout_secs`                | integer  | `30`             | Request timeout in seconds                       |
+| `allowed_content_types`       | string[] | See above        | Content types to accept (prefix match)           |
+| `cost_microcents_per_request` | integer  | `0`              | Cost per request in microcents (free by default) |
+
+<Callout type="info">
+  Omit the `[features.web_fetch]` section entirely to disable web fetch. When present, set `enabled
+  = false` to temporarily disable without removing the configuration.
+</Callout>
+
+### Security
+
+Web fetch includes multiple layers of SSRF protection:
+
+| Protection        | Description                                                    |
+| ----------------- | -------------------------------------------------------------- |
+| URL validation    | Blocks private/loopback IPs by default                         |
+| DNS pinning       | Resolves DNS once and pins the connection to prevent rebinding |
+| Redirect blocking | Rejects HTTP redirects to prevent SSRF via redirect chains     |
+| Content filtering | Only fetches allowed content types                             |
+| Size limits       | Truncates responses at `max_response_bytes`                    |
+
+To allow fetching from private/loopback addresses (development only):
+
+```toml
+[server]
+allow_loopback_urls = true
+allow_private_urls = true
+```
+
+### Content Type Filtering
+
+The `allowed_content_types` list uses prefix matching. For example, `"text/html"` matches `"text/html; charset=utf-8"`. An empty list allows all content types (not recommended).
+
+## Complete Examples
+
+### Development
+
+```toml
+[features.web_search]
+provider = "tavily"
+api_key = "${TAVILY_API_KEY}"
+max_results = 5
+timeout_secs = 10
+
+[features.web_fetch]
+max_response_bytes = 524288
+timeout_secs = 15
+```
+
+### Production
+
+```toml
+[features.web_search]
+provider = "tavily"
+api_key = "${TAVILY_API_KEY}"
+max_results = 10
+timeout_secs = 30
+cost_microcents_per_request = 10000
+
+[features.web_fetch]
+max_response_bytes = 1048576
+timeout_secs = 30
+cost_microcents_per_request = 0
+allowed_content_types = ["text/html", "text/plain", "application/json"]
+```
+
+### Web Fetch Only
+
+```toml
+# No [features.web_search] — web search disabled
+
+[features.web_fetch]
+max_response_bytes = 2097152
+timeout_secs = 60
+```
+
+## Next Steps
+
+- [Web Tools Feature Guide](/docs/features/web-tools) — How web tools work in the chat UI
+- [Frontend Tools](/docs/features/frontend-tools) — Client-side tools (Python, JS, SQL, charts)
+- [Authorization](/docs/features/authorization) — RBAC policies for tool access

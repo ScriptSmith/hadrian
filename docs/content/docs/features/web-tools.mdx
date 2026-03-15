@@ -1,0 +1,148 @@
+---
+title: Web Tools
+description: Server-side web search and URL fetching tools for the chat UI
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The chat UI includes server-side web tools that call backend API endpoints to search the web and fetch URL content. Unlike [frontend tools](/docs/features/frontend-tools) which execute in the browser, web tools are proxied through the gateway for security and access control.
+
+## Available Tools
+
+| Tool       | Name         | Backend Provider | Use Cases                                 |
+| ---------- | ------------ | ---------------- | ----------------------------------------- |
+| Web Search | `web_search` | Tavily or Exa    | Current events, factual queries, research |
+| Web Fetch  | `web_fetch`  | Direct HTTP      | Read articles, documentation, web pages   |
+
+## Web Search
+
+Performs a web search using a configured search provider and returns ranked results with titles, URLs, and content snippets.
+
+### Supported Providers
+
+| Provider                     | Description                          |
+| ---------------------------- | ------------------------------------ |
+| [Tavily](https://tavily.com) | AI-optimized search API              |
+| [Exa](https://exa.ai)        | Neural search with full-text results |
+
+### How It Works
+
+```
+1. User enables web_search tool in chat
+2. Model generates web_search tool call with query
+3. Frontend sends POST /api/v1/tools/web-search
+4. Gateway proxies search to configured provider
+5. Results returned with titles, URLs, snippets, scores
+6. Results displayed as citations and sent back to model
+```
+
+### Citations
+
+Web search results appear as inline URL citations in the model's response, with expandable previews showing the source content.
+
+## Web Fetch
+
+Fetches a URL and returns its content as text. HTML pages are automatically stripped of tags, scripts, and styles to extract readable content.
+
+### Features
+
+- **SSRF protection** — URLs are validated and DNS-pinned to prevent server-side request forgery
+- **Redirect blocking** — Redirects are rejected to prevent SSRF via DNS rebinding
+- **Content type filtering** — Only allowed content types are fetched (configurable)
+- **Size limits** — Response bodies are truncated to a configurable maximum
+- **HTML stripping** — HTML tags, scripts, and styles are removed; common entities decoded
+
+### How It Works
+
+```
+1. User enables web_fetch tool in chat
+2. Model generates web_fetch tool call with URL
+3. Frontend sends POST /api/v1/tools/web-fetch
+4. Gateway validates URL (SSRF protection, DNS pinning)
+5. Gateway fetches URL with size and timeout limits
+6. HTML content is stripped to plain text
+7. Content returned to model for analysis
+```
+
+## Enabling Tools
+
+Enable web tools per-conversation via the toolbar in the chat interface:
+
+1. Click the **Tools** button in the chat input toolbar
+2. Toggle **Web Search** and/or **Web Fetch** on
+3. Tools appear as available functions for the model
+
+<Callout type="warn">
+  Web tools require backend configuration. If not configured, the tools appear in the UI but return
+  an error when invoked. See the [configuration reference](/docs/configuration/features/web-tools)
+  to set up providers and API keys.
+</Callout>
+
+## Usage Tracking
+
+Both tools log usage to the gateway's usage tracking system with:
+
+- Tool name and type (`web_search` or `web_fetch`)
+- Query string (web search) or URL (web fetch)
+- Number of results returned or bytes fetched
+- Configurable per-request cost in microcents
+
+Usage appears in the admin dashboard alongside LLM token usage.
+
+## Authorization
+
+When RBAC is enabled, web tools require the `tool:execute` permission. Authorization checks use the `web_search` or `web_fetch` resource name, scoped to the caller's organization and project.
+
+## API Endpoints
+
+Both endpoints are Hadrian extensions (not part of the OpenAI API specification).
+
+### POST /api/v1/tools/web-search
+
+```json
+{
+  "query": "latest developments in quantum computing",
+  "max_results": 5
+}
+```
+
+Response:
+
+```json
+{
+  "results": [
+    {
+      "title": "Quantum Computing Breakthrough...",
+      "url": "https://example.com/quantum-2026",
+      "content": "Researchers announced a new...",
+      "score": 0.95
+    }
+  ]
+}
+```
+
+### POST /api/v1/tools/web-fetch
+
+```json
+{
+  "url": "https://example.com/article",
+  "max_length": 50000
+}
+```
+
+Response:
+
+```json
+{
+  "url": "https://example.com/article",
+  "content_type": "text/html; charset=utf-8",
+  "content": "Article title Researchers announced...",
+  "content_length": 12345
+}
+```
+
+## Next Steps
+
+- [Web Tools Configuration](/docs/configuration/features/web-tools) — Set up search providers and fetch options
+- [Frontend Tools](/docs/features/frontend-tools) — Client-side tools (Python, JS, SQL, charts)
+- [Authorization](/docs/features/authorization) — RBAC policies for tool access
