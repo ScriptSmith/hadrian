@@ -21,7 +21,7 @@ use crate::{
         FallbackDecision, Provider, ProviderError, anthropic, build_fallback_chain,
         classify_provider_error, open_ai, should_fallback_on_response_status, test,
     },
-    services::preprocess_file_search_tools,
+    services::{preprocess_file_search_tools, preprocess_web_search_tools},
 };
 
 // ============================================================================
@@ -260,10 +260,10 @@ impl ProviderExecutor for ResponsesExecutor {
     ) -> Result<Response, ProviderError> {
         match provider_config {
             ProviderConfig::OpenAi(config) => {
-                // Preprocess file_search tools to function tools for OpenAI-compatible providers
-                // that send the payload directly without conversion
+                // Preprocess built-in tools to function tools for OpenAI-compatible providers
                 let mut payload = payload;
                 preprocess_file_search_tools(&mut payload);
+                preprocess_web_search_tools(&mut payload);
 
                 open_ai::OpenAICompatibleProvider::from_config_with_registry(
                     config,
@@ -274,7 +274,9 @@ impl ProviderExecutor for ResponsesExecutor {
                 .await
             }
             ProviderConfig::Anthropic(config) => {
-                // Anthropic uses convert_responses_tools() which handles file_search conversion
+                // Preprocess web_search tools (Anthropic handles file_search in its own convert)
+                let mut payload = payload;
+                preprocess_web_search_tools(&mut payload);
                 anthropic::AnthropicProvider::from_config_with_registry(
                     config,
                     provider_name,
@@ -285,9 +287,10 @@ impl ProviderExecutor for ResponsesExecutor {
             }
             #[cfg(feature = "provider-azure")]
             ProviderConfig::AzureOpenAi(config) => {
-                // Preprocess file_search tools to function tools for Azure OpenAI
+                // Preprocess built-in tools to function tools for Azure OpenAI
                 let mut payload = payload;
                 preprocess_file_search_tools(&mut payload);
+                preprocess_web_search_tools(&mut payload);
 
                 azure_openai::AzureOpenAIProvider::from_config_with_registry(
                     config,
@@ -299,9 +302,10 @@ impl ProviderExecutor for ResponsesExecutor {
             }
             #[cfg(feature = "provider-bedrock")]
             ProviderConfig::Bedrock(config) => {
-                // Preprocess file_search tools to function tools for Bedrock
+                // Preprocess built-in tools to function tools for Bedrock
                 let mut payload = payload;
                 preprocess_file_search_tools(&mut payload);
+                preprocess_web_search_tools(&mut payload);
 
                 bedrock::BedrockProvider::from_config_with_registry(
                     config,
@@ -313,7 +317,9 @@ impl ProviderExecutor for ResponsesExecutor {
             }
             #[cfg(feature = "provider-vertex")]
             ProviderConfig::Vertex(config) => {
-                // Vertex uses convert_responses_tools_to_vertex() which handles file_search conversion
+                // Preprocess web_search tools (Vertex handles file_search in its own convert)
+                let mut payload = payload;
+                preprocess_web_search_tools(&mut payload);
                 vertex::VertexProvider::from_config_with_registry(
                     config,
                     provider_name,
@@ -323,9 +329,10 @@ impl ProviderExecutor for ResponsesExecutor {
                 .await
             }
             ProviderConfig::Test(config) => {
-                // Preprocess for test provider as well (for testing)
+                // Preprocess built-in tools for test provider
                 let mut payload = payload;
                 preprocess_file_search_tools(&mut payload);
+                preprocess_web_search_tools(&mut payload);
 
                 test::TestProvider::from_config(config)
                     .create_responses(&state.http_client, payload)

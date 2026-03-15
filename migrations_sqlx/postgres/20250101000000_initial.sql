@@ -652,7 +652,15 @@ CREATE TABLE IF NOT EXISTS usage_records (
     pricing_source VARCHAR(20) NOT NULL DEFAULT 'none',
     provider_source VARCHAR(16),
     http_referer TEXT,
-    recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- Record type: 'model' for LLM requests, 'tool' for tool invocations
+    record_type VARCHAR(16) NOT NULL DEFAULT 'model',
+    -- Tool-specific fields (only populated for record_type='tool')
+    tool_name VARCHAR(64),
+    tool_query TEXT,
+    tool_url TEXT,
+    tool_bytes_fetched BIGINT,
+    tool_results_count INTEGER
 );
 
 -- API key indexes (partial: only index rows with api_key_id)

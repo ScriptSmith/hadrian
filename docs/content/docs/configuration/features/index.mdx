@@ -9,15 +9,16 @@ The `[features]` section enables and configures optional gateway capabilities. A
 
 ## Feature Overview
 
-| Feature                                                           | Section                       | Purpose                                           |
-| ----------------------------------------------------------------- | ----------------------------- | ------------------------------------------------- |
-| [File Search](/docs/configuration/features/file-search)           | `[features.file_search]`      | RAG file_search tool for Responses API            |
-| [File Processing](/docs/configuration/features/file-processing)   | `[features.file_processing]`  | Document chunking, OCR, virus scanning            |
-| [Response Caching](/docs/configuration/features/response-caching) | `[features.response_caching]` | Exact and semantic response caching               |
-| [Guardrails](/docs/configuration/features/guardrails)             | `[features.guardrails]`       | Content filtering, PII detection, safety          |
-| [Image Fetching](/docs/configuration/features/image-fetching)     | `[features.image_fetching]`   | URL-to-base64 conversion for non-OpenAI providers |
-| [WebSocket](/docs/configuration/features/websocket)               | `[features.websocket]`        | Real-time event subscriptions                     |
-| Model Catalog                                                     | `[features.model_catalog]`    | Enrich models with capabilities and pricing       |
+| Feature                                                           | Section                                          | Purpose                                           |
+| ----------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------- |
+| [File Search](/docs/configuration/features/file-search)           | `[features.file_search]`                         | RAG file_search tool for Responses API            |
+| [File Processing](/docs/configuration/features/file-processing)   | `[features.file_processing]`                     | Document chunking, OCR, virus scanning            |
+| [Response Caching](/docs/configuration/features/response-caching) | `[features.response_caching]`                    | Exact and semantic response caching               |
+| [Guardrails](/docs/configuration/features/guardrails)             | `[features.guardrails]`                          | Content filtering, PII detection, safety          |
+| [Image Fetching](/docs/configuration/features/image-fetching)     | `[features.image_fetching]`                      | URL-to-base64 conversion for non-OpenAI providers |
+| [WebSocket](/docs/configuration/features/websocket)               | `[features.websocket]`                           | Real-time event subscriptions                     |
+| [Web Tools](/docs/configuration/features/web-tools)               | `[features.web_search]` / `[features.web_fetch]` | Web search and URL fetching for chat UI           |
+| Model Catalog                                                     | `[features.model_catalog]`                       | Enrich models with capabilities and pricing       |
 
 ## Minimal Configuration
 
@@ -108,6 +109,17 @@ require_auth = true
 enabled = true
 sync_interval_secs = 1800
 api_url = "https://models.dev/api.json"
+
+# Web Search
+[features.web_search]
+provider = "tavily"
+api_key = "${TAVILY_API_KEY}"
+max_results = 10
+
+# Web Fetch
+[features.web_fetch]
+max_response_bytes = 1048576
+timeout_secs = 30
 ```
 
 ## Model Catalog
@@ -169,6 +181,7 @@ Some features have dependencies on other configuration:
 | Semantic Caching     | Vector backend (pgvector or Qdrant)                       |
 | Guardrails (Bedrock) | AWS credentials                                           |
 | WebSocket auth       | Authentication configuration                              |
+| Web Search           | Search provider API key (Tavily or Exa)                   |
 
 <Callout type="info">
   For conceptual documentation on how each feature works, see the [Features Guide](/docs/features).

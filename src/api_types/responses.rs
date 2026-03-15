@@ -964,11 +964,11 @@ impl FileSearchTool {
 #[serde(untagged)]
 pub enum ResponsesToolDefinition {
     FileSearch(FileSearchTool), // Must be before Function to match type field first
-    Function(serde_json::Value), // Generic function tool with any structure
     WebSearchPreview(WebSearchPreviewTool),
     WebSearchPreview20250311(WebSearchPreview20250311Tool),
     WebSearch(WebSearchTool),
     WebSearch20250826(WebSearch20250826Tool),
+    Function(serde_json::Value), // Must be last - matches any JSON object
 }
 
 impl ResponsesToolDefinition {
@@ -983,6 +983,28 @@ impl ResponsesToolDefinition {
     /// Returns true if this is a file_search tool.
     pub fn is_file_search(&self) -> bool {
         matches!(self, ResponsesToolDefinition::FileSearch(_))
+    }
+
+    /// Returns true if this is any web_search tool variant.
+    pub fn is_web_search(&self) -> bool {
+        matches!(
+            self,
+            ResponsesToolDefinition::WebSearchPreview(_)
+                | ResponsesToolDefinition::WebSearchPreview20250311(_)
+                | ResponsesToolDefinition::WebSearch(_)
+                | ResponsesToolDefinition::WebSearch20250826(_)
+        )
+    }
+
+    /// Extracts `search_context_size` from any web_search tool variant.
+    pub fn web_search_context_size(&self) -> Option<ResponsesSearchContextSize> {
+        match self {
+            ResponsesToolDefinition::WebSearchPreview(t) => t.search_context_size,
+            ResponsesToolDefinition::WebSearchPreview20250311(t) => t.search_context_size,
+            ResponsesToolDefinition::WebSearch(t) => t.search_context_size,
+            ResponsesToolDefinition::WebSearch20250826(t) => t.search_context_size,
+            _ => None,
+        }
     }
 }
 

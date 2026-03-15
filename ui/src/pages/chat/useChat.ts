@@ -687,6 +687,51 @@ export function useChat({
           });
         }
 
+        // Add web_search tool for searching the live web
+        if (enabledTools.includes("web_search")) {
+          tools.push({
+            type: "function",
+            name: "web_search",
+            description:
+              "Search the web for current information. Returns a list of relevant results with titles, URLs, and content snippets.",
+            parameters: {
+              type: "object",
+              properties: {
+                query: {
+                  type: "string",
+                  description: "The search query",
+                },
+              },
+              required: ["query"],
+            },
+          });
+        }
+
+        // Add web_fetch tool for fetching content from a URL
+        if (enabledTools.includes("web_fetch")) {
+          tools.push({
+            type: "function",
+            name: "web_fetch",
+            description:
+              "Fetch the content of a web page or API endpoint. Returns the text content of the URL. HTML pages are automatically converted to plain text.",
+            parameters: {
+              type: "object",
+              properties: {
+                url: {
+                  type: "string",
+                  description: "The URL to fetch",
+                },
+                max_length: {
+                  type: "number",
+                  description:
+                    "Maximum content length in bytes to return (default: server configured limit)",
+                },
+              },
+              required: ["url"],
+            },
+          });
+        }
+
         // Add MCP tools from connected servers
         if (enabledTools.includes("mcp")) {
           const mcpState = useMCPStore.getState();

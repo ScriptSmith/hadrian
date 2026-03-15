@@ -240,6 +240,22 @@ Tool results are displayed inline as interactive artifacts and sent back to the 
   <Card title="Frontend Tools" href="/docs/features/frontend-tools" />
 </Cards>
 
+## Web Tools
+
+Server-side web search and URL fetching, proxied through the gateway with SSRF protection and usage tracking.
+
+| Tool       | Provider      | Capabilities                            |
+| ---------- | ------------- | --------------------------------------- |
+| Web Search | Tavily or Exa | Search the web, returns ranked results  |
+| Web Fetch  | Direct HTTP   | Fetch URLs, HTML stripped to plain text |
+
+Web search results appear as inline citations. Both tools require backend configuration.
+
+<Cards>
+  <Card title="Web Tools" href="/docs/features/web-tools" />
+  <Card title="Web Tools Configuration" href="/docs/configuration/features/web-tools" />
+</Cards>
+
 ## MCP Integration
 
 Connect to external tool servers using the Model Context Protocol (MCP).

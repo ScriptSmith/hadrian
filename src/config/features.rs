@@ -47,6 +47,16 @@ pub struct FeaturesConfig {
     /// from the models.dev catalog.
     #[serde(default)]
     pub model_catalog: ModelCatalogConfig,
+
+    /// Web search configuration for backend-proxied web search tool.
+    /// Requires a search provider API key (Tavily or Exa).
+    #[serde(default)]
+    pub web_search: Option<WebSearchConfig>,
+
+    /// Web fetch configuration for backend-proxied URL fetching tool.
+    /// Validates URLs with SSRF protection and enforces size limits.
+    #[serde(default)]
+    pub web_fetch: Option<WebFetchConfig>,
 }
 
 impl FeaturesConfig {
@@ -2134,6 +2144,163 @@ fn default_image_content_types() -> Vec<String> {
 
 fn default_true() -> bool {
     true
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Web Search
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Web search configuration for backend-proxied search.
+///
+/// # Example Configuration
+///
+/// ```toml
+/// [features.web_search]
+/// provider = "tavily"
+/// api_key = "${TAVILY_API_KEY}"
+/// max_results = 10
+/// timeout_secs = 30
+/// ```
+#[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct WebSearchConfig {
+    /// Search provider backend.
+    pub provider: WebSearchProvider,
+
+    /// API key for the search provider. Supports `${ENV_VAR}` interpolation.
+    #[serde(skip_serializing)]
+    pub api_key: String,
+
+    /// Maximum number of results to return per search.
+    #[serde(default = "default_web_search_max_results")]
+    pub max_results: usize,
+
+    /// Timeout in seconds for search requests.
+    #[serde(default = "default_web_search_timeout_secs")]
+    pub timeout_secs: u64,
+
+    /// Cost per search request in microcents (1/1,000,000 of a dollar).
+    /// Default: 10000 = $0.01
+    #[serde(default = "default_web_search_cost")]
+    pub cost_microcents_per_request: i64,
+
+    /// Maximum web search tool call iterations before forcing text completion.
+    /// Lower than file_search since web search rarely needs multiple rounds.
+    #[serde(default = "default_web_search_max_iterations")]
+    pub max_iterations: usize,
+}
+
+impl std::fmt::Debug for WebSearchConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebSearchConfig")
+            .field("provider", &self.provider)
+            .field("api_key", &"****")
+            .field("max_results", &self.max_results)
+            .field("timeout_secs", &self.timeout_secs)
+            .field(
+                "cost_microcents_per_request",
+                &self.cost_microcents_per_request,
+            )
+            .field("max_iterations", &self.max_iterations)
+            .finish()
+    }
+}
+
+/// Supported web search providers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum WebSearchProvider {
+    Tavily,
+    Exa,
+}
+
+fn default_web_search_max_results() -> usize {
+    10
+}
+
+fn default_web_search_timeout_secs() -> u64 {
+    30
+}
+
+fn default_web_search_cost() -> i64 {
+    10000
+}
+
+fn default_web_search_max_iterations() -> usize {
+    3
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Web Fetch
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Web fetch configuration for backend-proxied URL fetching.
+///
+/// # Example Configuration
+///
+/// ```toml
+/// [features.web_fetch]
+/// max_response_bytes = 1048576
+/// timeout_secs = 30
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct WebFetchConfig {
+    /// Enable web fetch tool.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Maximum response body size in bytes.
+    #[serde(default = "default_web_fetch_max_bytes")]
+    pub max_response_bytes: usize,
+
+    /// Timeout in seconds for fetch requests.
+    #[serde(default = "default_web_fetch_timeout_secs")]
+    pub timeout_secs: u64,
+
+    /// Allowed response content types.
+    #[serde(default = "default_web_fetch_content_types")]
+    pub allowed_content_types: Vec<String>,
+
+    /// Cost per fetch request in microcents (1/1,000,000 of a dollar).
+    /// Default: 0 (free)
+    #[serde(default)]
+    pub cost_microcents_per_request: i64,
+}
+
+impl Default for WebFetchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_response_bytes: default_web_fetch_max_bytes(),
+            timeout_secs: default_web_fetch_timeout_secs(),
+            allowed_content_types: default_web_fetch_content_types(),
+            cost_microcents_per_request: 0,
+        }
+    }
+}
+
+fn default_web_fetch_max_bytes() -> usize {
+    1_048_576 // 1 MB
+}
+
+fn default_web_fetch_timeout_secs() -> u64 {
+    30
+}
+
+fn default_web_fetch_content_types() -> Vec<String> {
+    vec![
+        "text/html".to_string(),
+        "text/plain".to_string(),
+        "application/json".to_string(),
+        "application/xml".to_string(),
+        "text/xml".to_string(),
+        "text/csv".to_string(),
+        "text/markdown".to_string(),
+    ]
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

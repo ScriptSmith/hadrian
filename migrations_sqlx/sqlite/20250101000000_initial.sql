@@ -606,7 +606,15 @@ CREATE TABLE IF NOT EXISTS usage_records (
     pricing_source TEXT NOT NULL DEFAULT 'none',
     provider_source TEXT,
     http_referer TEXT,
-    recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
+    recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Record type: 'model' for LLM requests, 'tool' for tool invocations
+    record_type TEXT NOT NULL DEFAULT 'model',
+    -- Tool-specific fields (only populated for record_type='tool')
+    tool_name TEXT,
+    tool_query TEXT,
+    tool_url TEXT,
+    tool_bytes_fetched INTEGER,
+    tool_results_count INTEGER
 );
 
 -- SQLite doesn't support partial indexes; use regular indexes

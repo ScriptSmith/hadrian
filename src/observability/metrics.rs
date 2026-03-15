@@ -681,6 +681,53 @@ pub fn record_file_search_iteration(iteration: u32, is_final: bool, reason: &str
     }
 }
 
+/// Record a web search tool execution.
+pub fn record_web_search(status: &str, duration_secs: f64, results_count: u32) {
+    #[cfg(feature = "prometheus")]
+    {
+        counter!(
+            "web_search_total",
+            "status" => status.to_string(),
+        )
+        .increment(1);
+
+        histogram!(
+            "web_search_duration_seconds",
+            "status" => status.to_string(),
+        )
+        .record(duration_secs);
+
+        histogram!("web_search_results_count").record(results_count as f64);
+    }
+    #[cfg(not(feature = "prometheus"))]
+    {
+        let _ = (status, duration_secs, results_count);
+    }
+}
+
+/// Record web search tool iteration in the middleware loop.
+pub fn record_web_search_iteration(iteration: u32, is_final: bool, reason: &str) {
+    #[cfg(feature = "prometheus")]
+    {
+        counter!("web_search_iterations_total").increment(1);
+
+        if is_final {
+            histogram!("web_search_iteration_count", "reason" => reason.to_string())
+                .record(iteration as f64);
+
+            counter!(
+                "web_search_completions_total",
+                "reason" => reason.to_string()
+            )
+            .increment(1);
+        }
+    }
+    #[cfg(not(feature = "prometheus"))]
+    {
+        let _ = (iteration, is_final, reason);
+    }
+}
+
 /// Record vector store operation.
 ///
 /// Tracks vector database operations (insert, search, delete), enabling:

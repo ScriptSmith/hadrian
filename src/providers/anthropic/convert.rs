@@ -731,8 +731,9 @@ pub fn convert_responses_tools(
             | ResponsesToolDefinition::WebSearchPreview20250311(_)
             | ResponsesToolDefinition::WebSearch(_)
             | ResponsesToolDefinition::WebSearch20250826(_) => {
-                // Web search tools are OpenAI-specific, not supported by Anthropic
-                tracing::warn!("Web search tools not supported by Anthropic Messages API");
+                // Dead code: web_search tools are preprocessed to function tools in execution.rs
+                // before reaching provider-specific conversion. This branch is a safety net.
+                tracing::warn!("Unexpected web_search tool variant reached Anthropic conversion");
             }
             ResponsesToolDefinition::FileSearch(file_search) => {
                 // File search is handled by the gateway middleware, but the model needs to know
