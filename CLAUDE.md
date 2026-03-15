@@ -120,6 +120,7 @@ See `agent_instructions/architecture.md` for details on RBAC, SSO, RAG, chat mod
 
 - Admin endpoints: `/admin/v1/` — OpenAI-compatible endpoints: `/v1/`
 - OpenAI spec conformance with `**Hadrian Extension:**` doc comments; verify with `./scripts/openapi-conformance.py`
+- Spec generates client for the frontend with `./scripts/generate-openapi.sh`
 - Reference specs in `openapi/` directory
 - Plural nouns for resources, consistent JSON error shapes
 - Cursor-based pagination on all list endpoints (see `agent_instructions/adding_admin_endpoint.md`)
