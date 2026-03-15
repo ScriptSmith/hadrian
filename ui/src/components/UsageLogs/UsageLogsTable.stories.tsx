@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { http, HttpResponse } from "msw";
 import UsageLogsTable from "./UsageLogsTable";
+import { ToastProvider } from "@/components/Toast/Toast";
 import type { UsageLogResponse, UsageLogListResponse } from "@/api/generated/types.gen";
 
 const queryClient = new QueryClient({
@@ -185,18 +186,20 @@ const meta: Meta<typeof UsageLogsTable> = {
   decorators: [
     (Story) => (
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={["/admin/usage"]}>
-          <Routes>
-            <Route
-              path="/admin/usage"
-              element={
-                <div className="p-6">
-                  <Story />
-                </div>
-              }
-            />
-          </Routes>
-        </MemoryRouter>
+        <ToastProvider>
+          <MemoryRouter initialEntries={["/admin/usage"]}>
+            <Routes>
+              <Route
+                path="/admin/usage"
+                element={
+                  <div className="p-6">
+                    <Story />
+                  </div>
+                }
+              />
+            </Routes>
+          </MemoryRouter>
+        </ToastProvider>
       </QueryClientProvider>
     ),
   ],
