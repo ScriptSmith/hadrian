@@ -239,28 +239,11 @@ fn detect_web_search_in_chunk(chunk: &[u8]) -> Vec<WebSearchToolCall> {
                     found_calls.push(tc);
                 }
 
-                // response.function_call_arguments.done
-                if json.get("type").and_then(|t| t.as_str())
-                    == Some("response.function_call_arguments.done")
-                    && json.get("name").and_then(|n| n.as_str())
-                        == Some(WebSearchToolArguments::FUNCTION_NAME)
-                {
-                    let id = json
-                        .get("item_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown")
-                        .to_string();
-                    if let Some(arguments_str) = json.get("arguments").and_then(|a| a.as_str())
-                        && let Some(args) = WebSearchToolArguments::parse(arguments_str)
-                    {
-                        found_calls.push(WebSearchToolCall {
-                            id,
-                            query: args.query,
-                        });
-                    }
-                }
-
-                // response.output_item.done
+                // response.output_item.done — canonical event for complete function calls.
+                // Note: we intentionally skip `response.function_call_arguments.done`
+                // because the Responses API emits both events for the same tool call,
+                // which would cause duplicate search executions. The output_item.done
+                // event contains the complete function call with the correct `call_id`.
                 if json.get("type").and_then(|t| t.as_str()) == Some("response.output_item.done")
                     && let Some(item) = json.get("item")
                     && let Some(tc) = parse_web_search_tool_call(item)
@@ -789,13 +772,24 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_web_search_in_chunk_arguments_done() {
+    fn test_detect_web_search_ignores_function_call_arguments_done() {
+        // The Responses API emits both `response.function_call_arguments.done` and
+        // `response.output_item.done` for the same tool call. We only detect from
+        // `response.output_item.done` to avoid duplicates.
         let chunk = br#"data: {"type": "response.function_call_arguments.done", "name": "web_search", "item_id": "item_789", "arguments": "{\"query\": \"weather today\"}"}
 
 "#;
         let calls = detect_web_search_in_chunk(chunk);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn test_detect_web_search_no_duplicate_across_event_types() {
+        // Simulate both events arriving in the same chunk — only one detection expected.
+        let chunk = b"data: {\"type\": \"response.function_call_arguments.done\", \"name\": \"web_search\", \"item_id\": \"item_789\", \"arguments\": \"{\\\"query\\\": \\\"weather today\\\"}\"}\n\ndata: {\"type\": \"response.output_item.done\", \"item\": {\"type\": \"function_call\", \"name\": \"web_search\", \"call_id\": \"call_789\", \"arguments\": \"{\\\"query\\\": \\\"weather today\\\"}\"}}\n\n";
+        let calls = detect_web_search_in_chunk(chunk);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].id, "item_789");
+        assert_eq!(calls[0].id, "call_789");
         assert_eq!(calls[0].query, "weather today");
     }
 
