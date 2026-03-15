@@ -294,11 +294,10 @@ impl UsageSink for OtlpSink {
         let mut success_count = 0;
 
         for entry in entries {
-            // Create a log record for this usage entry
             let mut record = self.logger.create_log_record();
 
-            // Set severity and body
             record.set_severity_number(Severity::Info);
+            record.set_timestamp(entry.request_at.into());
             record.set_body(
                 format!(
                     "LLM usage: {} tokens, {} microcents",
@@ -308,7 +307,7 @@ impl UsageSink for OtlpSink {
                 .into(),
             );
 
-            // Add all usage attributes using direct types that implement Into<AnyValue>
+            // Identity attributes
             record.add_attribute(
                 Key::from_static_str("hadrian.request_id"),
                 entry.request_id.clone(),
@@ -340,11 +339,32 @@ impl UsageSink for OtlpSink {
                     service_account_id.to_string(),
                 );
             }
+
+            // Request attributes
             record.add_attribute(Key::from_static_str("hadrian.model"), entry.model.clone());
             record.add_attribute(
                 Key::from_static_str("hadrian.provider"),
                 entry.provider.clone(),
             );
+            if let Some(provider_source) = &entry.provider_source {
+                record.add_attribute(
+                    Key::from_static_str("hadrian.provider_source"),
+                    provider_source.clone(),
+                );
+            }
+            record.add_attribute(
+                Key::from_static_str("hadrian.record_type"),
+                entry.record_type.clone(),
+            );
+            record.add_attribute(Key::from_static_str("hadrian.streamed"), entry.streamed);
+            if let Some(referer) = &entry.http_referer {
+                record.add_attribute(
+                    Key::from_static_str("hadrian.http_referer"),
+                    referer.clone(),
+                );
+            }
+
+            // Token usage
             record.add_attribute(
                 Key::from_static_str("hadrian.input_tokens"),
                 entry.input_tokens as i64,
@@ -357,32 +377,12 @@ impl UsageSink for OtlpSink {
                 Key::from_static_str("hadrian.total_tokens"),
                 (entry.input_tokens + entry.output_tokens) as i64,
             );
-
-            if let Some(cost) = entry.cost_microcents {
-                record.add_attribute(Key::from_static_str("hadrian.cost_microcents"), cost);
-                // Also add cost in dollars for easier querying
-                record.add_attribute(
-                    Key::from_static_str("hadrian.cost_dollars"),
-                    cost as f64 / 100_000_000.0,
-                );
-            }
-
-            if let Some(referer) = &entry.http_referer {
-                record.add_attribute(
-                    Key::from_static_str("hadrian.http_referer"),
-                    referer.clone(),
-                );
-            }
-
-            record.add_attribute(Key::from_static_str("hadrian.streamed"), entry.streamed);
-
             if entry.cached_tokens > 0 {
                 record.add_attribute(
                     Key::from_static_str("hadrian.cached_tokens"),
                     entry.cached_tokens as i64,
                 );
             }
-
             if entry.reasoning_tokens > 0 {
                 record.add_attribute(
                     Key::from_static_str("hadrian.reasoning_tokens"),
@@ -390,22 +390,33 @@ impl UsageSink for OtlpSink {
                 );
             }
 
+            // Cost
+            if let Some(cost) = entry.cost_microcents {
+                record.add_attribute(Key::from_static_str("hadrian.cost_microcents"), cost);
+                record.add_attribute(
+                    Key::from_static_str("hadrian.cost_dollars"),
+                    cost as f64 / 100_000_000.0,
+                );
+            }
+            record.add_attribute(
+                Key::from_static_str("hadrian.pricing_source"),
+                entry.pricing_source.as_str().to_string(),
+            );
+
+            // Response attributes
             if let Some(finish_reason) = &entry.finish_reason {
                 record.add_attribute(
                     Key::from_static_str("hadrian.finish_reason"),
                     finish_reason.clone(),
                 );
             }
-
             if let Some(latency_ms) = entry.latency_ms {
                 record.add_attribute(
                     Key::from_static_str("hadrian.latency_ms"),
                     latency_ms as i64,
                 );
             }
-
             record.add_attribute(Key::from_static_str("hadrian.cancelled"), entry.cancelled);
-
             if let Some(status_code) = entry.status_code {
                 record.add_attribute(
                     Key::from_static_str("hadrian.status_code"),
@@ -413,11 +424,7 @@ impl UsageSink for OtlpSink {
                 );
             }
 
-            record.add_attribute(
-                Key::from_static_str("hadrian.pricing_source"),
-                entry.pricing_source.as_str().to_string(),
-            );
-
+            // Media usage
             if let Some(image_count) = entry.image_count {
                 record.add_attribute(
                     Key::from_static_str("hadrian.image_count"),
@@ -437,7 +444,38 @@ impl UsageSink for OtlpSink {
                 );
             }
 
-            // Emit the log record
+            // Tool usage (for record_type = "tool")
+            if let Some(tool_name) = &entry.tool_name {
+                record.add_attribute(
+                    Key::from_static_str("hadrian.tool_name"),
+                    tool_name.clone(),
+                );
+            }
+            if let Some(tool_query) = &entry.tool_query {
+                record.add_attribute(
+                    Key::from_static_str("hadrian.tool_query"),
+                    tool_query.clone(),
+                );
+            }
+            if let Some(tool_url) = &entry.tool_url {
+                record.add_attribute(
+                    Key::from_static_str("hadrian.tool_url"),
+                    tool_url.clone(),
+                );
+            }
+            if let Some(tool_bytes_fetched) = entry.tool_bytes_fetched {
+                record.add_attribute(
+                    Key::from_static_str("hadrian.tool_bytes_fetched"),
+                    tool_bytes_fetched,
+                );
+            }
+            if let Some(tool_results_count) = entry.tool_results_count {
+                record.add_attribute(
+                    Key::from_static_str("hadrian.tool_results_count"),
+                    tool_results_count as i64,
+                );
+            }
+
             self.logger.emit(record);
             success_count += 1;
         }
