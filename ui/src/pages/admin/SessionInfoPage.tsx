@@ -715,7 +715,7 @@ export default function SessionInfoPage() {
                   label="JIT Provisioning"
                   value={
                     data.sso_connection.jit_enabled ? (
-                      <span className="flex items-center gap-1 text-green-700">
+                      <span className="flex items-center gap-1 text-green-700 dark:text-green-400">
                         <CheckCircle2 className="h-4 w-4" />
                         Enabled
                       </span>
@@ -829,7 +829,7 @@ export default function SessionInfoPage() {
                     label="Online"
                     value={
                       browserInfo.onlineStatus ? (
-                        <span className="flex items-center gap-1 text-green-700">
+                        <span className="flex items-center gap-1 text-green-700 dark:text-green-400">
                           <CheckCircle2 className="h-3 w-3" />
                           Yes
                         </span>
@@ -879,7 +879,7 @@ export default function SessionInfoPage() {
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium">localStorage</span>
                       {storageInfo.localStorage.available ? (
-                        <Badge variant="outline" className="text-green-700">
+                        <Badge variant="outline" className="text-green-700 dark:text-green-400">
                           Available
                         </Badge>
                       ) : (
@@ -903,7 +903,7 @@ export default function SessionInfoPage() {
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium">sessionStorage</span>
                       {storageInfo.sessionStorage.available ? (
-                        <Badge variant="outline" className="text-green-700">
+                        <Badge variant="outline" className="text-green-700 dark:text-green-400">
                           Available
                         </Badge>
                       ) : (
@@ -927,7 +927,7 @@ export default function SessionInfoPage() {
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium">IndexedDB</span>
                       {storageInfo.indexedDB.available ? (
-                        <Badge variant="outline" className="text-green-700">
+                        <Badge variant="outline" className="text-green-700 dark:text-green-400">
                           Available
                         </Badge>
                       ) : (
@@ -953,7 +953,7 @@ export default function SessionInfoPage() {
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium">OPFS</span>
                       {storageInfo.opfs.available ? (
-                        <Badge variant="outline" className="text-green-700">
+                        <Badge variant="outline" className="text-green-700 dark:text-green-400">
                           Available
                         </Badge>
                       ) : (
