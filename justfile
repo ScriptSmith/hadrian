@@ -4,6 +4,7 @@ profile := "full"
 # Install Rust nightly, frontend deps, and model catalog
 init:
     rustup toolchain install nightly --component rustfmt
+    rustup target add wasm32-unknown-unknown
     cd ui && pnpm install
     cd docs && pnpm install
     ./scripts/fetch-model-catalog.sh
@@ -21,16 +22,24 @@ build-frontend:
 build-backend:
     cargo build --release --no-default-features --features {{profile}}
 
+# Build WASM module
+build-wasm:
+    ./scripts/build-wasm.sh
+
+# Build optimized WASM module
+build-wasm-release:
+    ./scripts/build-wasm.sh --release
+
 # Remove build artifacts
 clean:
     cargo clean
-    rm -rf ui/dist ui/storybook-static docs/out data/
+    rm -rf ui/dist ui/storybook-static ui/public/wasm docs/out data/
 
 # Run all CI checks (sequential)
 check: check-rust check-ui check-docs check-openapi check-helm check-security
 
 # Run all CI checks including slow ones
-check-all: check check-features check-e2e
+check-all: check check-features check-wasm check-e2e
 
 # Backend checks (matches CI backend job)
 check-rust:
@@ -44,7 +53,7 @@ check-rust:
         fi
     }
     run cargo +nightly fmt -- --check
-    run cargo clippy --all-targets --all-features -- -D clippy::correctness -W clippy::style
+    run cargo clippy --all-targets --no-default-features --features full -- -D clippy::correctness -W clippy::style
     run cargo check
     run cargo test -- --include-ignored
 
@@ -70,6 +79,20 @@ check-features profile="all":
         run "$p" cargo clippy --no-default-features --features "$p" --all-targets -- -D warnings
         run "$p" cargo test --no-default-features --features "$p" --all-targets -- --include-ignored
     done
+
+# WASM build check
+check-wasm:
+    #!/usr/bin/env bash
+    set -e
+    run() {
+        echo "→ (wasm) $*"
+        if ! output=$("$@" 2>&1); then
+            echo "$output"
+            exit 1
+        fi
+    }
+    run cargo check --target wasm32-unknown-unknown --no-default-features --features wasm
+    run cargo clippy --target wasm32-unknown-unknown --no-default-features --features wasm -- -D clippy::correctness -W clippy::style
 
 # Frontend checks (matches CI frontend job)
 check-ui:
@@ -174,7 +197,7 @@ fix-rust:
     echo "→ cargo +nightly fmt"
     cargo +nightly fmt
     echo "→ cargo clippy --fix"
-    cargo clippy --all-targets --all-features --fix --allow-dirty --allow-staged
+    cargo clippy --all-targets --no-default-features --features full --fix --allow-dirty --allow-staged
 
 # Fix frontend formatting and lints
 fix-ui:
@@ -213,6 +236,8 @@ check-parallel:
     pid_helm=$!
     just check-security &
     pid_security=$!
+    just check-wasm &
+    pid_wasm=$!
 
     failed=0
     wait $pid_helm || failed=1
@@ -221,5 +246,6 @@ check-parallel:
     wait $pid_docs || failed=1
     wait $pid_rust || failed=1
     wait $pid_ui || failed=1
+    wait $pid_wasm || failed=1
 
     exit $failed
