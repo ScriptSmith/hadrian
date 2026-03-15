@@ -118,7 +118,8 @@
       "@modelcontextprotocol/sdk>ajv": ">=8.18.0",
       "@modelcontextprotocol/sdk>hono": ">=4.12.4",
       "@modelcontextprotocol/sdk>@hono/node-server": ">=1.19.10",
-      "@modelcontextprotocol/sdk>express-rate-limit": ">=8.2.2"
+      "@modelcontextprotocol/sdk>express-rate-limit": ">=8.2.2",
+      "flatted": ">=3.4.0"
     }
   }
 }
