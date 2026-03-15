@@ -28,7 +28,15 @@ const models = [
   { model: "nova-premier", provider: "bedrock" },
 ] as const;
 
-const finishReasons = ["stop", "stop", "stop", "stop", "length", "error", "content_filter"] as const;
+const finishReasons = [
+  "stop",
+  "stop",
+  "stop",
+  "stop",
+  "length",
+  "error",
+  "content_filter",
+] as const;
 
 const mockLogs: UsageLogResponse[] = Array.from({ length: 30 }, (_, i) => {
   const m = models[i % models.length];
@@ -47,7 +55,11 @@ const mockLogs: UsageLogResponse[] = Array.from({ length: 30 }, (_, i) => {
     reasoning_tokens: ["o3", "claude-opus-4-6-20260301"].includes(m.model) ? 600 + i * 80 : 0,
     cost: isError ? 0 : parseFloat((0.002 + i * 0.008).toFixed(4)),
     streamed: i % 2 === 0,
-    finish_reason: isError ? "error" : isCancelled ? "stop" : finishReasons[i % finishReasons.length],
+    finish_reason: isError
+      ? "error"
+      : isCancelled
+        ? "stop"
+        : finishReasons[i % finishReasons.length],
     latency_ms: isError ? 180 : 300 + i * 90,
     cancelled: isCancelled,
     status_code: isError ? 429 : 200,
@@ -75,11 +87,46 @@ const mockResponse: UsageLogListResponse = {
 
 const mockUsersResponse = {
   data: [
-    { id: "usr-1", name: "Alice Johnson", email: "alice@example.com", external_id: "alice", created_at: "2024-01-01T00:00:00Z", updated_at: "2024-01-01T00:00:00Z" },
-    { id: "usr-2", name: "Bob Martinez", email: "bob@example.com", external_id: "bob", created_at: "2024-01-01T00:00:00Z", updated_at: "2024-01-01T00:00:00Z" },
-    { id: "usr-3", name: "Carol Wei", email: "carol@example.com", external_id: "carol", created_at: "2024-01-01T00:00:00Z", updated_at: "2024-01-01T00:00:00Z" },
-    { id: "usr-4", name: "David Kim", email: "david@example.com", external_id: "david", created_at: "2024-01-01T00:00:00Z", updated_at: "2024-01-01T00:00:00Z" },
-    { id: "usr-5", name: "Elena Rossi", email: "elena@example.com", external_id: "elena", created_at: "2024-01-01T00:00:00Z", updated_at: "2024-01-01T00:00:00Z" },
+    {
+      id: "usr-1",
+      name: "Alice Johnson",
+      email: "alice@example.com",
+      external_id: "alice",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    },
+    {
+      id: "usr-2",
+      name: "Bob Martinez",
+      email: "bob@example.com",
+      external_id: "bob",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    },
+    {
+      id: "usr-3",
+      name: "Carol Wei",
+      email: "carol@example.com",
+      external_id: "carol",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    },
+    {
+      id: "usr-4",
+      name: "David Kim",
+      email: "david@example.com",
+      external_id: "david",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    },
+    {
+      id: "usr-5",
+      name: "Elena Rossi",
+      email: "elena@example.com",
+      external_id: "elena",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    },
   ],
   pagination: { limit: 100, has_more: false },
 };
@@ -215,8 +262,26 @@ export const WithPagination: Story = {
     msw: {
       handlers: [
         http.get("*/admin/v1/usage/logs", () => {
-          const pgModels = ["gpt-5.4", "claude-opus-4-6-20260301", "gemini-3.1-pro", "o3", "claude-sonnet-4-6-20260301", "gpt-5.4-mini", "llama-4-maverick", "gemini-3.1-flash"];
-          const pgProviders = ["openai", "anthropic", "vertex_ai", "openai", "anthropic", "openai", "bedrock", "vertex_ai"];
+          const pgModels = [
+            "gpt-5.4",
+            "claude-opus-4-6-20260301",
+            "gemini-3.1-pro",
+            "o3",
+            "claude-sonnet-4-6-20260301",
+            "gpt-5.4-mini",
+            "llama-4-maverick",
+            "gemini-3.1-flash",
+          ];
+          const pgProviders = [
+            "openai",
+            "anthropic",
+            "vertex_ai",
+            "openai",
+            "anthropic",
+            "openai",
+            "bedrock",
+            "vertex_ai",
+          ];
           const pgFinishReasons = ["stop", "stop", "stop", "length", "error", "content_filter"];
 
           const manyLogs: UsageLogResponse[] = Array.from({ length: 50 }, (_, i) => ({
