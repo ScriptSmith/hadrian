@@ -614,9 +614,9 @@ pub fn wrap_streaming_with_web_search(
 
                     let search_results = futures_util::future::join_all(search_futures).await;
 
-                    // Process results
-                    let mut successful_results: Vec<(&WebSearchToolCall, String)> = Vec::new();
-                    let mut had_failure = false;
+                    // Process results — on failure, synthesize an error message
+                    // for the model instead of forwarding raw internal SSE.
+                    let mut tool_results: Vec<(&WebSearchToolCall, String)> = Vec::new();
 
                     for (tool_call, result) in detected_tool_calls.iter().zip(search_results) {
                         match result {
@@ -642,7 +642,7 @@ pub fn wrap_streaming_with_web_search(
                                     return;
                                 }
 
-                                successful_results.push((tool_call, content));
+                                tool_results.push((tool_call, content));
                             }
                             Err(e) => {
                                 error!(
@@ -651,17 +651,17 @@ pub fn wrap_streaming_with_web_search(
                                     error = %e,
                                     "Web search execution failed"
                                 );
-                                had_failure = true;
+                                // Provide the model with an error message instead of
+                                // dropping the result or leaking raw SSE.
+                                tool_results.push((
+                                    tool_call,
+                                    format!(
+                                        "Web search failed for query \"{}\": {}",
+                                        tool_call.query, e
+                                    ),
+                                ));
                             }
                         }
-                    }
-
-                    if had_failure {
-                        if tx.send(Ok(accumulated.freeze())).await.is_err() {
-                            return;
-                        }
-                        record_web_search_iteration(iteration as u32, true, "error");
-                        break;
                     }
 
                     // Continue with provider callback
@@ -669,17 +669,17 @@ pub fn wrap_streaming_with_web_search(
                         let is_final_iteration = iteration == max_iterations;
                         let continuation_payload = build_web_search_continuation_payload(
                             &context.original_payload,
-                            &successful_results,
+                            &tool_results,
                             is_final_iteration,
                         );
 
                         info!(
                             stage = "continuation_sent",
-                            tool_call_count = successful_results.len(),
+                            tool_call_count = tool_results.len(),
                             iteration = iteration,
                             is_final_iteration = is_final_iteration,
                             "Sending continuation request to provider with {} web search results",
-                            successful_results.len()
+                            tool_results.len()
                         );
 
                         match callback(continuation_payload).await {

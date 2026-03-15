@@ -46,6 +46,7 @@ pub struct WebSearchResult {
     pub score: Option<f64>,
 }
 
+/// Tavily API request — no Debug derive to avoid leaking `api_key` in logs.
 #[derive(Serialize)]
 struct TavilySearchRequest {
     query: String,
@@ -339,7 +340,7 @@ pub async fn web_search(
 pub struct WebFetchRequest {
     #[validate(length(min = 1, max = 2083))]
     pub url: String,
-    #[validate(range(min = 1))]
+    #[validate(range(min = 1, max = 10_485_760))]
     pub max_length: Option<usize>,
 }
 
@@ -564,13 +565,13 @@ pub async fn web_fetch(
     };
     let bytes_fetched = text.len() as i64;
 
-    // Strip HTML tags for text/html content
+    // Convert HTML to readable text
     let is_html = content_type
         .as_deref()
         .is_some_and(|ct| ct.starts_with("text/html"));
 
     let content = if is_html {
-        strip_html_tags(text)
+        html_to_text(text).await
     } else {
         text.to_string()
     };
@@ -665,10 +666,34 @@ fn extract_identity(
     }
 }
 
+/// Convert HTML to readable text.
+///
+/// When the `document-extraction-full` feature is enabled, uses kreuzberg to
+/// convert HTML to well-formatted markdown. Otherwise, falls back to a basic
+/// tag-stripping approach.
+async fn html_to_text(html: &str) -> String {
+    #[cfg(feature = "document-extraction-full")]
+    {
+        let config = kreuzberg::ExtractionConfig {
+            output_format: kreuzberg::OutputFormat::Markdown,
+            use_cache: false,
+            ..Default::default()
+        };
+        match kreuzberg::extract_bytes(html.as_bytes(), "text/html", &config).await {
+            Ok(result) => return result.content,
+            Err(e) => {
+                tracing::debug!(error = %e, "Kreuzberg HTML conversion failed, falling back to tag stripping");
+            }
+        }
+    }
+
+    strip_html_tags(html)
+}
+
 /// Basic HTML tag stripping — removes tags and decodes common entities.
 ///
-/// Uses char-based iteration to correctly handle multi-byte UTF-8.
-/// Strips `<script>` and `<style>` elements entirely (content + tags).
+/// Operates entirely on the lowercased string for tag detection to avoid
+/// byte-index misalignment between original and lowercased text.
 fn strip_html_tags(html: &str) -> String {
     let mut result = String::with_capacity(html.len());
     let mut in_tag = false;
@@ -676,14 +701,15 @@ fn strip_html_tags(html: &str) -> String {
     let mut in_style = false;
 
     let lower = html.to_lowercase();
-    let chars: Vec<char> = html.chars().collect();
-    let mut byte_idx = 0; // tracks byte position in `lower`
+    let mut orig_chars = html.chars();
 
-    for &ch in &chars {
-        let ch_len = ch.len_utf8();
+    for (byte_idx, _) in lower.char_indices() {
+        let ch = match orig_chars.next() {
+            Some(c) => c,
+            None => break,
+        };
 
         if !in_tag && !in_script && !in_style {
-            // Check for opening <script or <style tags
             if lower[byte_idx..].starts_with("<script") && is_tag_boundary(&lower, byte_idx + 7) {
                 in_script = true;
                 in_tag = true;
@@ -699,12 +725,8 @@ fn strip_html_tags(html: &str) -> String {
             }
         } else if in_script {
             if lower[byte_idx..].starts_with("</script>") {
-                // Skip past the closing tag — we'll advance char-by-char naturally,
-                // but we need to consume the remaining chars of "</script>"
-                // We handle this by just clearing the flag when we see '>' at the
-                // end of the tag. For simplicity, use the in_tag mechanism.
                 in_script = false;
-                in_tag = true; // we're at '<' of </script>, wait for '>'
+                in_tag = true;
             }
         } else if in_style {
             if lower[byte_idx..].starts_with("</style>") {
@@ -715,8 +737,6 @@ fn strip_html_tags(html: &str) -> String {
             in_tag = false;
             result.push(' ');
         }
-
-        byte_idx += ch_len;
     }
 
     // Decode common HTML entities
