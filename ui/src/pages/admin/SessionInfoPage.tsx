@@ -171,6 +171,26 @@ async function getStorageInfo(): Promise<StorageInfo> {
   return info;
 }
 
+function formatApiError(error: unknown): { message: string; type?: string; requestId?: string } {
+  if (error instanceof Error) {
+    return { message: error.message };
+  }
+  if (typeof error === "string") {
+    return { message: error };
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "error" in error &&
+    typeof (error as { error: { message?: string } }).error === "object"
+  ) {
+    const apiError = (error as { error: { message: string; type?: string; request_id?: string } })
+      .error;
+    return { message: apiError.message, type: apiError.type, requestId: apiError.request_id };
+  }
+  return { message: "An unknown error occurred" };
+}
+
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
   const k = 1024;
@@ -359,6 +379,7 @@ function generateMarkdownReport(
 
 export default function SessionInfoPage() {
   const { data, isLoading, error } = useQuery(sessionInfoGetOptions());
+  const apiError = error ? formatApiError(error) : null;
   const [browserInfo, setBrowserInfo] = useState<BrowserInfo | null>(null);
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
   const [copied, setCopied] = useState(false);
@@ -409,96 +430,96 @@ export default function SessionInfoPage() {
         </Button>
       </div>
 
-      {/* Loading state */}
-      {isLoading && (
-        <div className="grid gap-6 md:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <Skeleton className="h-6 w-32" />
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Skeleton className="h-4 w-full" />
-              <Skeleton className="h-4 w-3/4" />
-              <Skeleton className="h-4 w-1/2" />
+      <div className="space-y-6">
+        {/* Error state */}
+        {apiError && (
+          <Card className="border-destructive">
+            <CardContent className="flex items-center gap-3 p-6">
+              <AlertCircle className="h-5 w-5 shrink-0 text-destructive" />
+              <div className="min-w-0">
+                <p className="font-medium">Failed to load session information from server</p>
+                <p className="text-sm text-muted-foreground">{apiError.message}</p>
+                {(apiError.type || apiError.requestId) && (
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    {apiError.type && <span>Type: {apiError.type}</span>}
+                    {apiError.requestId && (
+                      <span>
+                        Request ID: <code>{apiError.requestId}</code>
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
             </CardContent>
           </Card>
+        )}
+
+        {/* Identity & IdP Groups */}
+        <div className="grid gap-6 lg:grid-cols-2">
           <Card>
             <CardHeader>
-              <Skeleton className="h-6 w-32" />
+              <CardTitle className="flex items-center gap-2">
+                <User className="h-5 w-5" />
+                Identity
+              </CardTitle>
+              <CardDescription>Information from your identity provider</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <Skeleton className="h-4 w-full" />
-              <Skeleton className="h-4 w-3/4" />
+              {isLoading ? (
+                <>
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-3/4" />
+                  <Skeleton className="h-4 w-1/2" />
+                </>
+              ) : data ? (
+                <>
+                  <DetailRow
+                    label="External ID"
+                    value={<CodeBadge>{data.identity.external_id}</CodeBadge>}
+                  />
+                  {data.identity.email && <DetailRow label="Email" value={data.identity.email} />}
+                  {data.identity.name && <DetailRow label="Name" value={data.identity.name} />}
+                  <DetailRow
+                    label="Roles"
+                    value={
+                      data.identity.roles.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {data.identity.roles.map((role) => (
+                            <Badge key={role} variant="secondary">
+                              {role}
+                            </Badge>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">None</span>
+                      )
+                    }
+                  />
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">Server unavailable</p>
+              )}
             </CardContent>
           </Card>
-        </div>
-      )}
 
-      {/* Error state */}
-      {error && (
-        <Card className="border-destructive">
-          <CardContent className="flex items-center gap-3 p-6">
-            <AlertCircle className="h-5 w-5 text-destructive" />
-            <div>
-              <p className="font-medium">Failed to load session information</p>
-              <p className="text-sm text-muted-foreground">{String(error)}</p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Session info */}
-      {data && (
-        <div className="space-y-6">
-          {/* Identity Card */}
-          <div className="grid gap-6 lg:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <User className="h-5 w-5" />
-                  Identity
-                </CardTitle>
-                <CardDescription>Information from your identity provider</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <DetailRow
-                  label="External ID"
-                  value={<CodeBadge>{data.identity.external_id}</CodeBadge>}
-                />
-                {data.identity.email && <DetailRow label="Email" value={data.identity.email} />}
-                {data.identity.name && <DetailRow label="Name" value={data.identity.name} />}
-                <DetailRow
-                  label="Roles"
-                  value={
-                    data.identity.roles.length > 0 ? (
-                      <div className="flex flex-wrap gap-1">
-                        {data.identity.roles.map((role) => (
-                          <Badge key={role} variant="secondary">
-                            {role}
-                          </Badge>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="text-muted-foreground">None</span>
-                    )
-                  }
-                />
-              </CardContent>
-            </Card>
-
-            {/* IdP Groups Card */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Key className="h-5 w-5" />
-                  IdP Groups
-                </CardTitle>
-                <CardDescription>
-                  Raw groups from your identity provider (before mapping)
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {data.identity.idp_groups.length > 0 ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Key className="h-5 w-5" />
+                IdP Groups
+              </CardTitle>
+              <CardDescription>
+                Raw groups from your identity provider (before mapping)
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isLoading ? (
+                <>
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-3/4" />
+                </>
+              ) : data ? (
+                data.identity.idp_groups.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
                     {data.identity.idp_groups.map((group, i) => (
                       <Badge key={i} variant="outline" className="font-mono text-xs">
@@ -510,56 +531,60 @@ export default function SessionInfoPage() {
                   <p className="text-sm text-muted-foreground">
                     No groups provided by identity provider
                   </p>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+                )
+              ) : (
+                <p className="text-sm text-muted-foreground">Server unavailable</p>
+              )}
+            </CardContent>
+          </Card>
+        </div>
 
-          {/* Database User Card */}
-          {data.user && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <User className="h-5 w-5" />
-                  Database User
-                </CardTitle>
-                <CardDescription>Your user record in Hadrian's database</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <DetailRow
-                    label="User ID"
-                    value={<CodeBadge className="text-xs">{data.user.id}</CodeBadge>}
-                    compact
-                  />
-                  {data.user.email && <DetailRow label="Email" value={data.user.email} compact />}
-                  {data.user.name && <DetailRow label="Name" value={data.user.name} compact />}
-                  <DetailRow
-                    label="Created"
-                    value={new Date(data.user.created_at).toLocaleDateString()}
-                    compact
-                  />
-                </div>
-              </CardContent>
-            </Card>
-          )}
+        {/* Database User Card */}
+        {data?.user && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <User className="h-5 w-5" />
+                Database User
+              </CardTitle>
+              <CardDescription>Your user record in Hadrian's database</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <DetailRow
+                  label="User ID"
+                  value={<CodeBadge className="text-xs">{data.user.id}</CodeBadge>}
+                  compact
+                />
+                {data.user.email && <DetailRow label="Email" value={data.user.email} compact />}
+                {data.user.name && <DetailRow label="Name" value={data.user.name} compact />}
+                <DetailRow
+                  label="Created"
+                  value={new Date(data.user.created_at).toLocaleDateString()}
+                  compact
+                />
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
-          {!data.user && (
-            <Card className="border-amber-500/50 bg-amber-50/50 dark:bg-amber-950/20">
-              <CardContent className="flex items-center gap-3 p-6">
-                <AlertCircle className="h-5 w-5 text-amber-800" />
-                <div>
-                  <p className="font-medium">No database user record</p>
-                  <p className="text-sm text-muted-foreground">
-                    Your identity is authenticated, but no corresponding user exists in the
-                    database. This may indicate JIT provisioning is disabled or hasn't run yet.
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-          )}
+        {data && !data.user && (
+          <Card className="border-amber-500/50 bg-amber-50/50 dark:bg-amber-950/20">
+            <CardContent className="flex items-center gap-3 p-6">
+              <AlertCircle className="h-5 w-5 text-amber-800" />
+              <div>
+                <p className="font-medium">No database user record</p>
+                <p className="text-sm text-muted-foreground">
+                  Your identity is authenticated, but no corresponding user exists in the database.
+                  This may indicate JIT provisioning is disabled or hasn't run yet.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
-          {/* Memberships Grid */}
+        {/* Memberships Grid */}
+        {data && (
           <div className="grid gap-6 lg:grid-cols-3">
             {/* Organizations */}
             <Card>
@@ -658,317 +683,327 @@ export default function SessionInfoPage() {
               </CardContent>
             </Card>
           </div>
+        )}
 
-          {/* SSO Connection & Server Info */}
-          <div className={`grid gap-6 ${data.sso_connection ? "lg:grid-cols-2" : ""}`}>
-            {/* SSO Connection */}
-            {data.sso_connection && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Shield className="h-5 w-5" />
-                    SSO Connection
-                  </CardTitle>
-                  <CardDescription>Single Sign-On configuration</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
+        {/* SSO Connection & Server Info */}
+        <div className={`grid gap-6 ${data?.sso_connection ? "lg:grid-cols-2" : ""}`}>
+          {/* SSO Connection */}
+          {data?.sso_connection && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Shield className="h-5 w-5" />
+                  SSO Connection
+                </CardTitle>
+                <CardDescription>Single Sign-On configuration</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <DetailRow
+                  label="Type"
+                  value={<Badge variant="default">{data.sso_connection.type.toUpperCase()}</Badge>}
+                />
+                {data.sso_connection.issuer && (
+                  <DetailRow label="Issuer" value={data.sso_connection.issuer} />
+                )}
+                {data.sso_connection.groups_claim && (
                   <DetailRow
-                    label="Type"
+                    label="Groups Claim"
+                    value={<CodeBadge>{data.sso_connection.groups_claim}</CodeBadge>}
+                  />
+                )}
+                <DetailRow
+                  label="JIT Provisioning"
+                  value={
+                    data.sso_connection.jit_enabled ? (
+                      <span className="flex items-center gap-1 text-green-700">
+                        <CheckCircle2 className="h-4 w-4" />
+                        Enabled
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-muted-foreground">
+                        <XCircle className="h-4 w-4" />
+                        Disabled
+                      </span>
+                    )
+                  }
+                />
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Server Info */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Clock className="h-5 w-5" />
+                Server Information
+              </CardTitle>
+              <CardDescription>Authentication and server details</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {isLoading ? (
+                <>
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-3/4" />
+                  <Skeleton className="h-4 w-1/2" />
+                </>
+              ) : data ? (
+                <>
+                  <DetailRow
+                    label="Runtime Mode"
                     value={
-                      <Badge variant="default">{data.sso_connection.type.toUpperCase()}</Badge>
+                      <Badge variant={data.runtime_mode === "wasm" ? "default" : "outline"}>
+                        {data.runtime_mode === "wasm" ? "Browser (WASM)" : "Server"}
+                      </Badge>
                     }
                   />
-                  {data.sso_connection.issuer && (
-                    <DetailRow label="Issuer" value={data.sso_connection.issuer} />
-                  )}
-                  {data.sso_connection.groups_claim && (
-                    <DetailRow
-                      label="Groups Claim"
-                      value={<CodeBadge>{data.sso_connection.groups_claim}</CodeBadge>}
-                    />
-                  )}
                   <DetailRow
-                    label="JIT Provisioning"
+                    label="Auth Method"
+                    value={<Badge variant="outline">{data.auth_method}</Badge>}
+                  />
+                  <DetailRow
+                    label="Server Time"
+                    value={new Date(data.server_time).toLocaleString()}
+                  />
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">Server unavailable</p>
+              )}
+              <DetailRow label="Your Timezone" value={browserInfo?.timezone ?? "Loading..."} />
+              <DetailRow
+                label="UTC Offset"
+                value={
+                  browserInfo
+                    ? `UTC${browserInfo.timezoneOffset >= 0 ? "-" : "+"}${Math.abs(browserInfo.timezoneOffset / 60)}`
+                    : "Loading..."
+                }
+              />
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Browser & Storage Info */}
+        <div className="grid gap-6 lg:grid-cols-2">
+          {/* Browser Info */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Monitor className="h-5 w-5" />
+                Browser Information
+              </CardTitle>
+              <CardDescription>Client environment details</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {browserInfo ? (
+                <>
+                  <DetailRow
+                    label="User Agent"
                     value={
-                      data.sso_connection.jit_enabled ? (
+                      <span className="break-all text-xs font-mono" title={browserInfo.userAgent}>
+                        {browserInfo.userAgent}
+                      </span>
+                    }
+                  />
+                  <DetailRow label="Platform" value={browserInfo.platform} />
+                  <DetailRow
+                    label="Language"
+                    value={`${browserInfo.language} (${browserInfo.languages.slice(0, 3).join(", ")}${browserInfo.languages.length > 3 ? "..." : ""})`}
+                  />
+                  <DetailRow
+                    label="Screen"
+                    value={`${browserInfo.screenWidth}×${browserInfo.screenHeight} @ ${browserInfo.screenColorDepth}-bit`}
+                  />
+                  <DetailRow
+                    label="Viewport"
+                    value={`${browserInfo.viewportWidth}×${browserInfo.viewportHeight}`}
+                  />
+                  <DetailRow
+                    label="Device Pixel Ratio"
+                    value={`${browserInfo.devicePixelRatio}x`}
+                  />
+                  <DetailRow
+                    label="Touch Support"
+                    value={browserInfo.touchSupport ? "Yes" : "No"}
+                  />
+                  <DetailRow
+                    label="Online"
+                    value={
+                      browserInfo.onlineStatus ? (
                         <span className="flex items-center gap-1 text-green-700">
-                          <CheckCircle2 className="h-4 w-4" />
-                          Enabled
+                          <CheckCircle2 className="h-3 w-3" />
+                          Yes
                         </span>
                       ) : (
-                        <span className="flex items-center gap-1 text-muted-foreground">
-                          <XCircle className="h-4 w-4" />
-                          Disabled
+                        <span className="flex items-center gap-1 text-red-700">
+                          <XCircle className="h-3 w-3" />
+                          No
                         </span>
                       )
                     }
                   />
-                </CardContent>
-              </Card>
-            )}
+                  <DetailRow
+                    label="Cookies"
+                    value={browserInfo.cookiesEnabled ? "Enabled" : "Disabled"}
+                  />
+                  {browserInfo.hardwareConcurrency && (
+                    <DetailRow label="CPU Cores" value={browserInfo.hardwareConcurrency} />
+                  )}
+                  {browserInfo.deviceMemory && (
+                    <DetailRow label="Device Memory" value={`${browserInfo.deviceMemory} GB`} />
+                  )}
+                </>
+              ) : (
+                <div className="space-y-2">
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-3/4" />
+                  <Skeleton className="h-4 w-1/2" />
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
-            {/* Server Info */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Clock className="h-5 w-5" />
-                  Server Information
-                </CardTitle>
-                <CardDescription>Authentication and server details</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <DetailRow
-                  label="Runtime Mode"
-                  value={
-                    <Badge variant={data.runtime_mode === "wasm" ? "default" : "outline"}>
-                      {data.runtime_mode === "wasm" ? "Browser (WASM)" : "Server"}
-                    </Badge>
-                  }
-                />
-                <DetailRow
-                  label="Auth Method"
-                  value={<Badge variant="outline">{data.auth_method}</Badge>}
-                />
-                <DetailRow
-                  label="Server Time"
-                  value={new Date(data.server_time).toLocaleString()}
-                />
-                <DetailRow label="Your Timezone" value={browserInfo?.timezone ?? "Loading..."} />
-                <DetailRow
-                  label="UTC Offset"
-                  value={
-                    browserInfo
-                      ? `UTC${browserInfo.timezoneOffset >= 0 ? "-" : "+"}${Math.abs(browserInfo.timezoneOffset / 60)}`
-                      : "Loading..."
-                  }
-                />
-              </CardContent>
-            </Card>
-          </div>
+          {/* Storage Info */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <HardDrive className="h-5 w-5" />
+                Storage Information
+              </CardTitle>
+              <CardDescription>Browser storage status and usage</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {storageInfo ? (
+                <>
+                  {/* localStorage */}
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">localStorage</span>
+                      {storageInfo.localStorage.available ? (
+                        <Badge variant="outline" className="text-green-700">
+                          Available
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-red-700">
+                          Unavailable
+                        </Badge>
+                      )}
+                    </div>
+                    {storageInfo.localStorage.available && (
+                      <div className="grid grid-cols-2 gap-2 text-sm">
+                        <span className="text-muted-foreground">Keys:</span>
+                        <span>{storageInfo.localStorage.keyCount}</span>
+                        <span className="text-muted-foreground">Size:</span>
+                        <span>{formatBytes(storageInfo.localStorage.estimatedSize)}</span>
+                      </div>
+                    )}
+                  </div>
 
-          {/* Browser & Storage Info */}
-          <div className="grid gap-6 lg:grid-cols-2">
-            {/* Browser Info */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Monitor className="h-5 w-5" />
-                  Browser Information
-                </CardTitle>
-                <CardDescription>Client environment details</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {browserInfo ? (
-                  <>
-                    <DetailRow
-                      label="User Agent"
-                      value={
-                        <span className="break-all text-xs font-mono" title={browserInfo.userAgent}>
-                          {browserInfo.userAgent}
+                  {/* sessionStorage */}
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">sessionStorage</span>
+                      {storageInfo.sessionStorage.available ? (
+                        <Badge variant="outline" className="text-green-700">
+                          Available
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-red-700">
+                          Unavailable
+                        </Badge>
+                      )}
+                    </div>
+                    {storageInfo.sessionStorage.available && (
+                      <div className="grid grid-cols-2 gap-2 text-sm">
+                        <span className="text-muted-foreground">Keys:</span>
+                        <span>{storageInfo.sessionStorage.keyCount}</span>
+                        <span className="text-muted-foreground">Size:</span>
+                        <span>{formatBytes(storageInfo.sessionStorage.estimatedSize)}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* IndexedDB */}
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">IndexedDB</span>
+                      {storageInfo.indexedDB.available ? (
+                        <Badge variant="outline" className="text-green-700">
+                          Available
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-red-700">
+                          Unavailable
+                        </Badge>
+                      )}
+                    </div>
+                    {storageInfo.indexedDB.available && (
+                      <div className="grid grid-cols-2 gap-2 text-sm">
+                        <span className="text-muted-foreground">Databases:</span>
+                        <span>
+                          {storageInfo.indexedDB.databases.length > 0
+                            ? storageInfo.indexedDB.databases.join(", ")
+                            : "None"}
                         </span>
-                      }
-                    />
-                    <DetailRow label="Platform" value={browserInfo.platform} />
-                    <DetailRow
-                      label="Language"
-                      value={`${browserInfo.language} (${browserInfo.languages.slice(0, 3).join(", ")}${browserInfo.languages.length > 3 ? "..." : ""})`}
-                    />
-                    <DetailRow
-                      label="Screen"
-                      value={`${browserInfo.screenWidth}×${browserInfo.screenHeight} @ ${browserInfo.screenColorDepth}-bit`}
-                    />
-                    <DetailRow
-                      label="Viewport"
-                      value={`${browserInfo.viewportWidth}×${browserInfo.viewportHeight}`}
-                    />
-                    <DetailRow
-                      label="Device Pixel Ratio"
-                      value={`${browserInfo.devicePixelRatio}x`}
-                    />
-                    <DetailRow
-                      label="Touch Support"
-                      value={browserInfo.touchSupport ? "Yes" : "No"}
-                    />
-                    <DetailRow
-                      label="Online"
-                      value={
-                        browserInfo.onlineStatus ? (
-                          <span className="flex items-center gap-1 text-green-700">
-                            <CheckCircle2 className="h-3 w-3" />
-                            Yes
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-1 text-red-700">
-                            <XCircle className="h-3 w-3" />
-                            No
-                          </span>
-                        )
-                      }
-                    />
-                    <DetailRow
-                      label="Cookies"
-                      value={browserInfo.cookiesEnabled ? "Enabled" : "Disabled"}
-                    />
-                    {browserInfo.hardwareConcurrency && (
-                      <DetailRow label="CPU Cores" value={browserInfo.hardwareConcurrency} />
+                      </div>
                     )}
-                    {browserInfo.deviceMemory && (
-                      <DetailRow label="Device Memory" value={`${browserInfo.deviceMemory} GB`} />
-                    )}
-                  </>
-                ) : (
-                  <div className="space-y-2">
-                    <Skeleton className="h-4 w-full" />
-                    <Skeleton className="h-4 w-3/4" />
-                    <Skeleton className="h-4 w-1/2" />
                   </div>
-                )}
-              </CardContent>
-            </Card>
 
-            {/* Storage Info */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <HardDrive className="h-5 w-5" />
-                  Storage Information
-                </CardTitle>
-                <CardDescription>Browser storage status and usage</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                {storageInfo ? (
-                  <>
-                    {/* localStorage */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium">localStorage</span>
-                        {storageInfo.localStorage.available ? (
-                          <Badge variant="outline" className="text-green-700">
-                            Available
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" className="text-red-700">
-                            Unavailable
-                          </Badge>
-                        )}
-                      </div>
-                      {storageInfo.localStorage.available && (
-                        <div className="grid grid-cols-2 gap-2 text-sm">
-                          <span className="text-muted-foreground">Keys:</span>
-                          <span>{storageInfo.localStorage.keyCount}</span>
-                          <span className="text-muted-foreground">Size:</span>
-                          <span>{formatBytes(storageInfo.localStorage.estimatedSize)}</span>
-                        </div>
+                  {/* OPFS */}
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">OPFS</span>
+                      {storageInfo.opfs.available ? (
+                        <Badge variant="outline" className="text-green-700">
+                          Available
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-red-700">
+                          Unavailable
+                        </Badge>
                       )}
                     </div>
-
-                    {/* sessionStorage */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium">sessionStorage</span>
-                        {storageInfo.sessionStorage.available ? (
-                          <Badge variant="outline" className="text-green-700">
-                            Available
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" className="text-red-700">
-                            Unavailable
-                          </Badge>
-                        )}
-                      </div>
-                      {storageInfo.sessionStorage.available && (
-                        <div className="grid grid-cols-2 gap-2 text-sm">
-                          <span className="text-muted-foreground">Keys:</span>
-                          <span>{storageInfo.sessionStorage.keyCount}</span>
-                          <span className="text-muted-foreground">Size:</span>
-                          <span>{formatBytes(storageInfo.sessionStorage.estimatedSize)}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* IndexedDB */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium">IndexedDB</span>
-                        {storageInfo.indexedDB.available ? (
-                          <Badge variant="outline" className="text-green-700">
-                            Available
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" className="text-red-700">
-                            Unavailable
-                          </Badge>
-                        )}
-                      </div>
-                      {storageInfo.indexedDB.available && (
-                        <div className="grid grid-cols-2 gap-2 text-sm">
-                          <span className="text-muted-foreground">Databases:</span>
-                          <span>
-                            {storageInfo.indexedDB.databases.length > 0
-                              ? storageInfo.indexedDB.databases.join(", ")
-                              : "None"}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* OPFS */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium">OPFS</span>
-                        {storageInfo.opfs.available ? (
-                          <Badge variant="outline" className="text-green-700">
-                            Available
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" className="text-red-700">
-                            Unavailable
-                          </Badge>
-                        )}
-                      </div>
-                      {storageInfo.opfs.available && (
-                        <div className="grid grid-cols-2 gap-2 text-sm">
-                          <span className="text-muted-foreground">Files:</span>
-                          <span>{storageInfo.opfs.fileCount}</span>
-                          <span className="text-muted-foreground">Size:</span>
-                          <span>{formatBytes(storageInfo.opfs.totalBytes)}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Origin Storage Quota */}
-                    {(storageInfo.originUsage !== null || storageInfo.originQuota !== null) && (
-                      <div className="space-y-2">
-                        <span className="text-sm font-medium">Origin Storage Quota</span>
-                        <div className="grid grid-cols-2 gap-2 text-sm">
-                          {storageInfo.originUsage !== null && (
-                            <>
-                              <span className="text-muted-foreground">Usage:</span>
-                              <span>{formatBytes(storageInfo.originUsage)}</span>
-                            </>
-                          )}
-                          {storageInfo.originQuota !== null && (
-                            <>
-                              <span className="text-muted-foreground">Quota:</span>
-                              <span>{formatBytes(storageInfo.originQuota)}</span>
-                            </>
-                          )}
-                        </div>
+                    {storageInfo.opfs.available && (
+                      <div className="grid grid-cols-2 gap-2 text-sm">
+                        <span className="text-muted-foreground">Files:</span>
+                        <span>{storageInfo.opfs.fileCount}</span>
+                        <span className="text-muted-foreground">Size:</span>
+                        <span>{formatBytes(storageInfo.opfs.totalBytes)}</span>
                       </div>
                     )}
-                  </>
-                ) : (
-                  <div className="space-y-2">
-                    <Skeleton className="h-4 w-full" />
-                    <Skeleton className="h-4 w-3/4" />
-                    <Skeleton className="h-4 w-1/2" />
                   </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+
+                  {/* Origin Storage Quota */}
+                  {(storageInfo.originUsage !== null || storageInfo.originQuota !== null) && (
+                    <div className="space-y-2">
+                      <span className="text-sm font-medium">Origin Storage Quota</span>
+                      <div className="grid grid-cols-2 gap-2 text-sm">
+                        {storageInfo.originUsage !== null && (
+                          <>
+                            <span className="text-muted-foreground">Usage:</span>
+                            <span>{formatBytes(storageInfo.originUsage)}</span>
+                          </>
+                        )}
+                        {storageInfo.originQuota !== null && (
+                          <>
+                            <span className="text-muted-foreground">Quota:</span>
+                            <span>{formatBytes(storageInfo.originQuota)}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="space-y-2">
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-3/4" />
+                  <Skeleton className="h-4 w-1/2" />
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
-      )}
+      </div>
     </div>
   );
 }
