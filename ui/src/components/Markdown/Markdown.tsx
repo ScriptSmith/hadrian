@@ -1,6 +1,9 @@
 import { useRef, useEffect } from "react";
 import { Streamdown, type MermaidOptions } from "streamdown";
 import { createCodePlugin } from "@streamdown/code";
+import { math } from "@streamdown/math";
+import { mermaid } from "@streamdown/mermaid";
+import "katex/dist/katex.min.css";
 
 import { cn } from "@/utils/cn";
 import { usePreferences } from "@/preferences/PreferencesProvider";
@@ -50,7 +53,7 @@ export function Markdown({ content, className }: MarkdownProps) {
         className
       )}
     >
-      <Streamdown plugins={{ code }} mermaid={mermaidOptions}>
+      <Streamdown plugins={{ code, math, mermaid }} mermaid={mermaidOptions}>
         {content}
       </Streamdown>
     </div>

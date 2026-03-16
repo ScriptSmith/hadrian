@@ -1,5 +1,8 @@
 import { Streamdown, type MermaidOptions } from "streamdown";
 import { createCodePlugin } from "@streamdown/code";
+import { math } from "@streamdown/math";
+import { mermaid } from "@streamdown/mermaid";
+import "katex/dist/katex.min.css";
 import { memo } from "react";
 
 import { cn } from "@/utils/cn";
@@ -81,7 +84,7 @@ function StreamingMarkdownComponent({ content, isStreaming, className }: Streami
       )}
     >
       <Streamdown
-        plugins={{ code }}
+        plugins={{ code, math, mermaid }}
         mermaid={mermaidOptions}
         mode={isStreaming ? "streaming" : "static"}
         isAnimating={isStreaming}

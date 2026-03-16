@@ -5,6 +5,8 @@
 
 /* Streamdown styles */
 @source "../node_modules/streamdown/dist/*.js";
+@source "../node_modules/@streamdown/mermaid/dist/*.js";
+@source "../node_modules/@streamdown/math/dist/*.js";
 
 /* Design System CSS Variables */
 @layer base {
