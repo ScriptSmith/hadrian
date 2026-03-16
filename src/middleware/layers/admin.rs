@@ -1036,7 +1036,7 @@ async fn validate_bearer_token(
     };
 
     let validator =
-        crate::auth::jwt::JwtValidator::with_client(jwt_config, state.http_client.clone());
+        crate::auth::jwt::JwtValidator::with_client(jwt_config, state.http_client.clone())?;
 
     let claims = validator.validate(token).await?;
 

@@ -23,7 +23,7 @@ const NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(6
 /// Maximum number of negative cache entries before eviction kicks in.
 /// Prevents unbounded memory growth from attacker-controlled JWT issuers.
 #[cfg(feature = "sso")]
-const MAX_NEGATIVE_CACHE_ENTRIES: usize = 10_000;
+const MAX_NEGATIVE_CACHE_ENTRIES: usize = 1_000;
 
 /// Internal state behind the single `RwLock`.
 struct RegistryInner {
@@ -94,7 +94,7 @@ impl GatewayJwtRegistry {
             super::fetch_jwks_uri(discovery_url, http_client, allow_loopback, allow_private)
                 .await?;
         let jwt_config = build_jwt_config_from_sso(issuer, client_id, &jwks_url, config);
-        let validator = Arc::new(JwtValidator::with_client(jwt_config, http_client.clone()));
+        let validator = Arc::new(JwtValidator::with_client(jwt_config, http_client.clone())?);
 
         // Single write lock: remove old issuer index, insert validator, update index
         let mut inner = self.inner.write().await;
@@ -318,7 +318,7 @@ mod tests {
             allowed_algorithms: vec![JwtAlgorithm::RS256],
         };
 
-        let validator = Arc::new(JwtValidator::new(config));
+        let validator = Arc::new(JwtValidator::new(config).unwrap());
         {
             let mut inner = registry.inner.write().await;
             inner.validators.insert(org_id, validator);
@@ -357,17 +357,20 @@ mod tests {
         let org2 = Uuid::new_v4();
 
         let make_validator = || {
-            Arc::new(JwtValidator::new(JwtAuthConfig {
-                issuer: issuer.to_string(),
-                audience: OneOrMany::One("test".to_string()),
-                jwks_url: "https://shared-idp.example.com/jwks".to_string(),
-                jwks_refresh_secs: 3600,
-                identity_claim: "sub".to_string(),
-                org_claim: None,
-                additional_claims: vec![],
-                allow_expired: false,
-                allowed_algorithms: vec![JwtAlgorithm::RS256],
-            }))
+            Arc::new(
+                JwtValidator::new(JwtAuthConfig {
+                    issuer: issuer.to_string(),
+                    audience: OneOrMany::One("test".to_string()),
+                    jwks_url: "https://shared-idp.example.com/jwks".to_string(),
+                    jwks_refresh_secs: 3600,
+                    identity_claim: "sub".to_string(),
+                    org_claim: None,
+                    additional_claims: vec![],
+                    allow_expired: false,
+                    allowed_algorithms: vec![JwtAlgorithm::RS256],
+                })
+                .unwrap(),
+            )
         };
 
         {

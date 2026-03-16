@@ -114,21 +114,34 @@ pub struct JwtValidator {
 impl JwtValidator {
     /// Create a new JWT validator.
     #[allow(dead_code)] // Auth infrastructure
-    pub fn new(config: JwtAuthConfig) -> Self {
-        Self {
+    pub fn new(config: JwtAuthConfig) -> Result<Self, AuthError> {
+        if config.allowed_algorithms.is_empty() {
+            return Err(AuthError::Internal(
+                "JWT allowed_algorithms must not be empty".into(),
+            ));
+        }
+        Ok(Self {
             config,
             http_client: reqwest::Client::new(),
             jwks_cache: RwLock::new(None),
-        }
+        })
     }
 
     /// Create a new JWT validator with a custom HTTP client.
-    pub fn with_client(config: JwtAuthConfig, http_client: reqwest::Client) -> Self {
-        Self {
+    pub fn with_client(
+        config: JwtAuthConfig,
+        http_client: reqwest::Client,
+    ) -> Result<Self, AuthError> {
+        if config.allowed_algorithms.is_empty() {
+            return Err(AuthError::Internal(
+                "JWT allowed_algorithms must not be empty".into(),
+            ));
+        }
+        Ok(Self {
             config,
             http_client,
             jwks_cache: RwLock::new(None),
-        }
+        })
     }
 
     /// Validate a JWT and return the claims.
@@ -423,7 +436,7 @@ mod tests {
     #[test]
     fn test_algorithm_allowlist_rs256_allowed() {
         let config = test_config();
-        let validator = JwtValidator::new(config);
+        let validator = JwtValidator::new(config).unwrap();
 
         assert!(validator.is_algorithm_allowed(Algorithm::RS256));
     }
@@ -431,7 +444,7 @@ mod tests {
     #[test]
     fn test_algorithm_allowlist_es256_allowed() {
         let config = test_config();
-        let validator = JwtValidator::new(config);
+        let validator = JwtValidator::new(config).unwrap();
 
         assert!(validator.is_algorithm_allowed(Algorithm::ES256));
     }
@@ -439,7 +452,7 @@ mod tests {
     #[test]
     fn test_algorithm_allowlist_hs256_rejected() {
         let config = test_config();
-        let validator = JwtValidator::new(config);
+        let validator = JwtValidator::new(config).unwrap();
 
         // HS256 is not in the allowed list
         assert!(!validator.is_algorithm_allowed(Algorithm::HS256));
@@ -448,7 +461,7 @@ mod tests {
     #[test]
     fn test_algorithm_allowlist_rs384_rejected() {
         let config = test_config();
-        let validator = JwtValidator::new(config);
+        let validator = JwtValidator::new(config).unwrap();
 
         // RS384 is not in the allowed list (only RS256 and ES256)
         assert!(!validator.is_algorithm_allowed(Algorithm::RS384));
@@ -461,7 +474,7 @@ mod tests {
             allowed_algorithms: vec![JwtAlgorithm::HS256],
             ..test_config()
         };
-        let validator = JwtValidator::new(config);
+        let validator = JwtValidator::new(config).unwrap();
 
         assert!(validator.is_algorithm_allowed(Algorithm::HS256));
         assert!(!validator.is_algorithm_allowed(Algorithm::RS256));
@@ -477,7 +490,7 @@ mod tests {
             ],
             ..test_config()
         };
-        let validator = JwtValidator::new(config);
+        let validator = JwtValidator::new(config).unwrap();
 
         assert!(validator.is_algorithm_allowed(Algorithm::RS256));
         assert!(validator.is_algorithm_allowed(Algorithm::RS384));
@@ -487,16 +500,12 @@ mod tests {
     }
 
     #[test]
-    fn test_algorithm_allowlist_empty_rejects_all() {
+    fn test_algorithm_allowlist_empty_rejected() {
         let config = JwtAuthConfig {
             allowed_algorithms: vec![],
             ..test_config()
         };
-        let validator = JwtValidator::new(config);
-
-        assert!(!validator.is_algorithm_allowed(Algorithm::RS256));
-        assert!(!validator.is_algorithm_allowed(Algorithm::ES256));
-        assert!(!validator.is_algorithm_allowed(Algorithm::HS256));
+        assert!(JwtValidator::new(config).is_err());
     }
 
     #[test]
@@ -523,7 +532,7 @@ mod tests {
             allowed_algorithms: vec![JwtAlgorithm::RS256, JwtAlgorithm::ES256],
             ..test_config()
         };
-        let validator = JwtValidator::new(config);
+        let validator = JwtValidator::new(config).unwrap();
 
         let allowed = validator.allowed_algorithms();
         assert_eq!(allowed.len(), 2);

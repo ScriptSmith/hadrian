@@ -247,7 +247,7 @@ impl OidcAuthenticator {
                 *validator = Some(Arc::new(JwtValidator::with_client(
                     jwt_config,
                     self.http_client.clone(),
-                )));
+                )?));
             }
         }
 
