@@ -158,8 +158,7 @@ mod buffer {
                     let count = self
                         .dropped_count
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    // Log periodically to avoid log spam (every 100 drops)
-                    if count.is_multiple_of(100) {
+                    if count == 0 || count.is_multiple_of(10) {
                         tracing::warn!(
                             dropped_count = count + 1,
                             max_pending = self.config.max_pending_entries,
@@ -209,6 +208,15 @@ mod buffer {
                         buffer.drain_all(&mut batch);
                         if !batch.is_empty() {
                             buffer.flush_batch(&sink, &mut batch).await;
+                        }
+                        let total_dropped = buffer
+                            .dropped_count
+                            .load(std::sync::atomic::Ordering::Relaxed);
+                        if total_dropped > 0 {
+                            tracing::warn!(
+                                total_dropped,
+                                "Usage buffer dropped entries during lifetime"
+                            );
                         }
                         tracing::info!("Usage log buffer worker shutting down");
                         break;
