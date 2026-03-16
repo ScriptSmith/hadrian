@@ -18,6 +18,8 @@ import { AlphaBanner } from "@/components/AlphaBanner/AlphaBanner";
 import { Header } from "@/components/Header/Header";
 import { Sidebar } from "@/components/Sidebar/Sidebar";
 import { usePreferences } from "@/preferences/PreferencesProvider";
+import { useConfig } from "@/config/ConfigProvider";
+import { getPageConfig } from "@/components/PageGuard/PageGuard";
 import { useCommandPalette } from "@/components/CommandPalette/CommandPalette";
 import { useResizable } from "@/hooks/useResizable";
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_DEFAULT_WIDTH } from "@/preferences/types";
@@ -30,6 +32,7 @@ interface AppLayoutProps {
 export function AppLayout({ children }: AppLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { preferences, setPreferences } = usePreferences();
+  const { config } = useConfig();
   const navigate = useNavigate();
   const location = useLocation();
   const { registerCommand, unregisterCommand } = useCommandPalette();
@@ -58,9 +61,10 @@ export function AppLayout({ children }: AppLayoutProps) {
     onResizeEnd: handleResizeEnd,
   });
 
-  // Register navigation commands
+  // Register navigation commands (filtered by page visibility)
   useEffect(() => {
-    const commands = [
+    const pages = config.pages;
+    const allCommands: (Parameters<typeof registerCommand>[0] & { pageKey?: string })[] = [
       {
         id: "new-chat",
         label: "New Chat",
@@ -68,6 +72,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         icon: <Plus className="h-4 w-4" />,
         shortcut: ["N"],
         category: "Chat",
+        pageKey: "chat",
         onSelect: () => navigate("/chat"),
       },
       {
@@ -77,6 +82,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         icon: <MessageSquare className="h-4 w-4" />,
         shortcut: ["G", "C"],
         category: "Navigation",
+        pageKey: "chat",
         onSelect: () => navigate("/chat"),
       },
       {
@@ -86,6 +92,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         icon: <Palette className="h-4 w-4" />,
         shortcut: ["G", "S"],
         category: "Navigation",
+        pageKey: "studio",
         onSelect: () => navigate("/studio"),
       },
       {
@@ -95,6 +102,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         icon: <LayoutDashboard className="h-4 w-4" />,
         shortcut: ["G", "D"],
         category: "Navigation",
+        pageKey: "admin.dashboard",
         onSelect: () => navigate("/admin"),
       },
       {
@@ -103,6 +111,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         description: "Manage organizations",
         icon: <Building2 className="h-4 w-4" />,
         category: "Admin",
+        pageKey: "admin.organizations",
         onSelect: () => navigate("/admin/organizations"),
       },
       {
@@ -111,6 +120,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         description: "Manage projects",
         icon: <FolderOpen className="h-4 w-4" />,
         category: "Admin",
+        pageKey: "admin.projects",
         onSelect: () => navigate("/admin/projects"),
       },
       {
@@ -119,6 +129,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         description: "Manage users",
         icon: <Users className="h-4 w-4" />,
         category: "Admin",
+        pageKey: "admin.users",
         onSelect: () => navigate("/admin/users"),
       },
       {
@@ -127,6 +138,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         description: "Manage API keys",
         icon: <Key className="h-4 w-4" />,
         category: "Admin",
+        pageKey: "admin.api_keys",
         onSelect: () => navigate("/admin/api-keys"),
       },
       {
@@ -135,6 +147,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         description: "Configure LLM providers",
         icon: <Server className="h-4 w-4" />,
         category: "Admin",
+        pageKey: "admin.providers",
         onSelect: () => navigate("/admin/providers"),
       },
       {
@@ -143,6 +156,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         description: "Configure model pricing",
         icon: <DollarSign className="h-4 w-4" />,
         category: "Admin",
+        pageKey: "admin.pricing",
         onSelect: () => navigate("/admin/pricing"),
       },
       {
@@ -151,6 +165,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         description: "View usage statistics",
         icon: <BarChart3 className="h-4 w-4" />,
         category: "Admin",
+        pageKey: "admin.usage",
         onSelect: () => navigate("/admin/usage"),
       },
       {
@@ -159,6 +174,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         description: "Configure gateway settings",
         icon: <Settings className="h-4 w-4" />,
         category: "Admin",
+        pageKey: "admin.settings",
         onSelect: () => navigate("/admin/settings"),
       },
       {
@@ -170,12 +186,23 @@ export function AppLayout({ children }: AppLayoutProps) {
       },
     ];
 
+    const commands = allCommands.filter(
+      (cmd) => !cmd.pageKey || getPageConfig(pages, cmd.pageKey).status !== "disabled"
+    );
+
     commands.forEach(registerCommand);
 
     return () => {
       commands.forEach((cmd) => unregisterCommand(cmd.id));
     };
-  }, [navigate, registerCommand, unregisterCommand, preferences.sidebarCollapsed, setPreferences]);
+  }, [
+    navigate,
+    registerCommand,
+    unregisterCommand,
+    preferences.sidebarCollapsed,
+    setPreferences,
+    config.pages,
+  ]);
 
   return (
     <div className="flex h-screen flex-col bg-background">

@@ -4,8 +4,8 @@ use serde::Serialize;
 use crate::{
     AppState,
     config::{
-        AdminConfig, AuthMode, BrandingConfig, ChatConfig, ColorPalette, CustomFont, FontsConfig,
-        LoginConfig, UiConfig,
+        AdminConfig, AdminPagesConfig, AuthMode, BrandingConfig, ChatConfig, ColorPalette,
+        CustomFont, FontsConfig, LoginConfig, PageConfig, PageStatus, PagesConfig, UiConfig,
     },
 };
 
@@ -17,6 +17,7 @@ pub struct UiConfigResponse {
     pub admin: AdminResponse,
     pub auth: AuthResponse,
     pub sovereignty: SovereigntyUiResponse,
+    pub pages: PagesResponse,
 }
 
 #[derive(Debug, Serialize)]
@@ -155,6 +156,94 @@ pub struct CustomFieldDefResponse {
     pub description: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct PageConfigResponse {
+    pub status: PageStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notice_message: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PagesResponse {
+    pub chat: PageConfigResponse,
+    pub studio: PageConfigResponse,
+    pub projects: PageConfigResponse,
+    pub teams: PageConfigResponse,
+    pub knowledge_bases: PageConfigResponse,
+    pub api_keys: PageConfigResponse,
+    pub providers: PageConfigResponse,
+    pub usage: PageConfigResponse,
+    pub admin: AdminPagesResponse,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminPagesResponse {
+    pub dashboard: PageConfigResponse,
+    pub organizations: PageConfigResponse,
+    pub projects: PageConfigResponse,
+    pub teams: PageConfigResponse,
+    pub service_accounts: PageConfigResponse,
+    pub users: PageConfigResponse,
+    pub sso: PageConfigResponse,
+    pub session_info: PageConfigResponse,
+    pub api_keys: PageConfigResponse,
+    pub providers: PageConfigResponse,
+    pub provider_health: PageConfigResponse,
+    pub knowledge_bases: PageConfigResponse,
+    pub pricing: PageConfigResponse,
+    pub usage: PageConfigResponse,
+    pub audit_logs: PageConfigResponse,
+    pub settings: PageConfigResponse,
+}
+
+impl From<&PageConfig> for PageConfigResponse {
+    fn from(config: &PageConfig) -> Self {
+        Self {
+            status: config.status().clone(),
+            notice_message: config.notice_message().map(String::from),
+        }
+    }
+}
+
+impl From<&PagesConfig> for PagesResponse {
+    fn from(config: &PagesConfig) -> Self {
+        Self {
+            chat: PageConfigResponse::from(&config.chat),
+            studio: PageConfigResponse::from(&config.studio),
+            projects: PageConfigResponse::from(&config.projects),
+            teams: PageConfigResponse::from(&config.teams),
+            knowledge_bases: PageConfigResponse::from(&config.knowledge_bases),
+            api_keys: PageConfigResponse::from(&config.api_keys),
+            providers: PageConfigResponse::from(&config.providers),
+            usage: PageConfigResponse::from(&config.usage),
+            admin: AdminPagesResponse::from(&config.admin),
+        }
+    }
+}
+
+impl From<&AdminPagesConfig> for AdminPagesResponse {
+    fn from(config: &AdminPagesConfig) -> Self {
+        Self {
+            dashboard: PageConfigResponse::from(&config.dashboard),
+            organizations: PageConfigResponse::from(&config.organizations),
+            projects: PageConfigResponse::from(&config.projects),
+            teams: PageConfigResponse::from(&config.teams),
+            service_accounts: PageConfigResponse::from(&config.service_accounts),
+            users: PageConfigResponse::from(&config.users),
+            sso: PageConfigResponse::from(&config.sso),
+            session_info: PageConfigResponse::from(&config.session_info),
+            api_keys: PageConfigResponse::from(&config.api_keys),
+            providers: PageConfigResponse::from(&config.providers),
+            provider_health: PageConfigResponse::from(&config.provider_health),
+            knowledge_bases: PageConfigResponse::from(&config.knowledge_bases),
+            pricing: PageConfigResponse::from(&config.pricing),
+            usage: PageConfigResponse::from(&config.usage),
+            audit_logs: PageConfigResponse::from(&config.audit_logs),
+            settings: PageConfigResponse::from(&config.settings),
+        }
+    }
+}
+
 impl From<&UiConfig> for UiConfigResponse {
     fn from(config: &UiConfig) -> Self {
         Self {
@@ -165,6 +254,7 @@ impl From<&UiConfig> for UiConfigResponse {
             sovereignty: SovereigntyUiResponse {
                 custom_fields: vec![],
             },
+            pages: PagesResponse::from(&config.pages),
         }
     }
 }

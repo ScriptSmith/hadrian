@@ -21,6 +21,8 @@ import {
 import { cn } from "@/utils/cn";
 import { Button } from "@/components/Button/Button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/Tooltip/Tooltip";
+import { useConfig } from "@/config/ConfigProvider";
+import type { AdminPagesConfig } from "@/config/types";
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "@/preferences/types";
 
 interface NavItem {
@@ -28,25 +30,41 @@ interface NavItem {
   icon: typeof LayoutDashboard;
   label: string;
   exact?: boolean;
+  pageKey?: keyof AdminPagesConfig;
 }
 
 const adminNavItems: NavItem[] = [
-  { to: "/admin", icon: LayoutDashboard, label: "Dashboard", exact: true },
-  { to: "/admin/organizations", icon: Building2, label: "Organizations" },
-  { to: "/admin/projects", icon: FolderOpen, label: "Projects" },
-  { to: "/admin/teams", icon: Users2, label: "Teams" },
-  { to: "/admin/service-accounts", icon: Bot, label: "Service Accounts" },
-  { to: "/admin/users", icon: Users, label: "Users" },
-  { to: "/admin/sso", icon: Shield, label: "SSO" },
-  { to: "/session", icon: Bug, label: "Session Info" },
-  { to: "/admin/api-keys", icon: Key, label: "API Keys" },
-  { to: "/admin/providers", icon: Server, label: "Providers" },
-  { to: "/admin/provider-health", icon: Activity, label: "Provider Health" },
-  { to: "/admin/vector-stores", icon: Database, label: "Knowledge Bases" },
-  { to: "/admin/pricing", icon: DollarSign, label: "Pricing" },
-  { to: "/admin/usage", icon: BarChart3, label: "Usage" },
-  { to: "/admin/audit-logs", icon: FileText, label: "Audit Logs" },
-  { to: "/admin/settings", icon: Settings, label: "Settings" },
+  { to: "/admin", icon: LayoutDashboard, label: "Dashboard", exact: true, pageKey: "dashboard" },
+  { to: "/admin/organizations", icon: Building2, label: "Organizations", pageKey: "organizations" },
+  { to: "/admin/projects", icon: FolderOpen, label: "Projects", pageKey: "projects" },
+  { to: "/admin/teams", icon: Users2, label: "Teams", pageKey: "teams" },
+  {
+    to: "/admin/service-accounts",
+    icon: Bot,
+    label: "Service Accounts",
+    pageKey: "service_accounts",
+  },
+  { to: "/admin/users", icon: Users, label: "Users", pageKey: "users" },
+  { to: "/admin/sso", icon: Shield, label: "SSO", pageKey: "sso" },
+  { to: "/session", icon: Bug, label: "Session Info", pageKey: "session_info" },
+  { to: "/admin/api-keys", icon: Key, label: "API Keys", pageKey: "api_keys" },
+  { to: "/admin/providers", icon: Server, label: "Providers", pageKey: "providers" },
+  {
+    to: "/admin/provider-health",
+    icon: Activity,
+    label: "Provider Health",
+    pageKey: "provider_health",
+  },
+  {
+    to: "/admin/vector-stores",
+    icon: Database,
+    label: "Knowledge Bases",
+    pageKey: "knowledge_bases",
+  },
+  { to: "/admin/pricing", icon: DollarSign, label: "Pricing", pageKey: "pricing" },
+  { to: "/admin/usage", icon: BarChart3, label: "Usage", pageKey: "usage" },
+  { to: "/admin/audit-logs", icon: FileText, label: "Audit Logs", pageKey: "audit_logs" },
+  { to: "/admin/settings", icon: Settings, label: "Settings", pageKey: "settings" },
 ];
 
 export interface AdminSidebarProps {
@@ -81,6 +99,12 @@ export function AdminSidebar({
   className,
 }: AdminSidebarProps) {
   const location = useLocation();
+  const { config } = useConfig();
+
+  const visibleItems = adminNavItems.filter((item) => {
+    if (!item.pageKey) return true;
+    return config.pages.admin[item.pageKey]?.status !== "disabled";
+  });
 
   const isActive = (item: NavItem) => {
     if (item.exact) {
@@ -131,7 +155,7 @@ export function AdminSidebar({
         aria-label="Admin navigation"
       >
         <ul className="space-y-1">
-          {adminNavItems.map((item) => {
+          {visibleItems.map((item) => {
             const active = isActive(item);
             const Icon = item.icon;
 

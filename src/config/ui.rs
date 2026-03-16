@@ -28,6 +28,10 @@ pub struct UiConfig {
     /// Branding customization.
     #[serde(default)]
     pub branding: BrandingConfig,
+
+    /// Per-page visibility configuration.
+    #[serde(default)]
+    pub pages: PagesConfig,
 }
 
 impl Default for UiConfig {
@@ -39,6 +43,7 @@ impl Default for UiConfig {
             chat: ChatConfig::default(),
             admin: AdminConfig::default(),
             branding: BrandingConfig::default(),
+            pages: PagesConfig::default(),
         }
     }
 }
@@ -390,6 +395,117 @@ pub struct FooterLink {
     pub url: String,
 }
 
+/// Page visibility status.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum PageStatus {
+    #[default]
+    Enabled,
+    Disabled,
+    Notice,
+}
+
+/// Per-page configuration. Accepts either a bare string (`"enabled"`) or an inline table
+/// (`{ status = "notice", notice_message = "..." }`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum PageConfig {
+    Simple(PageStatus),
+    Detailed {
+        status: PageStatus,
+        #[serde(default)]
+        notice_message: Option<String>,
+    },
+}
+
+impl Default for PageConfig {
+    fn default() -> Self {
+        Self::Simple(PageStatus::Enabled)
+    }
+}
+
+impl PageConfig {
+    pub fn status(&self) -> &PageStatus {
+        match self {
+            Self::Simple(s) => s,
+            Self::Detailed { status, .. } => status,
+        }
+    }
+
+    pub fn notice_message(&self) -> Option<&str> {
+        match self {
+            Self::Simple(_) => None,
+            Self::Detailed { notice_message, .. } => notice_message.as_deref(),
+        }
+    }
+}
+
+/// Per-page visibility for main UI pages.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PagesConfig {
+    #[serde(default)]
+    pub chat: PageConfig,
+    #[serde(default)]
+    pub studio: PageConfig,
+    #[serde(default)]
+    pub projects: PageConfig,
+    #[serde(default)]
+    pub teams: PageConfig,
+    #[serde(default)]
+    pub knowledge_bases: PageConfig,
+    #[serde(default)]
+    pub api_keys: PageConfig,
+    #[serde(default)]
+    pub providers: PageConfig,
+    #[serde(default)]
+    pub usage: PageConfig,
+    #[serde(default)]
+    pub admin: AdminPagesConfig,
+}
+
+/// Per-page visibility for admin pages.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AdminPagesConfig {
+    #[serde(default)]
+    pub dashboard: PageConfig,
+    #[serde(default)]
+    pub organizations: PageConfig,
+    #[serde(default)]
+    pub projects: PageConfig,
+    #[serde(default)]
+    pub teams: PageConfig,
+    #[serde(default)]
+    pub service_accounts: PageConfig,
+    #[serde(default)]
+    pub users: PageConfig,
+    #[serde(default)]
+    pub sso: PageConfig,
+    #[serde(default)]
+    pub session_info: PageConfig,
+    #[serde(default)]
+    pub api_keys: PageConfig,
+    #[serde(default)]
+    pub providers: PageConfig,
+    #[serde(default)]
+    pub provider_health: PageConfig,
+    #[serde(default)]
+    pub knowledge_bases: PageConfig,
+    #[serde(default)]
+    pub pricing: PageConfig,
+    #[serde(default)]
+    pub usage: PageConfig,
+    #[serde(default)]
+    pub audit_logs: PageConfig,
+    #[serde(default)]
+    pub settings: PageConfig,
+}
+
 /// Login page customization.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
@@ -410,4 +526,54 @@ pub struct LoginConfig {
     /// Whether to show the logo on the login page (defaults to true).
     #[serde(default = "default_true")]
     pub show_logo: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simple_string_status() {
+        let toml = r#"chat = "enabled""#;
+        let pages: PagesConfig = toml::from_str(toml).unwrap();
+        assert_eq!(pages.chat.status(), &PageStatus::Enabled);
+    }
+
+    #[test]
+    fn detailed_table() {
+        let toml = r#"
+[chat]
+status = "notice"
+notice_message = "Under maintenance"
+"#;
+        let pages: PagesConfig = toml::from_str(toml).unwrap();
+        assert_eq!(pages.chat.status(), &PageStatus::Notice);
+        assert_eq!(pages.chat.notice_message(), Some("Under maintenance"));
+    }
+
+    #[test]
+    fn mixed_formats_with_defaults() {
+        let toml = r#"
+chat = "disabled"
+studio = "enabled"
+"#;
+        let pages: PagesConfig = toml::from_str(toml).unwrap();
+        assert_eq!(pages.chat.status(), &PageStatus::Disabled);
+        assert_eq!(pages.studio.status(), &PageStatus::Enabled);
+        // Omitted fields default to enabled
+        assert_eq!(pages.teams.status(), &PageStatus::Enabled);
+        assert_eq!(pages.usage.status(), &PageStatus::Enabled);
+    }
+
+    #[test]
+    fn invalid_status_fails() {
+        let toml = r#"chat = "bogus""#;
+        assert!(toml::from_str::<PagesConfig>(toml).is_err());
+    }
+
+    #[test]
+    fn unknown_field_rejected() {
+        let toml = r#"nonexistent_page = "enabled""#;
+        assert!(toml::from_str::<PagesConfig>(toml).is_err());
+    }
 }

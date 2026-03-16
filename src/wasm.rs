@@ -458,6 +458,12 @@ fn error_response(status: u16, message: &str) -> Response {
 
 /// Create a minimal config suitable for WASM browser operation.
 fn wasm_default_config() -> config::GatewayConfig {
+    use config::{PageConfig, PageStatus};
+
+    let notice = |msg: &str| PageConfig::Detailed {
+        status: PageStatus::Notice,
+        notice_message: Some(format!("This feature requires Hadrian Server. {msg}")),
+    };
     config::GatewayConfig {
         server: config::ServerConfig {
             allow_loopback_urls: true,
@@ -474,7 +480,32 @@ fn wasm_default_config() -> config::GatewayConfig {
         limits: config::LimitsConfig::default(),
         features: config::FeaturesConfig::default(),
         observability: config::ObservabilityConfig::default(),
-        ui: config::UiConfig::default(),
+        ui: config::UiConfig {
+            pages: config::PagesConfig {
+                teams: notice("Team management needs multi-user authentication."),
+                api_keys: notice("API key management is not available in browser mode."),
+                usage: notice("Usage tracking is not available in browser mode."),
+                admin: config::AdminPagesConfig {
+                    organizations: notice(
+                        "Organization management is not available in browser mode.",
+                    ),
+                    teams: notice("Team management needs multi-user authentication."),
+                    service_accounts: notice("Service accounts are not available in browser mode."),
+                    users: notice("User management is not available in browser mode."),
+                    sso: notice("Single sign-on is not available in browser mode."),
+                    api_keys: notice("API key management is not available in browser mode."),
+                    provider_health: notice(
+                        "Provider health monitoring is not available in browser mode.",
+                    ),
+                    pricing: notice("Pricing configuration requires usage tracking."),
+                    usage: notice("Usage tracking is not available in browser mode."),
+                    audit_logs: notice("Audit logging is not available in browser mode."),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        },
         docs: config::DocsConfig::default(),
         pricing: pricing::PricingConfig::default(),
         secrets: config::SecretsConfig::None,
