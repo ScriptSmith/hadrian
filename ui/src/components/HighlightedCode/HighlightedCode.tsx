@@ -138,7 +138,7 @@ function HighlightedCodeComponent({
         <div
           tabIndex={0}
           className={cn(
-            "overflow-x-auto [&_pre]:!m-0 [&_pre]:overflow-x-auto [&_code]:!font-mono",
+            "overflow-x-auto [&_pre]:!m-0 [&_pre]:overflow-x-auto [&_code]:!font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
             compact
               ? "[&_pre]:!px-2.5 [&_pre]:!py-1.5 [&_pre]:!text-[11px] [&_pre]:!leading-relaxed"
               : "[&_pre]:!p-4 [&_pre]:!text-sm",
@@ -152,7 +152,7 @@ function HighlightedCodeComponent({
         <pre
           tabIndex={0}
           className={cn(
-            "overflow-x-auto bg-muted/50 text-foreground font-mono",
+            "overflow-x-auto bg-muted/50 text-foreground font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
             compact ? "px-2.5 py-1.5 text-[11px] leading-relaxed" : "p-4 text-sm",
             showLanguage && language && !compact && "pt-8",
             maxHeight && "overflow-y-auto"
