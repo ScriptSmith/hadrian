@@ -28,7 +28,6 @@ const createVectorStoreSchema = z.object({
   name: z.string().min(1, "Name is required").max(255, "Name must be less than 255 characters"),
   description: z.string().optional(),
   embedding_model: z.string().min(1, "Embedding model is required"),
-  org_id: z.string().min(1, "Organization is required"),
 });
 
 const updateVectorStoreSchema = z.object({
@@ -43,7 +42,6 @@ const defaultValues: CreateFormValues = {
   name: "",
   description: "",
   embedding_model: "text-embedding-3-small",
-  org_id: "",
 };
 
 export interface VectorStoreFormModalProps {
@@ -95,8 +93,13 @@ export function VectorStoreFormModal({
       onEditSubmit(body);
     } else {
       const createData = data as CreateFormValues;
+      const orgId = organizations?.[0]?.id;
+      if (!orgId) throw new Error("No organization available");
       const embeddingModel = EMBEDDING_MODELS.find((m) => m.value === createData.embedding_model);
-      const owner: VectorStoreOwner = { type: "organization", organization_id: createData.org_id };
+      const owner: VectorStoreOwner = {
+        type: "organization",
+        organization_id: orgId,
+      };
       const body: CreateVectorStore = {
         name: createData.name,
         description: createData.description || null,
@@ -139,54 +142,28 @@ export function VectorStoreFormModal({
             </FormField>
 
             {!isEditing && (
-              <>
-                <FormField
-                  label="Embedding Model"
-                  htmlFor="store-embedding-model"
-                  required
-                  helpText="The model used to generate embeddings. Cannot be changed after creation."
-                  error={
-                    (form.formState.errors as { embedding_model?: { message?: string } })
-                      .embedding_model?.message
-                  }
+              <FormField
+                label="Embedding Model"
+                htmlFor="store-embedding-model"
+                required
+                helpText="The model used to generate embeddings. Cannot be changed after creation."
+                error={
+                  (form.formState.errors as { embedding_model?: { message?: string } })
+                    .embedding_model?.message
+                }
+              >
+                <select
+                  id="store-embedding-model"
+                  {...form.register("embedding_model")}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                 >
-                  <select
-                    id="store-embedding-model"
-                    {...form.register("embedding_model")}
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  >
-                    {EMBEDDING_MODELS.map((model) => (
-                      <option key={model.value} value={model.value}>
-                        {model.label} ({model.dimensions} dimensions)
-                      </option>
-                    ))}
-                  </select>
-                </FormField>
-
-                {organizations && (
-                  <FormField
-                    label="Organization"
-                    htmlFor="store-org"
-                    required
-                    error={
-                      (form.formState.errors as { org_id?: { message?: string } }).org_id?.message
-                    }
-                  >
-                    <select
-                      id="store-org"
-                      {...form.register("org_id")}
-                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    >
-                      <option value="">Select organization...</option>
-                      {organizations.map((org) => (
-                        <option key={org.id} value={org.id}>
-                          {org.name}
-                        </option>
-                      ))}
-                    </select>
-                  </FormField>
-                )}
-              </>
+                  {EMBEDDING_MODELS.map((model) => (
+                    <option key={model.value} value={model.value}>
+                      {model.label} ({model.dimensions} dimensions)
+                    </option>
+                  ))}
+                </select>
+              </FormField>
             )}
 
             {isEditing && (

@@ -27,7 +27,6 @@ const createProjectSchema = z.object({
     .min(1, "Slug is required")
     .max(100, "Slug must be 100 characters or less")
     .regex(/^[a-z0-9-]+$/, "Slug must be lowercase alphanumeric with hyphens only"),
-  organization_slug: z.string().min(1, "Organization is required"),
 });
 
 type CreateProjectForm = z.infer<typeof createProjectSchema>;
@@ -54,7 +53,6 @@ export function QuickCreateProjectModal({
     defaultValues: {
       name: "",
       slug: "",
-      organization_slug: "",
     },
   });
 
@@ -64,10 +62,9 @@ export function QuickCreateProjectModal({
       form.reset({
         name: "",
         slug: "",
-        organization_slug: organizations[0]?.slug || "",
       });
     }
-  }, [open, form, organizations]);
+  }, [open, form]);
 
   // Auto-generate slug from name
   const handleNameChange = (name: string) => {
@@ -81,12 +78,14 @@ export function QuickCreateProjectModal({
 
   const createMutation = useMutation({
     mutationFn: async (data: CreateProjectForm) => {
+      const orgSlug = organizations[0]?.slug;
+      if (!orgSlug) throw new Error("No organization available");
       const body: CreateProject = {
         name: data.name,
         slug: data.slug,
       };
       const response = await projectCreate({
-        path: { org_slug: data.organization_slug },
+        path: { org_slug: orgSlug },
         body,
       });
       if (response.error) {
@@ -138,26 +137,6 @@ export function QuickCreateProjectModal({
                 {error.message}
               </div>
             )}
-
-            <FormField
-              label="Organization"
-              htmlFor="project-org"
-              required
-              error={form.formState.errors.organization_slug?.message}
-            >
-              <select
-                id="project-org"
-                {...form.register("organization_slug")}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              >
-                <option value="">Select organization...</option>
-                {organizations.map((org) => (
-                  <option key={org.id} value={org.slug}>
-                    {org.name}
-                  </option>
-                ))}
-              </select>
-            </FormField>
 
             <FormField
               label="Name"
