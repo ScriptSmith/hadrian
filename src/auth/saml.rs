@@ -158,6 +158,15 @@ impl SamlAuthenticator {
             )));
         }
 
+        // SSRF validation: block private IPs, loopback, and cloud metadata endpoints
+        let url_opts = crate::validation::UrlValidationOptions {
+            allow_loopback: false,
+            allow_private: false,
+        };
+        crate::validation::validate_base_url_opts(metadata_url, url_opts).map_err(|e| {
+            AuthError::Internal(format!("SAML metadata URL failed SSRF validation: {e}"))
+        })?;
+
         let response = self
             .http_client
             .get(metadata_url)
