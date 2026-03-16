@@ -12,7 +12,7 @@ use crate::{
         error::{DbError, DbResult},
         repos::{
             Cursor, CursorDirection, ListParams, ListResult, PageCursors, PromptRepo,
-            cursor_from_row,
+            cursor_from_row, truncate_to_millis,
         },
     },
     models::{CreatePrompt, Prompt, PromptOwnerType, UpdatePrompt},
@@ -118,7 +118,7 @@ impl SqlitePromptRepo {
 impl PromptRepo for SqlitePromptRepo {
     async fn create(&self, input: CreatePrompt) -> DbResult<Prompt> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         let owner_type = input.owner.owner_type();
         let owner_id = input.owner.owner_id();
 
@@ -305,7 +305,7 @@ impl PromptRepo for SqlitePromptRepo {
             return self.get_by_id(id).await?.ok_or(DbError::NotFound);
         }
 
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         let mut set_clauses = vec!["updated_at = ?"];
         if has_name {
@@ -359,7 +359,7 @@ impl PromptRepo for SqlitePromptRepo {
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         let result = query(
             r#"

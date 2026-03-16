@@ -10,7 +10,7 @@ use crate::{
         error::{DbError, DbResult},
         repos::{
             Cursor, CursorDirection, ListParams, ListResult, PageCursors, UserDeletionResult,
-            UserRepo, cursor_from_row,
+            UserRepo, cursor_from_row, truncate_to_millis,
         },
     },
     models::{
@@ -213,7 +213,7 @@ impl SqliteUserRepo {
 impl UserRepo for SqliteUserRepo {
     async fn create(&self, input: CreateUser) -> DbResult<User> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query(
             r#"
@@ -351,7 +351,7 @@ impl UserRepo for SqliteUserRepo {
     }
 
     async fn update(&self, id: Uuid, input: UpdateUser) -> DbResult<User> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         let result = query(
             r#"
@@ -383,7 +383,7 @@ impl UserRepo for SqliteUserRepo {
         role: &str,
         source: MembershipSource,
     ) -> DbResult<()> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query(
             r#"
@@ -577,7 +577,7 @@ impl UserRepo for SqliteUserRepo {
         role: &str,
         source: MembershipSource,
     ) -> DbResult<()> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query(
             r#"
@@ -1162,7 +1162,7 @@ mod tests {
 
     async fn create_org(pool: &SqlitePool, slug: &str) -> Uuid {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         sqlx::query(
             r#"
             INSERT INTO organizations (id, slug, name, created_at, updated_at)
@@ -1182,7 +1182,7 @@ mod tests {
 
     async fn create_project(pool: &SqlitePool, org_id: Uuid, slug: &str) -> Uuid {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         sqlx::query(
             r#"
             INSERT INTO projects (id, org_id, slug, name, created_at, updated_at)

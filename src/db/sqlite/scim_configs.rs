@@ -10,7 +10,7 @@ use super::{
 use crate::{
     db::{
         error::{DbError, DbResult},
-        repos::OrgScimConfigRepo,
+        repos::{OrgScimConfigRepo, truncate_to_millis},
     },
     models::{CreateOrgScimConfig, OrgScimConfig, OrgScimConfigWithHash, UpdateOrgScimConfig},
 };
@@ -66,7 +66,7 @@ impl OrgScimConfigRepo for SqliteOrgScimConfigRepo {
         token_prefix: &str,
     ) -> DbResult<OrgScimConfig> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query(
             r#"
@@ -180,7 +180,7 @@ impl OrgScimConfigRepo for SqliteOrgScimConfigRepo {
             .revoke_api_keys_on_deactivate
             .unwrap_or(current.revoke_api_keys_on_deactivate);
 
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query(
             r#"
@@ -229,7 +229,7 @@ impl OrgScimConfigRepo for SqliteOrgScimConfigRepo {
         token_hash: &str,
         token_prefix: &str,
     ) -> DbResult<OrgScimConfig> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         let result = query(
             r#"
@@ -253,7 +253,7 @@ impl OrgScimConfigRepo for SqliteOrgScimConfigRepo {
     }
 
     async fn update_token_last_used(&self, id: Uuid) -> DbResult<()> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query("UPDATE org_scim_configs SET token_last_used_at = ? WHERE id = ?")
             .bind(now)

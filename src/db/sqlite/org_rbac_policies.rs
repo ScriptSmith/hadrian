@@ -11,7 +11,7 @@ use crate::{
         error::{DbError, DbResult},
         repos::{
             Cursor, CursorDirection, ListParams, ListResult, OrgRbacPolicyRepo, PageCursors,
-            cursor_from_row,
+            cursor_from_row, truncate_to_millis,
         },
     },
     models::{
@@ -244,7 +244,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
         created_by: Option<Uuid>,
     ) -> DbResult<OrgRbacPolicy> {
         let id = Uuid::new_v4();
-        let now: DateTime<Utc> = Utc::now();
+        let now: DateTime<Utc> = truncate_to_millis(Utc::now());
 
         let policy = OrgRbacPolicy {
             id,
@@ -506,7 +506,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
 
         // Increment version
         policy.version += 1;
-        policy.updated_at = Utc::now();
+        policy.updated_at = truncate_to_millis(Utc::now());
 
         let mut tx = begin(&self.pool).await?;
 
@@ -552,7 +552,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
-        let now = Utc::now();
+        let now = truncate_to_millis(Utc::now());
 
         // Soft-delete by setting deleted_at timestamp
         let result = query(
@@ -621,7 +621,7 @@ impl OrgRbacPolicyRepo for SqliteOrgRbacPolicyRepo {
 
         // Create the rolled-back policy with incremented version
         let new_version = current_policy.version + 1;
-        let now = Utc::now();
+        let now = truncate_to_millis(Utc::now());
 
         let policy = OrgRbacPolicy {
             id: current_policy.id,

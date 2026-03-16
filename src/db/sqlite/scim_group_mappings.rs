@@ -12,6 +12,7 @@ use crate::{
         error::{DbError, DbResult},
         repos::{
             Cursor, CursorDirection, ListParams, ListResult, PageCursors, ScimGroupMappingRepo,
+            truncate_to_millis,
         },
     },
     models::{
@@ -75,7 +76,7 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
         input: CreateScimGroupMapping,
     ) -> DbResult<ScimGroupMapping> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query(
             r#"
@@ -330,7 +331,7 @@ impl ScimGroupMappingRepo for SqliteScimGroupMappingRepo {
             Some(v) => v, // Some(Some(name)) or Some(None)
             None => current.display_name.clone(),
         };
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query(
             "UPDATE scim_group_mappings SET team_id = ?, display_name = ?, updated_at = ? WHERE id = ?",

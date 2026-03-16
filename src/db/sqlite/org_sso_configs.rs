@@ -8,7 +8,7 @@ use super::{
 use crate::{
     db::{
         error::{DbError, DbResult},
-        repos::OrgSsoConfigRepo,
+        repos::{OrgSsoConfigRepo, truncate_to_millis},
     },
     models::{
         CreateOrgSsoConfig, OrgSsoConfig, OrgSsoConfigWithSecret, SsoEnforcementMode,
@@ -117,7 +117,7 @@ impl OrgSsoConfigRepo for SqliteOrgSsoConfigRepo {
         saml_sp_private_key_ref: Option<&str>,
     ) -> DbResult<OrgSsoConfig> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         let scopes_str = input.scopes.join(" ");
         let allowed_domains_json = if input.allowed_email_domains.is_empty() {
@@ -363,7 +363,7 @@ impl OrgSsoConfigRepo for SqliteOrgSsoConfigRepo {
         client_secret_key: Option<&str>,
         saml_sp_private_key_ref: Option<&str>,
     ) -> DbResult<OrgSsoConfig> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         // Fetch existing record to use as fallback for optional fields
         let existing = self.get_by_id(id).await?.ok_or(DbError::NotFound)?;
@@ -709,7 +709,7 @@ mod tests {
 
     async fn create_test_org(pool: &SqlitePool, slug: &str) -> Uuid {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         sqlx::query(
             "INSERT INTO organizations (id, slug, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
         )
@@ -726,7 +726,7 @@ mod tests {
 
     async fn create_test_team(pool: &SqlitePool, org_id: Uuid, slug: &str) -> Uuid {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         sqlx::query(
             "INSERT INTO teams (id, org_id, slug, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
         )

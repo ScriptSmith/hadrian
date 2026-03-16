@@ -10,7 +10,7 @@ use crate::{
         error::{DbError, DbResult},
         repos::{
             Cursor, CursorDirection, ListParams, ListResult, PageCursors, SsoGroupMappingRepo,
-            cursor_from_row,
+            cursor_from_row, truncate_to_millis,
         },
     },
     models::{CreateSsoGroupMapping, SsoGroupMapping, UpdateSsoGroupMapping},
@@ -117,7 +117,7 @@ impl SsoGroupMappingRepo for SqliteSsoGroupMappingRepo {
         input: CreateSsoGroupMapping,
     ) -> DbResult<SsoGroupMapping> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query(
             r#"
@@ -323,7 +323,7 @@ impl SsoGroupMappingRepo for SqliteSsoGroupMappingRepo {
             return self.get_by_id(id).await?.ok_or(DbError::NotFound);
         }
 
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         let mut set_clauses = vec!["updated_at = ?"];
         if has_idp_group {
@@ -501,7 +501,7 @@ mod tests {
 
     async fn create_test_org(pool: &SqlitePool, slug: &str) -> Uuid {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         sqlx::query(
             "INSERT INTO organizations (id, slug, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
         )
@@ -518,7 +518,7 @@ mod tests {
 
     async fn create_test_team(pool: &SqlitePool, org_id: Uuid, slug: &str) -> Uuid {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         sqlx::query(
             "INSERT INTO teams (id, org_id, slug, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
         )

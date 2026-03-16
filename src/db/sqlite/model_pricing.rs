@@ -10,7 +10,7 @@ use crate::{
         error::{DbError, DbResult},
         repos::{
             Cursor, CursorDirection, ListParams, ListResult, ModelPricingRepo, PageCursors,
-            cursor_from_row,
+            cursor_from_row, truncate_to_millis,
         },
     },
     models::{CreateModelPricing, DbModelPricing, PricingOwner, PricingSource, UpdateModelPricing},
@@ -205,7 +205,7 @@ impl SqliteModelPricingRepo {
 impl ModelPricingRepo for SqliteModelPricingRepo {
     async fn create(&self, input: CreateModelPricing) -> DbResult<DbModelPricing> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         let (owner_type, owner_id) = Self::owner_to_parts(&input.owner);
 
         query(
@@ -540,7 +540,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
     }
 
     async fn update(&self, id: Uuid, input: UpdateModelPricing) -> DbResult<DbModelPricing> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query(
             r#"
@@ -584,7 +584,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
 
     async fn upsert(&self, input: CreateModelPricing) -> DbResult<DbModelPricing> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         let (owner_type, owner_id) = Self::owner_to_parts(&input.owner);
 
         // Use INSERT ... ON CONFLICT DO UPDATE for atomic upsert
@@ -690,7 +690,7 @@ impl ModelPricingRepo for SqliteModelPricingRepo {
             return Ok(0);
         }
 
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         let count = entries.len();
 
         let mut tx = begin(&self.pool).await?;

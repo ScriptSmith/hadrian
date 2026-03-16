@@ -8,7 +8,10 @@ use super::{
 use crate::{
     db::{
         error::{DbError, DbResult},
-        repos::{Cursor, CursorDirection, FilesRepo, ListParams, ListResult, PageCursors},
+        repos::{
+            Cursor, CursorDirection, FilesRepo, ListParams, ListResult, PageCursors,
+            truncate_to_millis,
+        },
     },
     models::{CreateFile, File, FilePurpose, FileStatus, OBJECT_TYPE_FILE, VectorStoreOwnerType},
 };
@@ -32,7 +35,7 @@ impl SqliteFilesRepo {
 impl FilesRepo for SqliteFilesRepo {
     async fn create_file(&self, input: CreateFile) -> DbResult<File> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query(
             r#"

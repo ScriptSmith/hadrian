@@ -10,7 +10,7 @@ use crate::{
         error::{DbError, DbResult},
         repos::{
             Cursor, CursorDirection, ListParams, ListResult, PageCursors, ProjectRepo,
-            cursor_from_row,
+            cursor_from_row, truncate_to_millis,
         },
     },
     models::{CreateProject, Project, UpdateProject},
@@ -102,7 +102,7 @@ impl SqliteProjectRepo {
 impl ProjectRepo for SqliteProjectRepo {
     async fn create(&self, org_id: Uuid, input: CreateProject) -> DbResult<Project> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query(
             r#"
@@ -324,7 +324,7 @@ impl ProjectRepo for SqliteProjectRepo {
             return self.get_by_id(id).await?.ok_or(DbError::NotFound);
         }
 
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         // Build dynamic update query
         let mut set_clauses = vec!["updated_at = ?"];
@@ -362,7 +362,7 @@ impl ProjectRepo for SqliteProjectRepo {
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         let result = query(
             r#"
@@ -442,7 +442,7 @@ mod tests {
     /// Create a test organization and return its ID
     async fn create_test_org(pool: &SqlitePool, slug: &str) -> Uuid {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         sqlx::query(
             r#"
             INSERT INTO organizations (id, slug, name, created_at, updated_at)

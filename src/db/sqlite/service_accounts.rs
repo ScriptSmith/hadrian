@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use chrono::SubsecRound;
 use uuid::Uuid;
 
 use super::{
@@ -11,7 +10,7 @@ use crate::{
         error::{DbError, DbResult},
         repos::{
             Cursor, CursorDirection, ListParams, ListResult, PageCursors, ServiceAccountRepo,
-            cursor_from_row,
+            cursor_from_row, truncate_to_millis,
         },
     },
     models::{CreateServiceAccount, ServiceAccount, UpdateServiceAccount},
@@ -103,7 +102,7 @@ impl SqliteServiceAccountRepo {
 impl ServiceAccountRepo for SqliteServiceAccountRepo {
     async fn create(&self, org_id: Uuid, input: CreateServiceAccount) -> DbResult<ServiceAccount> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now().trunc_subsecs(3);
+        let now = truncate_to_millis(chrono::Utc::now());
         let roles_json = Self::serialize_roles(&input.roles);
 
         query(
@@ -262,7 +261,7 @@ impl ServiceAccountRepo for SqliteServiceAccountRepo {
         // First check if the service account exists
         let existing = self.get_by_id(id).await?.ok_or(DbError::NotFound)?;
 
-        let now = chrono::Utc::now().trunc_subsecs(3);
+        let now = truncate_to_millis(chrono::Utc::now());
         let new_name = input.name.unwrap_or(existing.name);
         let new_description = input.description.or(existing.description);
         let new_roles = input.roles.unwrap_or(existing.roles);
@@ -301,7 +300,7 @@ impl ServiceAccountRepo for SqliteServiceAccountRepo {
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
-        let now = chrono::Utc::now().trunc_subsecs(3);
+        let now = truncate_to_millis(chrono::Utc::now());
 
         let result = query(
             r#"
@@ -323,7 +322,7 @@ impl ServiceAccountRepo for SqliteServiceAccountRepo {
     }
 
     async fn delete_with_api_key_revocation(&self, id: Uuid) -> DbResult<Vec<Uuid>> {
-        let now = chrono::Utc::now().trunc_subsecs(3);
+        let now = truncate_to_millis(chrono::Utc::now());
 
         let mut tx = begin(&self.pool).await?;
 
@@ -417,7 +416,7 @@ mod tests {
 
     async fn create_test_org(pool: &SqlitePool, slug: &str) -> Uuid {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         sqlx::query(
             r#"
             INSERT INTO organizations (id, slug, name, created_at, updated_at)

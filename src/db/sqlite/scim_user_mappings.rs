@@ -12,6 +12,7 @@ use crate::{
         error::{DbError, DbResult},
         repos::{
             Cursor, CursorDirection, ListParams, ListResult, PageCursors, ScimUserMappingRepo,
+            truncate_to_millis,
         },
     },
     models::{
@@ -75,7 +76,7 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
         input: CreateScimUserMapping,
     ) -> DbResult<ScimUserMapping> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query(
             r#"
@@ -336,7 +337,7 @@ impl ScimUserMappingRepo for SqliteScimUserMappingRepo {
         let current = self.get_by_id(id).await?.ok_or_else(|| DbError::NotFound)?;
 
         let active = input.active.unwrap_or(current.active);
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query("UPDATE scim_user_mappings SET active = ?, updated_at = ? WHERE id = ?")
             .bind(active as i32)

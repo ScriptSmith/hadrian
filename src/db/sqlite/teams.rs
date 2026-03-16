@@ -9,7 +9,8 @@ use crate::{
     db::{
         error::{DbError, DbResult},
         repos::{
-            Cursor, CursorDirection, ListParams, ListResult, PageCursors, TeamRepo, cursor_from_row,
+            Cursor, CursorDirection, ListParams, ListResult, PageCursors, TeamRepo,
+            cursor_from_row, truncate_to_millis,
         },
     },
     models::{
@@ -160,7 +161,7 @@ impl SqliteTeamRepo {
 impl TeamRepo for SqliteTeamRepo {
     async fn create(&self, org_id: Uuid, input: CreateTeam) -> DbResult<Team> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query(
             r#"
@@ -353,7 +354,7 @@ impl TeamRepo for SqliteTeamRepo {
 
     async fn update(&self, id: Uuid, input: UpdateTeam) -> DbResult<Team> {
         if let Some(name) = input.name {
-            let now = chrono::Utc::now();
+            let now = truncate_to_millis(chrono::Utc::now());
 
             let result = query(
                 r#"
@@ -379,7 +380,7 @@ impl TeamRepo for SqliteTeamRepo {
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         let result = query(
             r#"
@@ -405,7 +406,7 @@ impl TeamRepo for SqliteTeamRepo {
     // ========================================================================
 
     async fn add_member(&self, team_id: Uuid, input: AddTeamMember) -> DbResult<TeamMember> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query(
             r#"
@@ -714,7 +715,7 @@ mod tests {
 
     async fn create_test_org(pool: &SqlitePool, slug: &str) -> Uuid {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         sqlx::query(
             r#"
             INSERT INTO organizations (id, slug, name, created_at, updated_at)
@@ -734,7 +735,7 @@ mod tests {
 
     async fn create_test_user(pool: &SqlitePool, external_id: &str) -> Uuid {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         sqlx::query(
             r#"
             INSERT INTO users (id, external_id, email, name, created_at, updated_at)

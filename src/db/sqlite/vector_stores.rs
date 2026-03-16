@@ -11,7 +11,10 @@ use super::{
 use crate::{
     db::{
         error::{DbError, DbResult},
-        repos::{Cursor, CursorDirection, ListParams, ListResult, PageCursors, VectorStoresRepo},
+        repos::{
+            Cursor, CursorDirection, ListParams, ListResult, PageCursors, VectorStoresRepo,
+            truncate_to_millis,
+        },
     },
     models::{
         AddFileToVectorStore, ChunkingStrategy, CreateVectorStore, ExpiresAfter, FileCounts,
@@ -143,7 +146,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
 
     async fn create_vector_store(&self, input: CreateVectorStore) -> DbResult<VectorStore> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         let owner_type = input.owner.owner_type();
         let owner_id = input.owner.owner_id();
         // Generate name if not provided (OpenAI-compatible: name is optional)
@@ -680,7 +683,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         id: Uuid,
         input: UpdateVectorStore,
     ) -> DbResult<VectorStore> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         // Use IMMEDIATE transaction mode to acquire write lock before reading
         let mut conn = self.pool.acquire().await?;
@@ -789,7 +792,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
     }
 
     async fn delete_vector_store(&self, id: Uuid) -> DbResult<()> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         let result = query(
             r#"
@@ -862,7 +865,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
     }
 
     async fn touch_vector_store(&self, id: Uuid) -> DbResult<()> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         let result = query(
             r#"
@@ -891,7 +894,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         input: AddFileToVectorStore,
     ) -> DbResult<VectorStoreFile> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         let chunking_strategy_json = input
             .chunking_strategy
             .as_ref()
@@ -1116,7 +1119,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
         status: VectorStoreFileStatus,
         error: Option<FileError>,
     ) -> DbResult<()> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         let error_json = error
             .map(|e| serde_json::to_string(&e))
             .transpose()
@@ -1144,7 +1147,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
     }
 
     async fn update_vector_store_file_usage(&self, id: Uuid, usage_bytes: i64) -> DbResult<()> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         let result = query(
             r#"
@@ -1167,7 +1170,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
     }
 
     async fn remove_file_from_vector_store(&self, id: Uuid) -> DbResult<()> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         let result = query(
             r#"
@@ -1274,7 +1277,7 @@ impl VectorStoresRepo for SqliteVectorStoresRepo {
     // as chunks are stored in the vector database (pgvector/Qdrant), not the relational database.
 
     async fn update_vector_store_stats(&self, vector_store_id: Uuid) -> DbResult<()> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         // Calculate aggregate stats from files (excluding soft-deleted)
         // SQLite doesn't have jsonb_build_object, so we build the JSON string manually
@@ -1429,7 +1432,7 @@ mod tests {
     /// Helper to create a test file in the files table
     async fn create_test_file(pool: &SqlitePool, owner_id: Uuid) -> Uuid {
         let file_id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         sqlx::query(
             r#"
@@ -1939,7 +1942,7 @@ mod tests {
         content_hash: &str,
     ) -> Uuid {
         let file_id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         sqlx::query(
             r#"

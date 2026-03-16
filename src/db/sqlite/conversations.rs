@@ -9,7 +9,10 @@ use super::{
 use crate::{
     db::{
         error::{DbError, DbResult},
-        repos::{ConversationRepo, Cursor, CursorDirection, ListParams, ListResult, PageCursors},
+        repos::{
+            ConversationRepo, Cursor, CursorDirection, ListParams, ListResult, PageCursors,
+            truncate_to_millis,
+        },
     },
     models::{
         AppendMessages, Conversation, ConversationOwnerType, ConversationWithProject,
@@ -132,7 +135,7 @@ impl SqliteConversationRepo {
 impl ConversationRepo for SqliteConversationRepo {
     async fn create(&self, input: CreateConversation) -> DbResult<Conversation> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         let owner_type = input.owner.owner_type();
         let owner_id = input.owner.owner_id();
         let models_json =
@@ -354,7 +357,7 @@ impl ConversationRepo for SqliteConversationRepo {
     }
 
     async fn update(&self, id: Uuid, input: UpdateConversation) -> DbResult<Conversation> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         // Use IMMEDIATE transaction mode to acquire write lock before reading.
         // This prevents lost updates from concurrent modifications by blocking
@@ -456,7 +459,7 @@ impl ConversationRepo for SqliteConversationRepo {
     }
 
     async fn append_messages(&self, id: Uuid, input: AppendMessages) -> DbResult<Vec<Message>> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         // Use IMMEDIATE transaction mode to acquire write lock before reading.
         // This prevents lost messages from concurrent appends by blocking
@@ -523,7 +526,7 @@ impl ConversationRepo for SqliteConversationRepo {
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         let result = query(
             r#"
@@ -649,7 +652,7 @@ impl ConversationRepo for SqliteConversationRepo {
     }
 
     async fn set_pin_order(&self, id: Uuid, pin_order: Option<i32>) -> DbResult<Conversation> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         // Use IMMEDIATE transaction mode to acquire write lock
         let mut conn = self.pool.acquire().await?;

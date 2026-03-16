@@ -8,7 +8,7 @@ use crate::{
         error::{DbError, DbResult},
         repos::{
             ApiKeyRepo, Cursor, CursorDirection, ListParams, ListResult, PageCursors,
-            cursor_from_row,
+            cursor_from_row, truncate_to_millis,
         },
     },
     models::{ApiKey, ApiKeyOwner, ApiKeyWithOwner, BudgetPeriod, CreateApiKey},
@@ -382,7 +382,7 @@ impl SqliteApiKeyRepo {
 impl ApiKeyRepo for SqliteApiKeyRepo {
     async fn create(&self, input: CreateApiKey, key_hash: &str) -> DbResult<ApiKey> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         // Extract first 8 characters of hash as prefix (gw_live_xxx...)
         let key_prefix = if key_hash.len() >= 8 {
@@ -493,7 +493,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
     }
 
     async fn get_by_hash(&self, key_hash: &str) -> DbResult<Option<ApiKeyWithOwner>> {
-        let now = Utc::now();
+        let now = truncate_to_millis(Utc::now());
         let row = query(
             r#"
             SELECT
@@ -923,7 +923,7 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
         grace_until: DateTime<Utc>,
     ) -> DbResult<ApiKey> {
         let new_id = Uuid::new_v4();
-        let now = Utc::now();
+        let now = truncate_to_millis(Utc::now());
 
         // Extract first 8 characters of hash as prefix
         let key_prefix = if new_key_hash.len() >= 8 {

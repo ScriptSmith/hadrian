@@ -167,6 +167,12 @@ Never expose internal paths, UUIDs, infrastructure details, or secret manager re
 
 Never return provider credentials in API responses. Never treat a secret reference as a literal value.
 
+### Cursor pagination timestamps
+
+SQLite repos that use cursor pagination **must** call `truncate_to_millis(Utc::now())` when creating
+or updating timestamps. Cursors encode at millisecond precision; without truncation, SQLite TEXT
+comparisons fail. See `src/db/repos/cursor.rs` for details.
+
 ### Security defaults
 
 Fail-closed: invalid credentials = 401, `fail_on_evaluation_error` = true, IAP auth requires explicit `trusted_proxies`.

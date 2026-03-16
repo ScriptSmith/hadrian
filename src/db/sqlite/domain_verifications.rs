@@ -8,7 +8,7 @@ use super::{
 use crate::{
     db::{
         error::{DbError, DbResult},
-        repos::{DomainVerificationRepo, ListParams},
+        repos::{DomainVerificationRepo, ListParams, truncate_to_millis},
     },
     models::{
         CreateDomainVerification, DomainVerification, DomainVerificationStatus,
@@ -59,7 +59,7 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
         verification_token: &str,
     ) -> DbResult<DomainVerification> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query(
             r#"
@@ -196,7 +196,7 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
         id: Uuid,
         input: UpdateDomainVerification,
     ) -> DbResult<DomainVerification> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         // Fetch existing record
         let existing = self.get_by_id(id).await?.ok_or(DbError::NotFound)?;
@@ -321,7 +321,7 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
         verification_token: &str,
     ) -> DbResult<DomainVerification> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query(
             r#"
@@ -485,7 +485,7 @@ mod tests {
 
     async fn create_test_org(pool: &SqlitePool, slug: &str) -> Uuid {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         sqlx::query(
             "INSERT INTO organizations (id, slug, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
         )
@@ -502,7 +502,7 @@ mod tests {
 
     async fn create_test_sso_config(pool: &SqlitePool, org_id: Uuid) -> Uuid {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         sqlx::query(
             r#"
             INSERT INTO org_sso_configs (
@@ -667,7 +667,7 @@ mod tests {
             .await
             .expect("Failed to create");
 
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         let update = UpdateDomainVerification {
             status: Some(DomainVerificationStatus::Verified),
             dns_txt_record: Some(Some("hadrian-verify=token".to_string())),
@@ -740,7 +740,7 @@ mod tests {
         // Mark as verified
         let update = UpdateDomainVerification {
             status: Some(DomainVerificationStatus::Verified),
-            verified_at: Some(Some(chrono::Utc::now())),
+            verified_at: Some(Some(truncate_to_millis(chrono::Utc::now()))),
             ..Default::default()
         };
         repo.update(created.id, update)
@@ -788,7 +788,7 @@ mod tests {
         // Mark as verified
         let update = UpdateDomainVerification {
             status: Some(DomainVerificationStatus::Verified),
-            verified_at: Some(Some(chrono::Utc::now())),
+            verified_at: Some(Some(truncate_to_millis(chrono::Utc::now()))),
             ..Default::default()
         };
         repo.update(created.id, update)

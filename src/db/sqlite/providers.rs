@@ -7,6 +7,7 @@ use crate::{
         error::{DbError, DbResult},
         repos::{
             Cursor, DynamicProviderRepo, ListParams, ListResult, PageCursors, cursor_from_row,
+            truncate_to_millis,
         },
     },
     models::{CreateDynamicProvider, DynamicProvider, ProviderOwner, UpdateDynamicProvider},
@@ -298,7 +299,7 @@ impl SqliteDynamicProviderRepo {
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl DynamicProviderRepo for SqliteDynamicProviderRepo {
     async fn create(&self, id: Uuid, input: CreateDynamicProvider) -> DbResult<DynamicProvider> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
         let (owner_type, owner_id) = Self::owner_to_parts(&input.owner);
         let models = input.models.clone().unwrap_or_default();
         let models_json =
@@ -963,7 +964,7 @@ impl DynamicProviderRepo for SqliteDynamicProviderRepo {
     }
 
     async fn update(&self, id: Uuid, input: UpdateDynamicProvider) -> DbResult<DynamicProvider> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         // Build dynamic update query
         let mut updates = vec!["updated_at = ?"];

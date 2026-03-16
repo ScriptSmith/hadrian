@@ -10,7 +10,7 @@ use crate::{
         error::{DbError, DbResult},
         repos::{
             Cursor, CursorDirection, ListParams, ListResult, OrganizationRepo, PageCursors,
-            cursor_from_row,
+            cursor_from_row, truncate_to_millis,
         },
     },
     models::{CreateOrganization, Organization, UpdateOrganization},
@@ -97,7 +97,7 @@ impl SqliteOrganizationRepo {
 impl OrganizationRepo for SqliteOrganizationRepo {
     async fn create(&self, input: CreateOrganization) -> DbResult<Organization> {
         let id = Uuid::new_v4();
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         query(
             r#"
@@ -243,7 +243,7 @@ impl OrganizationRepo for SqliteOrganizationRepo {
 
     async fn update(&self, id: Uuid, input: UpdateOrganization) -> DbResult<Organization> {
         if let Some(name) = input.name {
-            let now = chrono::Utc::now();
+            let now = truncate_to_millis(chrono::Utc::now());
 
             let result = query(
                 r#"
@@ -270,7 +270,7 @@ impl OrganizationRepo for SqliteOrganizationRepo {
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
-        let now = chrono::Utc::now();
+        let now = truncate_to_millis(chrono::Utc::now());
 
         let result = query(
             r#"
