@@ -91,6 +91,10 @@ export function useConversationSync(conversationId: string | undefined) {
   const pendingNewConversationRef = useRef<string | null>(null);
   // Debounce timer for saves
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Skip the first save after loading a conversation (loading messages into the store
+  // triggers the save effect, but nothing actually changed — saving would bump updatedAt
+  // and cause the conversation to jump to the top of the sidebar)
+  const skipNextSaveRef = useRef(false);
 
   // Load conversation when it changes
   useEffect(() => {
@@ -103,10 +107,12 @@ export function useConversationSync(conversationId: string | undefined) {
       // (the message is already in state, and the conversation is empty)
       if (newId === pendingNewConversationRef.current) {
         pendingNewConversationRef.current = null;
+        skipNextSaveRef.current = false;
         return;
       }
 
       if (currentConversation) {
+        skipNextSaveRef.current = true;
         setMessages(currentConversation.messages);
         if (currentConversation.models.length > 0) {
           setSelectedModels(currentConversation.models);
@@ -114,6 +120,7 @@ export function useConversationSync(conversationId: string | undefined) {
         setDisabledModels([]);
         clearSelectedBestResponses();
       } else {
+        skipNextSaveRef.current = false;
         clearMessages();
         clearSelectedBestResponses();
       }
@@ -125,6 +132,13 @@ export function useConversationSync(conversationId: string | undefined) {
   useEffect(() => {
     if (isStreaming || !currentConversationId || messages.length === 0) return;
     if (loadedConversationIdRef.current !== currentConversationId) return;
+
+    // After loading a conversation, the messages store changes which triggers this effect.
+    // Skip that first save to avoid bumping updatedAt (which reorders the sidebar).
+    if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false;
+      return;
+    }
 
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
