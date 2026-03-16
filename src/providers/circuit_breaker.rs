@@ -43,6 +43,8 @@ use crate::{
     observability::metrics,
 };
 
+const MAX_CAS_RETRIES: usize = 100;
+
 /// Circuit breaker state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
@@ -174,7 +176,7 @@ impl CircuitBreaker {
             return;
         }
 
-        loop {
+        for _ in 0..MAX_CAS_RETRIES {
             let packed = self.state_and_counter.load(Ordering::Acquire);
             let (state, counter) = unpack_state(packed);
 
@@ -241,6 +243,7 @@ impl CircuitBreaker {
                 _ => return,
             }
         }
+        warn!(provider = %self.provider_name, "Circuit breaker: CAS contention limit reached in record_success");
     }
 
     /// Record a failed request.
@@ -249,7 +252,7 @@ impl CircuitBreaker {
             return;
         }
 
-        loop {
+        for _ in 0..MAX_CAS_RETRIES {
             let packed = self.state_and_counter.load(Ordering::Acquire);
             let (state, counter) = unpack_state(packed);
 
@@ -298,6 +301,7 @@ impl CircuitBreaker {
                 _ => return,
             }
         }
+        warn!(provider = %self.provider_name, "Circuit breaker: CAS contention limit reached in record_failure");
     }
 
     /// Get the current state of the circuit breaker.
