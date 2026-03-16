@@ -92,6 +92,7 @@ export interface UseAudioPlaybackReturn {
 export function useAudioPlayback(): UseAudioPlaybackReturn {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const blobUrlRef = useRef<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const [state, setState] = useState<PlaybackState>("idle");
   const [currentTime, setCurrentTime] = useState(0);
@@ -101,6 +102,8 @@ export function useAudioPlayback(): UseAudioPlaybackReturn {
 
   // Cleanup blob URL and audio element
   const cleanup = useCallback(() => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.src = "";
@@ -121,35 +124,66 @@ export function useAudioPlayback(): UseAudioPlaybackReturn {
   const getAudio = useCallback(() => {
     if (!audioRef.current) {
       audioRef.current = new Audio();
+      abortControllerRef.current = new AbortController();
+      const { signal } = abortControllerRef.current;
 
-      // Set up event listeners
-      audioRef.current.addEventListener("timeupdate", () => {
-        setCurrentTime(audioRef.current?.currentTime ?? 0);
-      });
+      // Throttle timeupdate with requestAnimationFrame
+      let rafId: number | null = null;
+      audioRef.current.addEventListener(
+        "timeupdate",
+        () => {
+          if (rafId !== null) return;
+          rafId = requestAnimationFrame(() => {
+            setCurrentTime(audioRef.current?.currentTime ?? 0);
+            rafId = null;
+          });
+        },
+        { signal }
+      );
 
-      audioRef.current.addEventListener("loadedmetadata", () => {
-        setDuration(audioRef.current?.duration ?? 0);
-      });
+      audioRef.current.addEventListener(
+        "loadedmetadata",
+        () => {
+          setDuration(audioRef.current?.duration ?? 0);
+        },
+        { signal }
+      );
 
-      audioRef.current.addEventListener("ended", () => {
-        setState("idle");
-        setCurrentTime(0);
-      });
+      audioRef.current.addEventListener(
+        "ended",
+        () => {
+          setState("idle");
+          setCurrentTime(0);
+        },
+        { signal }
+      );
 
-      audioRef.current.addEventListener("error", () => {
-        setState("error");
-        setError("Failed to play audio");
-      });
+      audioRef.current.addEventListener(
+        "error",
+        () => {
+          setState("error");
+          setError("Failed to play audio");
+        },
+        { signal }
+      );
 
-      audioRef.current.addEventListener("play", () => {
-        setState("playing");
-      });
+      audioRef.current.addEventListener(
+        "play",
+        () => {
+          setState("playing");
+        },
+        { signal }
+      );
 
-      audioRef.current.addEventListener("pause", () => {
-        if (audioRef.current && !audioRef.current.ended) {
-          setState("paused");
-        }
-      });
+      audioRef.current.addEventListener(
+        "pause",
+        () => {
+          if (audioRef.current && !audioRef.current.ended) {
+            setState("paused");
+          }
+        },
+        { signal }
+      );
     }
     return audioRef.current;
   }, []);
