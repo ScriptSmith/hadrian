@@ -20,7 +20,7 @@ interface UserMenuProps {
 }
 
 export function UserMenu({ className }: UserMenuProps) {
-  const { user, logout, isAuthenticated } = useAuth();
+  const { user, logout, isAuthenticated, method } = useAuth();
   const { config } = useConfig();
   const navigate = useNavigate();
   const visibleNavItems = navItems.filter((item) => {
@@ -29,6 +29,7 @@ export function UserMenu({ className }: UserMenuProps) {
   });
   const showAdmin = config?.admin.enabled && hasAdminAccess(user);
   const allNavItems = showAdmin ? [...visibleNavItems, adminNavItem] : visibleNavItems;
+  const isAnonymous = method === "none";
 
   if (!isAuthenticated) {
     return null;
@@ -53,7 +54,7 @@ export function UserMenu({ className }: UserMenuProps) {
         )}
         aria-label="User menu"
       >
-        {initials || <User className="h-4 w-4" />}
+        {isAnonymous ? <User className="h-4 w-4" /> : initials || <User className="h-4 w-4" />}
       </DropdownTrigger>
       <DropdownContent align="end" className="w-56">
         <DropdownLabel>
