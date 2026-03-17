@@ -866,19 +866,13 @@ mod tests {
         let pool = create_test_pool().await;
         let repo = SqliteOrganizationRepo::new(pool);
 
-        // Create 3 orgs
-        let org1 = repo
-            .create(create_org_input("cursor-test-1", "Org 1"))
-            .await
-            .expect("Failed to create org 1");
-        let org2 = repo
-            .create(create_org_input("cursor-test-2", "Org 2"))
-            .await
-            .expect("Failed to create org 2");
-        let _org3 = repo
-            .create(create_org_input("cursor-test-3", "Org 3"))
-            .await
-            .expect("Failed to create org 3");
+        // Create 3 orgs (all may share the same millisecond timestamp,
+        // so sort order is by created_at DESC, id DESC — not creation order)
+        for i in 1..=3 {
+            repo.create(create_org_input(&format!("cursor-test-{i}"), &format!("Org {i}")))
+                .await
+                .unwrap_or_else(|_| panic!("Failed to create org {i}"));
+        }
 
         // Get first page with limit 2
         let page1 = repo
@@ -889,10 +883,13 @@ mod tests {
             .await
             .expect("Failed to list");
 
-        // Most recent orgs should be first (descending order)
-        // The next cursor should point to the last item in the result (org2)
+        assert_eq!(page1.items.len(), 2);
+
+        // Next cursor should point to the last item on this page
         let next_cursor = page1.cursors.next.expect("Should have next cursor");
-        assert_eq!(next_cursor.id, org2.id);
+        assert_eq!(next_cursor.id, page1.items[1].id);
+        // First page has no prev cursor
+        assert!(page1.cursors.prev.is_none());
 
         // Navigate to next page using cursor
         let page2 = repo
@@ -905,13 +902,16 @@ mod tests {
             .await
             .expect("Failed to list page 2");
 
-        // Should get org1 (the oldest)
+        // Should get the remaining org
         assert_eq!(page2.items.len(), 1);
-        assert_eq!(page2.items[0].id, org1.id);
+        // It should be the one not on page1
+        assert!(page1.items.iter().all(|o| o.id != page2.items[0].id));
 
-        // Prev cursor should point to first item of page2 (org1)
+        // Prev cursor should point to first item of page2
         let prev_cursor = page2.cursors.prev.expect("Should have prev cursor");
-        assert_eq!(prev_cursor.id, org1.id);
+        assert_eq!(prev_cursor.id, page2.items[0].id);
+        // Last page has no next cursor
+        assert!(page2.cursors.next.is_none());
     }
 
     #[tokio::test]
