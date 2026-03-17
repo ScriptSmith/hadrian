@@ -869,9 +869,12 @@ mod tests {
         // Create 3 orgs (all may share the same millisecond timestamp,
         // so sort order is by created_at DESC, id DESC — not creation order)
         for i in 1..=3 {
-            repo.create(create_org_input(&format!("cursor-test-{i}"), &format!("Org {i}")))
-                .await
-                .unwrap_or_else(|_| panic!("Failed to create org {i}"));
+            repo.create(create_org_input(
+                &format!("cursor-test-{i}"),
+                &format!("Org {i}"),
+            ))
+            .await
+            .unwrap_or_else(|_| panic!("Failed to create org {i}"));
         }
 
         // Get first page with limit 2
