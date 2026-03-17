@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react";
 import { MemoryRouter } from "react-router-dom";
+import { ConfigProvider } from "@/config/ConfigProvider";
 import { AdminSidebar } from "./AdminSidebar";
 import { useResizable } from "@/hooks/useResizable";
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "@/preferences/types";
@@ -16,9 +17,11 @@ const meta: Meta<typeof AdminSidebar> = {
       const initialEntries = context.parameters.initialEntries || ["/admin"];
       return (
         <MemoryRouter initialEntries={initialEntries}>
-          <div style={{ height: "100vh", display: "flex" }}>
-            <Story />
-          </div>
+          <ConfigProvider>
+            <div style={{ height: "100vh", display: "flex" }}>
+              <Story />
+            </div>
+          </ConfigProvider>
         </MemoryRouter>
       );
     },
