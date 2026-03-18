@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { Server, Shield, Users, Zap, Eye, Code, Brain } from "lucide-react";
 import { StoryEmbed } from "@/components/story-embed";
@@ -235,7 +236,7 @@ export default function HomePage() {
       <section className="relative overflow-hidden border-b bg-gradient-to-b from-fd-background to-fd-muted/30 py-16 md:py-24">
         <div className="mx-auto max-w-6xl px-4">
           <div className="text-center">
-            <img
+            <Image
               src={`${process.env.DOCS_BASE_PATH || ""}/icon.svg`}
               alt=""
               width={96}
