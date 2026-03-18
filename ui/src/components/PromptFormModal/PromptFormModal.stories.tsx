@@ -2,6 +2,8 @@ import type { Meta, StoryObj } from "@storybook/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { http, HttpResponse, delay } from "msw";
 import { useState } from "react";
+import { AuthProvider } from "@/auth";
+import { ConfigProvider } from "@/config/ConfigProvider";
 import { PromptFormModal } from "./PromptFormModal";
 import { Button } from "../Button/Button";
 import type { Organization, Template } from "@/api/generated/types.gen";
@@ -57,7 +59,11 @@ const meta: Meta<typeof PromptFormModal> = {
   decorators: [
     (Story) => (
       <QueryClientProvider client={queryClient}>
-        <Story />
+        <ConfigProvider>
+          <AuthProvider>
+            <Story />
+          </AuthProvider>
+        </ConfigProvider>
       </QueryClientProvider>
     ),
   ],
