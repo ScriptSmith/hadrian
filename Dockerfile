@@ -136,6 +136,23 @@ COPY --from=builder /usr/src/hadrian/migrations_sqlx /app/migrations_sqlx
 # Create data directory for SQLite (will be overwritten by volume mount)
 RUN mkdir -p /app/data
 
+# Create default config (can be overridden by mounting a volume at /app/config/hadrian.toml)
+RUN mkdir -p /app/config && cat > /app/config/hadrian.toml <<'EOF'
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[database]
+type = "sqlite"
+path = "/app/data/hadrian.db"
+
+[cache]
+type = "memory"
+
+[ui]
+enabled = true
+EOF
+
 # Expose port
 EXPOSE 8080
 

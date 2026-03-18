@@ -133,6 +133,65 @@ function getDownloadUrl(os: OS, profile: Profile, libc: Libc): string {
   return `https://github.com/ScriptSmith/hadrian/releases/latest/download/hadrian-${target}-${profile}.${ext}`;
 }
 
+const dockerSimpleCommand = [
+  "docker run -p 8080:8080 \\",
+  "  -v hadrian-data:/app/data \\",
+  "  ghcr.io/scriptsmith/hadrian",
+].join("\n");
+
+const dockerConfigCommand = [
+  "cat <<'EOF' > hadrian.toml",
+  "[server]",
+  'host = "0.0.0.0"',
+  "port = 8080",
+  "",
+  "[database]",
+  'type = "sqlite"',
+  'path = "/app/data/hadrian.db"',
+  "",
+  "[cache]",
+  'type = "memory"',
+  "",
+  "[ui]",
+  "enabled = true",
+  "EOF",
+  "",
+  "docker run -p 8080:8080 \\",
+  "  -v ./hadrian.toml:/app/config/hadrian.toml:ro \\",
+  "  -v hadrian-data:/app/data \\",
+  "  ghcr.io/scriptsmith/hadrian",
+].join("\n");
+
+function CommandBlock({ command, label }: { command: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(command);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <div>
+      {label && (
+        <div className="border-b border-fd-border px-4 py-2">
+          <span className="text-xs font-medium text-fd-muted-foreground">{label}</span>
+        </div>
+      )}
+      <div className="relative">
+        <pre className="overflow-x-auto whitespace-pre-wrap break-all p-4 pr-12 text-sm">
+          <code className="text-fd-foreground">{command}</code>
+        </pre>
+        <button
+          onClick={handleCopy}
+          className="absolute right-3 top-3 rounded-md p-1.5 text-fd-muted-foreground transition-colors hover:bg-fd-muted hover:text-fd-foreground"
+          aria-label="Copy command"
+        >
+          {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ToggleGroup<T extends string>({
   options,
   value,
@@ -184,8 +243,6 @@ export function QuickStartSelector() {
   const [os, setOs] = useState<OS>("linux-x86_64");
   const [profile, setProfile] = useState<Profile>("standard");
   const [libc, setLibc] = useState<Libc>("musl");
-  const [copied, setCopied] = useState(false);
-
   const isLinux = os === "linux-x86_64" || os === "linux-arm64";
   const disabledProfiles = getDisabledProfiles(os, libc);
   const disabledLibcs = os === "linux-arm64" ? new Set<Libc>(["musl"]) : undefined;
@@ -212,12 +269,6 @@ export function QuickStartSelector() {
 
   const command = getInstallCommand(method, os, profile, libc);
   const downloadUrl = method === "binary" ? getDownloadUrl(os, profile, libc) : null;
-
-  const handleCopy = async () => {
-    await navigator.clipboard.writeText(command);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   return (
     <div className="not-prose overflow-hidden rounded-lg border border-fd-border bg-fd-card">
@@ -334,20 +385,16 @@ export function QuickStartSelector() {
             allow="clipboard-read; clipboard-write"
           />
         </div>
+      ) : method === "docker" ? (
+        <>
+          <CommandBlock command={dockerSimpleCommand} label="Run" />
+          <div className="border-t border-fd-border">
+            <CommandBlock command={dockerConfigCommand} label="With configuration" />
+          </div>
+        </>
       ) : (
         <>
-          <div className="relative">
-            <pre className="overflow-x-auto whitespace-pre-wrap break-all p-4 pr-12 text-sm">
-              <code className="text-fd-foreground">{command}</code>
-            </pre>
-            <button
-              onClick={handleCopy}
-              className="absolute right-3 top-3 rounded-md p-1.5 text-fd-muted-foreground transition-colors hover:bg-fd-muted hover:text-fd-foreground"
-              aria-label="Copy command"
-            >
-              {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-            </button>
-          </div>
+          <CommandBlock command={command} />
 
           {downloadUrl && (
             <div className="border-t border-fd-border bg-fd-muted/30 px-4 py-3">

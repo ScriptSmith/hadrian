@@ -42,6 +42,14 @@ Download the latest binary from [GitHub Releases](https://github.com/ScriptSmith
 Or use Docker:
 
 ```bash
+docker run -p 8080:8080 \
+  -v hadrian-data:/app/data \
+  ghcr.io/scriptsmith/hadrian
+```
+
+To customize the configuration, create a `hadrian.toml` and mount it:
+
+```bash
 cat <<'EOF' > hadrian.toml
 [server]
 host = "0.0.0.0"
