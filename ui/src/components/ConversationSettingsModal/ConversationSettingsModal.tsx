@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Settings2, RotateCcw, Database, Save, Volume2 } from "lucide-react";
 
 import type { VectorStoreOwnerType, Voice } from "@/api/generated/types.gen";
 import { TTS_VOICES, DEFAULT_TTS_VOICE, DEFAULT_TTS_SPEED } from "@/hooks/useAudioPlayback";
+import { getDefaultSystemPrompt } from "@/utils/defaultSystemPrompt";
 import { Button } from "@/components/Button/Button";
 import type { ResponseActionConfig } from "@/components/chat-types";
 import { DEFAULT_ACTION_CONFIG } from "@/components/chat-types";
@@ -82,6 +83,14 @@ export function ConversationSettingsModal({
 }: ConversationSettingsModalProps) {
   const [promptFormOpen, setPromptFormOpen] = useState(false);
 
+  const displayedPrompt = systemPrompt || getDefaultSystemPrompt();
+  const isDefault = !systemPrompt;
+
+  const autoResize = useCallback((el: HTMLTextAreaElement) => {
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
+
   const handleSaveAsTemplate = () => {
     setPromptFormOpen(true);
   };
@@ -132,24 +141,43 @@ export function ConversationSettingsModal({
                 settings icon on each model chip.
               </p>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 px-2 gap-1 shrink-0"
-              onClick={handleSaveAsTemplate}
-              disabled={!systemPrompt.trim()}
-              title={systemPrompt.trim() ? "Save as template" : "Enter a prompt to save"}
-            >
-              <Save className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Save as Template</span>
-            </Button>
+            <div className="flex gap-1 shrink-0">
+              {!isDefault && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 gap-1"
+                  onClick={() => onSystemPromptChange("")}
+                  title="Reset to default"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Reset</span>
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-2 gap-1"
+                onClick={handleSaveAsTemplate}
+                disabled={!displayedPrompt.trim()}
+                title={displayedPrompt.trim() ? "Save as template" : "Enter a prompt to save"}
+              >
+                <Save className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Save as Template</span>
+              </Button>
+            </div>
           </div>
           <textarea
-            value={systemPrompt}
-            onChange={(e) => onSystemPromptChange(e.target.value)}
-            placeholder="Enter system instructions..."
+            ref={(el) => {
+              if (el) autoResize(el);
+            }}
+            value={displayedPrompt}
+            onChange={(e) => {
+              onSystemPromptChange(e.target.value);
+              autoResize(e.target);
+            }}
             aria-label="System prompt"
-            className="w-full min-h-[120px] rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 resize-y"
+            className={`w-full min-h-[120px] rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 resize-none ${isDefault ? "text-muted-foreground" : ""}`}
           />
         </div>
 
@@ -344,7 +372,7 @@ export function ConversationSettingsModal({
       <PromptFormModal
         open={promptFormOpen}
         onClose={() => setPromptFormOpen(false)}
-        initialContent={systemPrompt}
+        initialContent={displayedPrompt}
       />
     </Modal>
   );

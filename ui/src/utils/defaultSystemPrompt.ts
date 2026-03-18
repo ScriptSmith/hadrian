@@ -50,5 +50,5 @@ Format your responses using Markdown:
 - **Math**: ONLY use $$...$$ for equations. Do NOT ever use \\(...\\), \\[...\\], $...$ delimiters.
 - **Diagrams**: Use Mermaid code blocks for flowcharts, sequence diagrams, etc.
 
-Keep responses concise and focused. Prioritize clarity over verbosity.`;
+Keep responses concise and focused. Prefer clarity over verbosity.`;
 }
