@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { Button } from "@/components/Button/Button";
 import { Input } from "@/components/Input/Input";
@@ -17,15 +17,25 @@ const EMPTY_VARIABLE: TemplateVariable = {
   type: "text",
 };
 
+let globalKeyCounter = 0;
+
 export function TemplateVariableEditor({ variables, onChange }: TemplateVariableEditorProps) {
   const [expanded, setExpanded] = useState(variables.length > 0);
+  const keysRef = useRef<number[]>([]);
+
+  // Sync keys when variables array changes externally (e.g. form reset)
+  if (keysRef.current.length !== variables.length) {
+    keysRef.current = variables.map((_, i) => keysRef.current[i] ?? globalKeyCounter++);
+  }
 
   const addVariable = () => {
+    keysRef.current = [...keysRef.current, globalKeyCounter++];
     onChange([...variables, { ...EMPTY_VARIABLE }]);
     setExpanded(true);
   };
 
   const removeVariable = (index: number) => {
+    keysRef.current = keysRef.current.filter((_, i) => i !== index);
     onChange(variables.filter((_, i) => i !== index));
   };
 
@@ -55,7 +65,10 @@ export function TemplateVariableEditor({ variables, onChange }: TemplateVariable
           </p>
 
           {variables.map((variable, index) => (
-            <div key={index} className="space-y-2 rounded-md border bg-muted/30 p-3">
+            <div
+              key={keysRef.current[index]}
+              className="space-y-2 rounded-md border bg-muted/30 p-3"
+            >
               <div className="flex items-center justify-between">
                 <span className="text-xs font-medium text-muted-foreground">
                   Variable {index + 1}

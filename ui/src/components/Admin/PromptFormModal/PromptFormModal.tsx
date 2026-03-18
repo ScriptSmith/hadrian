@@ -85,6 +85,7 @@ export function AdminPromptFormModal({
       queryClient.invalidateQueries({ queryKey: [{ _id: "templateListByOrg" }] });
       queryClient.invalidateQueries({ queryKey: [{ _id: "templateListByTeam" }] });
       queryClient.invalidateQueries({ queryKey: [{ _id: "templateListByProject" }] });
+      queryClient.invalidateQueries({ queryKey: [{ _id: "templateListByUser" }] });
       onSaved?.(prompt);
       onClose();
     },
@@ -114,6 +115,7 @@ export function AdminPromptFormModal({
       queryClient.invalidateQueries({ queryKey: [{ _id: "templateListByOrg" }] });
       queryClient.invalidateQueries({ queryKey: [{ _id: "templateListByTeam" }] });
       queryClient.invalidateQueries({ queryKey: [{ _id: "templateListByProject" }] });
+      queryClient.invalidateQueries({ queryKey: [{ _id: "templateListByUser" }] });
       onSaved?.(prompt);
       onClose();
     },
