@@ -1,9 +1,48 @@
+export type PageStatus = "enabled" | "disabled" | "notice";
+
+export interface PageConfig {
+  status: PageStatus;
+  notice_message?: string;
+}
+
+export interface PagesConfig {
+  chat: PageConfig;
+  studio: PageConfig;
+  projects: PageConfig;
+  teams: PageConfig;
+  knowledge_bases: PageConfig;
+  api_keys: PageConfig;
+  providers: PageConfig;
+  usage: PageConfig;
+  admin: AdminPagesConfig;
+}
+
+export interface AdminPagesConfig {
+  dashboard: PageConfig;
+  organizations: PageConfig;
+  projects: PageConfig;
+  teams: PageConfig;
+  service_accounts: PageConfig;
+  users: PageConfig;
+  sso: PageConfig;
+  session_info: PageConfig;
+  api_keys: PageConfig;
+  providers: PageConfig;
+  provider_health: PageConfig;
+  knowledge_bases: PageConfig;
+  pricing: PageConfig;
+  usage: PageConfig;
+  audit_logs: PageConfig;
+  settings: PageConfig;
+}
+
 export interface UiConfig {
   branding: BrandingConfig;
   chat: ChatConfig;
   admin: AdminConfig;
   auth: AuthConfig;
   sovereignty: SovereigntyUiConfig;
+  pages: PagesConfig;
 }
 
 export interface BrandingConfig {

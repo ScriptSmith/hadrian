@@ -1,4 +1,35 @@
-import type { UiConfig } from "./types";
+import type { UiConfig, PagesConfig } from "./types";
+
+const enabledPage = { status: "enabled" as const };
+
+export const defaultPagesConfig: PagesConfig = {
+  chat: enabledPage,
+  studio: enabledPage,
+  projects: enabledPage,
+  teams: enabledPage,
+  knowledge_bases: enabledPage,
+  api_keys: enabledPage,
+  providers: enabledPage,
+  usage: enabledPage,
+  admin: {
+    dashboard: enabledPage,
+    organizations: enabledPage,
+    projects: enabledPage,
+    teams: enabledPage,
+    service_accounts: enabledPage,
+    users: enabledPage,
+    sso: enabledPage,
+    session_info: enabledPage,
+    api_keys: enabledPage,
+    providers: enabledPage,
+    provider_health: enabledPage,
+    knowledge_bases: enabledPage,
+    pricing: enabledPage,
+    usage: enabledPage,
+    audit_logs: enabledPage,
+    settings: enabledPage,
+  },
+};
 
 export const defaultConfig: UiConfig = {
   branding: {
@@ -34,6 +65,7 @@ export const defaultConfig: UiConfig = {
   sovereignty: {
     custom_fields: [],
   },
+  pages: defaultPagesConfig,
 };
 
 export function getApiBaseUrl(): string {

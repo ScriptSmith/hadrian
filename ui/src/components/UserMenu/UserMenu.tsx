@@ -12,6 +12,7 @@ import {
   DropdownTrigger,
 } from "@/components/Dropdown/Dropdown";
 import { navItems, adminNavItem } from "@/components/Header/Header";
+import { getPageConfig } from "@/components/PageGuard/PageGuard";
 import { cn } from "@/utils/cn";
 
 interface UserMenuProps {
@@ -22,8 +23,12 @@ export function UserMenu({ className }: UserMenuProps) {
   const { user, logout, isAuthenticated } = useAuth();
   const { config } = useConfig();
   const navigate = useNavigate();
+  const visibleNavItems = navItems.filter((item) => {
+    if (!item.pageKey) return true;
+    return getPageConfig(config.pages, item.pageKey).status !== "disabled";
+  });
   const showAdmin = config?.admin.enabled && hasAdminAccess(user);
-  const allNavItems = showAdmin ? [...navItems, adminNavItem] : navItems;
+  const allNavItems = showAdmin ? [...visibleNavItems, adminNavItem] : visibleNavItems;
 
   if (!isAuthenticated) {
     return null;
@@ -82,10 +87,12 @@ export function UserMenu({ className }: UserMenuProps) {
           <Settings className="mr-2 h-4 w-4" />
           Account Settings
         </DropdownItem>
-        <DropdownItem onClick={() => navigate("/session")}>
-          <Bug className="mr-2 h-4 w-4" />
-          Session Info
-        </DropdownItem>
+        {getPageConfig(config.pages, "admin.session_info").status !== "disabled" && (
+          <DropdownItem onClick={() => navigate("/session")}>
+            <Bug className="mr-2 h-4 w-4" />
+            Session Info
+          </DropdownItem>
+        )}
         <DropdownSeparator />
         <DropdownItem onClick={logout} className="text-destructive">
           <LogOut className="mr-2 h-4 w-4" />

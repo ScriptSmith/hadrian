@@ -18,6 +18,7 @@ import { ThemeToggle } from "@/components/ThemeToggle/ThemeToggle";
 import { UserMenu } from "@/components/UserMenu/UserMenu";
 import { useWasmSetup } from "@/components/WasmSetup/WasmSetupGuard";
 import { useConfig } from "@/config/ConfigProvider";
+import { getPageConfig, getFirstEnabledRoute } from "@/components/PageGuard/PageGuard";
 import { usePreferences } from "@/preferences/PreferencesProvider";
 import { useAuth, hasAdminAccess } from "@/auth";
 import { cn } from "@/utils/cn";
@@ -27,17 +28,18 @@ export interface NavItem {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   matchPrefix?: string;
+  pageKey?: string;
 }
 
 export const navItems: NavItem[] = [
-  { to: "/chat", icon: MessageSquare, label: "Chat" },
-  { to: "/studio", icon: Palette, label: "Studio" },
-  { to: "/projects", icon: FolderOpen, label: "Projects" },
-  { to: "/teams", icon: UsersRound, label: "Teams" },
-  { to: "/knowledge-bases", icon: BookOpen, label: "Knowledge" },
-  { to: "/api-keys", icon: Key, label: "API Keys" },
-  { to: "/providers", icon: Server, label: "Providers" },
-  { to: "/usage", icon: BarChart3, label: "Usage" },
+  { to: "/chat", icon: MessageSquare, label: "Chat", pageKey: "chat" },
+  { to: "/studio", icon: Palette, label: "Studio", pageKey: "studio" },
+  { to: "/projects", icon: FolderOpen, label: "Projects", pageKey: "projects" },
+  { to: "/teams", icon: UsersRound, label: "Teams", pageKey: "teams" },
+  { to: "/knowledge-bases", icon: BookOpen, label: "Knowledge", pageKey: "knowledge_bases" },
+  { to: "/api-keys", icon: Key, label: "API Keys", pageKey: "api_keys" },
+  { to: "/providers", icon: Server, label: "Providers", pageKey: "providers" },
+  { to: "/usage", icon: BarChart3, label: "Usage", pageKey: "usage" },
 ];
 
 export const adminNavItem: NavItem = {
@@ -66,9 +68,15 @@ export function Header({ onMenuClick, showMenuButton = false, className }: Heade
       ? config.branding.logo_dark_url
       : config?.branding.logo_url;
 
+  // Filter nav items by page visibility
+  const visibleNavItems = navItems.filter((item) => {
+    if (!item.pageKey) return true;
+    return getPageConfig(config.pages, item.pageKey).status !== "disabled";
+  });
+
   // Only show admin nav if admin is enabled AND user has admin access
   const showAdmin = config?.admin.enabled && hasAdminAccess(user);
-  const allNavItems = showAdmin ? [...navItems, adminNavItem] : navItems;
+  const allNavItems = showAdmin ? [...visibleNavItems, adminNavItem] : visibleNavItems;
 
   const isActive = (item: NavItem) => {
     if (item.matchPrefix) {
@@ -92,7 +100,7 @@ export function Header({ onMenuClick, showMenuButton = false, className }: Heade
             <span className="sr-only">Toggle menu</span>
           </Button>
         )}
-        <Link to="/chat" className="flex items-center gap-2.5">
+        <Link to={getFirstEnabledRoute(config.pages)} className="flex items-center gap-2.5">
           {logoUrl ? (
             <img
               src={logoUrl}

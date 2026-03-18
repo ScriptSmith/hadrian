@@ -2,6 +2,8 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { RequireAuth, RequireAdmin } from "@/auth";
 import { AppLayout } from "@/components/AppLayout/AppLayout";
 import { AdminLayout } from "@/components/AdminLayout/AdminLayout";
+import { PageGuard, getFirstEnabledRoute } from "@/components/PageGuard/PageGuard";
+import { useConfig } from "@/config/ConfigProvider";
 import { lazy, Suspense } from "react";
 import { Spinner } from "@/components/Spinner/Spinner";
 
@@ -52,11 +54,16 @@ function PageLoader() {
   );
 }
 
+function RootRedirect() {
+  const { config } = useConfig();
+  return <Navigate to={getFirstEnabledRoute(config.pages)} replace />;
+}
+
 export function AppRoutes() {
   return (
     <Routes>
       {/* Root redirect */}
-      <Route path="/" element={<Navigate to="/chat" replace />} />
+      <Route path="/" element={<RootRedirect />} />
 
       {/* Login route */}
       <Route
@@ -91,7 +98,9 @@ export function AppRoutes() {
           path="/chat"
           element={
             <Suspense fallback={<PageLoader />}>
-              <ChatPage />
+              <PageGuard pageKey="chat" pageTitle="Chat">
+                <ChatPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -99,7 +108,9 @@ export function AppRoutes() {
           path="/chat/:conversationId"
           element={
             <Suspense fallback={<PageLoader />}>
-              <ChatPage />
+              <PageGuard pageKey="chat" pageTitle="Chat">
+                <ChatPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -109,7 +120,9 @@ export function AppRoutes() {
           path="/projects"
           element={
             <Suspense fallback={<PageLoader />}>
-              <ProjectsPage />
+              <PageGuard pageKey="projects" pageTitle="Projects">
+                <ProjectsPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -119,7 +132,9 @@ export function AppRoutes() {
           path="/projects/:orgSlug/:projectSlug"
           element={
             <Suspense fallback={<PageLoader />}>
-              <SelfServiceProjectDetailPage />
+              <PageGuard pageKey="projects" pageTitle="Projects">
+                <SelfServiceProjectDetailPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -129,7 +144,9 @@ export function AppRoutes() {
           path="/teams"
           element={
             <Suspense fallback={<PageLoader />}>
-              <TeamsPage />
+              <PageGuard pageKey="teams" pageTitle="Teams">
+                <TeamsPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -139,7 +156,9 @@ export function AppRoutes() {
           path="/knowledge-bases"
           element={
             <Suspense fallback={<PageLoader />}>
-              <KnowledgeBasesPage />
+              <PageGuard pageKey="knowledge_bases" pageTitle="Knowledge Bases">
+                <KnowledgeBasesPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -149,7 +168,9 @@ export function AppRoutes() {
           path="/api-keys"
           element={
             <Suspense fallback={<PageLoader />}>
-              <ApiKeysPage />
+              <PageGuard pageKey="api_keys" pageTitle="API Keys">
+                <ApiKeysPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -157,7 +178,9 @@ export function AppRoutes() {
           path="/api-keys/:keyId"
           element={
             <Suspense fallback={<PageLoader />}>
-              <ApiKeyDetailPage />
+              <PageGuard pageKey="api_keys" pageTitle="API Keys">
+                <ApiKeyDetailPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -167,7 +190,9 @@ export function AppRoutes() {
           path="/providers"
           element={
             <Suspense fallback={<PageLoader />}>
-              <MyProvidersPage />
+              <PageGuard pageKey="providers" pageTitle="Providers">
+                <MyProvidersPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -177,7 +202,9 @@ export function AppRoutes() {
           path="/usage"
           element={
             <Suspense fallback={<PageLoader />}>
-              <MyUsagePage />
+              <PageGuard pageKey="usage" pageTitle="Usage">
+                <MyUsagePage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -187,7 +214,9 @@ export function AppRoutes() {
           path="/studio"
           element={
             <Suspense fallback={<PageLoader />}>
-              <StudioPage />
+              <PageGuard pageKey="studio" pageTitle="Studio">
+                <StudioPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -207,7 +236,9 @@ export function AppRoutes() {
           path="/session"
           element={
             <Suspense fallback={<PageLoader />}>
-              <SessionInfoPage />
+              <PageGuard pageKey="admin.session_info" pageTitle="Session Info">
+                <SessionInfoPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -225,7 +256,9 @@ export function AppRoutes() {
           path="/admin"
           element={
             <Suspense fallback={<PageLoader />}>
-              <AdminDashboardPage />
+              <PageGuard pageKey="admin.dashboard" pageTitle="Dashboard">
+                <AdminDashboardPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -233,7 +266,9 @@ export function AppRoutes() {
           path="/admin/organizations"
           element={
             <Suspense fallback={<PageLoader />}>
-              <OrganizationsPage />
+              <PageGuard pageKey="admin.organizations" pageTitle="Organizations">
+                <OrganizationsPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -241,7 +276,9 @@ export function AppRoutes() {
           path="/admin/organizations/:slug"
           element={
             <Suspense fallback={<PageLoader />}>
-              <OrganizationDetailPage />
+              <PageGuard pageKey="admin.organizations" pageTitle="Organizations">
+                <OrganizationDetailPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -249,7 +286,9 @@ export function AppRoutes() {
           path="/admin/organizations/:orgSlug/projects/:projectSlug"
           element={
             <Suspense fallback={<PageLoader />}>
-              <ProjectDetailPage />
+              <PageGuard pageKey="admin.projects" pageTitle="Projects">
+                <ProjectDetailPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -257,7 +296,9 @@ export function AppRoutes() {
           path="/admin/users"
           element={
             <Suspense fallback={<PageLoader />}>
-              <UsersPage />
+              <PageGuard pageKey="admin.users" pageTitle="Users">
+                <UsersPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -265,7 +306,9 @@ export function AppRoutes() {
           path="/admin/users/:userId"
           element={
             <Suspense fallback={<PageLoader />}>
-              <UserDetailPage />
+              <PageGuard pageKey="admin.users" pageTitle="Users">
+                <UserDetailPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -273,7 +316,9 @@ export function AppRoutes() {
           path="/admin/sso"
           element={
             <Suspense fallback={<PageLoader />}>
-              <SsoConnectionsPage />
+              <PageGuard pageKey="admin.sso" pageTitle="SSO">
+                <SsoConnectionsPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -281,7 +326,9 @@ export function AppRoutes() {
           path="/admin/organizations/:orgSlug/sso-group-mappings"
           element={
             <Suspense fallback={<PageLoader />}>
-              <SsoGroupMappingsPage />
+              <PageGuard pageKey="admin.sso" pageTitle="SSO">
+                <SsoGroupMappingsPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -289,7 +336,9 @@ export function AppRoutes() {
           path="/admin/organizations/:orgSlug/sso-config"
           element={
             <Suspense fallback={<PageLoader />}>
-              <OrgSsoConfigPage />
+              <PageGuard pageKey="admin.sso" pageTitle="SSO">
+                <OrgSsoConfigPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -297,7 +346,9 @@ export function AppRoutes() {
           path="/admin/organizations/:orgSlug/scim-config"
           element={
             <Suspense fallback={<PageLoader />}>
-              <ScimConfigPage />
+              <PageGuard pageKey="admin.sso" pageTitle="SSO">
+                <ScimConfigPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -305,7 +356,9 @@ export function AppRoutes() {
           path="/admin/organizations/:orgSlug/rbac-policies"
           element={
             <Suspense fallback={<PageLoader />}>
-              <OrgRbacPoliciesPage />
+              <PageGuard pageKey="admin.organizations" pageTitle="Organizations">
+                <OrgRbacPoliciesPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -313,7 +366,9 @@ export function AppRoutes() {
           path="/admin/api-keys"
           element={
             <Suspense fallback={<PageLoader />}>
-              <AdminApiKeysPage />
+              <PageGuard pageKey="admin.api_keys" pageTitle="API Keys">
+                <AdminApiKeysPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -321,7 +376,9 @@ export function AppRoutes() {
           path="/admin/providers"
           element={
             <Suspense fallback={<PageLoader />}>
-              <ProvidersPage />
+              <PageGuard pageKey="admin.providers" pageTitle="Providers">
+                <ProvidersPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -329,7 +386,9 @@ export function AppRoutes() {
           path="/admin/provider-health"
           element={
             <Suspense fallback={<PageLoader />}>
-              <ProviderHealthPage />
+              <PageGuard pageKey="admin.provider_health" pageTitle="Provider Health">
+                <ProviderHealthPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -337,7 +396,9 @@ export function AppRoutes() {
           path="/admin/provider-health/:providerName"
           element={
             <Suspense fallback={<PageLoader />}>
-              <ProviderDetailPage />
+              <PageGuard pageKey="admin.provider_health" pageTitle="Provider Health">
+                <ProviderDetailPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -345,7 +406,9 @@ export function AppRoutes() {
           path="/admin/pricing"
           element={
             <Suspense fallback={<PageLoader />}>
-              <PricingPage />
+              <PageGuard pageKey="admin.pricing" pageTitle="Pricing">
+                <PricingPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -353,7 +416,9 @@ export function AppRoutes() {
           path="/admin/usage"
           element={
             <Suspense fallback={<PageLoader />}>
-              <UsagePage />
+              <PageGuard pageKey="admin.usage" pageTitle="Usage">
+                <UsagePage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -361,7 +426,9 @@ export function AppRoutes() {
           path="/admin/projects"
           element={
             <Suspense fallback={<PageLoader />}>
-              <AdminProjectsPage />
+              <PageGuard pageKey="admin.projects" pageTitle="Projects">
+                <AdminProjectsPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -369,7 +436,9 @@ export function AppRoutes() {
           path="/admin/teams"
           element={
             <Suspense fallback={<PageLoader />}>
-              <AdminTeamsPage />
+              <PageGuard pageKey="admin.teams" pageTitle="Teams">
+                <AdminTeamsPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -377,7 +446,9 @@ export function AppRoutes() {
           path="/admin/service-accounts"
           element={
             <Suspense fallback={<PageLoader />}>
-              <ServiceAccountsPage />
+              <PageGuard pageKey="admin.service_accounts" pageTitle="Service Accounts">
+                <ServiceAccountsPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -385,7 +456,9 @@ export function AppRoutes() {
           path="/admin/organizations/:orgSlug/teams/:teamSlug"
           element={
             <Suspense fallback={<PageLoader />}>
-              <TeamDetailPage />
+              <PageGuard pageKey="admin.teams" pageTitle="Teams">
+                <TeamDetailPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -393,7 +466,9 @@ export function AppRoutes() {
           path="/admin/settings"
           element={
             <Suspense fallback={<PageLoader />}>
-              <SettingsPage />
+              <PageGuard pageKey="admin.settings" pageTitle="Settings">
+                <SettingsPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -401,7 +476,9 @@ export function AppRoutes() {
           path="/admin/audit-logs"
           element={
             <Suspense fallback={<PageLoader />}>
-              <AuditLogsPage />
+              <PageGuard pageKey="admin.audit_logs" pageTitle="Audit Logs">
+                <AuditLogsPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -409,7 +486,9 @@ export function AppRoutes() {
           path="/admin/vector-stores"
           element={
             <Suspense fallback={<PageLoader />}>
-              <VectorStoresPage />
+              <PageGuard pageKey="admin.knowledge_bases" pageTitle="Knowledge Bases">
+                <VectorStoresPage />
+              </PageGuard>
             </Suspense>
           }
         />
@@ -417,14 +496,16 @@ export function AppRoutes() {
           path="/admin/vector-stores/:vectorStoreId"
           element={
             <Suspense fallback={<PageLoader />}>
-              <VectorStoreDetailPage />
+              <PageGuard pageKey="admin.knowledge_bases" pageTitle="Knowledge Bases">
+                <VectorStoreDetailPage />
+              </PageGuard>
             </Suspense>
           }
         />
       </Route>
 
-      {/* Catch all - redirect to chat */}
-      <Route path="*" element={<Navigate to="/chat" replace />} />
+      {/* Catch all - redirect to first enabled page */}
+      <Route path="*" element={<RootRedirect />} />
     </Routes>
   );
 }

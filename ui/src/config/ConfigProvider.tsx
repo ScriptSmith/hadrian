@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import type { UiConfig, ColorPalette, FontsConfig, CustomFont } from "./types";
-import { defaultConfig, getApiBaseUrl } from "./defaults";
+import { defaultConfig, defaultPagesConfig, getApiBaseUrl } from "./defaults";
 
 interface ConfigContextValue {
   config: UiConfig;
@@ -165,7 +165,13 @@ export function ConfigProvider({ children }: ConfigProviderProps) {
         const response = await fetch(`${apiBaseUrl}/admin/v1/ui/config`);
         if (response.ok) {
           const data = (await response.json()) as UiConfig;
-          setConfig(data);
+          // Deep-merge pages so partial server responses fill in defaults
+          const mergedPages = {
+            ...defaultPagesConfig,
+            ...data.pages,
+            admin: { ...defaultPagesConfig.admin, ...data.pages?.admin },
+          };
+          setConfig({ ...data, pages: mergedPages });
         } else {
           // Use defaults if endpoint is not available
           console.warn("UI config endpoint not available, using defaults");

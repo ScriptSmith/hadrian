@@ -15,6 +15,7 @@ import { AlphaBanner } from "@/components/AlphaBanner/AlphaBanner";
 import { Header } from "@/components/Header/Header";
 import { AdminSidebar } from "./AdminSidebar";
 import { usePreferences } from "@/preferences/PreferencesProvider";
+import { useConfig } from "@/config/ConfigProvider";
 import { useCommandPalette } from "@/components/CommandPalette/CommandPalette";
 import { useResizable } from "@/hooks/useResizable";
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_DEFAULT_WIDTH } from "@/preferences/types";
@@ -27,6 +28,7 @@ export interface AdminLayoutProps {
 export function AdminLayout({ children }: AdminLayoutProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { preferences, setPreferences } = usePreferences();
+  const { config } = useConfig();
   const navigate = useNavigate();
   const { registerCommand, unregisterCommand } = useCommandPalette();
 
@@ -63,9 +65,10 @@ export function AdminLayout({ children }: AdminLayoutProps) {
     [setPreferences]
   );
 
-  // Register admin navigation commands
+  // Register admin navigation commands (filtered by page visibility)
   useEffect(() => {
-    const commands = [
+    const adminPages = config.pages.admin;
+    const allCommands: (Parameters<typeof registerCommand>[0] & { pageKey?: string })[] = [
       {
         id: "admin-go-dashboard",
         label: "Go to Dashboard",
@@ -73,6 +76,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
         icon: <LayoutDashboard className="h-4 w-4" />,
         shortcut: ["G", "D"],
         category: "Admin",
+        pageKey: "dashboard",
         onSelect: () => navigate("/admin"),
       },
       {
@@ -81,6 +85,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
         description: "Manage organizations",
         icon: <Building2 className="h-4 w-4" />,
         category: "Admin",
+        pageKey: "organizations",
         onSelect: () => navigate("/admin/organizations"),
       },
       {
@@ -89,6 +94,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
         description: "Manage projects",
         icon: <FolderOpen className="h-4 w-4" />,
         category: "Admin",
+        pageKey: "projects",
         onSelect: () => navigate("/admin/projects"),
       },
       {
@@ -97,6 +103,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
         description: "Manage users",
         icon: <Users className="h-4 w-4" />,
         category: "Admin",
+        pageKey: "users",
         onSelect: () => navigate("/admin/users"),
       },
       {
@@ -105,6 +112,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
         description: "Manage API keys",
         icon: <Key className="h-4 w-4" />,
         category: "Admin",
+        pageKey: "api_keys",
         onSelect: () => navigate("/admin/api-keys"),
       },
       {
@@ -113,6 +121,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
         description: "Configure LLM providers",
         icon: <Server className="h-4 w-4" />,
         category: "Admin",
+        pageKey: "providers",
         onSelect: () => navigate("/admin/providers"),
       },
       {
@@ -121,6 +130,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
         description: "Configure model pricing",
         icon: <DollarSign className="h-4 w-4" />,
         category: "Admin",
+        pageKey: "pricing",
         onSelect: () => navigate("/admin/pricing"),
       },
       {
@@ -129,6 +139,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
         description: "View usage statistics",
         icon: <BarChart3 className="h-4 w-4" />,
         category: "Admin",
+        pageKey: "usage",
         onSelect: () => navigate("/admin/usage"),
       },
       {
@@ -137,6 +148,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
         description: "Configure gateway settings",
         icon: <Settings className="h-4 w-4" />,
         category: "Admin",
+        pageKey: "settings",
         onSelect: () => navigate("/admin/settings"),
       },
       {
@@ -148,12 +160,24 @@ export function AdminLayout({ children }: AdminLayoutProps) {
       },
     ];
 
+    const commands = allCommands.filter(
+      (cmd) =>
+        !cmd.pageKey || adminPages[cmd.pageKey as keyof typeof adminPages]?.status !== "disabled"
+    );
+
     commands.forEach(registerCommand);
 
     return () => {
       commands.forEach((cmd) => unregisterCommand(cmd.id));
     };
-  }, [navigate, registerCommand, unregisterCommand, adminSidebarCollapsed, handleCollapsedChange]);
+  }, [
+    navigate,
+    registerCommand,
+    unregisterCommand,
+    adminSidebarCollapsed,
+    handleCollapsedChange,
+    config.pages,
+  ]);
 
   return (
     <div className="flex h-screen flex-col bg-background">
