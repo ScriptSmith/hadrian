@@ -74,18 +74,24 @@ function FileStatusBadge({ status }: { status: VectorStoreFileStatus }) {
   );
 }
 
-/** Supported file extensions for vector store uploads */
+/** Supported file extensions for vector store uploads — must match backend is_supported_file_type() */
 const VALID_FILE_EXTENSIONS = [
+  // Plain text
   ".txt",
   ".md",
+  ".markdown",
   ".json",
   ".csv",
   ".xml",
   ".html",
+  ".htm",
+  // Code files
+  ".rs",
   ".py",
   ".js",
   ".ts",
-  ".rs",
+  ".jsx",
+  ".tsx",
   ".go",
   ".java",
   ".c",
@@ -101,10 +107,46 @@ const VALID_FILE_EXTENSIONS = [
   ".r",
   ".sql",
   ".sh",
+  ".bash",
+  ".zsh",
+  ".ps1",
   ".yaml",
   ".yml",
   ".toml",
   ".ini",
+  ".cfg",
+  ".conf",
+  ".properties",
+  ".env",
+  ".dockerfile",
+  ".makefile",
+  // Documentation
+  ".rst",
+  ".adoc",
+  ".tex",
+  ".latex",
+  // Rich documents (extracted via Kreuzberg)
+  ".pdf",
+  ".docx",
+  ".doc",
+  ".xlsx",
+  ".xls",
+  ".pptx",
+  ".ppt",
+  ".odt",
+  ".ods",
+  ".odp",
+  ".rtf",
+  ".epub",
+  // Images (OCR extraction via Kreuzberg + Tesseract)
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".tiff",
+  ".tif",
+  ".bmp",
+  ".webp",
+  ".gif",
 ];
 
 /** Modal for adding files to vector store */
@@ -322,7 +364,7 @@ function AddFileModal({
                 multiple
                 className="hidden"
                 onChange={handleFileSelect}
-                accept=".txt,.md,.json,.csv,.xml,.html,.py,.js,.ts,.rs,.go,.java,.c,.cpp,.h,.hpp,.cs,.rb,.php,.swift,.kt,.scala,.r,.sql,.sh,.yaml,.yml,.toml,.ini"
+                accept={VALID_FILE_EXTENSIONS.join(",")}
                 aria-label="Upload files"
               />
               {selectedFiles.length > 0 ? (
@@ -395,7 +437,7 @@ function AddFileModal({
               )}
             </div>
             <p className="text-xs text-muted-foreground mt-2">
-              Supported: text, markdown, JSON, CSV, XML, HTML, and common code files
+              Supported: PDF, Office documents, text, code files, images, and more
             </p>
           </div>
 
