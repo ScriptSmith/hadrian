@@ -25,7 +25,6 @@ mod projects;
 pub mod prometheus_client;
 #[cfg(feature = "prometheus")]
 pub mod prometheus_parser;
-mod prompts;
 pub mod provider_metrics;
 mod providers;
 mod reranker;
@@ -37,6 +36,7 @@ mod service_accounts;
 #[cfg(feature = "sso")]
 mod sso_group_mappings;
 mod teams;
+mod templates;
 mod usage;
 mod users;
 mod vector_stores;
@@ -82,7 +82,6 @@ pub use org_rbac_policies::{OrgRbacPolicyError, OrgRbacPolicyService};
 pub use org_sso_configs::{OrgSsoConfigError, OrgSsoConfigService, OrgSsoConfigWithClientSecret};
 pub use organizations::OrganizationService;
 pub use projects::ProjectService;
-pub use prompts::PromptService;
 pub use provider_metrics::{
     ProviderMetricsError, ProviderMetricsService, ProviderStats, ProviderStatsHistorical,
     StatsGranularity, TimeBucketStats,
@@ -103,6 +102,7 @@ pub use service_accounts::ServiceAccountService;
 #[cfg(feature = "sso")]
 pub use sso_group_mappings::SsoGroupMappingService;
 pub use teams::TeamService;
+pub use templates::TemplateService;
 pub use usage::UsageService;
 pub use users::UserService;
 pub use vector_stores::VectorStoresService;
@@ -128,7 +128,7 @@ pub struct Services {
     pub usage: UsageService,
     pub model_pricing: ModelPricingService,
     pub conversations: ConversationService,
-    pub prompts: PromptService,
+    pub templates: TemplateService,
     pub audit_logs: AuditLogService,
     pub access_reviews: AccessReviewService,
     pub vector_stores: VectorStoresService,
@@ -163,7 +163,7 @@ impl Services {
             usage: UsageService::new(db.clone()),
             model_pricing: ModelPricingService::new(db.clone()),
             conversations: ConversationService::new(db.clone()),
-            prompts: PromptService::new(db.clone()),
+            templates: TemplateService::new(db.clone()),
             audit_logs: AuditLogService::new(db.clone()),
             access_reviews: AccessReviewService::new(db.clone()),
             vector_stores: VectorStoresService::new(db.clone()),
@@ -200,7 +200,7 @@ impl Services {
             usage: UsageService::new(db.clone()),
             model_pricing: ModelPricingService::new(db.clone()),
             conversations: ConversationService::new(db.clone()),
-            prompts: PromptService::new(db.clone()),
+            templates: TemplateService::new(db.clone()),
             audit_logs: AuditLogService::with_event_bus(db.clone(), event_bus),
             access_reviews: AccessReviewService::new(db.clone()),
             vector_stores: VectorStoresService::new(db.clone()),

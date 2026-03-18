@@ -5926,13 +5926,13 @@
         }
       }
     },
-    "/admin/v1/organizations/{org_slug}/projects/{project_slug}/prompts": {
+    "/admin/v1/organizations/{org_slug}/projects/{project_slug}/templates": {
       "get": {
         "tags": [
-          "prompts"
+          "templates"
         ],
-        "summary": "List prompts by project",
-        "operationId": "prompt_list_by_project",
+        "summary": "List templates by project",
+        "operationId": "template_list_by_project",
         "parameters": [
           {
             "name": "org_slug",
@@ -6004,11 +6004,11 @@
         ],
         "responses": {
           "200": {
-            "description": "List of prompts",
+            "description": "List of templates",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PromptListResponse"
+                  "$ref": "#/components/schemas/TemplateListResponse"
                 }
               }
             }
@@ -6840,107 +6840,6 @@
           },
           "404": {
             "description": "Project not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/admin/v1/organizations/{org_slug}/prompts": {
-      "get": {
-        "tags": [
-          "prompts"
-        ],
-        "summary": "List prompts by organization",
-        "operationId": "prompt_list_by_org",
-        "parameters": [
-          {
-            "name": "org_slug",
-            "in": "path",
-            "description": "Organization slug",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "description": "Maximum number of results to return",
-            "required": false,
-            "schema": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "format": "int64"
-            }
-          },
-          {
-            "name": "cursor",
-            "in": "query",
-            "description": "Cursor for keyset pagination. Encoded as base64 string.",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          {
-            "name": "direction",
-            "in": "query",
-            "description": "Pagination direction: \"forward\" (default) or \"backward\".",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          {
-            "name": "include_deleted",
-            "in": "query",
-            "description": "Include soft-deleted records in results",
-            "required": false,
-            "schema": {
-              "type": [
-                "boolean",
-                "null"
-              ]
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "List of prompts",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PromptListResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid cursor or direction",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Organization not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -10364,13 +10263,13 @@
         }
       }
     },
-    "/admin/v1/organizations/{org_slug}/teams/{team_slug}/prompts": {
+    "/admin/v1/organizations/{org_slug}/teams/{team_slug}/templates": {
       "get": {
         "tags": [
-          "prompts"
+          "templates"
         ],
-        "summary": "List prompts by team",
-        "operationId": "prompt_list_by_team",
+        "summary": "List templates by team",
+        "operationId": "template_list_by_team",
         "parameters": [
           {
             "name": "org_slug",
@@ -10442,11 +10341,11 @@
         ],
         "responses": {
           "200": {
-            "description": "List of prompts",
+            "description": "List of templates",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PromptListResponse"
+                  "$ref": "#/components/schemas/TemplateListResponse"
                 }
               }
             }
@@ -11433,6 +11332,107 @@
           },
           "404": {
             "description": "Team not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/organizations/{org_slug}/templates": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "List templates by organization",
+        "operationId": "template_list_by_org",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "Organization slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of results to return",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor for keyset pagination. Encoded as base64 string.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Pagination direction: \"forward\" (default) or \"backward\".",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "description": "Include soft-deleted records in results",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor or direction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Organization not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -12591,195 +12591,6 @@
         }
       }
     },
-    "/admin/v1/prompts": {
-      "post": {
-        "tags": [
-          "prompts"
-        ],
-        "summary": "Create a prompt template",
-        "operationId": "prompt_create",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreatePrompt"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Prompt created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Prompt"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Owner not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Prompt with this name already exists",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/admin/v1/prompts/{id}": {
-      "get": {
-        "tags": [
-          "prompts"
-        ],
-        "summary": "Get a prompt by ID",
-        "operationId": "prompt_get",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Prompt ID",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Prompt found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Prompt"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Prompt not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "prompts"
-        ],
-        "summary": "Delete a prompt",
-        "operationId": "prompt_delete",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Prompt ID",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Prompt deleted"
-          },
-          "404": {
-            "description": "Prompt not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "patch": {
-        "tags": [
-          "prompts"
-        ],
-        "summary": "Update a prompt",
-        "operationId": "prompt_update",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Prompt ID",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdatePrompt"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Prompt updated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Prompt"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Prompt not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Prompt with this name already exists",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/admin/v1/providers/circuit-breakers": {
       "get": {
         "tags": [
@@ -13411,6 +13222,195 @@
           },
           "404": {
             "description": "SSO connection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/templates": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Create a template",
+        "operationId": "template_create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTemplate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Template created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Template"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Owner not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Template with this name already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/templates/{id}": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Get a template by ID",
+        "operationId": "template_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Template found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Template"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Delete a template",
+        "operationId": "template_delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Template deleted"
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Update a template",
+        "operationId": "template_update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTemplate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Template updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Template"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Template with this name already exists",
             "content": {
               "application/json": {
                 "schema": {
@@ -15427,98 +15427,6 @@
         }
       }
     },
-    "/admin/v1/users/{user_id}/prompts": {
-      "get": {
-        "tags": [
-          "prompts"
-        ],
-        "summary": "List prompts by user",
-        "operationId": "prompt_list_by_user",
-        "parameters": [
-          {
-            "name": "user_id",
-            "in": "path",
-            "description": "User ID",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "description": "Maximum number of results to return",
-            "required": false,
-            "schema": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "format": "int64"
-            }
-          },
-          {
-            "name": "cursor",
-            "in": "query",
-            "description": "Cursor for keyset pagination. Encoded as base64 string.",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          {
-            "name": "direction",
-            "in": "query",
-            "description": "Pagination direction: \"forward\" (default) or \"backward\".",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          {
-            "name": "include_deleted",
-            "in": "query",
-            "description": "Include soft-deleted records in results",
-            "required": false,
-            "schema": {
-              "type": [
-                "boolean",
-                "null"
-              ]
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "List of prompts",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PromptListResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid cursor or direction",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/admin/v1/users/{user_id}/sessions": {
       "get": {
         "tags": [
@@ -15708,6 +15616,98 @@
           },
           "404": {
             "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/users/{user_id}/templates": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "List templates by user",
+        "operationId": "template_list_by_user",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of results to return",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor for keyset pagination. Encoded as base64 string.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Pagination direction: \"forward\" (default) or \"backward\".",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "description": "Include soft-deleted records in results",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor or direction",
             "content": {
               "application/json": {
                 "schema": {
@@ -20720,6 +20720,17 @@
             "type": "object",
             "description": "**Hadrian Extension:** Provider routing configuration"
           },
+          "sovereignty_requirements": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SovereigntyRequirements",
+                "description": "**Hadrian Extension:** Per-request sovereignty requirements.\nMerged with API key requirements (most restrictive wins)."
+              }
+            ]
+          },
           "user": {
             "type": [
               "string",
@@ -20981,6 +20992,17 @@
               {
                 "$ref": "#/components/schemas/ImageSize",
                 "description": "Size of the generated images."
+              }
+            ]
+          },
+          "sovereignty_requirements": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SovereigntyRequirements",
+                "description": "**Hadrian Extension:** Per-request sovereignty requirements.\nMerged with API key requirements (most restrictive wins)."
               }
             ]
           },
@@ -21510,47 +21532,6 @@
           }
         }
       },
-      "CreatePrompt": {
-        "type": "object",
-        "description": "Request to create a new prompt",
-        "required": [
-          "owner",
-          "name",
-          "content"
-        ],
-        "properties": {
-          "content": {
-            "type": "string",
-            "description": "The actual prompt content"
-          },
-          "description": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Optional description"
-          },
-          "metadata": {
-            "type": [
-              "object",
-              "null"
-            ],
-            "description": "Optional metadata",
-            "additionalProperties": {},
-            "propertyNames": {
-              "type": "string"
-            }
-          },
-          "name": {
-            "type": "string",
-            "description": "Name of the prompt template (unique per owner)"
-          },
-          "owner": {
-            "$ref": "#/components/schemas/PromptOwner",
-            "description": "Owner of the prompt"
-          }
-        }
-      },
       "CreateResponsesPayload": {
         "type": "object",
         "description": "Create responses request (OpenAI Responses API)",
@@ -21947,6 +21928,17 @@
               }
             ]
           },
+          "sovereignty_requirements": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SovereigntyRequirements",
+                "description": "**Hadrian Extension:** Per-request sovereignty requirements.\nMerged with API key requirements (most restrictive wins)."
+              }
+            ]
+          },
           "speed": {
             "type": [
               "number",
@@ -22023,6 +22015,47 @@
           "slug": {
             "type": "string",
             "description": "URL-friendly identifier (lowercase alphanumeric with hyphens)"
+          }
+        }
+      },
+      "CreateTemplate": {
+        "type": "object",
+        "description": "Request to create a new template",
+        "required": [
+          "owner",
+          "name",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "The actual template content"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional description"
+          },
+          "metadata": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Optional metadata",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string",
+            "description": "Name of the template (unique per owner)"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/TemplateOwner",
+            "description": "Owner of the template"
           }
         }
       },
@@ -26838,178 +26871,6 @@
           }
         }
       },
-      "Prompt": {
-        "type": "object",
-        "description": "A reusable system prompt template",
-        "required": [
-          "id",
-          "owner_type",
-          "owner_id",
-          "name",
-          "content",
-          "created_at",
-          "updated_at"
-        ],
-        "properties": {
-          "content": {
-            "type": "string",
-            "description": "The actual prompt content (system message template)"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "description": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Optional description of what this prompt does"
-          },
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "metadata": {
-            "type": [
-              "object",
-              "null"
-            ],
-            "description": "Optional metadata (e.g., recommended temperature, max_tokens, tags)",
-            "additionalProperties": {},
-            "propertyNames": {
-              "type": "string"
-            }
-          },
-          "name": {
-            "type": "string",
-            "description": "Name of the prompt template"
-          },
-          "owner_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "owner_type": {
-            "$ref": "#/components/schemas/PromptOwnerType"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "PromptListResponse": {
-        "type": "object",
-        "description": "Paginated list of prompts",
-        "required": [
-          "data",
-          "pagination"
-        ],
-        "properties": {
-          "data": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Prompt"
-            },
-            "description": "List of prompts"
-          },
-          "pagination": {
-            "$ref": "#/components/schemas/PaginationMeta",
-            "description": "Pagination metadata"
-          }
-        }
-      },
-      "PromptOwner": {
-        "oneOf": [
-          {
-            "type": "object",
-            "required": [
-              "organization_id",
-              "type"
-            ],
-            "properties": {
-              "organization_id": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "organization"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "team_id",
-              "type"
-            ],
-            "properties": {
-              "team_id": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "team"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "project_id",
-              "type"
-            ],
-            "properties": {
-              "project_id": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "project"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "user_id",
-              "type"
-            ],
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "user"
-                ]
-              },
-              "user_id": {
-                "type": "string",
-                "format": "uuid"
-              }
-            }
-          }
-        ],
-        "description": "Owner specification for creating a prompt"
-      },
-      "PromptOwnerType": {
-        "type": "string",
-        "description": "Owner type for prompts (organization, team, project, or user)",
-        "enum": [
-          "organization",
-          "team",
-          "project",
-          "user"
-        ]
-      },
       "ProviderCircuitBreakerResponse": {
         "type": "object",
         "description": "Response for a single provider's circuit breaker status.",
@@ -29329,6 +29190,178 @@
           }
         }
       },
+      "Template": {
+        "type": "object",
+        "description": "A reusable system template",
+        "required": [
+          "id",
+          "owner_type",
+          "owner_id",
+          "name",
+          "content",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "The actual template content (system message template)"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional description of what this template does"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "metadata": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Optional metadata (e.g., recommended temperature, max_tokens, tags)",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string",
+            "description": "Name of the template"
+          },
+          "owner_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "owner_type": {
+            "$ref": "#/components/schemas/TemplateOwnerType"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TemplateListResponse": {
+        "type": "object",
+        "description": "Paginated list of templates",
+        "required": [
+          "data",
+          "pagination"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Template"
+            },
+            "description": "List of templates"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta",
+            "description": "Pagination metadata"
+          }
+        }
+      },
+      "TemplateOwner": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "organization_id",
+              "type"
+            ],
+            "properties": {
+              "organization_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "organization"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "team_id",
+              "type"
+            ],
+            "properties": {
+              "team_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "team"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "project_id",
+              "type"
+            ],
+            "properties": {
+              "project_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "project"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "user_id",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "user"
+                ]
+              },
+              "user_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ],
+        "description": "Owner specification for creating a template"
+      },
+      "TemplateOwnerType": {
+        "type": "string",
+        "description": "Owner type for templates (organization, team, project, or user)",
+        "enum": [
+          "organization",
+          "team",
+          "project",
+          "user"
+        ]
+      },
       "TestMappingRequest": {
         "type": "object",
         "description": "Request to test SSO group mapping resolution",
@@ -30228,7 +30261,7 @@
               },
               {
                 "$ref": "#/components/schemas/SovereigntyMetadata",
-                "description": "Sovereignty and compliance metadata"
+                "description": "Sovereignty and compliance metadata (set to null to clear)"
               }
             ]
           }
@@ -30764,44 +30797,6 @@
           }
         }
       },
-      "UpdatePrompt": {
-        "type": "object",
-        "description": "Request to update a prompt",
-        "properties": {
-          "content": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "New content"
-          },
-          "description": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "New description"
-          },
-          "metadata": {
-            "type": [
-              "object",
-              "null"
-            ],
-            "description": "New metadata (replaces existing)",
-            "additionalProperties": {},
-            "propertyNames": {
-              "type": "string"
-            }
-          },
-          "name": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "New name (unique per owner)"
-          }
-        }
-      },
       "UpdateServiceAccount": {
         "type": "object",
         "description": "Request to update an existing service account",
@@ -30890,6 +30885,44 @@
           "role": {
             "type": "string",
             "description": "New role to assign"
+          }
+        }
+      },
+      "UpdateTemplate": {
+        "type": "object",
+        "description": "Request to update a template",
+        "properties": {
+          "content": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New content"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New description"
+          },
+          "metadata": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "New metadata (replaces existing)",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New name (unique per owner)"
           }
         }
       },
@@ -32715,8 +32748,8 @@
       "description": "Store and manage chat conversation history. Conversations can be owned by users or projects and support multiple models."
     },
     {
-      "name": "prompts",
-      "description": "Manage reusable system prompt templates. Prompts can be owned by organizations, teams, projects, or users and include metadata for configuration."
+      "name": "templates",
+      "description": "Manage reusable prompt templates. Templates can be owned by organizations, teams, projects, or users and include metadata for configuration."
     },
     {
       "name": "audit-logs",

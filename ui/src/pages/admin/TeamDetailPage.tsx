@@ -2,7 +2,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { createColumnHelper, type ColumnDef } from "@tanstack/react-table";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Users, Plus, Trash2, BarChart3 } from "lucide-react";
+import { ArrowLeft, Users, Plus, Trash2, BarChart3, ClipboardPenLine } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -13,9 +13,11 @@ import {
   teamMemberListOptions,
   teamMemberAddMutation,
   teamMemberRemoveMutation,
+  templateListByTeamOptions,
+  templateDeleteMutation,
   userListOptions,
 } from "@/api/generated/@tanstack/react-query.gen";
-import type { TeamMember } from "@/api/generated/types.gen";
+import type { TeamMember, Template } from "@/api/generated/types.gen";
 import { Button } from "@/components/Button/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/Card/Card";
 import { CodeBadge } from "@/components/CodeBadge/CodeBadge";
@@ -27,14 +29,22 @@ import { Skeleton } from "@/components/Skeleton/Skeleton";
 import { Badge } from "@/components/Badge/Badge";
 import { useToast } from "@/components/Toast/Toast";
 import { useConfirm } from "@/components/ConfirmDialog/ConfirmDialog";
-import { DetailPageHeader, TabNavigation, AddMemberModal, type Tab } from "@/components/Admin";
+import {
+  DetailPageHeader,
+  TabNavigation,
+  AddMemberModal,
+  AdminPromptFormModal,
+  type Tab,
+} from "@/components/Admin";
 import { formatDateTime } from "@/utils/formatters";
 import UsageDashboard from "@/components/UsageDashboard/UsageDashboard";
+import { createTemplateColumns } from "./promptColumns";
 
-type TabId = "members" | "usage";
+type TabId = "members" | "templates" | "usage";
 
 const tabs: Tab<TabId>[] = [
   { id: "members", label: "Members", icon: <Users className="h-4 w-4" /> },
+  { id: "templates", label: "Templates", icon: <ClipboardPenLine className="h-4 w-4" /> },
   { id: "usage", label: "Usage", icon: <BarChart3 className="h-4 w-4" /> },
 ];
 
@@ -56,6 +66,8 @@ export default function TeamDetailPage() {
   const [activeTab, setActiveTab] = useState<TabId>("members");
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isAddMemberModalOpen, setIsAddMemberModalOpen] = useState(false);
+  const [isPromptModalOpen, setIsPromptModalOpen] = useState(false);
+  const [editingPrompt, setEditingPrompt] = useState<Template | null>(null);
 
   const editForm = useForm<EditTeamForm>({
     resolver: zodResolver(editTeamSchema),
@@ -75,6 +87,14 @@ export default function TeamDetailPage() {
       path: { org_slug: orgSlug!, team_slug: teamSlug! },
     }),
     enabled: activeTab === "members",
+  });
+
+  // Fetch templates
+  const { data: promptsData, isLoading: promptsLoading } = useQuery({
+    ...templateListByTeamOptions({
+      path: { org_slug: orgSlug!, team_slug: teamSlug! },
+    }),
+    enabled: activeTab === "templates",
   });
 
   // Fetch all users for member selection
@@ -120,6 +140,37 @@ export default function TeamDetailPage() {
       toast({ title: "Failed to remove member", description: String(error), type: "error" });
     },
   });
+
+  // Delete prompt mutation
+  const deletePromptMutation = useMutation({
+    ...templateDeleteMutation(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [{ _id: "templateListByTeam" }] });
+      toast({ title: "Template deleted", type: "success" });
+    },
+    onError: (error) => {
+      toast({ title: "Failed to delete template", description: String(error), type: "error" });
+    },
+  });
+
+  const handlePromptEdit = (prompt: Template) => {
+    setEditingPrompt(prompt);
+    setIsPromptModalOpen(true);
+  };
+
+  const handlePromptDelete = async (prompt: Template) => {
+    const confirmed = await confirm({
+      title: "Delete Template",
+      message: `Are you sure you want to delete "${prompt.name}"? This action cannot be undone.`,
+      confirmLabel: "Delete",
+      variant: "destructive",
+    });
+    if (confirmed) {
+      deletePromptMutation.mutate({ path: { id: prompt.id } });
+    }
+  };
+
+  const promptColumns = createTemplateColumns(handlePromptEdit, handlePromptDelete);
 
   const onEditSubmit = (data: EditTeamForm) => {
     updateMutation.mutate({
@@ -246,6 +297,18 @@ export default function TeamDetailPage() {
               Add Member
             </Button>
           )}
+          {activeTab === "templates" && (
+            <Button
+              size="sm"
+              onClick={() => {
+                setEditingPrompt(null);
+                setIsPromptModalOpen(true);
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              New Template
+            </Button>
+          )}
         </CardHeader>
         <CardContent>
           {activeTab === "members" && (
@@ -256,6 +319,16 @@ export default function TeamDetailPage() {
               emptyMessage="No members in this team."
               searchColumn="name"
               searchPlaceholder="Search members..."
+            />
+          )}
+          {activeTab === "templates" && (
+            <DataTable
+              columns={promptColumns as ColumnDef<Template>[]}
+              data={promptsData?.data || []}
+              isLoading={promptsLoading}
+              emptyMessage="No templates in this team."
+              searchColumn="name"
+              searchPlaceholder="Search templates..."
             />
           )}
           {activeTab === "usage" && orgSlug && teamSlug && team?.id && (
@@ -298,6 +371,25 @@ export default function TeamDetailPage() {
         isLoading={addMemberMutation.isPending}
         emptyMessage="All users are already members of this team."
       />
+
+      {/* Prompt Template Modal */}
+      {team && (
+        <AdminPromptFormModal
+          open={isPromptModalOpen}
+          onClose={() => {
+            setIsPromptModalOpen(false);
+            setEditingPrompt(null);
+          }}
+          editingPrompt={editingPrompt}
+          ownerOverride={{ type: "team", team_id: team.id }}
+          onSaved={() => {
+            toast({
+              title: editingPrompt ? "Template updated" : "Template created",
+              type: "success",
+            });
+          }}
+        />
+      )}
     </div>
   );
 }

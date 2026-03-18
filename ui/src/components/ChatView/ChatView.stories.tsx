@@ -11,6 +11,7 @@ import type {
   Artifact,
 } from "@/components/chat-types";
 import type { ModelInfo } from "@/components/ModelSelector/ModelSelector";
+import { AuthProvider } from "@/auth";
 import { ConfigProvider } from "@/config/ConfigProvider";
 import { PreferencesProvider } from "@/preferences/PreferencesProvider";
 import { ToastProvider } from "@/components/Toast/Toast";
@@ -102,15 +103,17 @@ const meta: Meta<typeof ChatView> = {
     (Story) => (
       <QueryClientProvider client={queryClient}>
         <ConfigProvider>
-          <PreferencesProvider>
-            <ToastProvider>
-              <TooltipProvider>
-                <div className="h-screen">
-                  <Story />
-                </div>
-              </TooltipProvider>
-            </ToastProvider>
-          </PreferencesProvider>
+          <AuthProvider>
+            <PreferencesProvider>
+              <ToastProvider>
+                <TooltipProvider>
+                  <div className="h-screen">
+                    <Story />
+                  </div>
+                </TooltipProvider>
+              </ToastProvider>
+            </PreferencesProvider>
+          </AuthProvider>
         </ConfigProvider>
       </QueryClientProvider>
     ),

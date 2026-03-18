@@ -19,7 +19,6 @@ pub mod org_rbac_policies;
 pub mod org_sso_configs;
 pub mod organizations;
 pub mod projects;
-pub mod prompts;
 pub mod providers;
 #[cfg(feature = "sso")]
 pub mod scim_configs;
@@ -32,6 +31,7 @@ pub mod sso_connections;
 #[cfg(feature = "sso")]
 pub mod sso_group_mappings;
 pub mod teams;
+pub mod templates;
 pub mod ui_config;
 pub mod usage;
 pub mod users;
@@ -587,27 +587,27 @@ pub(crate) fn admin_v1_routes() -> Router<AppState> {
             "/users/{user_id}/conversations/accessible",
             get(conversations::list_accessible_for_user),
         )
-        // Prompts
-        .route("/prompts", post(prompts::create))
+        // Templates
+        .route("/templates", post(templates::create))
         .route(
-            "/prompts/{id}",
-            get(prompts::get)
-                .merge(patch(prompts::update))
-                .merge(delete(prompts::delete)),
+            "/templates/{id}",
+            get(templates::get)
+                .merge(patch(templates::update))
+                .merge(delete(templates::delete)),
         )
         .route(
-            "/organizations/{org_slug}/prompts",
-            get(prompts::list_by_org),
+            "/organizations/{org_slug}/templates",
+            get(templates::list_by_org),
         )
         .route(
-            "/organizations/{org_slug}/teams/{team_slug}/prompts",
-            get(prompts::list_by_team),
+            "/organizations/{org_slug}/teams/{team_slug}/templates",
+            get(templates::list_by_team),
         )
         .route(
-            "/organizations/{org_slug}/projects/{project_slug}/prompts",
-            get(prompts::list_by_project),
+            "/organizations/{org_slug}/projects/{project_slug}/templates",
+            get(templates::list_by_project),
         )
-        .route("/users/{user_id}/prompts", get(prompts::list_by_user))
+        .route("/users/{user_id}/templates", get(templates::list_by_user))
         // Provider management
         .route(
             "/providers/circuit-breakers",
@@ -4687,7 +4687,7 @@ ttl_secs = 86400
     }
 
     // ============================================================================
-    // Prompt Tests
+    // Template Tests
     // ============================================================================
 
     async fn create_project(app: &axum::Router, org_slug: &str, project_slug: &str) -> String {
@@ -4702,9 +4702,9 @@ ttl_secs = 86400
     }
 
     #[tokio::test]
-    async fn test_create_prompt_for_organization() {
+    async fn test_create_template_for_organization() {
         let app = test_app().await;
-        let org_slug = create_org(&app, "prompt-org").await;
+        let org_slug = create_org(&app, "template-org").await;
 
         // Get org ID
         let (_, org) = get_json(&app, &format!("/admin/v1/organizations/{}", org_slug)).await;
@@ -4712,12 +4712,12 @@ ttl_secs = 86400
 
         let (status, body) = post_json(
             &app,
-            "/admin/v1/prompts",
+            "/admin/v1/templates",
             json!({
                 "owner": {"type": "organization", "organization_id": org_id},
-                "name": "test-prompt",
+                "name": "test-template",
                 "content": "You are a helpful assistant.",
-                "description": "A test prompt"
+                "description": "A test template"
             }),
         )
         .await;
@@ -4729,69 +4729,69 @@ ttl_secs = 86400
             );
         }
         assert_eq!(status, StatusCode::CREATED);
-        assert_eq!(body["name"], "test-prompt");
+        assert_eq!(body["name"], "test-template");
         assert_eq!(body["content"], "You are a helpful assistant.");
-        assert_eq!(body["description"], "A test prompt");
+        assert_eq!(body["description"], "A test template");
         assert_eq!(body["owner_type"], "organization");
         assert_eq!(body["owner_id"], org_id);
         assert!(body["id"].is_string());
     }
 
     #[tokio::test]
-    async fn test_create_prompt_for_project() {
+    async fn test_create_template_for_project() {
         let app = test_app().await;
-        let org_slug = create_org(&app, "prompt-proj-org").await;
-        let project_id = create_project(&app, &org_slug, "prompt-project").await;
+        let org_slug = create_org(&app, "template-proj-org").await;
+        let project_id = create_project(&app, &org_slug, "template-project").await;
 
         let (status, body) = post_json(
             &app,
-            "/admin/v1/prompts",
+            "/admin/v1/templates",
             json!({
                 "owner": {"type": "project", "project_id": project_id},
-                "name": "project-prompt",
-                "content": "Project system prompt"
+                "name": "project-template",
+                "content": "Project system template"
             }),
         )
         .await;
 
         assert_eq!(status, StatusCode::CREATED);
-        assert_eq!(body["name"], "project-prompt");
+        assert_eq!(body["name"], "project-template");
         assert_eq!(body["owner_type"], "project");
         assert_eq!(body["owner_id"], project_id);
     }
 
     #[tokio::test]
-    async fn test_create_prompt_for_team() {
+    async fn test_create_template_for_team() {
         let app = test_app().await;
-        let org_slug = create_org(&app, "prompt-team-org").await;
-        let team_id = create_team(&app, &org_slug, "prompt-team").await;
+        let org_slug = create_org(&app, "template-team-org").await;
+        let team_id = create_team(&app, &org_slug, "template-team").await;
 
         let (status, body) = post_json(
             &app,
-            "/admin/v1/prompts",
+            "/admin/v1/templates",
             json!({
                 "owner": {"type": "team", "team_id": team_id},
-                "name": "team-prompt",
-                "content": "Team system prompt"
+                "name": "team-template",
+                "content": "Team system template"
             }),
         )
         .await;
 
         assert_eq!(status, StatusCode::CREATED);
-        assert_eq!(body["name"], "team-prompt");
+        assert_eq!(body["name"], "team-template");
         assert_eq!(body["owner_type"], "team");
         assert_eq!(body["owner_id"], team_id);
     }
 
     #[tokio::test]
-    async fn test_create_prompt_for_user() {
+    async fn test_create_template_for_user() {
         let app = test_app().await;
 
         // Create a user
         let (status, user) = post_json(
             &app,
             "/admin/v1/users",
-            json!({"external_id": "prompt-user", "email": "prompt@example.com", "name": "Prompt User"}),
+            json!({"external_id": "template-user", "email": "template@example.com", "name": "Template User"}),
         )
         .await;
         assert_eq!(status, StatusCode::CREATED);
@@ -4799,35 +4799,35 @@ ttl_secs = 86400
 
         let (status, body) = post_json(
             &app,
-            "/admin/v1/prompts",
+            "/admin/v1/templates",
             json!({
                 "owner": {"type": "user", "user_id": user_id},
-                "name": "user-prompt",
-                "content": "User system prompt"
+                "name": "user-template",
+                "content": "User system template"
             }),
         )
         .await;
 
         assert_eq!(status, StatusCode::CREATED);
-        assert_eq!(body["name"], "user-prompt");
+        assert_eq!(body["name"], "user-template");
         assert_eq!(body["owner_type"], "user");
         assert_eq!(body["owner_id"], user_id);
     }
 
     #[tokio::test]
-    async fn test_create_prompt_with_metadata() {
+    async fn test_create_template_with_metadata() {
         let app = test_app().await;
-        let org_slug = create_org(&app, "prompt-meta-org").await;
+        let org_slug = create_org(&app, "template-meta-org").await;
         let (_, org) = get_json(&app, &format!("/admin/v1/organizations/{}", org_slug)).await;
         let org_id = org["id"].as_str().unwrap();
 
         let (status, body) = post_json(
             &app,
-            "/admin/v1/prompts",
+            "/admin/v1/templates",
             json!({
                 "owner": {"type": "organization", "organization_id": org_id},
-                "name": "meta-prompt",
-                "content": "System prompt with metadata",
+                "name": "meta-template",
+                "content": "System template with metadata",
                 "metadata": {
                     "temperature": 0.7,
                     "max_tokens": 1000,
@@ -4844,19 +4844,19 @@ ttl_secs = 86400
     }
 
     #[tokio::test]
-    async fn test_create_prompt_duplicate_name_same_owner() {
+    async fn test_create_template_duplicate_name_same_owner() {
         let app = test_app().await;
-        let org_slug = create_org(&app, "dup-prompt-org").await;
+        let org_slug = create_org(&app, "dup-template-org").await;
         let (_, org) = get_json(&app, &format!("/admin/v1/organizations/{}", org_slug)).await;
         let org_id = org["id"].as_str().unwrap();
 
         let (status, _) = post_json(
             &app,
-            "/admin/v1/prompts",
+            "/admin/v1/templates",
             json!({
                 "owner": {"type": "organization", "organization_id": org_id},
-                "name": "duplicate-prompt",
-                "content": "First prompt"
+                "name": "duplicate-template",
+                "content": "First template"
             }),
         )
         .await;
@@ -4864,11 +4864,11 @@ ttl_secs = 86400
 
         let (status, body) = post_json(
             &app,
-            "/admin/v1/prompts",
+            "/admin/v1/templates",
             json!({
                 "owner": {"type": "organization", "organization_id": org_id},
-                "name": "duplicate-prompt",
-                "content": "Second prompt"
+                "name": "duplicate-template",
+                "content": "Second template"
             }),
         )
         .await;
@@ -4878,20 +4878,20 @@ ttl_secs = 86400
     }
 
     #[tokio::test]
-    async fn test_create_prompt_same_name_different_owners() {
+    async fn test_create_template_same_name_different_owners() {
         let app = test_app().await;
-        let org1_slug = create_org(&app, "prompt-org1").await;
-        let org2_slug = create_org(&app, "prompt-org2").await;
+        let org1_slug = create_org(&app, "template-org1").await;
+        let org2_slug = create_org(&app, "template-org2").await;
         let (_, org1) = get_json(&app, &format!("/admin/v1/organizations/{}", org1_slug)).await;
         let (_, org2) = get_json(&app, &format!("/admin/v1/organizations/{}", org2_slug)).await;
 
         let (status, _) = post_json(
             &app,
-            "/admin/v1/prompts",
+            "/admin/v1/templates",
             json!({
                 "owner": {"type": "organization", "organization_id": org1["id"]},
                 "name": "shared-name",
-                "content": "Org 1 prompt"
+                "content": "Org 1 template"
             }),
         )
         .await;
@@ -4899,11 +4899,11 @@ ttl_secs = 86400
 
         let (status, _) = post_json(
             &app,
-            "/admin/v1/prompts",
+            "/admin/v1/templates",
             json!({
                 "owner": {"type": "organization", "organization_id": org2["id"]},
                 "name": "shared-name",
-                "content": "Org 2 prompt"
+                "content": "Org 2 template"
             }),
         )
         .await;
@@ -4911,54 +4911,54 @@ ttl_secs = 86400
     }
 
     #[tokio::test]
-    async fn test_get_prompt() {
+    async fn test_get_template() {
         let app = test_app().await;
-        let org_slug = create_org(&app, "get-prompt-org").await;
+        let org_slug = create_org(&app, "get-template-org").await;
         let (_, org) = get_json(&app, &format!("/admin/v1/organizations/{}", org_slug)).await;
         let org_id = org["id"].as_str().unwrap();
 
         let (status, created) = post_json(
             &app,
-            "/admin/v1/prompts",
+            "/admin/v1/templates",
             json!({
                 "owner": {"type": "organization", "organization_id": org_id},
-                "name": "get-test-prompt",
+                "name": "get-test-template",
                 "content": "Test content"
             }),
         )
         .await;
         assert_eq!(status, StatusCode::CREATED);
-        let prompt_id = created["id"].as_str().unwrap();
+        let template_id = created["id"].as_str().unwrap();
 
-        let (status, body) = get_json(&app, &format!("/admin/v1/prompts/{}", prompt_id)).await;
+        let (status, body) = get_json(&app, &format!("/admin/v1/templates/{}", template_id)).await;
 
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["id"], prompt_id);
-        assert_eq!(body["name"], "get-test-prompt");
+        assert_eq!(body["id"], template_id);
+        assert_eq!(body["name"], "get-test-template");
         assert_eq!(body["content"], "Test content");
     }
 
     #[tokio::test]
-    async fn test_get_prompt_not_found() {
+    async fn test_get_template_not_found() {
         let app = test_app().await;
         let fake_id = uuid::Uuid::new_v4();
 
-        let (status, body) = get_json(&app, &format!("/admin/v1/prompts/{}", fake_id)).await;
+        let (status, body) = get_json(&app, &format!("/admin/v1/templates/{}", fake_id)).await;
 
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert!(body["error"]["code"].is_string());
     }
 
     #[tokio::test]
-    async fn test_update_prompt() {
+    async fn test_update_template() {
         let app = test_app().await;
-        let org_slug = create_org(&app, "update-prompt-org").await;
+        let org_slug = create_org(&app, "update-template-org").await;
         let (_, org) = get_json(&app, &format!("/admin/v1/organizations/{}", org_slug)).await;
         let org_id = org["id"].as_str().unwrap();
 
         let (status, created) = post_json(
             &app,
-            "/admin/v1/prompts",
+            "/admin/v1/templates",
             json!({
                 "owner": {"type": "organization", "organization_id": org_id},
                 "name": "update-test",
@@ -4967,11 +4967,11 @@ ttl_secs = 86400
         )
         .await;
         assert_eq!(status, StatusCode::CREATED);
-        let prompt_id = created["id"].as_str().unwrap();
+        let template_id = created["id"].as_str().unwrap();
 
         let (status, body) = patch_json(
             &app,
-            &format!("/admin/v1/prompts/{}", prompt_id),
+            &format!("/admin/v1/templates/{}", template_id),
             json!({
                 "name": "updated-name",
                 "content": "Updated content",
@@ -4987,7 +4987,7 @@ ttl_secs = 86400
     }
 
     #[tokio::test]
-    async fn test_update_prompt_partial() {
+    async fn test_update_template_partial() {
         let app = test_app().await;
         let org_slug = create_org(&app, "partial-update-org").await;
         let (_, org) = get_json(&app, &format!("/admin/v1/organizations/{}", org_slug)).await;
@@ -4995,7 +4995,7 @@ ttl_secs = 86400
 
         let (status, created) = post_json(
             &app,
-            "/admin/v1/prompts",
+            "/admin/v1/templates",
             json!({
                 "owner": {"type": "organization", "organization_id": org_id},
                 "name": "partial-update",
@@ -5004,12 +5004,12 @@ ttl_secs = 86400
         )
         .await;
         assert_eq!(status, StatusCode::CREATED);
-        let prompt_id = created["id"].as_str().unwrap();
+        let template_id = created["id"].as_str().unwrap();
 
         // Only update content
         let (status, body) = patch_json(
             &app,
-            &format!("/admin/v1/prompts/{}", prompt_id),
+            &format!("/admin/v1/templates/{}", template_id),
             json!({"content": "Only content changed"}),
         )
         .await;
@@ -5020,13 +5020,13 @@ ttl_secs = 86400
     }
 
     #[tokio::test]
-    async fn test_update_prompt_not_found() {
+    async fn test_update_template_not_found() {
         let app = test_app().await;
         let fake_id = uuid::Uuid::new_v4();
 
         let (status, body) = patch_json(
             &app,
-            &format!("/admin/v1/prompts/{}", fake_id),
+            &format!("/admin/v1/templates/{}", fake_id),
             json!({"name": "new-name"}),
         )
         .await;
@@ -5036,15 +5036,15 @@ ttl_secs = 86400
     }
 
     #[tokio::test]
-    async fn test_delete_prompt() {
+    async fn test_delete_template() {
         let app = test_app().await;
-        let org_slug = create_org(&app, "delete-prompt-org").await;
+        let org_slug = create_org(&app, "delete-template-org").await;
         let (_, org) = get_json(&app, &format!("/admin/v1/organizations/{}", org_slug)).await;
         let org_id = org["id"].as_str().unwrap();
 
         let (status, created) = post_json(
             &app,
-            "/admin/v1/prompts",
+            "/admin/v1/templates",
             json!({
                 "owner": {"type": "organization", "organization_id": org_id},
                 "name": "delete-test",
@@ -5053,42 +5053,42 @@ ttl_secs = 86400
         )
         .await;
         assert_eq!(status, StatusCode::CREATED);
-        let prompt_id = created["id"].as_str().unwrap();
+        let template_id = created["id"].as_str().unwrap();
 
-        let (status, _) = delete_json(&app, &format!("/admin/v1/prompts/{}", prompt_id)).await;
+        let (status, _) = delete_json(&app, &format!("/admin/v1/templates/{}", template_id)).await;
         assert_eq!(status, StatusCode::OK);
 
         // Verify it's deleted
-        let (status, _) = get_json(&app, &format!("/admin/v1/prompts/{}", prompt_id)).await;
+        let (status, _) = get_json(&app, &format!("/admin/v1/templates/{}", template_id)).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
-    async fn test_delete_prompt_not_found() {
+    async fn test_delete_template_not_found() {
         let app = test_app().await;
         let fake_id = uuid::Uuid::new_v4();
 
-        let (status, body) = delete_json(&app, &format!("/admin/v1/prompts/{}", fake_id)).await;
+        let (status, body) = delete_json(&app, &format!("/admin/v1/templates/{}", fake_id)).await;
 
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert!(body["error"]["code"].is_string());
     }
 
     #[tokio::test]
-    async fn test_list_prompts_by_organization() {
+    async fn test_list_templates_by_organization() {
         let app = test_app().await;
-        let org_slug = create_org(&app, "list-prompt-org").await;
+        let org_slug = create_org(&app, "list-template-org").await;
         let (_, org) = get_json(&app, &format!("/admin/v1/organizations/{}", org_slug)).await;
         let org_id = org["id"].as_str().unwrap();
 
-        // Create 3 prompts for the org
+        // Create 3 templates for the org
         for i in 0..3 {
             let (status, _) = post_json(
                 &app,
-                "/admin/v1/prompts",
+                "/admin/v1/templates",
                 json!({
                     "owner": {"type": "organization", "organization_id": org_id},
-                    "name": format!("org-prompt-{}", i),
+                    "name": format!("org-template-{}", i),
                     "content": format!("Content {}", i)
                 }),
             )
@@ -5098,7 +5098,7 @@ ttl_secs = 86400
 
         let (status, body) = get_json(
             &app,
-            &format!("/admin/v1/organizations/{}/prompts", org_slug),
+            &format!("/admin/v1/organizations/{}/templates", org_slug),
         )
         .await;
 
@@ -5109,19 +5109,19 @@ ttl_secs = 86400
     }
 
     #[tokio::test]
-    async fn test_list_prompts_by_team() {
+    async fn test_list_templates_by_team() {
         let app = test_app().await;
-        let org_slug = create_org(&app, "list-team-prompt-org").await;
-        let team_id = create_team(&app, &org_slug, "prompt-list-team").await;
+        let org_slug = create_org(&app, "list-team-template-org").await;
+        let team_id = create_team(&app, &org_slug, "template-list-team").await;
 
-        // Create 2 prompts for the team
+        // Create 2 templates for the team
         for i in 0..2 {
             let (status, _) = post_json(
                 &app,
-                "/admin/v1/prompts",
+                "/admin/v1/templates",
                 json!({
                     "owner": {"type": "team", "team_id": team_id},
-                    "name": format!("team-prompt-{}", i),
+                    "name": format!("team-template-{}", i),
                     "content": format!("Content {}", i)
                 }),
             )
@@ -5132,7 +5132,7 @@ ttl_secs = 86400
         let (status, body) = get_json(
             &app,
             &format!(
-                "/admin/v1/organizations/{}/teams/prompt-list-team/prompts",
+                "/admin/v1/organizations/{}/teams/template-list-team/templates",
                 org_slug
             ),
         )
@@ -5143,19 +5143,19 @@ ttl_secs = 86400
     }
 
     #[tokio::test]
-    async fn test_list_prompts_by_project() {
+    async fn test_list_templates_by_project() {
         let app = test_app().await;
-        let org_slug = create_org(&app, "list-proj-prompt-org").await;
-        let project_id = create_project(&app, &org_slug, "prompt-list-project").await;
+        let org_slug = create_org(&app, "list-proj-template-org").await;
+        let project_id = create_project(&app, &org_slug, "template-list-project").await;
 
-        // Create 2 prompts for the project
+        // Create 2 templates for the project
         for i in 0..2 {
             let (status, _) = post_json(
                 &app,
-                "/admin/v1/prompts",
+                "/admin/v1/templates",
                 json!({
                     "owner": {"type": "project", "project_id": project_id},
-                    "name": format!("project-prompt-{}", i),
+                    "name": format!("project-template-{}", i),
                     "content": format!("Content {}", i)
                 }),
             )
@@ -5166,7 +5166,7 @@ ttl_secs = 86400
         let (status, body) = get_json(
             &app,
             &format!(
-                "/admin/v1/organizations/{}/projects/prompt-list-project/prompts",
+                "/admin/v1/organizations/{}/projects/template-list-project/templates",
                 org_slug
             ),
         )
@@ -5177,27 +5177,27 @@ ttl_secs = 86400
     }
 
     #[tokio::test]
-    async fn test_list_prompts_by_user() {
+    async fn test_list_templates_by_user() {
         let app = test_app().await;
 
         // Create a user
         let (status, user) = post_json(
             &app,
             "/admin/v1/users",
-            json!({"external_id": "list-prompt-user", "email": "listprompt@example.com", "name": "List User"}),
+            json!({"external_id": "list-template-user", "email": "listtemplate@example.com", "name": "List User"}),
         )
         .await;
         assert_eq!(status, StatusCode::CREATED);
         let user_id = user["id"].as_str().unwrap();
 
-        // Create 2 prompts for the user
+        // Create 2 templates for the user
         for i in 0..2 {
             let (status, _) = post_json(
                 &app,
-                "/admin/v1/prompts",
+                "/admin/v1/templates",
                 json!({
                     "owner": {"type": "user", "user_id": user_id},
-                    "name": format!("user-prompt-{}", i),
+                    "name": format!("user-template-{}", i),
                     "content": format!("Content {}", i)
                 }),
             )
@@ -5205,20 +5205,21 @@ ttl_secs = 86400
             assert_eq!(status, StatusCode::CREATED);
         }
 
-        let (status, body) = get_json(&app, &format!("/admin/v1/users/{}/prompts", user_id)).await;
+        let (status, body) =
+            get_json(&app, &format!("/admin/v1/users/{}/templates", user_id)).await;
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["data"].as_array().unwrap().len(), 2);
     }
 
     #[tokio::test]
-    async fn test_list_prompts_empty() {
+    async fn test_list_templates_empty() {
         let app = test_app().await;
-        let org_slug = create_org(&app, "empty-prompt-org").await;
+        let org_slug = create_org(&app, "empty-template-org").await;
 
         let (status, body) = get_json(
             &app,
-            &format!("/admin/v1/organizations/{}/prompts", org_slug),
+            &format!("/admin/v1/organizations/{}/templates", org_slug),
         )
         .await;
 
@@ -5227,25 +5228,25 @@ ttl_secs = 86400
     }
 
     #[tokio::test]
-    async fn test_list_prompts_org_not_found() {
+    async fn test_list_templates_org_not_found() {
         let app = test_app().await;
 
         let (status, body) =
-            get_json(&app, "/admin/v1/organizations/nonexistent-org/prompts").await;
+            get_json(&app, "/admin/v1/organizations/nonexistent-org/templates").await;
 
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert!(body["error"]["code"].is_string());
     }
 
     #[tokio::test]
-    async fn test_list_prompts_team_not_found() {
+    async fn test_list_templates_team_not_found() {
         let app = test_app().await;
-        let org_slug = create_org(&app, "team-404-prompt-org").await;
+        let org_slug = create_org(&app, "team-404-template-org").await;
 
         let (status, body) = get_json(
             &app,
             &format!(
-                "/admin/v1/organizations/{}/teams/nonexistent-team/prompts",
+                "/admin/v1/organizations/{}/teams/nonexistent-team/templates",
                 org_slug
             ),
         )
@@ -5256,14 +5257,14 @@ ttl_secs = 86400
     }
 
     #[tokio::test]
-    async fn test_list_prompts_project_not_found() {
+    async fn test_list_templates_project_not_found() {
         let app = test_app().await;
-        let org_slug = create_org(&app, "proj-404-prompt-org").await;
+        let org_slug = create_org(&app, "proj-404-template-org").await;
 
         let (status, body) = get_json(
             &app,
             &format!(
-                "/admin/v1/organizations/{}/projects/nonexistent-project/prompts",
+                "/admin/v1/organizations/{}/projects/nonexistent-project/templates",
                 org_slug
             ),
         )
@@ -5274,20 +5275,20 @@ ttl_secs = 86400
     }
 
     #[tokio::test]
-    async fn test_list_prompts_pagination() {
+    async fn test_list_templates_pagination() {
         let app = test_app().await;
-        let org_slug = create_org(&app, "paginate-prompt-org").await;
+        let org_slug = create_org(&app, "paginate-template-org").await;
         let (_, org) = get_json(&app, &format!("/admin/v1/organizations/{}", org_slug)).await;
         let org_id = org["id"].as_str().unwrap();
 
-        // Create 5 prompts
+        // Create 5 templates
         for i in 0..5 {
             let (status, _) = post_json(
                 &app,
-                "/admin/v1/prompts",
+                "/admin/v1/templates",
                 json!({
                     "owner": {"type": "organization", "organization_id": org_id},
-                    "name": format!("paginate-prompt-{}", i),
+                    "name": format!("paginate-template-{}", i),
                     "content": format!("Content {}", i)
                 }),
             )
@@ -5298,7 +5299,7 @@ ttl_secs = 86400
         // Request with limit=2
         let (status, body) = get_json(
             &app,
-            &format!("/admin/v1/organizations/{}/prompts?limit=2", org_slug),
+            &format!("/admin/v1/organizations/{}/templates?limit=2", org_slug),
         )
         .await;
 

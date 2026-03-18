@@ -11,7 +11,6 @@ mod org_rbac_policies;
 mod org_sso_configs;
 mod organizations;
 mod projects;
-mod prompts;
 mod providers;
 #[cfg(feature = "sso")]
 mod scim_configs;
@@ -23,6 +22,7 @@ mod service_accounts;
 #[cfg(feature = "sso")]
 mod sso_group_mappings;
 mod teams;
+mod templates;
 mod usage;
 mod users;
 mod vector_stores;
@@ -41,7 +41,6 @@ pub use org_rbac_policies::*;
 pub use org_sso_configs::*;
 pub use organizations::*;
 pub use projects::*;
-pub use prompts::*;
 pub use providers::*;
 #[cfg(feature = "sso")]
 pub use scim_configs::*;
@@ -53,6 +52,7 @@ pub use service_accounts::*;
 #[cfg(feature = "sso")]
 pub use sso_group_mappings::*;
 pub use teams::*;
+pub use templates::*;
 pub use usage::*;
 pub use users::*;
 pub use vector_stores::*;

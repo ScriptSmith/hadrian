@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Settings2, RotateCcw, Database, Sparkles, Save, ChevronDown, Volume2 } from "lucide-react";
+import { Settings2, RotateCcw, Database, Save, Volume2 } from "lucide-react";
 
-import type { VectorStoreOwnerType, Prompt, Voice } from "@/api/generated/types.gen";
+import type { VectorStoreOwnerType, Voice } from "@/api/generated/types.gen";
 import { TTS_VOICES, DEFAULT_TTS_VOICE, DEFAULT_TTS_SPEED } from "@/hooks/useAudioPlayback";
 import { Button } from "@/components/Button/Button";
 import type { ResponseActionConfig } from "@/components/chat-types";
@@ -14,18 +14,11 @@ import {
   ModalHeader,
   ModalTitle,
 } from "@/components/Modal/Modal";
-import {
-  Dropdown,
-  DropdownContent,
-  DropdownItem,
-  DropdownTrigger,
-} from "@/components/Dropdown/Dropdown";
 import { PromptFormModal } from "@/components/PromptFormModal/PromptFormModal";
 import { Select, type SelectOption } from "@/components/Select/Select";
 import { Slider } from "@/components/Slider/Slider";
 import { Switch } from "@/components/Switch/Switch";
 import { VectorStoreSelector } from "@/components/VectorStores/VectorStoreSelector";
-import { useUserPrompts, type PromptWithOrg } from "@/hooks/useUserPrompts";
 
 interface ConversationSettingsModalProps {
   open: boolean;
@@ -88,20 +81,9 @@ export function ConversationSettingsModal({
   onTTSSpeedChange,
 }: ConversationSettingsModalProps) {
   const [promptFormOpen, setPromptFormOpen] = useState(false);
-  const [editingPrompt, setEditingPrompt] = useState<Prompt | null>(null);
-  const { prompts, isLoading: promptsLoading } = useUserPrompts();
-
-  const handleApplyPrompt = (prompt: PromptWithOrg) => {
-    onSystemPromptChange(prompt.content);
-  };
 
   const handleSaveAsTemplate = () => {
-    setEditingPrompt(null);
     setPromptFormOpen(true);
-  };
-
-  const handlePromptSaved = (_prompt: Prompt) => {
-    // Prompt saved successfully, modal will close automatically
   };
 
   const updateActionConfig = <K extends keyof ResponseActionConfig>(
@@ -150,58 +132,17 @@ export function ConversationSettingsModal({
                 settings icon on each model chip.
               </p>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              {/* Template Selector */}
-              <Dropdown>
-                <DropdownTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 px-2 gap-1"
-                    disabled={promptsLoading || prompts.length === 0}
-                  >
-                    <Sparkles className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">Templates</span>
-                    <ChevronDown className="h-3 w-3" />
-                  </Button>
-                </DropdownTrigger>
-                <DropdownContent align="end" className="w-56 max-h-64 overflow-y-auto">
-                  {prompts.length === 0 ? (
-                    <div className="px-2 py-3 text-sm text-muted-foreground text-center">
-                      No templates available
-                    </div>
-                  ) : (
-                    prompts.map((prompt) => (
-                      <DropdownItem
-                        key={prompt.id}
-                        onClick={() => handleApplyPrompt(prompt)}
-                        className="flex flex-col items-start gap-0.5"
-                      >
-                        <span className="font-medium">{prompt.name}</span>
-                        {prompt.description && (
-                          <span className="text-xs text-muted-foreground line-clamp-1">
-                            {prompt.description}
-                          </span>
-                        )}
-                      </DropdownItem>
-                    ))
-                  )}
-                </DropdownContent>
-              </Dropdown>
-
-              {/* Save as Template Button */}
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 px-2 gap-1"
-                onClick={handleSaveAsTemplate}
-                disabled={!systemPrompt.trim()}
-                title={systemPrompt.trim() ? "Save as template" : "Enter a prompt to save"}
-              >
-                <Save className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Save</span>
-              </Button>
-            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 px-2 gap-1 shrink-0"
+              onClick={handleSaveAsTemplate}
+              disabled={!systemPrompt.trim()}
+              title={systemPrompt.trim() ? "Save as template" : "Enter a prompt to save"}
+            >
+              <Save className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Save as Template</span>
+            </Button>
           </div>
           <textarea
             value={systemPrompt}
@@ -399,13 +340,11 @@ export function ConversationSettingsModal({
         </Button>
       </ModalFooter>
 
-      {/* Prompt Form Modal */}
+      {/* Save as Template Modal */}
       <PromptFormModal
         open={promptFormOpen}
         onClose={() => setPromptFormOpen(false)}
         initialContent={systemPrompt}
-        editingPrompt={editingPrompt}
-        onSaved={handlePromptSaved}
       />
     </Modal>
   );

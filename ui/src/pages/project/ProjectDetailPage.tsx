@@ -1,7 +1,16 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, Users, Key, Server, DollarSign, BarChart3, Pencil } from "lucide-react";
+import {
+  ArrowLeft,
+  Users,
+  Key,
+  Server,
+  DollarSign,
+  BarChart3,
+  Pencil,
+  ClipboardPenLine,
+} from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -25,15 +34,17 @@ import { MembersTab } from "./MembersTab";
 import { ApiKeysTab } from "./ApiKeysTab";
 import { ProvidersTab } from "./ProvidersTab";
 import { PricingTab } from "./PricingTab";
+import { TemplatesTab } from "./TemplatesTab";
 import { UsageTab } from "./UsageTab";
 
-type TabId = "members" | "api-keys" | "providers" | "pricing" | "usage";
+type TabId = "members" | "api-keys" | "providers" | "pricing" | "templates" | "usage";
 
 const tabs: Tab<TabId>[] = [
   { id: "members", label: "Members", icon: <Users className="h-4 w-4" /> },
   { id: "api-keys", label: "API Keys", icon: <Key className="h-4 w-4" /> },
   { id: "providers", label: "Providers", icon: <Server className="h-4 w-4" /> },
   { id: "pricing", label: "Pricing", icon: <DollarSign className="h-4 w-4" /> },
+  { id: "templates", label: "Templates", icon: <ClipboardPenLine className="h-4 w-4" /> },
   { id: "usage", label: "Usage", icon: <BarChart3 className="h-4 w-4" /> },
 ];
 
@@ -166,6 +177,9 @@ export default function ProjectDetailPage() {
         <ProvidersTab orgSlug={orgSlug!} projectSlug={projectSlug!} projectId={project.id} />
       )}
       {activeTab === "pricing" && <PricingTab orgSlug={orgSlug!} projectSlug={projectSlug!} />}
+      {activeTab === "templates" && (
+        <TemplatesTab orgSlug={orgSlug!} projectSlug={projectSlug!} projectId={project.id} />
+      )}
       {activeTab === "usage" && (
         <UsageTab orgSlug={orgSlug!} projectSlug={projectSlug!} projectId={project.id} />
       )}

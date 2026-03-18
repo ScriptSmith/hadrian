@@ -1123,21 +1123,21 @@ END $$;
 -- without cross-database joins. See VectorStore trait for chunk operations.
 
 -- ======================================================================
--- Prompts
+-- Templates
 -- ======================================================================
 
 -- Reusable system prompt templates.
 
 DO $$ BEGIN
-    CREATE TYPE prompt_owner_type AS ENUM ('organization', 'team', 'project', 'user');
+    CREATE TYPE template_owner_type AS ENUM ('organization', 'team', 'project', 'user');
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
-CREATE TABLE IF NOT EXISTS prompts (
+CREATE TABLE IF NOT EXISTS templates (
     id UUID PRIMARY KEY NOT NULL,
-    -- Ownership (who can access this prompt)
-    owner_type prompt_owner_type NOT NULL,
+    -- Ownership (who can access this template)
+    owner_type template_owner_type NOT NULL,
     owner_id UUID NOT NULL,
     name VARCHAR(255) NOT NULL,
     description TEXT,
@@ -1152,13 +1152,13 @@ CREATE TABLE IF NOT EXISTS prompts (
     UNIQUE(owner_type, owner_id, name)
 );
 
-CREATE INDEX IF NOT EXISTS idx_prompts_owner ON prompts(owner_type, owner_id);
--- Partial index for non-deleted prompts (most queries filter by deleted_at IS NULL)
-CREATE INDEX IF NOT EXISTS idx_prompts_owner_active ON prompts(owner_type, owner_id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_prompts_name ON prompts(name);
+CREATE INDEX IF NOT EXISTS idx_templates_owner ON templates(owner_type, owner_id);
+-- Partial index for non-deleted templates (most queries filter by deleted_at IS NULL)
+CREATE INDEX IF NOT EXISTS idx_templates_owner_active ON templates(owner_type, owner_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_templates_name ON templates(name);
 
 DO $$ BEGIN
-    CREATE TRIGGER update_prompts_updated_at BEFORE UPDATE ON prompts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    CREATE TRIGGER update_templates_updated_at BEFORE UPDATE ON templates FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
 

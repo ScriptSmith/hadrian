@@ -13,6 +13,7 @@ import {
   Shield,
   BarChart3,
   Building2,
+  ClipboardPenLine,
 } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
@@ -26,6 +27,8 @@ import {
   apiKeyListByOrgOptions,
   dynamicProviderListByOrgOptions,
   modelPricingListByOrgOptions,
+  templateListByOrgOptions,
+  templateDeleteMutation,
   teamListOptions,
   orgMemberAddMutation,
   orgMemberRemoveMutation,
@@ -38,6 +41,7 @@ import type {
   ApiKey,
   DynamicProvider,
   DbModelPricing,
+  Template,
 } from "@/api/generated/types.gen";
 import { Button } from "@/components/Button/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/Card/Card";
@@ -53,6 +57,7 @@ import {
   DetailPageHeader,
   TabNavigation,
   AddMemberModal,
+  AdminPromptFormModal,
   ApiKeyStatusBadge,
   EnabledStatusBadge,
   type Tab,
@@ -60,6 +65,7 @@ import {
 import { Badge } from "@/components/Badge/Badge";
 import { formatDateTime, formatCurrency } from "@/utils/formatters";
 import UsageDashboard from "@/components/UsageDashboard/UsageDashboard";
+import { createTemplateColumns } from "./promptColumns";
 
 type TabId =
   | "projects"
@@ -68,6 +74,7 @@ type TabId =
   | "api-keys"
   | "providers"
   | "pricing"
+  | "templates"
   | "sso"
   | "usage";
 
@@ -78,6 +85,7 @@ const tabs: Tab<TabId>[] = [
   { id: "api-keys", label: "API Keys", icon: <Key className="h-4 w-4" /> },
   { id: "providers", label: "Providers", icon: <Server className="h-4 w-4" /> },
   { id: "pricing", label: "Pricing", icon: <DollarSign className="h-4 w-4" /> },
+  { id: "templates", label: "Templates", icon: <ClipboardPenLine className="h-4 w-4" /> },
   { id: "usage", label: "Usage", icon: <BarChart3 className="h-4 w-4" /> },
   { id: "sso", label: "SSO", icon: <Shield className="h-4 w-4" /> },
 ];
@@ -105,6 +113,8 @@ export default function OrganizationDetailPage() {
   const [activeTab, setActiveTab] = useState<TabId>("projects");
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isAddMemberModalOpen, setIsAddMemberModalOpen] = useState(false);
+  const [isPromptModalOpen, setIsPromptModalOpen] = useState(false);
+  const [editingPrompt, setEditingPrompt] = useState<Template | null>(null);
 
   const editForm = useForm<EditOrgForm>({
     resolver: zodResolver(editOrgSchema),
@@ -154,6 +164,12 @@ export default function OrganizationDetailPage() {
     enabled: activeTab === "pricing",
   });
 
+  // Fetch templates
+  const { data: promptsData, isLoading: promptsLoading } = useQuery({
+    ...templateListByOrgOptions({ path: { org_slug: slug! } }),
+    enabled: activeTab === "templates",
+  });
+
   // Fetch all users for member selection
   const { data: allUsers } = useQuery({
     ...userListOptions(),
@@ -197,6 +213,37 @@ export default function OrganizationDetailPage() {
       toast({ title: "Failed to remove member", description: String(error), type: "error" });
     },
   });
+
+  // Delete prompt mutation
+  const deletePromptMutation = useMutation({
+    ...templateDeleteMutation(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [{ _id: "templateListByOrg" }] });
+      toast({ title: "Template deleted", type: "success" });
+    },
+    onError: (error) => {
+      toast({ title: "Failed to delete template", description: String(error), type: "error" });
+    },
+  });
+
+  const handlePromptEdit = (prompt: Template) => {
+    setEditingPrompt(prompt);
+    setIsPromptModalOpen(true);
+  };
+
+  const handlePromptDelete = async (prompt: Template) => {
+    const confirmed = await confirm({
+      title: "Delete Template",
+      message: `Are you sure you want to delete "${prompt.name}"? This action cannot be undone.`,
+      confirmLabel: "Delete",
+      variant: "destructive",
+    });
+    if (confirmed) {
+      deletePromptMutation.mutate({ path: { id: prompt.id } });
+    }
+  };
+
+  const promptColumns = createTemplateColumns(handlePromptEdit, handlePromptDelete);
 
   const onEditSubmit = (data: EditOrgForm) => {
     updateMutation.mutate({
@@ -426,6 +473,18 @@ export default function OrganizationDetailPage() {
               New Project
             </Button>
           )}
+          {activeTab === "templates" && (
+            <Button
+              size="sm"
+              onClick={() => {
+                setEditingPrompt(null);
+                setIsPromptModalOpen(true);
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              New Template
+            </Button>
+          )}
         </CardHeader>
         <CardContent>
           {activeTab === "projects" && (
@@ -486,6 +545,16 @@ export default function OrganizationDetailPage() {
               emptyMessage="No custom pricing for this organization."
               searchColumn="model"
               searchPlaceholder="Search models..."
+            />
+          )}
+          {activeTab === "templates" && (
+            <DataTable
+              columns={promptColumns as ColumnDef<Template>[]}
+              data={promptsData?.data || []}
+              isLoading={promptsLoading}
+              emptyMessage="No templates in this organization."
+              searchColumn="name"
+              searchPlaceholder="Search templates..."
             />
           )}
           {activeTab === "usage" && slug && org?.id && (
@@ -563,6 +632,25 @@ export default function OrganizationDetailPage() {
         isLoading={addMemberMutation.isPending}
         emptyMessage="All users are already members of this organization."
       />
+
+      {/* Prompt Template Modal */}
+      {org && (
+        <AdminPromptFormModal
+          open={isPromptModalOpen}
+          onClose={() => {
+            setIsPromptModalOpen(false);
+            setEditingPrompt(null);
+          }}
+          editingPrompt={editingPrompt}
+          ownerOverride={{ type: "organization", organization_id: org.id }}
+          onSaved={() => {
+            toast({
+              title: editingPrompt ? "Template updated" : "Template created",
+              type: "success",
+            });
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -12,7 +12,6 @@ mod org_rbac_policies;
 mod org_sso_configs;
 mod organizations;
 mod projects;
-mod prompts;
 mod providers;
 #[cfg(feature = "sso")]
 mod scim_configs;
@@ -24,6 +23,7 @@ mod service_accounts;
 #[cfg(feature = "sso")]
 mod sso_group_mappings;
 mod teams;
+mod templates;
 mod usage;
 mod users;
 mod vector_stores;
@@ -40,7 +40,6 @@ pub use org_rbac_policies::SqliteOrgRbacPolicyRepo;
 pub use org_sso_configs::SqliteOrgSsoConfigRepo;
 pub use organizations::SqliteOrganizationRepo;
 pub use projects::SqliteProjectRepo;
-pub use prompts::SqlitePromptRepo;
 pub use providers::SqliteDynamicProviderRepo;
 #[cfg(feature = "sso")]
 pub use scim_configs::SqliteOrgScimConfigRepo;
@@ -52,6 +51,7 @@ pub use service_accounts::SqliteServiceAccountRepo;
 #[cfg(feature = "sso")]
 pub use sso_group_mappings::SqliteSsoGroupMappingRepo;
 pub use teams::SqliteTeamRepo;
+pub use templates::SqliteTemplateRepo;
 pub use usage::SqliteUsageRepo;
 pub use users::SqliteUserRepo;
 pub use vector_stores::SqliteVectorStoresRepo;

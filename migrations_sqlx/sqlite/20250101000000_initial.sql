@@ -916,14 +916,14 @@ CREATE INDEX IF NOT EXISTS idx_vector_store_files_deleted_at ON vector_store_fil
 -- without cross-database joins. See VectorStore trait for chunk operations.
 
 -- ======================================================================
--- Prompts
+-- Templates
 -- ======================================================================
 
 -- Reusable system prompt templates.
 -- owner_type: 'organization', 'team', 'project', 'user'
-CREATE TABLE IF NOT EXISTS prompts (
+CREATE TABLE IF NOT EXISTS templates (
     id TEXT PRIMARY KEY NOT NULL,
-    -- Ownership (who can access this prompt)
+    -- Ownership (who can access this template)
     owner_type TEXT NOT NULL CHECK (owner_type IN ('organization', 'team', 'project', 'user')),
     owner_id TEXT NOT NULL,
     name TEXT NOT NULL,
@@ -939,10 +939,10 @@ CREATE TABLE IF NOT EXISTS prompts (
     UNIQUE(owner_type, owner_id, name)
 );
 
-CREATE INDEX IF NOT EXISTS idx_prompts_owner ON prompts(owner_type, owner_id);
--- Partial index for non-deleted prompts (most queries filter by deleted_at IS NULL)
-CREATE INDEX IF NOT EXISTS idx_prompts_owner_active ON prompts(owner_type, owner_id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_prompts_name ON prompts(name);
+CREATE INDEX IF NOT EXISTS idx_templates_owner ON templates(owner_type, owner_id);
+-- Partial index for non-deleted templates (most queries filter by deleted_at IS NULL)
+CREATE INDEX IF NOT EXISTS idx_templates_owner_active ON templates(owner_type, owner_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_templates_name ON templates(name);
 
 -- ======================================================================
 -- Service Accounts

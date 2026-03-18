@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react";
 import { MemoryRouter } from "react-router-dom";
-import { PromptsButton } from "./PromptsButton";
+import { TemplatesButton } from "./PromptsButton";
 import { AuthProvider } from "@/auth";
 import { ConfigProvider } from "@/config/ConfigProvider";
 import { ToastProvider } from "../Toast/Toast";
@@ -14,9 +14,9 @@ const queryClient = new QueryClient({
   },
 });
 
-const meta: Meta<typeof PromptsButton> = {
-  title: "Chat/PromptsButton",
-  component: PromptsButton,
+const meta: Meta<typeof TemplatesButton> = {
+  title: "Chat/TemplatesButton",
+  component: TemplatesButton,
   parameters: {
     layout: "centered",
   },
@@ -38,31 +38,14 @@ const meta: Meta<typeof PromptsButton> = {
     ),
   ],
   args: {
-    onApplyPrompt: (content: string) => console.log("Apply prompt:", content),
+    onApplyTemplate: (content: string) => console.log("Apply template:", content),
   },
 };
 
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-export const Default: Story = {
-  args: {
-    hasActivePrompt: false,
-  },
-};
-
-export const Active: Story = {
-  args: {
-    hasActivePrompt: true,
-  },
-  parameters: {
-    docs: {
-      description: {
-        story: "Button highlighted when a system prompt is active.",
-      },
-    },
-  },
-};
+export const Default: Story = {};
 
 export const Disabled: Story = {
   args: {

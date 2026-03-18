@@ -32,7 +32,7 @@ import type { VectorStoreOwnerType } from "@/api/generated/types.gen";
 import { Button } from "@/components/Button/Button";
 import { Textarea } from "@/components/Textarea/Textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/Tooltip/Tooltip";
-import { PromptsButton } from "@/components/PromptsButton";
+import { TemplatesButton } from "@/components/PromptsButton";
 import { ToolsBar } from "@/components/ToolsBar";
 import type { ModelInfo } from "@/components/ModelPicker/ModelPicker";
 import { useConfig } from "@/config/ConfigProvider";
@@ -454,13 +454,9 @@ export function ChatInput({
               </Tooltip>
             )}
 
-            {/* Prompt templates */}
+            {/* Templates */}
             {onApplyPrompt && (
-              <PromptsButton
-                onApplyPrompt={onApplyPrompt}
-                hasActivePrompt={hasSystemPrompt}
-                disabled={disabled || isStreaming}
-              />
+              <TemplatesButton onApplyTemplate={onApplyPrompt} disabled={disabled || isStreaming} />
             )}
 
             {/* History mode toggle - only show when multiple models */}

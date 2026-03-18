@@ -53,7 +53,7 @@ struct CachedRepos {
     vector_stores: Arc<dyn VectorStoresRepo>,
     files: Arc<dyn FilesRepo>,
     teams: Arc<dyn TeamRepo>,
-    prompts: Arc<dyn PromptRepo>,
+    templates: Arc<dyn TemplateRepo>,
     #[cfg(feature = "sso")]
     sso_group_mappings: Arc<dyn SsoGroupMappingRepo>,
     #[cfg(feature = "sso")]
@@ -131,7 +131,7 @@ impl DbPool {
             vector_stores: Arc::new(sqlite::SqliteVectorStoresRepo::new(pool.clone())),
             files: Arc::new(sqlite::SqliteFilesRepo::new(pool.clone())),
             teams: Arc::new(sqlite::SqliteTeamRepo::new(pool.clone())),
-            prompts: Arc::new(sqlite::SqlitePromptRepo::new(pool.clone())),
+            templates: Arc::new(sqlite::SqliteTemplateRepo::new(pool.clone())),
             #[cfg(feature = "sso")]
             sso_group_mappings: Arc::new(sqlite::SqliteSsoGroupMappingRepo::new(pool.clone())),
             #[cfg(feature = "sso")]
@@ -169,7 +169,7 @@ impl DbPool {
             vector_stores: Arc::new(sqlite::SqliteVectorStoresRepo::new(pool.clone())),
             files: Arc::new(sqlite::SqliteFilesRepo::new(pool.clone())),
             teams: Arc::new(sqlite::SqliteTeamRepo::new(pool.clone())),
-            prompts: Arc::new(sqlite::SqlitePromptRepo::new(pool.clone())),
+            templates: Arc::new(sqlite::SqliteTemplateRepo::new(pool.clone())),
             #[cfg(feature = "sso")]
             sso_group_mappings: unreachable!("SSO not supported in WASM builds"),
             #[cfg(feature = "sso")]
@@ -244,7 +244,7 @@ impl DbPool {
                 write_pool.clone(),
                 read_pool.clone(),
             )),
-            prompts: Arc::new(postgres::PostgresPromptRepo::new(
+            templates: Arc::new(postgres::PostgresTemplateRepo::new(
                 write_pool.clone(),
                 read_pool.clone(),
             )),
@@ -330,7 +330,7 @@ impl DbPool {
                     vector_stores: Arc::new(sqlite::SqliteVectorStoresRepo::new(pool.clone())),
                     files: Arc::new(sqlite::SqliteFilesRepo::new(pool.clone())),
                     teams: Arc::new(sqlite::SqliteTeamRepo::new(pool.clone())),
-                    prompts: Arc::new(sqlite::SqlitePromptRepo::new(pool.clone())),
+                    templates: Arc::new(sqlite::SqliteTemplateRepo::new(pool.clone())),
                     #[cfg(feature = "sso")]
                     sso_group_mappings: Arc::new(sqlite::SqliteSsoGroupMappingRepo::new(
                         pool.clone(),
@@ -430,7 +430,7 @@ impl DbPool {
                         write_pool.clone(),
                         read_pool.clone(),
                     )),
-                    prompts: Arc::new(postgres::PostgresPromptRepo::new(
+                    templates: Arc::new(postgres::PostgresTemplateRepo::new(
                         write_pool.clone(),
                         read_pool.clone(),
                     )),
@@ -581,9 +581,9 @@ impl DbPool {
         Arc::clone(&self.repos.teams)
     }
 
-    /// Get prompt repository
-    pub fn prompts(&self) -> Arc<dyn PromptRepo> {
-        Arc::clone(&self.repos.prompts)
+    /// Get template repository
+    pub fn templates(&self) -> Arc<dyn TemplateRepo> {
+        Arc::clone(&self.repos.templates)
     }
 
     /// Get SSO group mapping repository

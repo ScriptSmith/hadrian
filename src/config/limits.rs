@@ -95,9 +95,9 @@ pub struct ResourceLimits {
     #[serde(default = "default_max_conversations_per_owner")]
     pub max_conversations_per_owner: u32,
 
-    /// Maximum prompts per owner (org/team/project/user). Default: 5,000.
-    #[serde(default = "default_max_prompts_per_owner")]
-    pub max_prompts_per_owner: u32,
+    /// Maximum templates per owner (org/team/project/user). Default: 5,000.
+    #[serde(default = "default_max_templates_per_owner")]
+    pub max_templates_per_owner: u32,
 
     /// Maximum domain verifications per SSO configuration. Default: 50.
     #[serde(default = "default_max_domains_per_sso_config")]
@@ -146,7 +146,7 @@ impl Default for ResourceLimits {
             max_vector_stores_per_owner: default_max_vector_stores_per_owner(),
             max_files_per_vector_store: default_max_files_per_vector_store(),
             max_conversations_per_owner: default_max_conversations_per_owner(),
-            max_prompts_per_owner: default_max_prompts_per_owner(),
+            max_templates_per_owner: default_max_templates_per_owner(),
             max_domains_per_sso_config: default_max_domains_per_sso_config(),
             max_sso_group_mappings_per_org: default_max_sso_group_mappings_per_org(),
             max_members_per_org: default_max_members_per_org(),
@@ -218,7 +218,7 @@ fn default_max_conversations_per_owner() -> u32 {
     10_000
 }
 
-fn default_max_prompts_per_owner() -> u32 {
+fn default_max_templates_per_owner() -> u32 {
     5_000
 }
 
