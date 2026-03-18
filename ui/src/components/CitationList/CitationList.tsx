@@ -99,7 +99,12 @@ const CitationItem = memo(function CitationItem({
         "hover:border-primary/50 hover:bg-muted/30"
       )}
     >
-      <div className="flex items-center gap-2 px-3 py-2">
+      <button
+        type="button"
+        className="flex items-center gap-2 px-3 py-2 w-full text-left cursor-pointer"
+        onClick={hasExpandableContent ? onToggle : handleClick}
+        aria-expanded={hasExpandableContent ? isExpanded : undefined}
+      >
         {/* Icon */}
         {citation.type === "url" ? (
           <ExternalLink className="h-4 w-4 text-green-500 shrink-0" />
@@ -108,13 +113,9 @@ const CitationItem = memo(function CitationItem({
         )}
 
         {/* Title/filename */}
-        <button
-          type="button"
-          className="text-sm font-medium text-foreground hover:text-primary truncate text-left flex-1 min-w-0"
-          onClick={handleClick}
-        >
+        <span className="text-sm font-medium text-foreground truncate text-left flex-1 min-w-0">
           {citation.type === "url" ? citation.title : citation.filename}
-        </button>
+        </span>
 
         {/* Score badge */}
         {citation.score !== undefined && (
@@ -140,20 +141,13 @@ const CitationItem = memo(function CitationItem({
           </span>
         )}
 
-        {/* Expand button */}
+        {/* Expand indicator */}
         {hasExpandableContent && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 w-6 p-0 shrink-0"
-            onClick={onToggle}
-            aria-label={isExpanded ? "Collapse citation" : "Expand citation"}
-            aria-expanded={isExpanded}
-          >
+          <span className="h-6 w-6 flex items-center justify-center shrink-0">
             {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-          </Button>
+          </span>
         )}
-      </div>
+      </button>
 
       {/* Expanded content */}
       {isExpanded && hasExpandableContent && (
