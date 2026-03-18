@@ -10,9 +10,18 @@ no server, no Docker — just open the page and start chatting.
 
 ## Quick Start
 
-1. Open [app.hadriangateway.com](https://app.hadriangateway.com)
-2. Connect a provider (OpenRouter is one click, or add your own API keys)
-3. Start chatting
+1. Connect a provider (OpenRouter is one click, or add your own API keys)
+2. Start chatting
+
+Or [open in a new tab](https://app.hadriangateway.com).
+
+<iframe
+  src="https://app.hadriangateway.com"
+  title="Hadrian Browser Edition"
+  className="w-full rounded-xl border"
+  style={{ height: "70vh" }}
+  allow="clipboard-write"
+/>
 
 ## Using Ollama
 
@@ -130,12 +139,10 @@ If Ollama is not detected, check that:
 
 The browser edition has some limitations compared to the server version:
 
-- **No real-time streaming** — responses are buffered (the full response appears at once)
-- **No usage tracking** — token usage is not recorded
+- **No usage tracking** - token usage is not recorded
 - **No caching, rate limiting, or budgets**
-- **Requires a modern browser** — Chrome 91+, Edge 91+ (module service workers)
-- **Provider API keys are stored in your browser** — they never leave your device, but are only as
-  secure as your browser's storage
+- **Requires a modern browser** - Chrome 91+, Edge 91+ (module service workers)
+- **Provider API keys are stored in your browser** - only as secure as your browser's storage
 
 For teams, SSO, guardrails, and full feature support, use the
 [server version](/docs/getting-started).
