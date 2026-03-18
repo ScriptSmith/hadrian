@@ -1,10 +1,20 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { Download, Trash2, User, AlertTriangle, HardDrive } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Download, Trash2, User, AlertTriangle, HardDrive, Monitor } from "lucide-react";
+import { useState } from "react";
 
-import { meDeleteMutation, meExportOptions } from "@/api/generated/@tanstack/react-query.gen";
+import {
+  meDeleteMutation,
+  meExportOptions,
+  meSessionsListOptions,
+  meSessionsListQueryKey,
+  meSessionsDeleteOneMutation,
+} from "@/api/generated/@tanstack/react-query.gen";
+import type { SessionInfo } from "@/api/generated/types.gen";
 import { useAuth } from "@/auth";
 import { Button } from "@/components/Button/Button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/Card/Card";
+import { SessionCard } from "@/components/Admin/SessionsPanel/SessionCard";
+import { Skeleton } from "@/components/Skeleton/Skeleton";
 import { useToast } from "@/components/Toast/Toast";
 import { useConfirm } from "@/components/ConfirmDialog/ConfirmDialog";
 import { exportAllIndexedDBData, deleteIndexedDBDatabase } from "@/hooks/useIndexedDB";
@@ -55,12 +65,31 @@ export default function AccountPage() {
   const { user, logout } = useAuth();
   const { toast } = useToast();
   const confirm = useConfirm();
+  const queryClient = useQueryClient();
+  const [revokingSessionId, setRevokingSessionId] = useState<string | null>(null);
 
   // Export data query (only fetch when triggered)
   const { refetch: fetchExport, isFetching: isExporting } = useQuery({
     ...meExportOptions(),
     enabled: false, // Don't auto-fetch
   });
+
+  // Sessions
+  const { data: sessions, isLoading: sessionsLoading } = useQuery(meSessionsListOptions());
+
+  const deleteSessionMutation = useMutation({
+    ...meSessionsDeleteOneMutation(),
+    onSuccess: () => {
+      setRevokingSessionId(null);
+      queryClient.invalidateQueries({ queryKey: meSessionsListQueryKey() });
+    },
+    onError: () => setRevokingSessionId(null),
+  });
+
+  const handleRevokeSession = (sessionId: string) => {
+    setRevokingSessionId(sessionId);
+    deleteSessionMutation.mutate({ path: { session_id: sessionId } });
+  };
 
   // Delete account mutation
   const deleteMutation = useMutation({
@@ -234,6 +263,45 @@ export default function AccountPage() {
               </div>
             )}
           </dl>
+        </CardContent>
+      </Card>
+
+      {/* Active Sessions */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Monitor className="h-5 w-5" />
+            Active Sessions
+          </CardTitle>
+          <CardDescription>Devices where you are currently logged in</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {sessionsLoading ? (
+            <div className="space-y-3">
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-24 w-full" />
+            </div>
+          ) : sessions?.enhanced_enabled === false ? (
+            <p className="text-sm text-muted-foreground">
+              Session tracking is not enabled for this deployment.
+            </p>
+          ) : sessions && sessions.data.length > 0 ? (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground mb-4">
+                {sessions.data.length} active session{sessions.data.length !== 1 ? "s" : ""}
+              </p>
+              {sessions.data.map((session: SessionInfo) => (
+                <SessionCard
+                  key={session.id}
+                  session={session}
+                  onRevoke={handleRevokeSession}
+                  isRevoking={revokingSessionId === session.id}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No active sessions.</p>
+          )}
         </CardContent>
       </Card>
 

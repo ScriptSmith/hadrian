@@ -13,6 +13,8 @@ mod error;
 pub mod me;
 pub mod me_api_keys;
 pub mod me_providers;
+#[cfg(feature = "sso")]
+pub mod me_sessions;
 pub mod model_pricing;
 pub mod org_rbac_policies;
 #[cfg(feature = "sso")]
@@ -689,7 +691,10 @@ pub(crate) fn admin_v1_routes() -> Router<AppState> {
     // SSO routes (only available when sso feature is enabled)
     #[cfg(feature = "sso")]
     let router = router
-        // User Sessions
+        // Self-service sessions (current user)
+        .route("/me/sessions", get(me_sessions::list))
+        .route("/me/sessions/{session_id}", delete(me_sessions::delete_one))
+        // User Sessions (admin)
         .route(
             "/users/{user_id}/sessions",
             get(sessions::list).delete(sessions::delete_all),

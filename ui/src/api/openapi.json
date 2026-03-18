@@ -2962,6 +2962,92 @@
         }
       }
     },
+    "/admin/v1/me/sessions": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "List current user's active sessions.",
+        "description": "Returns an empty list if enhanced session management is not enabled.\nThe `enhanced_enabled` field indicates whether session tracking is active.",
+        "operationId": "me_sessions_list",
+        "responses": {
+          "200": {
+            "description": "List of current user's sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/me/sessions/{session_id}": {
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Revoke a specific session belonging to the current user.",
+        "description": "Returns success even if the session doesn't exist (idempotent).\nReturns 400 if the session belongs to a different user.",
+        "operationId": "me_sessions_delete_one",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "description": "Session ID to revoke",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionsRevokedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session does not belong to current user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/v1/me/usage": {
       "get": {
         "tags": [
