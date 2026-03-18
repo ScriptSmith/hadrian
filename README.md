@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://hadriangateway.com/docs"><strong>Documentation</strong></a> | <a href="https://app.hadriangateway.com"><strong>Try in Browser</strong></a> | <a href="https://hadriangateway.com/api/docs"><strong>API Reference</strong></a>
+  <a href="https://hadriangateway.com/docs"><strong>Documentation</strong></a> | <a href="https://app.hadriangateway.com"><strong>Try in Browser</strong></a> | <a href="https://hadriangateway.com/docs/api"><strong>API Reference</strong></a>
 </p>
 
 <p align="center">
