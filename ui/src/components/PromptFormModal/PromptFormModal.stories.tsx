@@ -4,7 +4,7 @@ import { http, HttpResponse, delay } from "msw";
 import { useState } from "react";
 import { PromptFormModal } from "./PromptFormModal";
 import { Button } from "../Button/Button";
-import type { Organization, Prompt } from "@/api/generated/types.gen";
+import type { Organization, Template } from "@/api/generated/types.gen";
 
 // Mock organizations
 const mockOrganizations: Organization[] = [
@@ -29,7 +29,7 @@ const mockOrganizations: Organization[] = [
 ];
 
 // Mock existing prompt for editing
-const mockPrompt: Prompt = {
+const mockTemplate: Template = {
   id: "prompt_001",
   name: "Code Review Assistant",
   description: "Reviews code for best practices and potential issues",
@@ -74,7 +74,7 @@ const meta: Meta<typeof PromptFormModal> = {
           });
         }),
         // Mock prompts list (empty initially)
-        http.get("/api/admin/v1/organizations/:org_slug/prompts", async () => {
+        http.get("/api/admin/v1/organizations/:org_slug/templates", async () => {
           await delay(200);
           return HttpResponse.json({
             data: [],
@@ -82,10 +82,10 @@ const meta: Meta<typeof PromptFormModal> = {
           });
         }),
         // Mock create prompt
-        http.post("/api/admin/v1/prompts", async ({ request }) => {
+        http.post("/api/admin/v1/templates", async ({ request }) => {
           await delay(500);
           const body = (await request.json()) as Record<string, unknown>;
-          const newPrompt: Prompt = {
+          const newTemplate: Template = {
             id: "prompt_new",
             name: body.name as string,
             description: (body.description as string) || null,
@@ -96,20 +96,20 @@ const meta: Meta<typeof PromptFormModal> = {
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           };
-          return HttpResponse.json(newPrompt, { status: 201 });
+          return HttpResponse.json(newTemplate, { status: 201 });
         }),
         // Mock update prompt
-        http.patch("/api/admin/v1/prompts/:id", async ({ request }) => {
+        http.patch("/api/admin/v1/templates/:id", async ({ request }) => {
           await delay(500);
           const body = (await request.json()) as Record<string, unknown>;
-          const updatedPrompt: Prompt = {
-            ...mockPrompt,
-            name: (body.name as string) || mockPrompt.name,
-            description: (body.description as string) || mockPrompt.description,
-            content: (body.content as string) || mockPrompt.content,
+          const updatedTemplate: Template = {
+            ...mockTemplate,
+            name: (body.name as string) || mockTemplate.name,
+            description: (body.description as string) || mockTemplate.description,
+            content: (body.content as string) || mockTemplate.content,
             updated_at: new Date().toISOString(),
           };
-          return HttpResponse.json(updatedPrompt);
+          return HttpResponse.json(updatedTemplate);
         }),
       ],
     },
@@ -145,7 +145,7 @@ function WithInitialContentStory() {
 
   return (
     <>
-      <Button onClick={() => setOpen(true)}>Save Current Prompt</Button>
+      <Button onClick={() => setOpen(true)}>Save Current Template</Button>
       <div className="mt-4 p-4 bg-muted rounded-md max-w-md">
         <p className="text-xs text-muted-foreground mb-2">Current system prompt:</p>
         <p className="text-sm">{initialContent}</p>
@@ -169,16 +169,16 @@ function EditExistingStory() {
 
   return (
     <>
-      <Button onClick={() => setOpen(true)}>Edit Prompt</Button>
+      <Button onClick={() => setOpen(true)}>Edit Template</Button>
       <div className="mt-4 p-4 bg-muted rounded-md max-w-md">
         <p className="text-xs text-muted-foreground mb-1">Editing:</p>
-        <p className="text-sm font-medium">{mockPrompt.name}</p>
-        <p className="text-xs text-muted-foreground mt-1">{mockPrompt.description}</p>
+        <p className="text-sm font-medium">{mockTemplate.name}</p>
+        <p className="text-xs text-muted-foreground mt-1">{mockTemplate.description}</p>
       </div>
       <PromptFormModal
         open={open}
         onClose={() => setOpen(false)}
-        editingPrompt={mockPrompt}
+        editingPrompt={mockTemplate}
         onSaved={(prompt) => console.log("Updated:", prompt)}
       />
     </>
@@ -219,7 +219,7 @@ function LongContentStory() {
 
   return (
     <>
-      <Button onClick={() => setOpen(true)}>Save Long Prompt</Button>
+      <Button onClick={() => setOpen(true)}>Save Long Template</Button>
       <PromptFormModal
         open={open}
         onClose={() => setOpen(false)}

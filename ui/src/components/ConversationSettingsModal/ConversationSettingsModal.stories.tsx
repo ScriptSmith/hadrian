@@ -4,7 +4,7 @@ import { http, HttpResponse, delay } from "msw";
 import { useState } from "react";
 import { ConversationSettingsModal } from "./ConversationSettingsModal";
 import { Button } from "../Button/Button";
-import type { VectorStore, Organization, Prompt } from "@/api/generated/types.gen";
+import type { VectorStore, Organization, Template } from "@/api/generated/types.gen";
 
 // Mock organizations
 const mockOrganizations: Organization[] = [
@@ -20,7 +20,7 @@ const mockOrganizations: Organization[] = [
 ];
 
 // Mock prompts
-const mockPrompts: Prompt[] = [
+const mockPrompts: Template[] = [
   {
     id: "prompt_001",
     name: "Code Review Assistant",
@@ -169,7 +169,7 @@ const meta: Meta<typeof ConversationSettingsModal> = {
           });
         }),
         // Mock prompts list
-        http.get("/api/admin/v1/organizations/:org_slug/prompts", async () => {
+        http.get("/api/admin/v1/organizations/:org_slug/templates", async () => {
           await delay(200);
           return HttpResponse.json({
             data: mockPrompts,
@@ -177,10 +177,10 @@ const meta: Meta<typeof ConversationSettingsModal> = {
           });
         }),
         // Mock create prompt
-        http.post("/api/admin/v1/prompts", async ({ request }) => {
+        http.post("/api/admin/v1/templates", async ({ request }) => {
           await delay(500);
           const body = (await request.json()) as Record<string, unknown>;
-          const newPrompt: Prompt = {
+          const newPrompt: Template = {
             id: "prompt_new",
             name: body.name as string,
             description: (body.description as string) || null,

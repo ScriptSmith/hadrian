@@ -82,3 +82,4 @@ export {
   type TimeRangeSelectorProps,
 } from "./TimeRangeSelector";
 export { ProviderHistoryCharts, type ProviderHistoryChartsProps } from "./ProviderHistoryCharts";
+export { AdminPromptFormModal, type AdminPromptFormModalProps } from "./PromptFormModal";

@@ -12,17 +12,17 @@ use super::{AuditActor, error::AdminError, organizations::ListQuery};
 use crate::{
     AppState,
     middleware::{AdminAuth, AuthzContext, ClientInfo},
-    models::{CreateAuditLog, CreatePrompt, Prompt, PromptOwnerType, UpdatePrompt},
+    models::{CreateAuditLog, CreateTemplate, Template, TemplateOwnerType, UpdateTemplate},
     openapi::PaginationMeta,
     services::Services,
 };
 
-/// Paginated list of prompts
+/// Paginated list of templates
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-pub struct PromptListResponse {
-    /// List of prompts
-    pub data: Vec<Prompt>,
+pub struct TemplateListResponse {
+    /// List of templates
+    pub data: Vec<Template>,
     /// Pagination metadata
     pub pagination: PaginationMeta,
 }
@@ -31,53 +31,53 @@ fn get_services(state: &AppState) -> Result<&Services, AdminError> {
     state.services.as_ref().ok_or(AdminError::ServicesRequired)
 }
 
-/// Create a prompt template
+/// Create a template
 #[cfg_attr(feature = "utoipa", utoipa::path(
     post,
-    path = "/admin/v1/prompts",
-    tag = "prompts",
-    operation_id = "prompt_create",
-    request_body = CreatePrompt,
+    path = "/admin/v1/templates",
+    tag = "templates",
+    operation_id = "template_create",
+    request_body = CreateTemplate,
     responses(
-        (status = 201, description = "Prompt created", body = Prompt),
+        (status = 201, description = "Template created", body = Template),
         (status = 404, description = "Owner not found", body = crate::openapi::ErrorResponse),
-        (status = 409, description = "Prompt with this name already exists", body = crate::openapi::ErrorResponse),
+        (status = 409, description = "Template with this name already exists", body = crate::openapi::ErrorResponse),
     )
 ))]
-#[tracing::instrument(name = "admin.prompts.create", skip(state, admin_auth, authz, input))]
+#[tracing::instrument(name = "admin.templates.create", skip(state, admin_auth, authz, input))]
 pub async fn create(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
     Extension(client_info): Extension<ClientInfo>,
-    Valid(Json(input)): Valid<Json<CreatePrompt>>,
-) -> Result<(StatusCode, Json<Prompt>), AdminError> {
+    Valid(Json(input)): Valid<Json<CreateTemplate>>,
+) -> Result<(StatusCode, Json<Template>), AdminError> {
     let services = get_services(&state)?;
     let actor = AuditActor::from(&admin_auth);
 
-    authz.require("prompt", "create", None, None, None, None)?;
+    authz.require("template", "create", None, None, None, None)?;
 
-    // Check prompt limit
-    let max = state.config.limits.resource_limits.max_prompts_per_owner;
+    // Check template limit
+    let max = state.config.limits.resource_limits.max_templates_per_owner;
     if max > 0 {
         let count = services
-            .prompts
+            .templates
             .count_by_owner(input.owner.owner_type(), input.owner.owner_id(), false)
             .await?;
         if count >= max as i64 {
             return Err(AdminError::Conflict(format!(
-                "Owner has reached the maximum number of prompts ({max})"
+                "Owner has reached the maximum number of templates ({max})"
             )));
         }
     }
 
-    let prompt = services.prompts.create(input).await?;
+    let template = services.templates.create(input).await?;
 
     // Extract org_id and project_id from owner for audit log
-    let (org_id, project_id) = match prompt.owner_type {
-        PromptOwnerType::Organization => (Some(prompt.owner_id), None),
-        PromptOwnerType::Project => (None, Some(prompt.owner_id)),
-        PromptOwnerType::Team | PromptOwnerType::User => (None, None),
+    let (org_id, project_id) = match template.owner_type {
+        TemplateOwnerType::Organization => (Some(template.owner_id), None),
+        TemplateOwnerType::Project => (None, Some(template.owner_id)),
+        TemplateOwnerType::Team | TemplateOwnerType::User => (None, None),
     };
 
     // Log audit event (fire-and-forget)
@@ -86,82 +86,82 @@ pub async fn create(
         .create(CreateAuditLog {
             actor_type: actor.actor_type,
             actor_id: actor.actor_id,
-            action: "prompt.create".to_string(),
-            resource_type: "prompt".to_string(),
-            resource_id: prompt.id,
+            action: "template.create".to_string(),
+            resource_type: "template".to_string(),
+            resource_id: template.id,
             org_id,
             project_id,
             details: json!({
-                "name": prompt.name,
-                "owner_type": prompt.owner_type,
-                "owner_id": prompt.owner_id,
+                "name": template.name,
+                "owner_type": template.owner_type,
+                "owner_id": template.owner_id,
             }),
             ip_address: client_info.ip_address,
             user_agent: client_info.user_agent,
         })
         .await;
 
-    Ok((StatusCode::CREATED, Json(prompt)))
+    Ok((StatusCode::CREATED, Json(template)))
 }
 
-/// Get a prompt by ID
+/// Get a template by ID
 #[cfg_attr(feature = "utoipa", utoipa::path(
     get,
-    path = "/admin/v1/prompts/{id}",
-    tag = "prompts",
-    operation_id = "prompt_get",
-    params(("id" = Uuid, Path, description = "Prompt ID")),
+    path = "/admin/v1/templates/{id}",
+    tag = "templates",
+    operation_id = "template_get",
+    params(("id" = Uuid, Path, description = "Template ID")),
     responses(
-        (status = 200, description = "Prompt found", body = Prompt),
-        (status = 404, description = "Prompt not found", body = crate::openapi::ErrorResponse),
+        (status = 200, description = "Template found", body = Template),
+        (status = 404, description = "Template not found", body = crate::openapi::ErrorResponse),
     )
 ))]
-#[tracing::instrument(name = "admin.prompts.get", skip(state, authz), fields(%id))]
+#[tracing::instrument(name = "admin.templates.get", skip(state, authz), fields(%id))]
 pub async fn get(
     State(state): State<AppState>,
     Extension(authz): Extension<AuthzContext>,
     Path(id): Path<Uuid>,
-) -> Result<Json<Prompt>, AdminError> {
+) -> Result<Json<Template>, AdminError> {
     let services = get_services(&state)?;
 
-    authz.require("prompt", "read", None, None, None, None)?;
+    authz.require("template", "read", None, None, None, None)?;
 
-    let prompt = services
-        .prompts
+    let template = services
+        .templates
         .get_by_id(id)
         .await?
-        .ok_or_else(|| AdminError::NotFound("Prompt not found".to_string()))?;
+        .ok_or_else(|| AdminError::NotFound("Template not found".to_string()))?;
 
-    Ok(Json(prompt))
+    Ok(Json(template))
 }
 
-/// Update a prompt
+/// Update a template
 #[cfg_attr(feature = "utoipa", utoipa::path(
     patch,
-    path = "/admin/v1/prompts/{id}",
-    tag = "prompts",
-    operation_id = "prompt_update",
-    params(("id" = Uuid, Path, description = "Prompt ID")),
-    request_body = UpdatePrompt,
+    path = "/admin/v1/templates/{id}",
+    tag = "templates",
+    operation_id = "template_update",
+    params(("id" = Uuid, Path, description = "Template ID")),
+    request_body = UpdateTemplate,
     responses(
-        (status = 200, description = "Prompt updated", body = Prompt),
-        (status = 404, description = "Prompt not found", body = crate::openapi::ErrorResponse),
-        (status = 409, description = "Prompt with this name already exists", body = crate::openapi::ErrorResponse),
+        (status = 200, description = "Template updated", body = Template),
+        (status = 404, description = "Template not found", body = crate::openapi::ErrorResponse),
+        (status = 409, description = "Template with this name already exists", body = crate::openapi::ErrorResponse),
     )
 ))]
-#[tracing::instrument(name = "admin.prompts.update", skip(state, admin_auth, authz, input), fields(%id))]
+#[tracing::instrument(name = "admin.templates.update", skip(state, admin_auth, authz, input), fields(%id))]
 pub async fn update(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
     Extension(client_info): Extension<ClientInfo>,
     Path(id): Path<Uuid>,
-    Valid(Json(input)): Valid<Json<UpdatePrompt>>,
-) -> Result<Json<Prompt>, AdminError> {
+    Valid(Json(input)): Valid<Json<UpdateTemplate>>,
+) -> Result<Json<Template>, AdminError> {
     let services = get_services(&state)?;
     let actor = AuditActor::from(&admin_auth);
 
-    authz.require("prompt", "update", None, None, None, None)?;
+    authz.require("template", "update", None, None, None, None)?;
 
     // Capture changes for audit log
     let changes = json!({
@@ -171,13 +171,13 @@ pub async fn update(
         "metadata": input.metadata,
     });
 
-    let prompt = services.prompts.update(id, input).await?;
+    let template = services.templates.update(id, input).await?;
 
     // Extract org_id and project_id from owner for audit log
-    let (org_id, project_id) = match prompt.owner_type {
-        PromptOwnerType::Organization => (Some(prompt.owner_id), None),
-        PromptOwnerType::Project => (None, Some(prompt.owner_id)),
-        PromptOwnerType::Team | PromptOwnerType::User => (None, None),
+    let (org_id, project_id) = match template.owner_type {
+        TemplateOwnerType::Organization => (Some(template.owner_id), None),
+        TemplateOwnerType::Project => (None, Some(template.owner_id)),
+        TemplateOwnerType::Team | TemplateOwnerType::User => (None, None),
     };
 
     // Log audit event (fire-and-forget)
@@ -186,13 +186,13 @@ pub async fn update(
         .create(CreateAuditLog {
             actor_type: actor.actor_type,
             actor_id: actor.actor_id,
-            action: "prompt.update".to_string(),
-            resource_type: "prompt".to_string(),
-            resource_id: prompt.id,
+            action: "template.update".to_string(),
+            resource_type: "template".to_string(),
+            resource_id: template.id,
             org_id,
             project_id,
             details: json!({
-                "name": prompt.name,
+                "name": template.name,
                 "changes": changes,
             }),
             ip_address: client_info.ip_address,
@@ -200,22 +200,22 @@ pub async fn update(
         })
         .await;
 
-    Ok(Json(prompt))
+    Ok(Json(template))
 }
 
-/// Delete a prompt
+/// Delete a template
 #[cfg_attr(feature = "utoipa", utoipa::path(
     delete,
-    path = "/admin/v1/prompts/{id}",
-    tag = "prompts",
-    operation_id = "prompt_delete",
-    params(("id" = Uuid, Path, description = "Prompt ID")),
+    path = "/admin/v1/templates/{id}",
+    tag = "templates",
+    operation_id = "template_delete",
+    params(("id" = Uuid, Path, description = "Template ID")),
     responses(
-        (status = 200, description = "Prompt deleted"),
-        (status = 404, description = "Prompt not found", body = crate::openapi::ErrorResponse),
+        (status = 200, description = "Template deleted"),
+        (status = 404, description = "Template not found", body = crate::openapi::ErrorResponse),
     )
 ))]
-#[tracing::instrument(name = "admin.prompts.delete", skip(state, admin_auth, authz), fields(%id))]
+#[tracing::instrument(name = "admin.templates.delete", skip(state, admin_auth, authz), fields(%id))]
 pub async fn delete(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
@@ -226,28 +226,28 @@ pub async fn delete(
     let services = get_services(&state)?;
     let actor = AuditActor::from(&admin_auth);
 
-    authz.require("prompt", "delete", None, None, None, None)?;
+    authz.require("template", "delete", None, None, None, None)?;
 
-    // Get prompt details before deletion for audit log
-    let prompt = services
-        .prompts
+    // Get template details before deletion for audit log
+    let template = services
+        .templates
         .get_by_id(id)
         .await?
-        .ok_or_else(|| AdminError::NotFound("Prompt not found".to_string()))?;
+        .ok_or_else(|| AdminError::NotFound("Template not found".to_string()))?;
 
     // Extract org_id and project_id from owner for audit log
-    let (org_id, project_id) = match prompt.owner_type {
-        PromptOwnerType::Organization => (Some(prompt.owner_id), None),
-        PromptOwnerType::Project => (None, Some(prompt.owner_id)),
-        PromptOwnerType::Team | PromptOwnerType::User => (None, None),
+    let (org_id, project_id) = match template.owner_type {
+        TemplateOwnerType::Organization => (Some(template.owner_id), None),
+        TemplateOwnerType::Project => (None, Some(template.owner_id)),
+        TemplateOwnerType::Team | TemplateOwnerType::User => (None, None),
     };
 
     // Capture details for audit log before deletion
-    let prompt_name = prompt.name.clone();
-    let prompt_owner_type = prompt.owner_type;
-    let prompt_owner_id = prompt.owner_id;
+    let template_name = template.name.clone();
+    let template_owner_type = template.owner_type;
+    let template_owner_id = template.owner_id;
 
-    services.prompts.delete(id).await?;
+    services.templates.delete(id).await?;
 
     // Log audit event (fire-and-forget)
     let _ = services
@@ -255,15 +255,15 @@ pub async fn delete(
         .create(CreateAuditLog {
             actor_type: actor.actor_type,
             actor_id: actor.actor_id,
-            action: "prompt.delete".to_string(),
-            resource_type: "prompt".to_string(),
+            action: "template.delete".to_string(),
+            resource_type: "template".to_string(),
             resource_id: id,
             org_id,
             project_id,
             details: json!({
-                "name": prompt_name,
-                "owner_type": prompt_owner_type,
-                "owner_id": prompt_owner_id,
+                "name": template_name,
+                "owner_type": template_owner_type,
+                "owner_id": template_owner_id,
             }),
             ip_address: client_info.ip_address,
             user_agent: client_info.user_agent,
@@ -273,29 +273,29 @@ pub async fn delete(
     Ok(Json(()))
 }
 
-/// List prompts by organization
+/// List templates by organization
 #[cfg_attr(feature = "utoipa", utoipa::path(
     get,
-    path = "/admin/v1/organizations/{org_slug}/prompts",
-    tag = "prompts",
-    operation_id = "prompt_list_by_org",
+    path = "/admin/v1/organizations/{org_slug}/templates",
+    tag = "templates",
+    operation_id = "template_list_by_org",
     params(
         ("org_slug" = String, Path, description = "Organization slug"),
         ListQuery,
     ),
     responses(
-        (status = 200, description = "List of prompts", body = PromptListResponse),
+        (status = 200, description = "List of templates", body = TemplateListResponse),
         (status = 400, description = "Invalid cursor or direction", body = crate::openapi::ErrorResponse),
         (status = 404, description = "Organization not found", body = crate::openapi::ErrorResponse),
     )
 ))]
-#[tracing::instrument(name = "admin.prompts.list_by_org", skip(state, authz, query), fields(%org_slug))]
+#[tracing::instrument(name = "admin.templates.list_by_org", skip(state, authz, query), fields(%org_slug))]
 pub async fn list_by_org(
     State(state): State<AppState>,
     Extension(authz): Extension<AuthzContext>,
     Path(org_slug): Path<String>,
     Query(query): Query<ListQuery>,
-) -> Result<Json<PromptListResponse>, AdminError> {
+) -> Result<Json<TemplateListResponse>, AdminError> {
     let services = get_services(&state)?;
 
     // Get org by slug
@@ -306,7 +306,7 @@ pub async fn list_by_org(
         .ok_or_else(|| AdminError::NotFound(format!("Organization '{}' not found", org_slug)))?;
 
     authz.require(
-        "prompt",
+        "template",
         "list",
         None,
         Some(&org.id.to_string()),
@@ -317,10 +317,7 @@ pub async fn list_by_org(
     let limit = query.limit.unwrap_or(100);
     let params = query.try_into_with_cursor()?;
 
-    let result = services
-        .prompts
-        .list_by_owner(PromptOwnerType::Organization, org.id, params)
-        .await?;
+    let result = services.templates.list_by_org(org.id, params).await?;
 
     let pagination = PaginationMeta::with_cursors(
         limit,
@@ -329,36 +326,36 @@ pub async fn list_by_org(
         result.cursors.prev.map(|c| c.encode()),
     );
 
-    Ok(Json(PromptListResponse {
+    Ok(Json(TemplateListResponse {
         data: result.items,
         pagination,
     }))
 }
 
-/// List prompts by team
+/// List templates by team
 #[cfg_attr(feature = "utoipa", utoipa::path(
     get,
-    path = "/admin/v1/organizations/{org_slug}/teams/{team_slug}/prompts",
-    tag = "prompts",
-    operation_id = "prompt_list_by_team",
+    path = "/admin/v1/organizations/{org_slug}/teams/{team_slug}/templates",
+    tag = "templates",
+    operation_id = "template_list_by_team",
     params(
         ("org_slug" = String, Path, description = "Organization slug"),
         ("team_slug" = String, Path, description = "Team slug"),
         ListQuery,
     ),
     responses(
-        (status = 200, description = "List of prompts", body = PromptListResponse),
+        (status = 200, description = "List of templates", body = TemplateListResponse),
         (status = 400, description = "Invalid cursor or direction", body = crate::openapi::ErrorResponse),
         (status = 404, description = "Organization or team not found", body = crate::openapi::ErrorResponse),
     )
 ))]
-#[tracing::instrument(name = "admin.prompts.list_by_team", skip(state, authz, query), fields(%org_slug, %team_slug))]
+#[tracing::instrument(name = "admin.templates.list_by_team", skip(state, authz, query), fields(%org_slug, %team_slug))]
 pub async fn list_by_team(
     State(state): State<AppState>,
     Extension(authz): Extension<AuthzContext>,
     Path((org_slug, team_slug)): Path<(String, String)>,
     Query(query): Query<ListQuery>,
-) -> Result<Json<PromptListResponse>, AdminError> {
+) -> Result<Json<TemplateListResponse>, AdminError> {
     let services = get_services(&state)?;
 
     // Get org by slug
@@ -381,7 +378,7 @@ pub async fn list_by_team(
         })?;
 
     authz.require(
-        "prompt",
+        "template",
         "list",
         None,
         Some(&org.id.to_string()),
@@ -393,8 +390,8 @@ pub async fn list_by_team(
     let params = query.try_into_with_cursor()?;
 
     let result = services
-        .prompts
-        .list_by_owner(PromptOwnerType::Team, team.id, params)
+        .templates
+        .list_by_owner(TemplateOwnerType::Team, team.id, params)
         .await?;
 
     let pagination = PaginationMeta::with_cursors(
@@ -404,36 +401,36 @@ pub async fn list_by_team(
         result.cursors.prev.map(|c| c.encode()),
     );
 
-    Ok(Json(PromptListResponse {
+    Ok(Json(TemplateListResponse {
         data: result.items,
         pagination,
     }))
 }
 
-/// List prompts by project
+/// List templates by project
 #[cfg_attr(feature = "utoipa", utoipa::path(
     get,
-    path = "/admin/v1/organizations/{org_slug}/projects/{project_slug}/prompts",
-    tag = "prompts",
-    operation_id = "prompt_list_by_project",
+    path = "/admin/v1/organizations/{org_slug}/projects/{project_slug}/templates",
+    tag = "templates",
+    operation_id = "template_list_by_project",
     params(
         ("org_slug" = String, Path, description = "Organization slug"),
         ("project_slug" = String, Path, description = "Project slug"),
         ListQuery,
     ),
     responses(
-        (status = 200, description = "List of prompts", body = PromptListResponse),
+        (status = 200, description = "List of templates", body = TemplateListResponse),
         (status = 400, description = "Invalid cursor or direction", body = crate::openapi::ErrorResponse),
         (status = 404, description = "Organization or project not found", body = crate::openapi::ErrorResponse),
     )
 ))]
-#[tracing::instrument(name = "admin.prompts.list_by_project", skip(state, authz, query), fields(%org_slug, %project_slug))]
+#[tracing::instrument(name = "admin.templates.list_by_project", skip(state, authz, query), fields(%org_slug, %project_slug))]
 pub async fn list_by_project(
     State(state): State<AppState>,
     Extension(authz): Extension<AuthzContext>,
     Path((org_slug, project_slug)): Path<(String, String)>,
     Query(query): Query<ListQuery>,
-) -> Result<Json<PromptListResponse>, AdminError> {
+) -> Result<Json<TemplateListResponse>, AdminError> {
     let services = get_services(&state)?;
 
     // Get org by slug
@@ -456,7 +453,7 @@ pub async fn list_by_project(
         })?;
 
     authz.require(
-        "prompt",
+        "template",
         "list",
         None,
         Some(&org.id.to_string()),
@@ -468,8 +465,8 @@ pub async fn list_by_project(
     let params = query.try_into_with_cursor()?;
 
     let result = services
-        .prompts
-        .list_by_owner(PromptOwnerType::Project, project.id, params)
+        .templates
+        .list_by_owner(TemplateOwnerType::Project, project.id, params)
         .await?;
 
     let pagination = PaginationMeta::with_cursors(
@@ -479,44 +476,44 @@ pub async fn list_by_project(
         result.cursors.prev.map(|c| c.encode()),
     );
 
-    Ok(Json(PromptListResponse {
+    Ok(Json(TemplateListResponse {
         data: result.items,
         pagination,
     }))
 }
 
-/// List prompts by user
+/// List templates by user
 #[cfg_attr(feature = "utoipa", utoipa::path(
     get,
-    path = "/admin/v1/users/{user_id}/prompts",
-    tag = "prompts",
-    operation_id = "prompt_list_by_user",
+    path = "/admin/v1/users/{user_id}/templates",
+    tag = "templates",
+    operation_id = "template_list_by_user",
     params(
         ("user_id" = Uuid, Path, description = "User ID"),
         ListQuery,
     ),
     responses(
-        (status = 200, description = "List of prompts", body = PromptListResponse),
+        (status = 200, description = "List of templates", body = TemplateListResponse),
         (status = 400, description = "Invalid cursor or direction", body = crate::openapi::ErrorResponse),
     )
 ))]
-#[tracing::instrument(name = "admin.prompts.list_by_user", skip(state, authz, query), fields(%user_id))]
+#[tracing::instrument(name = "admin.templates.list_by_user", skip(state, authz, query), fields(%user_id))]
 pub async fn list_by_user(
     State(state): State<AppState>,
     Extension(authz): Extension<AuthzContext>,
     Path(user_id): Path<Uuid>,
     Query(query): Query<ListQuery>,
-) -> Result<Json<PromptListResponse>, AdminError> {
+) -> Result<Json<TemplateListResponse>, AdminError> {
     let services = get_services(&state)?;
 
-    authz.require("prompt", "list", None, None, None, None)?;
+    authz.require("template", "list", None, None, None, None)?;
 
     let limit = query.limit.unwrap_or(100);
     let params = query.try_into_with_cursor()?;
 
     let result = services
-        .prompts
-        .list_by_owner(PromptOwnerType::User, user_id, params)
+        .templates
+        .list_by_owner(TemplateOwnerType::User, user_id, params)
         .await?;
 
     let pagination = PaginationMeta::with_cursors(
@@ -526,7 +523,7 @@ pub async fn list_by_user(
         result.cursors.prev.map(|c| c.encode()),
     );
 
-    Ok(Json(PromptListResponse {
+    Ok(Json(TemplateListResponse {
         data: result.items,
         pagination,
     }))

@@ -18,6 +18,7 @@ import {
   Power,
   PowerOff,
   Calendar,
+  ClipboardPenLine,
 } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
@@ -30,6 +31,8 @@ import {
   apiKeyListByProjectOptions,
   dynamicProviderListByProjectOptions,
   modelPricingListByProjectOptions,
+  templateListByProjectOptions,
+  templateDeleteMutation,
   projectMemberAddMutation,
   projectMemberRemoveMutation,
   dynamicProviderCreateMutation,
@@ -44,6 +47,7 @@ import type {
   ApiKey,
   DynamicProvider,
   DbModelPricing,
+  Template,
   CreateDynamicProvider,
   UpdateDynamicProvider,
   ConnectivityTestResponse,
@@ -69,6 +73,7 @@ import {
   DetailPageHeader,
   TabNavigation,
   AddMemberModal,
+  AdminPromptFormModal,
   ApiKeyStatusBadge,
   EnabledStatusBadge,
   ProviderFormModal,
@@ -78,14 +83,16 @@ import {
 import { getProviderTypeLabel, TestResultDisplay } from "@/pages/providers/shared";
 import { formatDateTime, formatCurrency } from "@/utils/formatters";
 import UsageDashboard from "@/components/UsageDashboard/UsageDashboard";
+import { createTemplateColumns } from "./promptColumns";
 
-type TabId = "members" | "api-keys" | "providers" | "pricing" | "usage";
+type TabId = "members" | "api-keys" | "providers" | "pricing" | "templates" | "usage";
 
 const tabs: Tab<TabId>[] = [
   { id: "members", label: "Members", icon: <Users className="h-4 w-4" /> },
   { id: "api-keys", label: "API Keys", icon: <Key className="h-4 w-4" /> },
   { id: "providers", label: "Providers", icon: <Server className="h-4 w-4" /> },
   { id: "pricing", label: "Pricing", icon: <DollarSign className="h-4 w-4" /> },
+  { id: "templates", label: "Templates", icon: <ClipboardPenLine className="h-4 w-4" /> },
   { id: "usage", label: "Usage", icon: <BarChart3 className="h-4 w-4" /> },
 ];
 
@@ -332,6 +339,8 @@ export default function ProjectDetailPage() {
   const [isAddMemberModalOpen, setIsAddMemberModalOpen] = useState(false);
   const [isProviderModalOpen, setIsProviderModalOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<DynamicProvider | null>(null);
+  const [isPromptModalOpen, setIsPromptModalOpen] = useState(false);
+  const [editingPrompt, setEditingPrompt] = useState<Template | null>(null);
   const [providerSearch, setProviderSearch] = useState("");
   const [testResults, setTestResults] = useState<Record<string, ConnectivityTestResponse>>({});
   const [testingIds, setTestingIds] = useState<Set<string>>(new Set());
@@ -378,6 +387,14 @@ export default function ProjectDetailPage() {
       path: { org_slug: orgSlug!, project_slug: projectSlug! },
     }),
     enabled: activeTab === "pricing",
+  });
+
+  // Fetch templates
+  const { data: promptsData, isLoading: promptsLoading } = useQuery({
+    ...templateListByProjectOptions({
+      path: { org_slug: orgSlug!, project_slug: projectSlug! },
+    }),
+    enabled: activeTab === "templates",
   });
 
   // Fetch all users for member selection
@@ -491,6 +508,37 @@ export default function ProjectDetailPage() {
       });
     },
   });
+
+  // Delete prompt mutation
+  const deletePromptMutation = useMutation({
+    ...templateDeleteMutation(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [{ _id: "templateListByProject" }] });
+      toast({ title: "Template deleted", type: "success" });
+    },
+    onError: (error) => {
+      toast({ title: "Failed to delete template", description: String(error), type: "error" });
+    },
+  });
+
+  const handlePromptEdit = (prompt: Template) => {
+    setEditingPrompt(prompt);
+    setIsPromptModalOpen(true);
+  };
+
+  const handlePromptDelete = async (prompt: Template) => {
+    const confirmed = await confirm({
+      title: "Delete Template",
+      message: `Are you sure you want to delete "${prompt.name}"? This action cannot be undone.`,
+      confirmLabel: "Delete",
+      variant: "destructive",
+    });
+    if (confirmed) {
+      deletePromptMutation.mutate({ path: { id: prompt.id } });
+    }
+  };
+
+  const promptColumns = createTemplateColumns(handlePromptEdit, handlePromptDelete);
 
   const handleProviderCreate = () => {
     setEditingProvider(null);
@@ -711,6 +759,18 @@ export default function ProjectDetailPage() {
               New Provider
             </Button>
           )}
+          {activeTab === "templates" && (
+            <Button
+              size="sm"
+              onClick={() => {
+                setEditingPrompt(null);
+                setIsPromptModalOpen(true);
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              New Template
+            </Button>
+          )}
         </CardHeader>
         <CardContent>
           {activeTab === "members" && (
@@ -756,6 +816,16 @@ export default function ProjectDetailPage() {
               emptyMessage="No custom pricing for this project."
               searchColumn="model"
               searchPlaceholder="Search models..."
+            />
+          )}
+          {activeTab === "templates" && (
+            <DataTable
+              columns={promptColumns as ColumnDef<Template>[]}
+              data={promptsData?.data || []}
+              isLoading={promptsLoading}
+              emptyMessage="No templates in this project."
+              searchColumn="name"
+              searchPlaceholder="Search templates..."
             />
           )}
           {activeTab === "usage" && orgSlug && projectSlug && project?.id && (
@@ -830,6 +900,25 @@ export default function ProjectDetailPage() {
         editingProvider={editingProvider}
         ownerOverride={{ type: "project", project_id: project.id }}
       />
+
+      {/* Prompt Template Modal */}
+      {project && (
+        <AdminPromptFormModal
+          open={isPromptModalOpen}
+          onClose={() => {
+            setIsPromptModalOpen(false);
+            setEditingPrompt(null);
+          }}
+          editingPrompt={editingPrompt}
+          ownerOverride={{ type: "project", project_id: project.id }}
+          onSaved={() => {
+            toast({
+              title: editingPrompt ? "Template updated" : "Template created",
+              type: "success",
+            });
+          }}
+        />
+      )}
     </div>
   );
 }

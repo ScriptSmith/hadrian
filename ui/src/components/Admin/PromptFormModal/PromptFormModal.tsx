@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useForm, Controller } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -19,55 +19,40 @@ import {
   ModalFooter,
 } from "@/components/Modal/Modal";
 import { TemplateVariableEditor } from "@/components/TemplateVariableEditor/TemplateVariableEditor";
-import { useUserPrompts } from "@/hooks/useUserPrompts";
 import { type TemplateVariable, parseVariables } from "@/lib/templateVariables";
 
 const promptFormSchema = z.object({
   name: z.string().min(1, "Name is required").max(100, "Name must be 100 characters or less"),
   description: z.string().max(500, "Description must be 500 characters or less").optional(),
   content: z.string().min(1, "Prompt content is required"),
-  organization_id: z.string().min(1, "Organization is required"),
 });
 
 type PromptFormValues = z.infer<typeof promptFormSchema>;
 
-export interface PromptFormModalProps {
-  /** Whether the modal is open */
+export interface AdminPromptFormModalProps {
   open: boolean;
-  /** Callback when modal is closed */
   onClose: () => void;
-  /** Initial content to pre-fill (e.g., from current system prompt) */
-  initialContent?: string;
-  /** Existing prompt to edit (if editing) */
   editingPrompt?: Template | null;
-  /** Callback after successful save */
+  ownerOverride: TemplateOwner;
   onSaved?: (template: Template) => void;
 }
 
-export function PromptFormModal({
+export function AdminPromptFormModal({
   open,
   onClose,
-  initialContent = "",
   editingPrompt,
+  ownerOverride,
   onSaved,
-}: PromptFormModalProps) {
+}: AdminPromptFormModalProps) {
   const queryClient = useQueryClient();
-  const { organizations } = useUserPrompts();
-
   const isEditing = !!editingPrompt;
   const [variables, setVariables] = useState<TemplateVariable[]>([]);
 
   const form = useForm<PromptFormValues>({
     resolver: zodResolver(promptFormSchema),
-    defaultValues: {
-      name: "",
-      description: "",
-      content: initialContent,
-      organization_id: "",
-    },
+    defaultValues: { name: "", description: "", content: "" },
   });
 
-  // Reset form when modal opens/closes or editing prompt changes
   useEffect(() => {
     if (open) {
       if (editingPrompt) {
@@ -75,23 +60,14 @@ export function PromptFormModal({
           name: editingPrompt.name,
           description: editingPrompt.description || "",
           content: editingPrompt.content,
-          organization_id:
-            editingPrompt.owner_type === "organization"
-              ? editingPrompt.owner_id
-              : organizations[0]?.id || "",
         });
         setVariables(parseVariables(editingPrompt.metadata));
       } else {
-        form.reset({
-          name: "",
-          description: "",
-          content: initialContent,
-          organization_id: organizations[0]?.id || "",
-        });
+        form.reset({ name: "", description: "", content: "" });
         setVariables([]);
       }
     }
-  }, [open, editingPrompt, initialContent, form, organizations]);
+  }, [open, editingPrompt, form]);
 
   const createMutation = useMutation({
     mutationFn: async (data: CreateTemplate) => {
@@ -107,6 +83,8 @@ export function PromptFormModal({
     },
     onSuccess: (prompt) => {
       queryClient.invalidateQueries({ queryKey: [{ _id: "templateListByOrg" }] });
+      queryClient.invalidateQueries({ queryKey: [{ _id: "templateListByTeam" }] });
+      queryClient.invalidateQueries({ queryKey: [{ _id: "templateListByProject" }] });
       onSaved?.(prompt);
       onClose();
     },
@@ -134,6 +112,8 @@ export function PromptFormModal({
     },
     onSuccess: (prompt) => {
       queryClient.invalidateQueries({ queryKey: [{ _id: "templateListByOrg" }] });
+      queryClient.invalidateQueries({ queryKey: [{ _id: "templateListByTeam" }] });
+      queryClient.invalidateQueries({ queryKey: [{ _id: "templateListByProject" }] });
       onSaved?.(prompt);
       onClose();
     },
@@ -143,10 +123,6 @@ export function PromptFormModal({
   const error = createMutation.error || updateMutation.error;
 
   const handleSubmit = form.handleSubmit((data) => {
-    const owner: TemplateOwner = {
-      type: "organization",
-      organization_id: data.organization_id,
-    };
     const metadata = variables.length > 0 ? { variables } : undefined;
 
     if (isEditing && editingPrompt) {
@@ -160,14 +136,13 @@ export function PromptFormModal({
         },
       });
     } else {
-      const body: CreateTemplate = {
+      createMutation.mutate({
         name: data.name,
         description: data.description || undefined,
         content: data.content,
-        owner,
+        owner: ownerOverride,
         metadata,
-      };
-      createMutation.mutate(body);
+      });
     }
   });
 
@@ -187,7 +162,7 @@ export function PromptFormModal({
         <ModalHeader>
           <ModalTitle className="flex items-center gap-2">
             <ClipboardPenLine className="h-5 w-5" />
-            {isEditing ? "Edit Prompt Template" : "Save as Template"}
+            {isEditing ? "Edit Template" : "New Template"}
           </ModalTitle>
         </ModalHeader>
 
@@ -201,12 +176,12 @@ export function PromptFormModal({
 
             <FormField
               label="Name"
-              htmlFor="prompt-name"
+              htmlFor="admin-prompt-name"
               required
               error={form.formState.errors.name?.message}
             >
               <Input
-                id="prompt-name"
+                id="admin-prompt-name"
                 {...form.register("name")}
                 placeholder="e.g., Code Review Assistant"
               />
@@ -214,12 +189,12 @@ export function PromptFormModal({
 
             <FormField
               label="Description"
-              htmlFor="prompt-description"
+              htmlFor="admin-prompt-description"
               helpText="Optional description to help identify this template"
               error={form.formState.errors.description?.message}
             >
               <Input
-                id="prompt-description"
+                id="admin-prompt-description"
                 {...form.register("description")}
                 placeholder="e.g., Reviews code for best practices and potential issues"
               />
@@ -227,12 +202,12 @@ export function PromptFormModal({
 
             <FormField
               label="Content"
-              htmlFor="prompt-content"
+              htmlFor="admin-prompt-content"
               required
               error={form.formState.errors.content?.message}
             >
               <textarea
-                id="prompt-content"
+                id="admin-prompt-content"
                 {...form.register("content")}
                 placeholder="Enter the system prompt content..."
                 className="w-full min-h-[150px] rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 resize-y"
@@ -240,34 +215,6 @@ export function PromptFormModal({
             </FormField>
 
             <TemplateVariableEditor variables={variables} onChange={setVariables} />
-
-            {!isEditing && organizations.length > 1 && (
-              <FormField
-                label="Organization"
-                htmlFor="prompt-org"
-                required
-                error={form.formState.errors.organization_id?.message}
-              >
-                <Controller
-                  name="organization_id"
-                  control={form.control}
-                  render={({ field }) => (
-                    <select
-                      id="prompt-org"
-                      {...field}
-                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    >
-                      <option value="">Select organization...</option>
-                      {organizations.map((org) => (
-                        <option key={org.id} value={org.id}>
-                          {org.name}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                />
-              </FormField>
-            )}
           </div>
         </ModalContent>
 
@@ -276,7 +223,7 @@ export function PromptFormModal({
             Cancel
           </Button>
           <Button type="submit" isLoading={isLoading}>
-            {isEditing ? "Save Changes" : "Save Template"}
+            {isEditing ? "Save Changes" : "Create Template"}
           </Button>
         </ModalFooter>
       </form>

@@ -3,83 +3,131 @@ import { useQuery, useQueries } from "@tanstack/react-query";
 
 import {
   organizationListOptions,
-  promptListByOrgOptions,
+  templateListByOrgOptions,
+  templateListByUserOptions,
 } from "@/api/generated/@tanstack/react-query.gen";
-import type { Organization, Prompt } from "@/api/generated/types.gen";
+import type { Organization, Template } from "@/api/generated/types.gen";
+import { useAuth } from "@/auth";
 
-export interface PromptWithOrg extends Prompt {
-  org_id: string;
-  org_slug: string;
-  org_name: string;
+export interface TemplateWithContext extends Template {
+  /** Which org this template is accessible through (for org/team/project-owned templates) */
+  org_id?: string;
+  org_slug?: string;
+  org_name?: string;
 }
 
-export interface UseUserPromptsResult {
-  prompts: PromptWithOrg[];
+export interface UseUserTemplatesResult {
+  templates: TemplateWithContext[];
   organizations: Organization[];
   isLoading: boolean;
   error: Error | null;
+  hasMore: boolean;
 }
 
 /**
- * Hook to fetch all prompts accessible to the current user.
+ * Hook to fetch all templates accessible to the current user.
  *
- * This fetches all organizations the user can access, then fetches
- * prompts for each organization. The authorization layer on the
- * backend filters what the user can see based on their permissions.
+ * Fetches:
+ * - Templates owned by the user directly
+ * - Templates from each organization the user can access (includes org, team, and project-scoped templates
+ *   that the backend authorization layer makes visible)
  */
-export function useUserPrompts(): UseUserPromptsResult {
-  // First, fetch all organizations the user can access
+export function useUserTemplates(): UseUserTemplatesResult {
+  const { user } = useAuth();
+
+  // Fetch user's own templates
+  const {
+    data: userTemplatesData,
+    isLoading: userTemplatesLoading,
+    error: userTemplatesError,
+  } = useQuery({
+    ...templateListByUserOptions({
+      path: { user_id: user?.id ?? "" },
+      query: { limit: 50 },
+    }),
+    staleTime: 5 * 60 * 1000,
+    enabled: !!user?.id,
+  });
+
+  // Fetch all organizations the user can access
   const {
     data: orgsData,
     isLoading: orgsLoading,
     error: orgsError,
   } = useQuery({
     ...organizationListOptions(),
-    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+    staleTime: 5 * 60 * 1000,
   });
 
   const organizations = useMemo(() => orgsData?.data ?? [], [orgsData?.data]);
 
-  // Then fetch prompts for each organization
-  const promptQueries = useQueries({
+  // Fetch templates for each organization (backend returns org + team + project templates the user can see)
+  const orgQueries = useQueries({
     queries: organizations.map((org) => ({
-      ...promptListByOrgOptions({
+      ...templateListByOrgOptions({
         path: { org_slug: org.slug },
-        query: { limit: 50 }, // Get up to 50 prompts per org
+        query: { limit: 50 },
       }),
       staleTime: 5 * 60 * 1000,
       enabled: organizations.length > 0,
     })),
   });
 
-  // Combine all prompts with their org info
-  const prompts = useMemo(() => {
-    const result: PromptWithOrg[] = [];
-    for (let i = 0; i < organizations.length; i++) {
-      const org = organizations[i];
-      const promptsData = promptQueries[i]?.data?.data ?? [];
-      for (const prompt of promptsData) {
-        result.push({
-          ...prompt,
-          org_id: org.id,
-          org_slug: org.slug,
-          org_name: org.name,
-        });
+  // Combine all templates, deduplicating by id
+  const templates = useMemo(() => {
+    const seen = new Set<string>();
+    const result: TemplateWithContext[] = [];
+
+    // User-owned templates first
+    for (const t of userTemplatesData?.data ?? []) {
+      if (!seen.has(t.id)) {
+        seen.add(t.id);
+        result.push(t);
       }
     }
-    // Sort prompts by name
+
+    // Then org-scoped templates
+    for (let i = 0; i < organizations.length; i++) {
+      const org = organizations[i];
+      for (const t of orgQueries[i]?.data?.data ?? []) {
+        if (!seen.has(t.id)) {
+          seen.add(t.id);
+          result.push({
+            ...t,
+            org_id: org.id,
+            org_slug: org.slug,
+            org_name: org.name,
+          });
+        }
+      }
+    }
+
     result.sort((a, b) => a.name.localeCompare(b.name));
     return result;
-  }, [organizations, promptQueries]);
+  }, [userTemplatesData?.data, organizations, orgQueries]);
 
-  const isLoading = orgsLoading || promptQueries.some((q) => q.isLoading);
-  const promptError = promptQueries.find((q) => q.error)?.error;
-  const error = orgsError ?? promptError ?? null;
+  const isLoading = userTemplatesLoading || orgsLoading || orgQueries.some((q) => q.isLoading);
+  const queryError = orgQueries.find((q) => q.error)?.error;
+  const error = userTemplatesError ?? orgsError ?? queryError ?? null;
+  const hasMore =
+    (userTemplatesData?.pagination?.has_more ?? false) ||
+    orgQueries.some((q) => q.data?.pagination?.has_more === true);
 
   return {
-    prompts,
+    templates,
     organizations,
     isLoading,
     error: error as Error | null,
+    hasMore,
   };
 }
+
+// Backwards compat aliases
+export type PromptWithOrg = TemplateWithContext;
+export interface UseUserPromptsResult extends UseUserTemplatesResult {
+  prompts: TemplateWithContext[];
+}
+export const useUserPrompts = (): UseUserPromptsResult => {
+  const result = useUserTemplates();
+  return { ...result, prompts: result.templates };
+};

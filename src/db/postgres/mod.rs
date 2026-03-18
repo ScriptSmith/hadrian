@@ -10,7 +10,6 @@ mod org_rbac_policies;
 mod org_sso_configs;
 mod organizations;
 mod projects;
-mod prompts;
 mod providers;
 #[cfg(feature = "sso")]
 mod scim_configs;
@@ -22,6 +21,7 @@ mod service_accounts;
 #[cfg(feature = "sso")]
 mod sso_group_mappings;
 mod teams;
+mod templates;
 mod usage;
 mod users;
 mod vector_stores;
@@ -38,7 +38,6 @@ pub use org_rbac_policies::PostgresOrgRbacPolicyRepo;
 pub use org_sso_configs::PostgresOrgSsoConfigRepo;
 pub use organizations::PostgresOrganizationRepo;
 pub use projects::PostgresProjectRepo;
-pub use prompts::PostgresPromptRepo;
 pub use providers::PostgresDynamicProviderRepo;
 #[cfg(feature = "sso")]
 pub use scim_configs::PostgresOrgScimConfigRepo;
@@ -50,6 +49,7 @@ pub use service_accounts::PostgresServiceAccountRepo;
 #[cfg(feature = "sso")]
 pub use sso_group_mappings::PostgresSsoGroupMappingRepo;
 pub use teams::PostgresTeamRepo;
+pub use templates::PostgresTemplateRepo;
 pub use usage::PostgresUsageRepo;
 pub use users::PostgresUserRepo;
 pub use vector_stores::PostgresVectorStoresRepo;

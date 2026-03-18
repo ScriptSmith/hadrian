@@ -1,1 +1,1 @@
-export { PromptsButton } from "./PromptsButton";
+export { TemplatesButton } from "./PromptsButton";

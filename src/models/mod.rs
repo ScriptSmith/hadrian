@@ -14,7 +14,6 @@ mod org_sso_config;
 mod organization;
 mod prefixed_id;
 mod project;
-mod prompt;
 mod ranking_options;
 #[cfg(feature = "sso")]
 mod scim;
@@ -22,6 +21,7 @@ mod service_account;
 #[cfg(feature = "sso")]
 mod sso_group_mapping;
 mod team;
+mod template;
 mod usage;
 mod user;
 mod validators;
@@ -43,7 +43,6 @@ pub use org_sso_config::*;
 pub use organization::*;
 pub use prefixed_id::*;
 pub use project::*;
-pub use prompt::*;
 pub use ranking_options::*;
 #[cfg(feature = "sso")]
 pub use scim::*;
@@ -51,6 +50,7 @@ pub use service_account::*;
 #[cfg(feature = "sso")]
 pub use sso_group_mapping::*;
 pub use team::*;
+pub use template::*;
 pub use usage::*;
 pub use user::*;
 pub use vector_store::*;

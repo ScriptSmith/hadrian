@@ -8,19 +8,19 @@ use crate::{
     db::{
         error::{DbError, DbResult},
         repos::{
-            Cursor, CursorDirection, ListParams, ListResult, PageCursors, PromptRepo,
+            Cursor, CursorDirection, ListParams, ListResult, PageCursors, TemplateRepo,
             cursor_from_row,
         },
     },
-    models::{CreatePrompt, Prompt, PromptOwnerType, UpdatePrompt},
+    models::{CreateTemplate, Template, TemplateOwnerType, UpdateTemplate},
 };
 
-pub struct PostgresPromptRepo {
+pub struct PostgresTemplateRepo {
     write_pool: PgPool,
     read_pool: PgPool,
 }
 
-impl PostgresPromptRepo {
+impl PostgresTemplateRepo {
     pub fn new(write_pool: PgPool, read_pool: Option<PgPool>) -> Self {
         let read_pool = read_pool.unwrap_or_else(|| write_pool.clone());
         Self {
@@ -29,10 +29,10 @@ impl PostgresPromptRepo {
         }
     }
 
-    /// Parse a Prompt from a database row.
-    fn parse_prompt(row: &sqlx::postgres::PgRow) -> DbResult<Prompt> {
+    /// Parse a Template from a database row.
+    fn parse_template(row: &sqlx::postgres::PgRow) -> DbResult<Template> {
         let owner_type_str: String = row.get("owner_type");
-        let owner_type: PromptOwnerType = owner_type_str
+        let owner_type: TemplateOwnerType = owner_type_str
             .parse()
             .map_err(|e: String| DbError::Internal(e))?;
 
@@ -42,7 +42,7 @@ impl PostgresPromptRepo {
             .transpose()
             .map_err(|e| DbError::Internal(format!("Failed to parse metadata: {}", e)))?;
 
-        Ok(Prompt {
+        Ok(Template {
             id: row.get("id"),
             owner_type,
             owner_id: row.get("owner_id"),
@@ -58,13 +58,13 @@ impl PostgresPromptRepo {
     /// Helper method for cursor-based pagination.
     async fn list_with_cursor(
         &self,
-        owner_type: PromptOwnerType,
+        owner_type: TemplateOwnerType,
         owner_id: Uuid,
         params: &ListParams,
         cursor: &Cursor,
         fetch_limit: i64,
         limit: i64,
-    ) -> DbResult<ListResult<Prompt>> {
+    ) -> DbResult<ListResult<Template>> {
         let (comparison, order, should_reverse) =
             params.sort_order.cursor_query_params(params.direction);
 
@@ -77,7 +77,7 @@ impl PostgresPromptRepo {
         let query = format!(
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, description, content, metadata, created_at, updated_at
-            FROM prompts
+            FROM templates
             WHERE owner_type = $1 AND owner_id = $2 AND ROW(created_at, id) {} ROW($3, $4)
             {}
             ORDER BY created_at {}, id {}
@@ -96,10 +96,10 @@ impl PostgresPromptRepo {
             .await?;
 
         let has_more = rows.len() as i64 > limit;
-        let mut items: Vec<Prompt> = rows
+        let mut items: Vec<Template> = rows
             .iter()
             .take(limit as usize)
-            .map(Self::parse_prompt)
+            .map(Self::parse_template)
             .collect::<DbResult<Vec<_>>>()?;
 
         if should_reverse {
@@ -117,8 +117,8 @@ impl PostgresPromptRepo {
 
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-impl PromptRepo for PostgresPromptRepo {
-    async fn create(&self, input: CreatePrompt) -> DbResult<Prompt> {
+impl TemplateRepo for PostgresTemplateRepo {
+    async fn create(&self, input: CreateTemplate) -> DbResult<Template> {
         let id = Uuid::new_v4();
         let owner_type = input.owner.owner_type();
         let owner_id = input.owner.owner_id();
@@ -132,7 +132,7 @@ impl PromptRepo for PostgresPromptRepo {
 
         let row = sqlx::query(
             r#"
-            INSERT INTO prompts (id, owner_type, owner_id, name, description, content, metadata)
+            INSERT INTO templates (id, owner_type, owner_id, name, description, content, metadata)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id, owner_type::TEXT, owner_id, name, description, content, metadata, created_at, updated_at
             "#,
@@ -149,21 +149,21 @@ impl PromptRepo for PostgresPromptRepo {
         .map_err(|e| match e {
             sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
                 DbError::Conflict(format!(
-                    "Prompt with name '{}' already exists for this owner",
+                    "Template with name '{}' already exists for this owner",
                     input.name
                 ))
             }
             _ => DbError::from(e),
         })?;
 
-        Self::parse_prompt(&row)
+        Self::parse_template(&row)
     }
 
-    async fn get_by_id(&self, id: Uuid) -> DbResult<Option<Prompt>> {
+    async fn get_by_id(&self, id: Uuid) -> DbResult<Option<Template>> {
         let result = sqlx::query(
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, description, content, metadata, created_at, updated_at
-            FROM prompts
+            FROM templates
             WHERE id = $1 AND deleted_at IS NULL
             "#,
         )
@@ -172,16 +172,16 @@ impl PromptRepo for PostgresPromptRepo {
         .await?;
 
         match result {
-            Some(row) => Ok(Some(Self::parse_prompt(&row)?)),
+            Some(row) => Ok(Some(Self::parse_template(&row)?)),
             None => Ok(None),
         }
     }
 
-    async fn get_by_id_and_org(&self, id: Uuid, org_id: Uuid) -> DbResult<Option<Prompt>> {
+    async fn get_by_id_and_org(&self, id: Uuid, org_id: Uuid) -> DbResult<Option<Template>> {
         let result = sqlx::query(
             r#"
             SELECT p.id, p.owner_type::TEXT, p.owner_id, p.name, p.description, p.content, p.metadata, p.created_at, p.updated_at
-            FROM prompts p
+            FROM templates p
             WHERE p.id = $1 AND p.deleted_at IS NULL
             AND (
                 (p.owner_type = 'organization' AND p.owner_id = $2)
@@ -209,17 +209,17 @@ impl PromptRepo for PostgresPromptRepo {
         .await?;
 
         match result {
-            Some(row) => Ok(Some(Self::parse_prompt(&row)?)),
+            Some(row) => Ok(Some(Self::parse_template(&row)?)),
             None => Ok(None),
         }
     }
 
     async fn list_by_owner(
         &self,
-        owner_type: PromptOwnerType,
+        owner_type: TemplateOwnerType,
         owner_id: Uuid,
         params: ListParams,
-    ) -> DbResult<ListResult<Prompt>> {
+    ) -> DbResult<ListResult<Template>> {
         let limit = params.limit.unwrap_or(100);
         let fetch_limit = limit + 1;
 
@@ -232,7 +232,7 @@ impl PromptRepo for PostgresPromptRepo {
         let query = if params.include_deleted {
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, description, content, metadata, created_at, updated_at
-            FROM prompts
+            FROM templates
             WHERE owner_type = $1 AND owner_id = $2
             ORDER BY created_at DESC, id DESC
             LIMIT $3
@@ -240,7 +240,7 @@ impl PromptRepo for PostgresPromptRepo {
         } else {
             r#"
             SELECT id, owner_type::TEXT, owner_id, name, description, content, metadata, created_at, updated_at
-            FROM prompts
+            FROM templates
             WHERE owner_type = $1 AND owner_id = $2 AND deleted_at IS NULL
             ORDER BY created_at DESC, id DESC
             LIMIT $3
@@ -255,10 +255,110 @@ impl PromptRepo for PostgresPromptRepo {
             .await?;
 
         let has_more = rows.len() as i64 > limit;
-        let items: Vec<Prompt> = rows
+        let items: Vec<Template> = rows
             .iter()
             .take(limit as usize)
-            .map(Self::parse_prompt)
+            .map(Self::parse_template)
+            .collect::<DbResult<Vec<_>>>()?;
+
+        let cursors =
+            PageCursors::from_items(&items, has_more, CursorDirection::Forward, None, |p| {
+                cursor_from_row(p.created_at, p.id)
+            });
+
+        Ok(ListResult::new(items, has_more, cursors))
+    }
+
+    async fn list_by_org(
+        &self,
+        org_id: Uuid,
+        params: ListParams,
+    ) -> DbResult<ListResult<Template>> {
+        let limit = params.limit.unwrap_or(100);
+        let fetch_limit = limit + 1;
+
+        // Org-scoped filter shared by both cursor and non-cursor paths
+        let org_filter = r#"
+            AND (
+                (p.owner_type = 'organization' AND p.owner_id = $1)
+                OR (p.owner_type = 'team' AND EXISTS (
+                    SELECT 1 FROM teams t WHERE t.id = p.owner_id AND t.org_id = $1
+                ))
+                OR (p.owner_type = 'project' AND EXISTS (
+                    SELECT 1 FROM projects pr WHERE pr.id = p.owner_id AND pr.org_id = $1
+                ))
+                OR (p.owner_type = 'user' AND EXISTS (
+                    SELECT 1 FROM org_memberships om WHERE om.user_id = p.owner_id AND om.org_id = $1
+                ))
+            )
+        "#;
+
+        if let Some(ref cursor) = params.cursor {
+            let (comparison, order, should_reverse) =
+                params.sort_order.cursor_query_params(params.direction);
+
+            let sql = format!(
+                r#"
+                SELECT p.id, p.owner_type::TEXT, p.owner_id, p.name, p.description, p.content, p.metadata, p.created_at, p.updated_at
+                FROM templates p
+                WHERE p.deleted_at IS NULL AND ROW(p.created_at, p.id) {} ROW($2, $3)
+                {}
+                ORDER BY p.created_at {}, p.id {}
+                LIMIT $4
+                "#,
+                comparison, org_filter, order, order
+            );
+
+            let rows = sqlx::query(&sql)
+                .bind(org_id)
+                .bind(cursor.created_at)
+                .bind(cursor.id)
+                .bind(fetch_limit)
+                .fetch_all(&self.read_pool)
+                .await?;
+
+            let has_more = rows.len() as i64 > limit;
+            let mut items: Vec<Template> = rows
+                .iter()
+                .take(limit as usize)
+                .map(Self::parse_template)
+                .collect::<DbResult<Vec<_>>>()?;
+
+            if should_reverse {
+                items.reverse();
+            }
+
+            let cursors =
+                PageCursors::from_items(&items, has_more, params.direction, Some(cursor), |p| {
+                    cursor_from_row(p.created_at, p.id)
+                });
+
+            return Ok(ListResult::new(items, has_more, cursors));
+        }
+
+        let sql = format!(
+            r#"
+            SELECT p.id, p.owner_type::TEXT, p.owner_id, p.name, p.description, p.content, p.metadata, p.created_at, p.updated_at
+            FROM templates p
+            WHERE p.deleted_at IS NULL
+            {}
+            ORDER BY p.created_at DESC, p.id DESC
+            LIMIT $2
+            "#,
+            org_filter
+        );
+
+        let rows = sqlx::query(&sql)
+            .bind(org_id)
+            .bind(fetch_limit)
+            .fetch_all(&self.read_pool)
+            .await?;
+
+        let has_more = rows.len() as i64 > limit;
+        let items: Vec<Template> = rows
+            .iter()
+            .take(limit as usize)
+            .map(Self::parse_template)
             .collect::<DbResult<Vec<_>>>()?;
 
         let cursors =
@@ -271,14 +371,14 @@ impl PromptRepo for PostgresPromptRepo {
 
     async fn count_by_owner(
         &self,
-        owner_type: PromptOwnerType,
+        owner_type: TemplateOwnerType,
         owner_id: Uuid,
         include_deleted: bool,
     ) -> DbResult<i64> {
         let query = if include_deleted {
-            "SELECT COUNT(*) as count FROM prompts WHERE owner_type = $1 AND owner_id = $2"
+            "SELECT COUNT(*) as count FROM templates WHERE owner_type = $1 AND owner_id = $2"
         } else {
-            "SELECT COUNT(*) as count FROM prompts WHERE owner_type = $1 AND owner_id = $2 AND deleted_at IS NULL"
+            "SELECT COUNT(*) as count FROM templates WHERE owner_type = $1 AND owner_id = $2 AND deleted_at IS NULL"
         };
 
         let row = sqlx::query(query)
@@ -290,7 +390,7 @@ impl PromptRepo for PostgresPromptRepo {
         Ok(row.get::<i64, _>("count"))
     }
 
-    async fn update(&self, id: Uuid, input: UpdatePrompt) -> DbResult<Prompt> {
+    async fn update(&self, id: Uuid, input: UpdateTemplate) -> DbResult<Template> {
         let has_name = input.name.is_some();
         let has_description = input.description.is_some();
         let has_content = input.content.is_some();
@@ -322,7 +422,7 @@ impl PromptRepo for PostgresPromptRepo {
 
         let query = format!(
             r#"
-            UPDATE prompts
+            UPDATE templates
             SET {}
             WHERE id = ${} AND deleted_at IS NULL
             RETURNING id, owner_type::TEXT, owner_id, name, description, content, metadata, created_at, updated_at
@@ -353,20 +453,20 @@ impl PromptRepo for PostgresPromptRepo {
             .fetch_optional(&self.write_pool)
             .await
             .map_err(|e| match e {
-                sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                    DbError::Conflict("Prompt with this name already exists for this owner".into())
-                }
+                sqlx::Error::Database(db_err) if db_err.is_unique_violation() => DbError::Conflict(
+                    "Template with this name already exists for this owner".into(),
+                ),
                 _ => DbError::from(e),
             })?
             .ok_or(DbError::NotFound)?;
 
-        Self::parse_prompt(&row)
+        Self::parse_template(&row)
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
         let result = sqlx::query(
             r#"
-            UPDATE prompts
+            UPDATE templates
             SET deleted_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL
             "#,

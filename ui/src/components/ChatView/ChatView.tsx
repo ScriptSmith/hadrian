@@ -129,6 +129,7 @@ export function ChatView({
     setTTSVoice,
     setTTSSpeed,
     setSubAgentModel,
+    setPendingPrompt,
   } = useChatUIStore();
 
   // Stable callback for instance parameter changes
@@ -234,7 +235,7 @@ export function ChatView({
             subAgentModel={subAgentModel}
             onSubAgentModelChange={setSubAgentModel}
             onOpenMCPConfig={() => setMCPConfigModalOpen(true)}
-            onApplyPrompt={setSystemPrompt}
+            onApplyPrompt={setPendingPrompt}
           />
         </div>
       </footer>
