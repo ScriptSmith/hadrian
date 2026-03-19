@@ -91,6 +91,7 @@ const mockSessions = {
     },
   ],
   enhanced_enabled: true,
+  current_session_id: "sess-001",
 };
 
 const sessionsHandler = http.get("*/admin/v1/me/sessions", () => HttpResponse.json(mockSessions));

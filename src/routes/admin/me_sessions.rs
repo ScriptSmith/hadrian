@@ -7,6 +7,7 @@ use axum::{
     extract::{Path, State},
 };
 use serde_json::json;
+use tower_cookies::Cookies;
 use uuid::Uuid;
 
 use super::{AuditActor, error::AdminError, sessions::get_session_store};
@@ -36,11 +37,15 @@ fn get_services(state: &AppState) -> Result<&Services, AdminError> {
         (status = 401, description = "Not authenticated", body = crate::openapi::ErrorResponse),
     )
 ))]
-#[tracing::instrument(name = "admin.me.sessions.list", skip(state, admin_auth, authz))]
+#[tracing::instrument(
+    name = "admin.me.sessions.list",
+    skip(state, admin_auth, authz, cookies)
+)]
 pub async fn list(
     State(state): State<AppState>,
     Extension(admin_auth): Extension<AdminAuth>,
     Extension(authz): Extension<AuthzContext>,
+    cookies: Cookies,
 ) -> Result<Json<SessionListResponse>, AdminError> {
     authz.require("me", "read", None, None, None, None)?;
 
@@ -49,11 +54,18 @@ pub async fn list(
         return Ok(Json(SessionListResponse {
             data: vec![],
             enhanced_enabled: false,
+            current_session_id: None,
         }));
     }
 
     let session_store = get_session_store(&state)?;
     let enhanced_enabled = session_store.is_enhanced_enabled();
+
+    // Extract current session ID from cookie so the UI can highlight it
+    let session_config = state.config.auth.session_config_or_default();
+    let current_session_id = cookies
+        .get(&session_config.cookie_name)
+        .and_then(|c| c.value().parse::<Uuid>().ok());
 
     let sessions = session_store
         .list_user_sessions(external_id)
@@ -74,6 +86,7 @@ pub async fn list(
     Ok(Json(SessionListResponse {
         data,
         enhanced_enabled,
+        current_session_id,
     }))
 }
 
@@ -127,30 +140,36 @@ pub async fn delete_one(
         }
     };
 
-    let result = session_store.delete_session(session_id).await;
-    let sessions_revoked = if result.is_ok() && session_existed {
-        1
-    } else {
-        0
+    let sessions_revoked = match session_store.delete_session(session_id).await {
+        Ok(_) if session_existed => 1,
+        Ok(_) => 0,
+        Err(e) => {
+            return Err(AdminError::Internal(format!(
+                "Failed to delete session: {e}"
+            )));
+        }
     };
 
-    let _ = services
-        .audit_logs
-        .create(CreateAuditLog {
-            actor_type: actor.actor_type,
-            actor_id: actor.actor_id,
-            action: "session.self_delete_one".to_string(),
-            resource_type: "session".to_string(),
-            resource_id: session_id,
-            org_id: None,
-            project_id: None,
-            details: json!({
-                "session_id": session_id,
-            }),
-            ip_address: client_info.ip_address,
-            user_agent: client_info.user_agent,
-        })
-        .await;
+    if session_existed {
+        let _ = services
+            .audit_logs
+            .create(CreateAuditLog {
+                actor_type: actor.actor_type,
+                actor_id: actor.actor_id,
+                action: "session.self_delete_one".to_string(),
+                resource_type: "session".to_string(),
+                resource_id: session_id,
+                org_id: None,
+                project_id: None,
+                details: json!({
+                    "session_id": session_id,
+                    "sessions_revoked": sessions_revoked,
+                }),
+                ip_address: client_info.ip_address,
+                user_agent: client_info.user_agent,
+            })
+            .await;
+    }
 
     Ok(Json(SessionsRevokedResponse { sessions_revoked }))
 }

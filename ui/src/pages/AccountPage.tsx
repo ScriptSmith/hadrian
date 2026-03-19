@@ -101,7 +101,17 @@ export default function AccountPage() {
     },
   });
 
-  const handleRevokeSession = (sessionId: string) => {
+  const handleRevokeSession = async (sessionId: string) => {
+    const isCurrent = sessionId === sessions?.current_session_id;
+    const confirmed = await confirm({
+      title: isCurrent ? "Revoke current session?" : "Revoke session?",
+      message: isCurrent
+        ? "This is your current session. Revoking it will immediately log you out of this browser."
+        : "This will immediately log out the device associated with this session.",
+      confirmLabel: "Revoke",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
     setRevokingSessionIds((prev) => new Set(prev).add(sessionId));
     deleteSessionMutation.mutate({ path: { session_id: sessionId } });
   };
@@ -311,6 +321,7 @@ export default function AccountPage() {
                   session={session}
                   onRevoke={handleRevokeSession}
                   isRevoking={revokingSessionIds.has(session.id)}
+                  isCurrent={session.id === sessions.current_session_id}
                 />
               ))}
             </div>

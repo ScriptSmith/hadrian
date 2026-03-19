@@ -27878,6 +27878,12 @@
           "enhanced_enabled"
         ],
         "properties": {
+          "current_session_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The session ID of the current request (if authenticated via session cookie).\nAllows the UI to highlight the current session and warn before self-revocation.",
+            "nullable": true
+          },
           "data": {
             "type": "array",
             "items": {
