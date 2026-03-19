@@ -61,11 +61,16 @@ pub async fn list(
     let session_store = get_session_store(&state)?;
     let enhanced_enabled = session_store.is_enhanced_enabled();
 
-    // Extract current session ID from cookie so the UI can highlight it
-    let session_config = state.config.auth.session_config_or_default();
-    let current_session_id = cookies
-        .get(&session_config.cookie_name)
-        .and_then(|c| c.value().parse::<Uuid>().ok());
+    // Extract current session ID from cookie so the UI can highlight it.
+    // Only include when enhanced sessions are enabled to avoid leaking the session UUID.
+    let current_session_id = if enhanced_enabled {
+        let session_config = state.config.auth.session_config_or_default();
+        cookies
+            .get(&session_config.cookie_name)
+            .and_then(|c| c.value().parse::<Uuid>().ok())
+    } else {
+        None
+    };
 
     let sessions = session_store
         .list_user_sessions(external_id)
@@ -140,14 +145,14 @@ pub async fn delete_one(
         }
     };
 
-    let sessions_revoked = match session_store.delete_session(session_id).await {
-        Ok(_) if session_existed => 1,
-        Ok(_) => 0,
-        Err(e) => {
-            return Err(AdminError::Internal(format!(
-                "Failed to delete session: {e}"
-            )));
-        }
+    let sessions_revoked = if !session_existed {
+        0
+    } else {
+        session_store
+            .delete_session(session_id)
+            .await
+            .map_err(|e| AdminError::Internal(format!("Failed to delete session: {e}")))?;
+        1
     };
 
     if session_existed {

@@ -75,7 +75,11 @@ export default function AccountPage() {
   });
 
   // Sessions
-  const { data: sessions, isLoading: sessionsLoading } = useQuery(meSessionsListOptions());
+  const {
+    data: sessions,
+    isLoading: sessionsLoading,
+    isError: sessionsError,
+  } = useQuery(meSessionsListOptions());
 
   const deleteSessionMutation = useMutation({
     ...meSessionsDeleteOneMutation(),
@@ -306,6 +310,8 @@ export default function AccountPage() {
               <Skeleton className="h-24 w-full" />
               <Skeleton className="h-24 w-full" />
             </div>
+          ) : sessionsError ? (
+            <p className="text-sm text-destructive">Failed to load sessions. Please try again.</p>
           ) : sessions?.enhanced_enabled === false ? (
             <p className="text-sm text-muted-foreground">
               Session tracking is not enabled for this deployment.
