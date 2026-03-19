@@ -48,6 +48,10 @@ pub struct SessionListResponse {
     /// Whether enhanced session management is enabled.
     /// If false, the UI should show a message that session tracking is not enabled.
     pub enhanced_enabled: bool,
+    /// The session ID of the current request (if authenticated via session cookie).
+    /// Allows the UI to highlight the current session and warn before self-revocation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_session_id: Option<Uuid>,
 }
 
 /// Response after revoking sessions.
@@ -153,6 +157,7 @@ pub async fn list(
     Ok(Json(SessionListResponse {
         data,
         enhanced_enabled,
+        current_session_id: None,
     }))
 }
 
@@ -386,6 +391,7 @@ mod tests {
         let response = SessionListResponse {
             data: vec![],
             enhanced_enabled: false,
+            current_session_id: None,
         };
 
         let json = serde_json::to_string(&response).unwrap();

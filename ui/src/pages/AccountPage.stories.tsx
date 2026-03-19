@@ -65,6 +65,41 @@ const mockExportData = {
   exported_at: "2024-06-15T14:30:00Z",
 };
 
+const mockSessions = {
+  data: [
+    {
+      id: "sess-001",
+      device: {
+        user_agent: "Mozilla/5.0 (X11; Linux x86_64) Chrome/120",
+        ip_address: "192.168.1.42",
+        device_description: "Chrome 120 on Linux",
+      },
+      created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      last_activity: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+      expires_at: new Date(Date.now() + 22 * 60 * 60 * 1000).toISOString(),
+    },
+    {
+      id: "sess-002",
+      device: {
+        user_agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)",
+        ip_address: "10.0.0.5",
+        device_description: "Safari on iPhone",
+      },
+      created_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      last_activity: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+      expires_at: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(),
+    },
+  ],
+  enhanced_enabled: true,
+  current_session_id: "sess-001",
+};
+
+const sessionsHandler = http.get("*/admin/v1/me/sessions", () => HttpResponse.json(mockSessions));
+
+const sessionsDisabledHandler = http.get("*/admin/v1/me/sessions", () =>
+  HttpResponse.json({ data: [], enhanced_enabled: false })
+);
+
 const meta: Meta<typeof AccountPage> = {
   title: "Pages/AccountPage",
   component: AccountPage,
@@ -102,6 +137,7 @@ export const Default: Story = {
   parameters: {
     msw: {
       handlers: [
+        sessionsHandler,
         http.get("*/admin/v1/me/export", () => {
           return HttpResponse.json(mockExportData);
         }),
@@ -115,6 +151,9 @@ export const Default: Story = {
             usage_records_deleted: 84,
           });
         }),
+        http.delete("*/admin/v1/me/sessions/:sessionId", () => {
+          return HttpResponse.json({ sessions_revoked: 1 });
+        }),
       ],
     },
   },
@@ -124,6 +163,7 @@ export const Loading: Story = {
   parameters: {
     msw: {
       handlers: [
+        sessionsHandler,
         http.get("*/admin/v1/me/export", async () => {
           await new Promise((resolve) => setTimeout(resolve, 100000));
           return HttpResponse.json(mockExportData);
@@ -144,6 +184,7 @@ export const MinimalProfile: Story = {
   parameters: {
     msw: {
       handlers: [
+        sessionsDisabledHandler,
         http.get("*/admin/v1/me/export", () => {
           return HttpResponse.json(mockExportData);
         }),
@@ -166,6 +207,7 @@ export const Error: Story = {
   parameters: {
     msw: {
       handlers: [
+        sessionsHandler,
         http.get("*/admin/v1/me/export", () => {
           return HttpResponse.json(
             { error: { code: "internal_error", message: "Failed to export data" } },

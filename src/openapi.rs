@@ -401,6 +401,9 @@ requests_per_minute = 120
         admin::me_api_keys::create,
         admin::me_api_keys::revoke,
         admin::me_api_keys::rotate,
+        // Self-service endpoints - Sessions
+        admin::me_sessions::list,
+        admin::me_sessions::delete_one,
         // Admin routes - Organizations
         admin::organizations::create,
         admin::organizations::get,

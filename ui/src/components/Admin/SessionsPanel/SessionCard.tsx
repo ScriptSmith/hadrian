@@ -5,6 +5,7 @@ export interface SessionCardProps {
   session: SessionInfo;
   onRevoke?: (sessionId: string) => void;
   isRevoking?: boolean;
+  isCurrent?: boolean;
 }
 
 function formatRelativeTime(date: Date): string {
@@ -37,13 +38,20 @@ function formatDateTime(dateStr: string): string {
   return date.toLocaleString();
 }
 
-export function SessionCard({ session, onRevoke, isRevoking = false }: SessionCardProps) {
+export function SessionCard({
+  session,
+  onRevoke,
+  isRevoking = false,
+  isCurrent = false,
+}: SessionCardProps) {
   const createdAt = new Date(session.created_at);
   const expiresAt = new Date(session.expires_at);
   const lastActivity = session.last_activity ? new Date(session.last_activity) : null;
 
   return (
-    <div className="bg-card border border-border rounded-lg p-4 space-y-3">
+    <div
+      className={`bg-card border rounded-lg p-4 space-y-3 ${isCurrent ? "border-primary/50" : "border-border"}`}
+    >
       {/* Device Info */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0 flex-1">
@@ -51,9 +59,16 @@ export function SessionCard({ session, onRevoke, isRevoking = false }: SessionCa
             <Monitor className="w-5 h-5 text-primary" />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium text-foreground truncate">
-              {session.device?.device_description || "Unknown Device"}
-            </p>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-medium text-foreground truncate">
+                {session.device?.device_description || "Unknown Device"}
+              </p>
+              {isCurrent && (
+                <span className="flex-shrink-0 text-xs font-medium text-primary bg-primary/10 px-1.5 py-0.5 rounded">
+                  This device
+                </span>
+              )}
+            </div>
             {session.device?.ip_address && (
               <div className="flex items-center gap-1.5 mt-1">
                 <Globe className="w-3.5 h-3.5 text-muted-foreground" />
