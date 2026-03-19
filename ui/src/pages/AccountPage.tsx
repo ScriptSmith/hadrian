@@ -89,7 +89,11 @@ export default function AccountPage() {
         next.delete(variables.path.session_id);
         return next;
       });
-      queryClient.invalidateQueries({ queryKey: meSessionsListQueryKey() });
+      if (variables.path.session_id === sessions?.current_session_id) {
+        logout();
+      } else {
+        queryClient.invalidateQueries({ queryKey: meSessionsListQueryKey() });
+      }
     },
     onError: (error, variables) => {
       setRevokingSessionIds((prev) => {
