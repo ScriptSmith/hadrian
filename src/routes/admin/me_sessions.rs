@@ -120,7 +120,11 @@ pub async fn delete_one(
             true
         }
         Ok(None) => false,
-        Err(_) => false,
+        Err(e) => {
+            return Err(AdminError::Internal(format!(
+                "Failed to look up session: {e}"
+            )));
+        }
     };
 
     let result = session_store.delete_session(session_id).await;

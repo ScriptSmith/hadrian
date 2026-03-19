@@ -66,7 +66,7 @@ export default function AccountPage() {
   const { toast } = useToast();
   const confirm = useConfirm();
   const queryClient = useQueryClient();
-  const [revokingSessionId, setRevokingSessionId] = useState<string | null>(null);
+  const [revokingSessionIds, setRevokingSessionIds] = useState<Set<string>>(new Set());
 
   // Export data query (only fetch when triggered)
   const { refetch: fetchExport, isFetching: isExporting } = useQuery({
@@ -79,15 +79,30 @@ export default function AccountPage() {
 
   const deleteSessionMutation = useMutation({
     ...meSessionsDeleteOneMutation(),
-    onSuccess: () => {
-      setRevokingSessionId(null);
+    onSuccess: (_data, variables) => {
+      setRevokingSessionIds((prev) => {
+        const next = new Set(prev);
+        next.delete(variables.path.session_id);
+        return next;
+      });
       queryClient.invalidateQueries({ queryKey: meSessionsListQueryKey() });
     },
-    onError: () => setRevokingSessionId(null),
+    onError: (error, variables) => {
+      setRevokingSessionIds((prev) => {
+        const next = new Set(prev);
+        next.delete(variables.path.session_id);
+        return next;
+      });
+      toast({
+        title: "Failed to revoke session",
+        description: String(error),
+        type: "error",
+      });
+    },
   });
 
   const handleRevokeSession = (sessionId: string) => {
-    setRevokingSessionId(sessionId);
+    setRevokingSessionIds((prev) => new Set(prev).add(sessionId));
     deleteSessionMutation.mutate({ path: { session_id: sessionId } });
   };
 
@@ -295,7 +310,7 @@ export default function AccountPage() {
                   key={session.id}
                   session={session}
                   onRevoke={handleRevokeSession}
-                  isRevoking={revokingSessionId === session.id}
+                  isRevoking={revokingSessionIds.has(session.id)}
                 />
               ))}
             </div>
