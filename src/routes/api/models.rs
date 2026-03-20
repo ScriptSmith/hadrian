@@ -73,10 +73,25 @@ pub async fn api_v1_models(
             })
             .collect();
 
+        let mut live_fetched = Vec::new();
         for (name, result) in join_all(futures).await {
             match result {
-                Ok(resp) => hits.push((name, resp)),
+                Ok(resp) => {
+                    if cache_enabled {
+                        live_fetched.push((name.clone(), resp.clone()));
+                    }
+                    hits.push((name, resp));
+                }
                 Err(e) => tracing::warn!(provider = %name, error = %e, "Live-fetch fallback failed for cache-miss provider"),
+            }
+        }
+
+        // Write successful live-fetches back to the cache so subsequent requests
+        // don't repeat the same upstream calls until the next background refresh.
+        if !live_fetched.is_empty() {
+            let mut cache = state.static_models_cache.write().await;
+            for (name, resp) in live_fetched {
+                cache.insert(name, resp);
             }
         }
     }

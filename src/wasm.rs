@@ -479,7 +479,12 @@ fn wasm_default_config() -> config::GatewayConfig {
         },
         providers: config::ProvidersConfig::default(),
         limits: config::LimitsConfig::default(),
-        features: config::FeaturesConfig::default(),
+        features: config::FeaturesConfig {
+            static_models_cache: config::StaticModelsCacheConfig {
+                refresh_interval_secs: 0,
+            },
+            ..Default::default()
+        },
         observability: config::ObservabilityConfig::default(),
         ui: config::UiConfig {
             pages: config::PagesConfig {
