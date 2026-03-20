@@ -875,9 +875,11 @@ export function useChat({
                   reasoningContent = event.text;
                   streamingStore.setReasoningContent(storeKey, reasoningContent);
                 } else if (event.type === "response.output_text.done" && event.text) {
-                  // Use the final text from done event
+                  // Use the final text from done event for the local content.
+                  // Don't call setContent on the streaming store — appendContent
+                  // already accumulated the right content, and setContent would
+                  // overwrite content from earlier rounds in multi-round tool use.
                   content = event.text;
-                  streamingStore.setContent(storeKey, content);
                 } else if (event.type === "response.output_item.done" && event.item) {
                   // Handle file_search_call output items (server-side file search)
                   if (event.item.type === "file_search_call" && event.item.results) {
@@ -983,7 +985,7 @@ export function useChat({
                           ?.filter((c) => c.type === "output_text")
                           .map((c) => c.text || "")
                       )
-                      .join("");
+                      .join("\n\n---\n\n");
 
                   // If no output_text, try to extract from reasoning content (for reasoning models)
                   // This is useful for modes like "elected" where we need to parse a vote number
@@ -1326,8 +1328,17 @@ export function useChat({
           }
         }
 
-        // Accumulate content
-        accumulatedContent = result.content; // Use latest content (continuation replaces)
+        // Accumulate content across rounds with separator.
+        // Skip reasoning-only rounds (where content was set from reasoning fallback
+        // rather than actual output text — e.g., rounds that only call display_artifacts).
+        const isActualOutput = result.content && result.content !== result.reasoningContent;
+        if (isActualOutput) {
+          if (accumulatedContent) {
+            accumulatedContent += "\n\n---\n\n" + result.content;
+          } else {
+            accumulatedContent = result.content;
+          }
+        }
         lastReasoningContent = result.reasoningContent;
 
         // Accumulate usage (sum tokens across iterations)
@@ -1538,6 +1549,14 @@ export function useChat({
 
         // Clear tool calls from streaming store before next iteration
         streamingStore.clearToolCalls(storeKey);
+
+        // Add separator to streaming store so the next round's appendContent
+        // builds on top of the accumulated content with a visual break.
+        // Only add if this round had actual text output (avoid double separators
+        // from rounds that only had tool calls with no text).
+        if (isActualOutput) {
+          streamingStore.appendContent(storeKey, "\n\n---\n\n");
+        }
       }
 
       // Complete debug capture successfully
