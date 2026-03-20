@@ -8,9 +8,13 @@ import {
   Eye,
   EyeOff,
   GitFork,
+  Loader2,
   MoreHorizontal,
+  Pencil,
   Rows3,
+  Square,
   Trophy,
+  Volume2,
   X,
 } from "lucide-react";
 import {
@@ -68,6 +72,7 @@ import {
 } from "@/components/Dropdown/Dropdown";
 import { Textarea } from "@/components/Textarea/Textarea";
 import { useViewMode, useExpandedModel, useChatUIStore, useIsEditing } from "@/stores/chatUIStore";
+import type { PlaybackState } from "@/hooks/useAudioPlayback";
 import { useTTSForResponse } from "@/hooks/useTTSManager";
 import {
   usePendingToolCalls,
@@ -296,6 +301,10 @@ interface CollapsedActionsMenuProps {
   onRegenerate?: () => void;
   onExpand?: () => void;
   onHide?: () => void;
+  onSpeak?: () => void;
+  onStopSpeaking?: () => void;
+  speakingState?: PlaybackState;
+  onEdit?: () => void;
   onOpenDebug?: () => void;
   hasDebugInfo?: boolean;
   actionConfig: ActionConfig;
@@ -312,6 +321,10 @@ function CollapsedActionsMenu({
   onRegenerate,
   onExpand,
   onHide,
+  onSpeak,
+  onStopSpeaking,
+  speakingState = "idle",
+  onEdit,
   onOpenDebug,
   hasDebugInfo,
   actionConfig,
@@ -324,12 +337,19 @@ function CollapsedActionsMenu({
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const isSpeaking = speakingState === "playing";
+  const isSpeakLoading = speakingState === "loading";
+  const canStopSpeaking =
+    (isSpeaking || isSpeakLoading || speakingState === "paused") && onStopSpeaking;
+
   const showSelectBestAction =
     actionConfig.showSelectBest && showSelectBest && onSelectBest && !isSelectedBest;
   const showRegenerateAction = actionConfig.showRegenerate && onRegenerate;
   const showCopyAction = actionConfig.showCopy;
   const showExpandAction = actionConfig.showExpand && canExpand && onExpand;
   const showHideAction = actionConfig.showHide && onHide;
+  const showSpeakAction = actionConfig.showSpeak && onSpeak;
+  const showEditAction = !!onEdit;
 
   return (
     <Dropdown>
@@ -371,6 +391,31 @@ function CollapsedActionsMenu({
           <DropdownItem onClick={onHide}>
             <EyeOff className="h-4 w-4 mr-2" />
             Hide response
+          </DropdownItem>
+        )}
+        {showSpeakAction && (
+          <DropdownItem
+            onClick={canStopSpeaking ? onStopSpeaking : onSpeak}
+            disabled={isSpeakLoading}
+          >
+            {isSpeakLoading ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : canStopSpeaking ? (
+              <Square className="h-4 w-4 mr-2" />
+            ) : (
+              <Volume2 className="h-4 w-4 mr-2" />
+            )}
+            {isSpeakLoading
+              ? "Generating audio..."
+              : canStopSpeaking
+                ? "Stop speaking"
+                : "Read aloud"}
+          </DropdownItem>
+        )}
+        {showEditAction && (
+          <DropdownItem onClick={onEdit}>
+            <Pencil className="h-4 w-4 mr-2" />
+            Edit response
           </DropdownItem>
         )}
 
@@ -622,7 +667,7 @@ const ModelResponseCard = memo(function ModelResponseCard({
   return (
     <div
       className={cn(
-        "group/card flex flex-col rounded-xl border shadow-sm transition-all duration-300",
+        "flex flex-col rounded-xl border shadow-sm transition-all duration-300",
         "hover:shadow-md",
         "animate-slide-up-bounce",
         isSelectedBest && "ring-2 ring-success ring-offset-2 ring-offset-background",
@@ -631,7 +676,10 @@ const ModelResponseCard = memo(function ModelResponseCard({
       style={{ animationDelay: `${index * 100}ms` }}
     >
       {/* Header */}
-      <div ref={headerRef} className="flex items-center gap-2 border-b px-3 py-2.5 min-w-0">
+      <div
+        ref={headerRef}
+        className="group/card flex items-center gap-2 border-b px-3 py-2.5 min-w-0"
+      >
         {/* Left side: Avatar and model name */}
         <div className="flex items-center gap-2 min-w-0 flex-1">
           <Avatar className="h-7 w-7 shrink-0">
@@ -691,6 +739,14 @@ const ModelResponseCard = memo(function ModelResponseCard({
               onRegenerate={onRegenerate ? handleRegenerate : undefined}
               onExpand={onExpand ? handleExpand : undefined}
               onHide={onHide ? handleHide : undefined}
+              onSpeak={handleSpeak}
+              onStopSpeaking={handleStopSpeaking}
+              speakingState={ttsState}
+              onEdit={
+                onSaveEdit && messageId && !isEditing && !isAnyStreaming
+                  ? handleStartEdit
+                  : undefined
+              }
               onOpenDebug={hasDebugInfo ? handleOpenDebug : undefined}
               hasDebugInfo={hasDebugInfo}
               actionConfig={actionConfig}
