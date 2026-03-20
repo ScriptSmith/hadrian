@@ -61,7 +61,7 @@ export interface DataFileColumn {
   type: string;
 }
 
-/** Table schema for SQLite databases */
+/** Table schema for database files */
 export interface DataFileTable {
   /** Table name */
   tableName: string;
@@ -75,7 +75,7 @@ export interface DataFile {
   id: string;
   /** Original filename */
   name: string;
-  /** File type (csv, parquet, json) - SQLite NOT supported in WASM */
+  /** File type */
   type: FileType;
   /** File size in bytes */
   size: number;
@@ -85,8 +85,12 @@ export interface DataFile {
   registered: boolean;
   /** Error message if registration failed */
   error?: string;
-  /** Column schema for the file */
+  /** Column schema for flat files (CSV, Parquet, JSON) */
   columns?: DataFileColumn[];
+  /** Table schemas for database files (DuckDB) */
+  tables?: DataFileTable[];
+  /** Database alias for attached databases */
+  dbName?: string;
 }
 
 // Re-export types for convenience
@@ -265,6 +269,8 @@ interface ChatUIActions {
     error?: string,
     schema?: {
       columns?: DataFileColumn[];
+      tables?: DataFileTable[];
+      dbName?: string;
     }
   ) => void;
   /** Clear all data files */
@@ -530,6 +536,8 @@ export const useChatUIStore = create<ChatUIStore>((set) => ({
               registered,
               error,
               columns: schema?.columns,
+              tables: schema?.tables,
+              dbName: schema?.dbName,
             }
           : f
       ),

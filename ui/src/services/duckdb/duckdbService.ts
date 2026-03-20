@@ -4,8 +4,6 @@
  * Manages communication with the DuckDB Web Worker for executing SQL queries.
  * Provides a simple async API for database operations with proper lifecycle management.
  *
- * Note: SQLite support is NOT available in DuckDB-WASM due to extension limitations.
- *
  * ## Usage
  *
  * ```typescript
@@ -21,6 +19,11 @@
  *
  * // Query the CSV
  * const csvResult = await duckdbService.execute("SELECT * FROM 'data.csv'");
+ *
+ * // Register a DuckDB database file
+ * const dbData = await fetch("data.duckdb").then(r => r.arrayBuffer());
+ * await duckdbService.registerFile("data.duckdb", dbData, "duckdb");
+ * // Tables are available as: SELECT * FROM data.table_name
  * ```
  */
 
@@ -72,8 +75,8 @@ export type DuckDBStatus = "idle" | "loading" | "ready" | "error";
 /** Status update callback */
 export type StatusCallback = (status: DuckDBStatus, message?: string) => void;
 
-/** File types supported for registration (SQLite NOT supported in WASM) */
-export type FileType = "csv" | "parquet" | "json";
+/** File types supported for registration */
+export type FileType = "csv" | "parquet" | "json" | "duckdb";
 
 /** Internal message counter for correlation */
 let messageId = 0;
@@ -303,7 +306,7 @@ class DuckDBService {
     data: ArrayBuffer,
     fileType: FileType,
     options?: ExecuteOptions
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; dbAlias?: string }> {
     const id = nextId();
 
     const response = await this.sendMessage<{
@@ -311,6 +314,7 @@ class DuckDBService {
       id: string;
       success: boolean;
       error?: string;
+      dbAlias?: string;
     }>(
       {
         type: "registerFile",
@@ -330,6 +334,45 @@ class DuckDBService {
     return {
       success: response.success,
       error: response.error,
+      dbAlias: response.dbAlias,
+    };
+  }
+
+  /**
+   * Register a database file via BROWSER_FILEREADER protocol.
+   * DuckDB reads lazily from the File handle — no memory overhead, no size limit.
+   */
+  async registerDatabaseFile(
+    name: string,
+    handle: File,
+    options?: ExecuteOptions
+  ): Promise<{ success: boolean; error?: string; dbAlias?: string }> {
+    const id = nextId();
+
+    const response = await this.sendMessage<{
+      type: "registerFileResult";
+      id: string;
+      success: boolean;
+      error?: string;
+      dbAlias?: string;
+    }>(
+      {
+        type: "registerDatabaseHandle",
+        id,
+        name,
+        handle,
+      },
+      { timeout: options?.timeout ?? 60000, signal: options?.signal }
+    );
+
+    if (response.success) {
+      this.registeredFiles.add(name);
+    }
+
+    return {
+      success: response.success,
+      error: response.error,
+      dbAlias: response.dbAlias,
     };
   }
 

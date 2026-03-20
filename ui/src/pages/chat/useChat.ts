@@ -67,12 +67,12 @@ interface DataFileInfo {
   name: string;
   /** For flat files (CSV, Parquet, JSON) */
   columns?: Array<{ name: string; type: string }>;
-  /** For SQLite databases */
+  /** For database files (DuckDB) */
   tables?: Array<{
     tableName: string;
     columns: Array<{ name: string; type: string }>;
   }>;
-  /** Database name for SQLite files */
+  /** Database alias for attached databases */
   dbName?: string;
 }
 
@@ -429,18 +429,26 @@ export function useChat({
           let sqlDescription =
             "Execute SQL queries in-browser using DuckDB. " +
             "Supports standard SQL syntax with analytics functions. " +
-            "Can query CSV, Parquet, JSON files directly (e.g., SELECT * FROM 'data.csv'). " +
+            "Can query CSV, Parquet, JSON files directly (e.g., SELECT * FROM 'data.csv') " +
+            "and DuckDB database files (e.g., SELECT * FROM db_name.table_name). " +
             "Use for data analysis, aggregations, joins, and transformations.";
 
           // Add available files and their schemas
           if (dataFiles.length > 0) {
             sqlDescription += "\n\nAvailable data:";
             for (const file of dataFiles) {
-              if (file.columns && file.columns.length > 0) {
+              if (file.tables && file.tables.length > 0 && file.dbName) {
+                // Database file with tables
+                for (const table of file.tables) {
+                  const columnList = table.columns.map((c) => `${c.name} (${c.type})`).join(", ");
+                  sqlDescription += `\n- ${file.dbName}.${table.tableName}: ${columnList}`;
+                }
+              } else if (file.columns && file.columns.length > 0) {
                 const columnList = file.columns.map((c) => `${c.name} (${c.type})`).join(", ");
                 sqlDescription += `\n- '${file.name}': ${columnList}`;
+              } else if (file.dbName) {
+                sqlDescription += `\n- Database '${file.name}' attached as ${file.dbName}`;
               } else {
-                // File without schema info
                 sqlDescription += `\n- '${file.name}'`;
               }
             }
