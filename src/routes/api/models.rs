@@ -82,7 +82,9 @@ pub async fn api_v1_models(
                     }
                     hits.push((name, resp));
                 }
-                Err(e) => tracing::warn!(provider = %name, error = %e, "Live-fetch fallback failed for cache-miss provider"),
+                Err(e) => {
+                    tracing::warn!(provider = %name, error = %e, "Live-fetch fallback failed for cache-miss provider")
+                }
             }
         }
 
