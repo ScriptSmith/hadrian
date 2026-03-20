@@ -267,17 +267,22 @@ async function executeQuery(sql: string): Promise<{
 }
 
 /**
- * Derive a safe database alias from a filename (e.g., "my-data.duckdb" -> "my_data")
+ * Derive a safe, unique database alias from a filename (e.g., "my-data.duckdb" -> "my_data").
+ * Appends a counter suffix when the alias already exists in attachedDatabases.
  */
 function deriveDbAlias(filename: string): string {
-  const base = filename.replace(/\.duckdb$/i, "");
-  // Replace non-alphanumeric/underscore chars with underscores, collapse runs
-  return (
-    base
+  const base =
+    filename
+      .replace(/\.duckdb$/i, "")
       .replace(/[^a-zA-Z0-9_]/g, "_")
       .replace(/_+/g, "_")
-      .replace(/^_|_$/g, "") || "db"
-  );
+      .replace(/^_|_$/g, "") || "db";
+
+  const existing = new Set(attachedDatabases.values());
+  if (!existing.has(base)) return base;
+  let i = 2;
+  while (existing.has(`${base}_${i}`)) i++;
+  return `${base}_${i}`;
 }
 
 /**
@@ -303,16 +308,18 @@ async function registerFile(
 
     // Register the file buffer
     await db.registerFileBuffer(name, new Uint8Array(data));
-    registeredFiles.add(name);
 
     // For .duckdb files, attach the database so its tables are queryable
     if (fileType === "duckdb") {
       const alias = deriveDbAlias(name);
-      await conn.query(`ATTACH '${name}' AS "${alias}" (READ_ONLY)`);
+      const escapedName = name.replace(/'/g, "''");
+      await conn.query(`ATTACH '${escapedName}' AS "${alias}" (READ_ONLY)`);
+      registeredFiles.add(name);
       attachedDatabases.set(name, alias);
       return { success: true, dbAlias: alias };
     }
 
+    registeredFiles.add(name);
     return { success: true };
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
@@ -336,10 +343,11 @@ async function registerDatabaseHandle(
 
   try {
     await db.registerFileHandle(name, handle, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
-    registeredFiles.add(name);
 
     const alias = deriveDbAlias(name);
-    await conn.query(`ATTACH '${name}' AS "${alias}" (READ_ONLY)`);
+    const escapedName = name.replace(/'/g, "''");
+    await conn.query(`ATTACH '${escapedName}' AS "${alias}" (READ_ONLY)`);
+    registeredFiles.add(name);
     attachedDatabases.set(name, alias);
     return { success: true, dbAlias: alias };
   } catch (error) {

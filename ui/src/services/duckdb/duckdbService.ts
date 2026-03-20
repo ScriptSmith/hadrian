@@ -20,9 +20,9 @@
  * // Query the CSV
  * const csvResult = await duckdbService.execute("SELECT * FROM 'data.csv'");
  *
- * // Register a DuckDB database file
- * const dbData = await fetch("data.duckdb").then(r => r.arrayBuffer());
- * await duckdbService.registerFile("data.duckdb", dbData, "duckdb");
+ * // Register a DuckDB database file (lazy read, no memory overhead)
+ * const file = fileInput.files[0]; // e.g. from <input type="file">
+ * await duckdbService.registerDatabaseFile("data.duckdb", file);
  * // Tables are available as: SELECT * FROM data.table_name
  * ```
  */
