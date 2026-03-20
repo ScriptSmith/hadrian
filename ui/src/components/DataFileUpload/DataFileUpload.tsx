@@ -1,25 +1,39 @@
 /**
  * DataFileUpload - Upload data files for SQL queries
  *
- * Allows users to upload CSV, Parquet, and JSON files for querying
+ * Allows users to upload CSV, Parquet, JSON, and DuckDB database files for querying
  * with DuckDB. Files are registered in-memory and reset on page reload.
  *
- * Note: SQLite files are NOT supported in DuckDB-WASM due to extension limitations.
+ * DuckDB database files are registered via BROWSER_FILEREADER protocol, which reads
+ * lazily from the File handle on demand — no size limit, no memory overhead.
  */
 
 import { useCallback, useRef, useState } from "react";
-import { Upload, X, FileSpreadsheet, AlertCircle, Loader2 } from "lucide-react";
+import { Upload, X, FileSpreadsheet, AlertCircle, Loader2, Eye } from "lucide-react";
 
 import { duckdbService, type FileType } from "@/services/duckdb";
-import { useChatUIStore, useDataFiles, type DataFile } from "@/stores/chatUIStore";
+import {
+  useChatUIStore,
+  useDataFiles,
+  type DataFile,
+  type DataFileTable,
+} from "@/stores/chatUIStore";
 import { cn } from "@/utils/cn";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/Tooltip/Tooltip";
+import {
+  Modal,
+  ModalHeader,
+  ModalTitle,
+  ModalDescription,
+  ModalClose,
+  ModalContent,
+} from "@/components/Modal/Modal";
 
 /** Accepted file extensions and their types */
 const FILE_TYPE_MAP: Record<string, FileType> = {
   csv: "csv",
   parquet: "parquet",
   json: "json",
+  duckdb: "duckdb",
 };
 
 /** File type to display name */
@@ -27,16 +41,18 @@ const FILE_TYPE_LABELS: Record<FileType, string> = {
   csv: "CSV",
   parquet: "Parquet",
   json: "JSON",
+  duckdb: "DuckDB",
 };
 
-/** Max file size: 100MB */
-const MAX_FILE_SIZE = 100 * 1024 * 1024;
+/** Max file size for flat files: 100MB (DuckDB databases use lazy reads, no limit) */
+const MAX_FLAT_FILE_SIZE = 100 * 1024 * 1024;
 
 /** Format file size for display */
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 /** Get file extension from filename */
@@ -57,12 +73,15 @@ export interface DataFileUploadProps {
   disabled?: boolean;
   /** Compact mode - show only chips, no drop zone */
   compact?: boolean;
+  /** Called when a file is successfully added (use for auto-enabling tool) */
+  onFileAdded?: () => void;
 }
 
 export function DataFileUpload({
   className,
   disabled = false,
   compact = false,
+  onFileAdded,
 }: DataFileUploadProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -89,8 +108,8 @@ export function DataFileUpload({
           continue;
         }
 
-        // Validate file size
-        if (file.size > MAX_FILE_SIZE) {
+        // Validate file size (only for flat files — duckdb uses lazy file reads)
+        if (fileType !== "duckdb" && file.size > MAX_FLAT_FILE_SIZE) {
           console.warn(`File too large: ${file.name} (${formatFileSize(file.size)})`);
           continue;
         }
@@ -117,21 +136,57 @@ export function DataFileUpload({
 
         // Register with DuckDB
         try {
-          const buffer = await file.arrayBuffer();
-          const result = await duckdbService.registerFile(file.name, buffer, fileType);
+          // For .duckdb files, pass the File handle directly — DuckDB reads lazily via
+          // BROWSER_FILEREADER protocol (no memory overhead, no size limit).
+          // For flat files, load into memory (capped at 100MB).
+          const result =
+            fileType === "duckdb"
+              ? await duckdbService.registerDatabaseFile(file.name, file)
+              : await duckdbService.registerFile(file.name, await file.arrayBuffer(), fileType);
 
           if (result.success) {
-            // Get column schema for the file
-            // Use quoted filename for DuckDB (files are accessed as 'filename.ext')
-            const schemaResult = await duckdbService.describeTable(`'${file.name}'`);
-            if (schemaResult.success && schemaResult.columns.length > 0) {
-              updateDataFileStatus(fileId, true, undefined, {
-                columns: schemaResult.columns.map((c) => ({ name: c.name, type: c.type })),
-              });
+            if (fileType === "duckdb" && result.dbAlias) {
+              // For DuckDB database files, enumerate tables and describe each
+              const tablesResult = await duckdbService.execute(
+                `SELECT table_schema, table_name FROM information_schema.tables WHERE table_catalog = '${result.dbAlias}' AND table_schema NOT IN ('information_schema', 'pg_catalog') ORDER BY table_schema, table_name`
+              );
+              if (tablesResult.success && tablesResult.rows.length > 0) {
+                const tables = [];
+                for (const row of tablesResult.rows) {
+                  const tableName = String(row.table_name);
+                  const schemaName = String(row.table_schema);
+                  const safeTable = tableName.replace(/"/g, '""');
+                  const safeSchema = schemaName.replace(/"/g, '""');
+                  const colResult = await duckdbService.describeTable(
+                    `"${result.dbAlias}"."${safeSchema}"."${safeTable}"`
+                  );
+                  tables.push({
+                    tableName,
+                    schemaName,
+                    columns: colResult.success
+                      ? colResult.columns.map((c) => ({ name: c.name, type: c.type }))
+                      : [],
+                  });
+                }
+                updateDataFileStatus(fileId, true, undefined, {
+                  tables,
+                  dbName: result.dbAlias,
+                });
+              } else {
+                updateDataFileStatus(fileId, true, undefined, { dbName: result.dbAlias });
+              }
             } else {
-              // Registration succeeded but schema extraction failed - still mark as registered
-              updateDataFileStatus(fileId, true);
+              // Flat file — get column schema
+              const schemaResult = await duckdbService.describeTable(`'${file.name}'`);
+              if (schemaResult.success && schemaResult.columns.length > 0) {
+                updateDataFileStatus(fileId, true, undefined, {
+                  columns: schemaResult.columns.map((c) => ({ name: c.name, type: c.type })),
+                });
+              } else {
+                updateDataFileStatus(fileId, true);
+              }
             }
+            onFileAdded?.();
           } else {
             updateDataFileStatus(fileId, false, result.error || "Registration failed");
           }
@@ -143,16 +198,14 @@ export function DataFileUpload({
 
       setIsUploading(false);
     },
-    [disabled, dataFiles, addDataFile, updateDataFileStatus]
+    [disabled, dataFiles, addDataFile, updateDataFileStatus, onFileAdded]
   );
 
   /** Handle file removal */
   const handleRemove = useCallback(
     async (file: DataFile) => {
-      // Remove from store
       removeDataFile(file.id);
 
-      // Unregister from DuckDB if it was registered
       if (file.registered) {
         try {
           await duckdbService.unregisterFile(file.name);
@@ -201,7 +254,6 @@ export function DataFileUpload({
     (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.files && e.target.files.length > 0) {
         handleFiles(e.target.files);
-        // Reset input so same file can be selected again
         e.target.value = "";
       }
     },
@@ -213,7 +265,7 @@ export function DataFileUpload({
     .join(",");
 
   return (
-    <div className={cn("space-y-2", className)}>
+    <div className={cn("space-y-2 min-w-0", className)}>
       {/* Hidden file input */}
       <input
         ref={inputRef}
@@ -257,7 +309,7 @@ export function DataFileUpload({
           <span className="text-xs text-muted-foreground text-center">
             {isDragging ? "Drop files here" : "Drop files or click to upload"}
           </span>
-          <span className="text-[10px] text-muted-foreground">CSV, Parquet, JSON (max 100MB)</span>
+          <span className="text-[10px] text-muted-foreground">CSV, Parquet, JSON, DuckDB</span>
         </div>
       )}
 
@@ -283,7 +335,7 @@ export function DataFileUpload({
 
       {/* File chips */}
       {dataFiles.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-1.5 min-w-0">
           {dataFiles.map((file: DataFile) => (
             <FileChip key={file.id} file={file} onRemove={() => handleRemove(file)} />
           ))}
@@ -316,20 +368,31 @@ export function DataFileUpload({
 
 /** Individual file chip */
 function FileChip({ file, onRemove }: { file: DataFile; onRemove: () => void }) {
+  const [schemaOpen, setSchemaOpen] = useState(false);
   const hasError = !file.registered && file.error;
   const isLoading = !file.registered && !file.error;
   const hasColumns = file.columns && file.columns.length > 0;
+  const hasTables = file.tables && file.tables.length > 0;
+  const isDatabase = file.type === "duckdb";
+  const hasSchema = hasColumns || hasTables;
+
+  const chipDetail =
+    isDatabase && hasTables
+      ? `${file.tables!.length} table${file.tables!.length !== 1 ? "s" : ""}`
+      : hasColumns
+        ? `${file.columns!.length} cols`
+        : undefined;
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <div
-          className={cn(
-            "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs",
-            hasError && "bg-destructive/10 text-destructive",
-            !hasError && "bg-muted text-foreground"
-          )}
-        >
+    <>
+      <div
+        className={cn(
+          "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs max-w-full min-w-0",
+          hasError && "bg-destructive/10 text-destructive",
+          !hasError && "bg-muted text-foreground"
+        )}
+      >
+        <span className="shrink-0">
           {isLoading ? (
             <Loader2 className="h-3 w-3 animate-spin" />
           ) : hasError ? (
@@ -337,53 +400,139 @@ function FileChip({ file, onRemove }: { file: DataFile; onRemove: () => void }) 
           ) : (
             <FileSpreadsheet className="h-3 w-3" />
           )}
-          <span className="max-w-[120px] truncate">{file.name}</span>
-          <span className="text-muted-foreground">{FILE_TYPE_LABELS[file.type]}</span>
-          {hasColumns && <span className="text-muted-foreground">{file.columns!.length} cols</span>}
+        </span>
+        <span className="truncate min-w-0">{file.name}</span>
+        <span className="text-muted-foreground shrink-0">{FILE_TYPE_LABELS[file.type]}</span>
+        {chipDetail && <span className="text-muted-foreground shrink-0">{chipDetail}</span>}
+        {hasSchema && !isLoading && (
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              onRemove();
+              setSchemaOpen(true);
             }}
-            className="ml-0.5 p-0.5 rounded hover:bg-foreground/10 transition-colors"
-            aria-label={`Remove ${file.name}`}
+            className="shrink-0 p-0.5 rounded hover:bg-foreground/10 transition-colors"
+            aria-label={`View schema for ${file.name}`}
           >
-            <X className="h-3 w-3" />
+            <Eye className="h-3 w-3" />
           </button>
-        </div>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" className="max-w-sm">
-        <div className="space-y-1.5">
-          <p className="font-medium">{file.name}</p>
-          <p className="text-xs text-muted-foreground">
-            {FILE_TYPE_LABELS[file.type]} &middot; {formatFileSize(file.size)}
-          </p>
-          {hasError && <p className="text-xs text-destructive">{file.error}</p>}
-          {!hasError && !isLoading && (
-            <>
-              <p className="text-xs text-muted-foreground">
-                Query with: SELECT * FROM &apos;{file.name}&apos;
-              </p>
+        )}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+          className="shrink-0 p-0.5 rounded hover:bg-foreground/10 transition-colors"
+          aria-label={`Remove ${file.name}`}
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </div>
 
-              {/* File columns */}
-              {hasColumns && (
-                <div className="pt-1 border-t border-border/50">
-                  <p className="text-xs font-medium mb-1">Columns:</p>
-                  <div className="text-xs text-muted-foreground space-y-0.5 max-h-32 overflow-y-auto">
-                    {file.columns!.map((col) => (
-                      <div key={col.name} className="flex justify-between gap-2">
-                        <span className="font-mono truncate">{col.name}</span>
-                        <span className="text-muted-foreground shrink-0">{col.type}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+      {/* Schema modal */}
+      {hasSchema && (
+        <DataSchemaModal open={schemaOpen} onClose={() => setSchemaOpen(false)} file={file} />
+      )}
+    </>
+  );
+}
+
+/** Modal showing full schema for a data file */
+function DataSchemaModal({
+  open,
+  onClose,
+  file,
+}: {
+  open: boolean;
+  onClose: () => void;
+  file: DataFile;
+}) {
+  const isDatabase = file.type === "duckdb";
+  const hasTables = file.tables && file.tables.length > 0;
+  const hasColumns = file.columns && file.columns.length > 0;
+
+  return (
+    <Modal open={open} onClose={onClose} className="max-w-md">
+      <ModalHeader>
+        <ModalTitle>{file.name}</ModalTitle>
+        <ModalDescription>
+          {FILE_TYPE_LABELS[file.type]} &middot; {formatFileSize(file.size)}
+          {isDatabase && file.dbName && (
+            <>
+              {" "}
+              &middot; Attached as{" "}
+              <code className="text-xs bg-muted px-1 rounded">{file.dbName}</code>
             </>
           )}
-        </div>
-      </TooltipContent>
-    </Tooltip>
+        </ModalDescription>
+      </ModalHeader>
+      <ModalClose onClose={onClose} />
+      <ModalContent className="max-h-[60vh] overflow-y-auto">
+        {/* Database tables */}
+        {hasTables && (
+          <div className="space-y-4">
+            {file.tables!.map((table) => (
+              <TableSchema
+                key={`${table.schemaName}.${table.tableName}`}
+                table={table}
+                dbName={file.dbName}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Flat file columns */}
+        {!isDatabase && hasColumns && (
+          <div>
+            <p className="text-xs text-muted-foreground mb-2 font-mono">
+              SELECT * FROM &apos;{file.name}&apos;
+            </p>
+            <ColumnTable columns={file.columns!} />
+          </div>
+        )}
+      </ModalContent>
+    </Modal>
+  );
+}
+
+/** Render a single table's schema */
+function TableSchema({ table, dbName }: { table: DataFileTable; dbName?: string }) {
+  return (
+    <div>
+      <div className="flex items-baseline gap-2 mb-1.5">
+        <h3 className="text-sm font-medium font-mono">{table.tableName}</h3>
+        <span className="text-xs text-muted-foreground">{table.columns.length} columns</span>
+      </div>
+      {dbName && (
+        <p className="text-xs text-muted-foreground mb-2 font-mono">
+          SELECT * FROM &quot;{dbName}&quot;.&quot;{table.schemaName}&quot;.&quot;{table.tableName}
+          &quot;
+        </p>
+      )}
+      {table.columns.length > 0 && <ColumnTable columns={table.columns} />}
+    </div>
+  );
+}
+
+/** Render a columns table */
+function ColumnTable({ columns }: { columns: Array<{ name: string; type: string }> }) {
+  return (
+    <table className="w-full text-xs">
+      <thead>
+        <tr className="border-b border-border">
+          <th className="text-left py-1 pr-4 font-medium text-muted-foreground">Column</th>
+          <th className="text-left py-1 font-medium text-muted-foreground">Type</th>
+        </tr>
+      </thead>
+      <tbody>
+        {columns.map((col) => (
+          <tr key={col.name} className="border-b border-border/50 last:border-0">
+            <td className="py-1 pr-4 font-mono">{col.name}</td>
+            <td className="py-1 text-muted-foreground">{col.type}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

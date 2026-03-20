@@ -129,6 +129,8 @@ export default function ChatPage() {
         .map((f) => ({
           name: f.name,
           columns: f.columns,
+          tables: f.tables,
+          dbName: f.dbName,
         })),
     [dataFiles]
   );

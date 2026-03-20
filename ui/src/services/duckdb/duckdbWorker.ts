@@ -2,9 +2,7 @@
  * DuckDB Web Worker
  *
  * This worker loads and manages a DuckDB WASM instance for executing SQL queries
- * in-browser. Supports CSV, Parquet, and JSON files via the virtual filesystem.
- *
- * Note: SQLite support is NOT available in DuckDB-WASM due to extension limitations.
+ * in-browser. Supports CSV, Parquet, JSON, and DuckDB database files via the virtual filesystem.
  *
  * Communication protocol:
  * - Main thread sends { type, id, ... } messages
@@ -26,7 +24,14 @@ interface RegisterFileMessage {
   id: string;
   name: string;
   data: ArrayBuffer;
-  fileType: "csv" | "parquet" | "json";
+  fileType: "csv" | "parquet" | "json" | "duckdb";
+}
+
+interface RegisterDatabaseHandleMessage {
+  type: "registerDatabaseHandle";
+  id: string;
+  name: string;
+  handle: File;
 }
 
 interface UnregisterFileMessage {
@@ -54,6 +59,7 @@ interface StatusMessage {
 type WorkerMessage =
   | ExecuteMessage
   | RegisterFileMessage
+  | RegisterDatabaseHandleMessage
   | UnregisterFileMessage
   | ListTablesMessage
   | DescribeTableMessage
@@ -84,6 +90,7 @@ interface RegisterFileResponse {
   id: string;
   success: boolean;
   error?: string;
+  dbAlias?: string;
 }
 
 interface UnregisterFileResponse {
@@ -138,6 +145,8 @@ let db: duckdb.AsyncDuckDB | null = null;
 let conn: duckdb.AsyncDuckDBConnection | null = null;
 let isLoading = false;
 const registeredFiles = new Set<string>();
+/** Tracks attached DuckDB databases: filename -> alias */
+const attachedDatabases = new Map<string, string>();
 
 /**
  * Send a message to the main thread
@@ -258,16 +267,35 @@ async function executeQuery(sql: string): Promise<{
 }
 
 /**
+ * Derive a safe, unique database alias from a filename (e.g., "my-data.duckdb" -> "my_data").
+ * Appends a counter suffix when the alias already exists in attachedDatabases.
+ */
+function deriveDbAlias(filename: string): string {
+  const base =
+    filename
+      .replace(/\.duckdb$/i, "")
+      .replace(/[^a-zA-Z0-9_]/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_|_$/g, "") || "db";
+
+  const existing = new Set(attachedDatabases.values());
+  if (!existing.has(base)) return base;
+  let i = 2;
+  while (existing.has(`${base}_${i}`)) i++;
+  return `${base}_${i}`;
+}
+
+/**
  * Register a file in DuckDB's virtual filesystem
  */
 async function registerFile(
   name: string,
   data: ArrayBuffer,
-  _fileType: "csv" | "parquet" | "json"
-): Promise<{ success: boolean; error?: string }> {
+  fileType: "csv" | "parquet" | "json" | "duckdb"
+): Promise<{ success: boolean; error?: string; dbAlias?: string }> {
   await initDuckDB();
 
-  if (!db) {
+  if (!db || !conn) {
     return { success: false, error: "Database not initialized" };
   }
 
@@ -280,9 +308,58 @@ async function registerFile(
 
     // Register the file buffer
     await db.registerFileBuffer(name, new Uint8Array(data));
-    registeredFiles.add(name);
 
+    // For .duckdb files, attach the database so its tables are queryable
+    if (fileType === "duckdb") {
+      const alias = deriveDbAlias(name);
+      const escapedName = name.replace(/'/g, "''");
+      try {
+        await conn.query(`ATTACH '${escapedName}' AS "${alias}" (READ_ONLY)`);
+      } catch (attachError) {
+        await db.dropFile(name);
+        throw attachError;
+      }
+      registeredFiles.add(name);
+      attachedDatabases.set(name, alias);
+      return { success: true, dbAlias: alias };
+    }
+
+    registeredFiles.add(name);
     return { success: true };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    return { success: false, error: errorMsg };
+  }
+}
+
+/**
+ * Register a database file via BROWSER_FILEREADER protocol.
+ * DuckDB reads lazily from the File handle on demand — no memory overhead.
+ */
+async function registerDatabaseHandle(
+  name: string,
+  handle: File
+): Promise<{ success: boolean; error?: string; dbAlias?: string }> {
+  await initDuckDB();
+
+  if (!db || !conn) {
+    return { success: false, error: "Database not initialized" };
+  }
+
+  try {
+    await db.registerFileHandle(name, handle, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+
+    const alias = deriveDbAlias(name);
+    const escapedName = name.replace(/'/g, "''");
+    try {
+      await conn.query(`ATTACH '${escapedName}' AS "${alias}" (READ_ONLY)`);
+    } catch (attachError) {
+      await db.dropFile(name);
+      throw attachError;
+    }
+    registeredFiles.add(name);
+    attachedDatabases.set(name, alias);
+    return { success: true, dbAlias: alias };
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     return { success: false, error: errorMsg };
@@ -298,6 +375,13 @@ async function unregisterFile(name: string): Promise<{ success: boolean; error?:
   }
 
   try {
+    // Detach if it was an attached database
+    const alias = attachedDatabases.get(name);
+    if (alias && conn) {
+      await conn.query(`DETACH "${alias}"`);
+      attachedDatabases.delete(name);
+    }
+
     await db.dropFile(name);
     registeredFiles.delete(name);
     return { success: true };
@@ -412,6 +496,25 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
     case "registerFile": {
       try {
         const result = await registerFile(message.name, message.data, message.fileType);
+        sendMessage({
+          type: "registerFileResult",
+          id: message.id,
+          ...result,
+        });
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        sendMessage({
+          type: "error",
+          id: message.id,
+          error: errorMsg,
+        });
+      }
+      break;
+    }
+
+    case "registerDatabaseHandle": {
+      try {
+        const result = await registerDatabaseHandle(message.name, message.handle);
         sendMessage({
           type: "registerFileResult",
           id: message.id,

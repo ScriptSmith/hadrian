@@ -462,6 +462,16 @@ export function ToolsBar({
     [allToolsData, enabledTools]
   );
 
+  /** Ensure a tool is enabled (no-op if already enabled) */
+  const ensureEnabled = useCallback(
+    (toolId: string) => {
+      if (!enabledTools.includes(toolId)) {
+        onEnabledToolsChange([...enabledTools, toolId]);
+      }
+    },
+    [enabledTools, onEnabledToolsChange]
+  );
+
   // Get extra content for specific tools (settings panels)
   const getToolExtraContent = useCallback(
     (toolId: string): React.ReactNode => {
@@ -472,7 +482,10 @@ export function ToolsBar({
           <div className="pt-2 border-t mt-2">
             <VectorStoreSelector
               selectedIds={vectorStoreIds || []}
-              onIdsChange={onVectorStoreIdsChange}
+              onIdsChange={(ids) => {
+                onVectorStoreIdsChange(ids);
+                if (ids.length > 0) ensureEnabled("file_search");
+              }}
               ownerType={vectorStoreOwnerType}
               ownerId={vectorStoreOwnerId}
               maxStores={10}
@@ -485,7 +498,11 @@ export function ToolsBar({
       if (toolId === "sql_query") {
         return (
           <div className="pt-2 border-t mt-2">
-            <DataFileUpload disabled={disabled} compact />
+            <DataFileUpload
+              disabled={disabled}
+              compact
+              onFileAdded={() => ensureEnabled("sql_query")}
+            />
           </div>
         );
       }
@@ -494,13 +511,24 @@ export function ToolsBar({
           <SubAgentModelSelector
             availableModels={availableModels}
             selectedModel={subAgentModel}
-            onModelChange={onSubAgentModelChange}
+            onModelChange={(model) => {
+              onSubAgentModelChange(model);
+              ensureEnabled("sub_agent");
+            }}
             disabled={disabled}
           />
         );
       }
       if (toolId === "mcp") {
-        return <MCPServerStatus onOpenConfig={onOpenMCPConfig} disabled={disabled} />;
+        return (
+          <MCPServerStatus
+            onOpenConfig={() => {
+              onOpenMCPConfig?.();
+              ensureEnabled("mcp");
+            }}
+            disabled={disabled}
+          />
+        );
       }
       return null;
     },
@@ -514,6 +542,7 @@ export function ToolsBar({
       subAgentModel,
       onSubAgentModelChange,
       onOpenMCPConfig,
+      ensureEnabled,
     ]
   );
 
