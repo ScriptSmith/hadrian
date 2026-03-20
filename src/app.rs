@@ -376,6 +376,10 @@ pub struct AppState {
     /// Model catalog registry for enriching API responses with model metadata.
     /// Loaded from embedded data at startup and optionally synced at runtime.
     pub model_catalog: catalog::ModelCatalogRegistry,
+    /// In-memory cache of model lists fetched from static (config-file) providers.
+    /// Warmed on startup and refreshed periodically to avoid per-request latency.
+    pub static_models_cache:
+        Arc<tokio::sync::RwLock<std::collections::HashMap<String, providers::ModelsResponse>>>,
 }
 
 impl AppState {
@@ -1059,7 +1063,7 @@ impl AppState {
             Arc::new(services::ProviderMetricsService::new())
         };
 
-        Ok(Self {
+        let result = Ok(Self {
             http_client,
             config: Arc::new(config),
             db,
@@ -1096,7 +1100,19 @@ impl AppState {
             default_org_id,
             provider_metrics,
             model_catalog,
-        })
+            static_models_cache: Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+        });
+
+        // Warm the static models cache so /v1/models is fast from the first request
+        if let Ok(ref state) = result
+            && state.config.features.static_models_cache.enabled()
+        {
+            state.warm_static_models_cache().await;
+        }
+
+        result
     }
 
     /// Ensure a default user exists for anonymous access when auth is disabled.
@@ -1815,6 +1831,49 @@ impl AppState {
                 None
             }
         }
+    }
+
+    /// Fetch model lists from all static (config-file) providers in parallel and
+    /// store them in `self.static_models_cache`. Failures for individual providers
+    /// are logged and skipped so one slow/broken provider cannot block the rest.
+    pub async fn warm_static_models_cache(&self) {
+        use futures::future::join_all;
+
+        let futures: Vec<_> = self
+            .config
+            .providers
+            .iter()
+            .map(|(name, cfg)| {
+                let name = name.to_owned();
+                let http = self.http_client.clone();
+                let cbs = self.circuit_breakers.clone();
+                async move {
+                    let result = providers::list_models_for_config(cfg, &name, &http, &cbs).await;
+                    (name, result)
+                }
+            })
+            .collect();
+
+        let results = join_all(futures).await;
+
+        let mut cache = self.static_models_cache.write().await;
+        let mut count = 0usize;
+        for (name, result) in results {
+            match result {
+                Ok(response) => {
+                    count += response.data.len();
+                    cache.insert(name, response);
+                }
+                Err(e) => {
+                    tracing::warn!(provider = %name, error = %e, "Failed to fetch models for cache warm");
+                }
+            }
+        }
+        tracing::info!(
+            providers = cache.len(),
+            models = count,
+            "Static models cache warmed"
+        );
     }
 }
 

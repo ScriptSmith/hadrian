@@ -874,6 +874,9 @@ mod tests {
                 crate::services::ProviderMetricsService::with_local_metrics(|| None),
             ),
             model_catalog: crate::catalog::ModelCatalogRegistry::new(),
+            static_models_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
         }
     }
 
