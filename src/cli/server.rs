@@ -339,8 +339,9 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
     // (initial warming already happened in AppState::new)
     if config.features.static_models_cache.enabled() {
         let interval = config.features.static_models_cache.refresh_interval();
+        let task_tracker = state.task_tracker.clone();
         let state_ref = state.clone();
-        tokio::spawn(async move {
+        task_tracker.spawn(async move {
             let mut ticker = tokio::time::interval(interval);
             ticker.tick().await; // skip the immediate first tick (already warmed)
             loop {

@@ -1857,11 +1857,10 @@ impl AppState {
         let results = join_all(futures).await;
 
         let mut cache = self.static_models_cache.write().await;
-        let mut count = 0usize;
+        cache.retain(|name, _| self.config.providers.get(name).is_some());
         for (name, result) in results {
             match result {
                 Ok(response) => {
-                    count += response.data.len();
                     cache.insert(name, response);
                 }
                 Err(e) => {
@@ -1869,9 +1868,10 @@ impl AppState {
                 }
             }
         }
+        let total_models: usize = cache.values().map(|r| r.data.len()).sum();
         tracing::info!(
             providers = cache.len(),
-            models = count,
+            models = total_models,
             "Static models cache warmed"
         );
     }

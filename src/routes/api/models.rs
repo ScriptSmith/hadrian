@@ -74,8 +74,9 @@ pub async fn api_v1_models(
             .collect();
 
         for (name, result) in join_all(futures).await {
-            if let Ok(resp) = result {
-                hits.push((name, resp));
+            match result {
+                Ok(resp) => hits.push((name, resp)),
+                Err(e) => tracing::warn!(provider = %name, error = %e, "Live-fetch fallback failed for cache-miss provider"),
             }
         }
     }
