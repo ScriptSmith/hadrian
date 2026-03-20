@@ -148,17 +148,21 @@ export function DataFileUpload({
             if (fileType === "duckdb" && result.dbAlias) {
               // For DuckDB database files, enumerate tables and describe each
               const tablesResult = await duckdbService.execute(
-                `SELECT table_name FROM information_schema.tables WHERE table_catalog = '${result.dbAlias}' AND table_schema = 'main' ORDER BY table_name`
+                `SELECT table_schema, table_name FROM information_schema.tables WHERE table_catalog = '${result.dbAlias}' AND table_schema NOT IN ('information_schema', 'pg_catalog') ORDER BY table_schema, table_name`
               );
               if (tablesResult.success && tablesResult.rows.length > 0) {
                 const tables = [];
                 for (const row of tablesResult.rows) {
                   const tableName = String(row.table_name);
+                  const schemaName = String(row.table_schema);
+                  const safeTable = tableName.replace(/"/g, '""');
+                  const safeSchema = schemaName.replace(/"/g, '""');
                   const colResult = await duckdbService.describeTable(
-                    `"${result.dbAlias}".main."${tableName}"`
+                    `"${result.dbAlias}"."${safeSchema}"."${safeTable}"`
                   );
                   tables.push({
                     tableName,
+                    schemaName,
                     columns: colResult.success
                       ? colResult.columns.map((c) => ({ name: c.name, type: c.type }))
                       : [],
@@ -498,7 +502,7 @@ function TableSchema({ table, dbName }: { table: DataFileTable; dbName?: string 
       </div>
       {dbName && (
         <p className="text-xs text-muted-foreground mb-2 font-mono">
-          SELECT * FROM {dbName}.{table.tableName}
+          SELECT * FROM {dbName}.{table.schemaName}.{table.tableName}
         </p>
       )}
       {table.columns.length > 0 && <ColumnTable columns={table.columns} />}

@@ -313,7 +313,12 @@ async function registerFile(
     if (fileType === "duckdb") {
       const alias = deriveDbAlias(name);
       const escapedName = name.replace(/'/g, "''");
-      await conn.query(`ATTACH '${escapedName}' AS "${alias}" (READ_ONLY)`);
+      try {
+        await conn.query(`ATTACH '${escapedName}' AS "${alias}" (READ_ONLY)`);
+      } catch (attachError) {
+        await db.dropFile(name);
+        throw attachError;
+      }
       registeredFiles.add(name);
       attachedDatabases.set(name, alias);
       return { success: true, dbAlias: alias };
@@ -346,7 +351,12 @@ async function registerDatabaseHandle(
 
     const alias = deriveDbAlias(name);
     const escapedName = name.replace(/'/g, "''");
-    await conn.query(`ATTACH '${escapedName}' AS "${alias}" (READ_ONLY)`);
+    try {
+      await conn.query(`ATTACH '${escapedName}' AS "${alias}" (READ_ONLY)`);
+    } catch (attachError) {
+      await db.dropFile(name);
+      throw attachError;
+    }
     registeredFiles.add(name);
     attachedDatabases.set(name, alias);
     return { success: true, dbAlias: alias };

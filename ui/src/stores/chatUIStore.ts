@@ -65,6 +65,8 @@ export interface DataFileColumn {
 export interface DataFileTable {
   /** Table name */
   tableName: string;
+  /** Schema name (e.g. "main") */
+  schemaName: string;
   /** Columns in the table */
   columns: DataFileColumn[];
 }

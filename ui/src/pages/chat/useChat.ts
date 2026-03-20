@@ -70,6 +70,7 @@ interface DataFileInfo {
   /** For database files (DuckDB) */
   tables?: Array<{
     tableName: string;
+    schemaName: string;
     columns: Array<{ name: string; type: string }>;
   }>;
   /** Database alias for attached databases */
@@ -441,7 +442,7 @@ export function useChat({
                 // Database file with tables
                 for (const table of file.tables) {
                   const columnList = table.columns.map((c) => `${c.name} (${c.type})`).join(", ");
-                  sqlDescription += `\n- ${file.dbName}.${table.tableName}: ${columnList}`;
+                  sqlDescription += `\n- ${file.dbName}.${table.schemaName}.${table.tableName}: ${columnList}`;
                 }
               } else if (file.columns && file.columns.length > 0) {
                 const columnList = file.columns.map((c) => `${c.name} (${c.type})`).join(", ");
