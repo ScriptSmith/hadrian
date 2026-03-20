@@ -473,7 +473,11 @@ function DataSchemaModal({
         {hasTables && (
           <div className="space-y-4">
             {file.tables!.map((table) => (
-              <TableSchema key={table.tableName} table={table} dbName={file.dbName} />
+              <TableSchema
+                key={`${table.schemaName}.${table.tableName}`}
+                table={table}
+                dbName={file.dbName}
+              />
             ))}
           </div>
         )}
@@ -502,7 +506,8 @@ function TableSchema({ table, dbName }: { table: DataFileTable; dbName?: string 
       </div>
       {dbName && (
         <p className="text-xs text-muted-foreground mb-2 font-mono">
-          SELECT * FROM {dbName}.{table.schemaName}.{table.tableName}
+          SELECT * FROM &quot;{dbName}&quot;.&quot;{table.schemaName}&quot;.&quot;{table.tableName}
+          &quot;
         </p>
       )}
       {table.columns.length > 0 && <ColumnTable columns={table.columns} />}
