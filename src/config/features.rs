@@ -57,6 +57,11 @@ pub struct FeaturesConfig {
     /// Validates URLs with SSRF protection and enforces size limits.
     #[serde(default)]
     pub web_fetch: Option<WebFetchConfig>,
+
+    /// Static models cache configuration.
+    /// Caches model lists from config-file providers to avoid per-request latency.
+    #[serde(default)]
+    pub static_models_cache: StaticModelsCacheConfig,
 }
 
 impl FeaturesConfig {
@@ -2561,6 +2566,51 @@ fn default_catalog_sync_interval_secs() -> u64 {
 
 fn default_catalog_api_url() -> String {
     "https://models.dev/api.json".to_string()
+}
+
+/// Configuration for the static models cache.
+///
+/// Model lists from config-file providers are cached in memory and refreshed
+/// periodically so that `/v1/models` does not make upstream HTTP calls on every
+/// request.
+///
+/// ```toml
+/// [features.static_models_cache]
+/// refresh_interval_secs = 300
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct StaticModelsCacheConfig {
+    /// How often to refresh the cached model lists, in seconds.
+    /// Set to 0 to disable caching (every request will query providers directly).
+    /// Default: 300 (5 minutes).
+    #[serde(default = "default_static_models_refresh_interval_secs")]
+    pub refresh_interval_secs: u64,
+}
+
+impl Default for StaticModelsCacheConfig {
+    fn default() -> Self {
+        Self {
+            refresh_interval_secs: default_static_models_refresh_interval_secs(),
+        }
+    }
+}
+
+impl StaticModelsCacheConfig {
+    /// Whether caching is enabled (interval > 0).
+    pub fn enabled(&self) -> bool {
+        self.refresh_interval_secs > 0
+    }
+
+    /// Refresh interval as a `Duration`.
+    pub fn refresh_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.refresh_interval_secs)
+    }
+}
+
+fn default_static_models_refresh_interval_secs() -> u64 {
+    300 // 5 minutes
 }
 
 #[cfg(test)]

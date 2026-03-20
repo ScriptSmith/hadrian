@@ -31,217 +31,249 @@ pub async fn api_v1_models(
     State(state): State<AppState>,
     auth: Option<Extension<crate::auth::AuthenticatedRequest>>,
 ) -> Result<Json<CombinedModelsResponse>, ApiError> {
-    use futures::future::join_all;
-
-    // Create futures for fetching models from all providers in parallel
-    let fetch_futures: Vec<_> = state
-        .config
-        .providers
-        .iter()
-        .map(|(provider_name, provider_config)| {
-            let provider_name = provider_name.to_owned();
-            let http_client = state.http_client.clone();
-            let circuit_breakers = state.circuit_breakers.clone();
-
-            async move {
-                let models_result = crate::providers::list_models_for_config(
-                    provider_config,
-                    &provider_name,
-                    &http_client,
-                    &circuit_breakers,
-                )
-                .await;
-                (provider_name, models_result)
+    // Read static provider models from the in-memory cache (warmed on startup,
+    // refreshed periodically). Providers missing from the cache (e.g. if warming
+    // failed) are fetched live as a fallback.
+    let cache_enabled = state.config.features.static_models_cache.enabled();
+    let mut hits: Vec<(String, crate::providers::ModelsResponse)> = Vec::new();
+    let mut misses: Vec<(String, &crate::config::ProviderConfig)> = Vec::new();
+    if cache_enabled {
+        let cached = state.static_models_cache.read().await;
+        for (name, cfg) in state.config.providers.iter() {
+            if let Some(resp) = cached.get(name) {
+                hits.push((name.to_owned(), resp.clone()));
+            } else {
+                misses.push((name.to_owned(), cfg));
             }
-        })
-        .collect();
+        }
+    } else {
+        misses.extend(
+            state
+                .config
+                .providers
+                .iter()
+                .map(|(name, cfg)| (name.to_owned(), cfg)),
+        );
+    }
 
-    // Fetch from all providers in parallel
-    let results = join_all(fetch_futures).await;
+    // Live-fetch any providers not in the cache
+    if !misses.is_empty() {
+        use futures::future::join_all;
+
+        let futures: Vec<_> = misses
+            .into_iter()
+            .map(|(name, cfg)| {
+                let http = state.http_client.clone();
+                let cbs = state.circuit_breakers.clone();
+                async move {
+                    let result =
+                        crate::providers::list_models_for_config(cfg, &name, &http, &cbs).await;
+                    (name, result)
+                }
+            })
+            .collect();
+
+        let mut live_fetched = Vec::new();
+        for (name, result) in join_all(futures).await {
+            match result {
+                Ok(resp) => {
+                    if cache_enabled {
+                        live_fetched.push((name.clone(), resp.clone()));
+                    }
+                    hits.push((name, resp));
+                }
+                Err(e) => tracing::warn!(provider = %name, error = %e, "Live-fetch fallback failed for cache-miss provider"),
+            }
+        }
+
+        // Write successful live-fetches back to the cache so subsequent requests
+        // don't repeat the same upstream calls until the next background refresh.
+        if !live_fetched.is_empty() {
+            let mut cache = state.static_models_cache.write().await;
+            for (name, resp) in live_fetched {
+                cache.insert(name, resp);
+            }
+        }
+    }
 
     // Collect successful results and enrich with catalog data
     let mut all_models = Vec::new();
-    for (provider_name, models_result) in results {
-        if let Ok(models_response) = models_result {
-            // Get the provider config for catalog lookup
-            let provider_config = state.config.providers.get(&provider_name);
+    for (provider_name, models_response) in hits {
+        // Get the provider config for catalog lookup
+        let provider_config = state.config.providers.get(&provider_name);
 
-            // Resolve the catalog provider ID for this provider
-            let catalog_provider_id = provider_config.and_then(|pc| {
-                crate::catalog::resolve_catalog_provider_id(
-                    pc.provider_type_name(),
-                    pc.base_url(),
-                    pc.catalog_provider(),
-                )
-            });
+        // Resolve the catalog provider ID for this provider
+        let catalog_provider_id = provider_config.and_then(|pc| {
+            crate::catalog::resolve_catalog_provider_id(
+                pc.provider_type_name(),
+                pc.base_url(),
+                pc.catalog_provider(),
+            )
+        });
 
-            // Prefix each model ID with the provider name and enrich with catalog + config data
-            for model in models_response.data {
-                let prefixed_id = format!("{}/{}", provider_name, model.id);
-                let mut model_json = model.extra;
-                if let Some(obj) = model_json.as_object_mut() {
-                    obj.insert("id".to_string(), serde_json::Value::String(prefixed_id));
+        // Prefix each model ID with the provider name and enrich with catalog + config data
+        for model in models_response.data {
+            let prefixed_id = format!("{}/{}", provider_name, model.id);
+            let mut model_json = model.extra;
+            if let Some(obj) = model_json.as_object_mut() {
+                obj.insert("id".to_string(), serde_json::Value::String(prefixed_id));
 
-                    // Look up catalog enrichment and config override
-                    let enrichment = catalog_provider_id
-                        .as_ref()
-                        .and_then(|pid| state.model_catalog.lookup(pid, &model.id));
-                    let model_config =
-                        provider_config.and_then(|pc| pc.get_model_config(&model.id));
+                // Look up catalog enrichment and config override
+                let enrichment = catalog_provider_id
+                    .as_ref()
+                    .and_then(|pid| state.model_catalog.lookup(pid, &model.id));
+                let model_config = provider_config.and_then(|pc| pc.get_model_config(&model.id));
 
-                    // Merge metadata: config wins if present, else catalog, else omit.
-                    // Only enrich if at least one source has data.
-                    if enrichment.is_some() || model_config.is_some() {
-                        // Capabilities: config overrides catalog
-                        if let Some(ref caps) = model_config.and_then(|mc| mc.capabilities.as_ref())
-                        {
-                            obj.insert(
-                                "capabilities".to_string(),
-                                serde_json::to_value(caps).unwrap_or_default(),
-                            );
-                        } else if let Some(ref e) = enrichment {
-                            obj.insert(
-                                "capabilities".to_string(),
-                                serde_json::to_value(&e.capabilities).unwrap_or_default(),
-                            );
-                        }
-
-                        // Context length: config > provider response > catalog
-                        if let Some(ctx_len) = model_config.and_then(|mc| mc.context_length) {
-                            obj.insert(
-                                "context_length".to_string(),
-                                serde_json::Value::Number(ctx_len.into()),
-                            );
-                        } else if !obj.contains_key("context_length")
-                            && let Some(ctx_len) =
-                                enrichment.as_ref().and_then(|e| e.limits.context_length)
-                        {
-                            obj.insert(
-                                "context_length".to_string(),
-                                serde_json::Value::Number(ctx_len.into()),
-                            );
-                        }
-
-                        // Max output tokens
-                        if let Some(max_out) = model_config.and_then(|mc| mc.max_output_tokens) {
-                            obj.insert(
-                                "max_output_tokens".to_string(),
-                                serde_json::Value::Number(max_out.into()),
-                            );
-                        } else if let Some(max_out) =
-                            enrichment.as_ref().and_then(|e| e.limits.max_output_tokens)
-                        {
-                            obj.insert(
-                                "max_output_tokens".to_string(),
-                                serde_json::Value::Number(max_out.into()),
-                            );
-                        }
-
-                        // Modalities: config overrides catalog
-                        if let Some(ref mods) = model_config.and_then(|mc| mc.modalities.as_ref()) {
-                            obj.insert(
-                                "modalities".to_string(),
-                                serde_json::to_value(mods).unwrap_or_default(),
-                            );
-                        } else if let Some(ref e) = enrichment {
-                            obj.insert(
-                                "modalities".to_string(),
-                                serde_json::to_value(&e.modalities).unwrap_or_default(),
-                            );
-                        }
-
-                        // Tasks: config overrides catalog
-                        let tasks = model_config
-                            .filter(|mc| !mc.tasks.is_empty())
-                            .map(|mc| &mc.tasks)
-                            .or(enrichment
-                                .as_ref()
-                                .filter(|e| !e.tasks.is_empty())
-                                .map(|e| &e.tasks));
-                        if let Some(tasks) = tasks {
-                            obj.insert(
-                                "tasks".to_string(),
-                                serde_json::to_value(tasks).unwrap_or_default(),
-                            );
-                        }
-
-                        // Catalog pricing for display (from catalog only)
-                        if let Some(ref e) = enrichment {
-                            obj.insert(
-                                "catalog_pricing".to_string(),
-                                serde_json::to_value(&e.catalog_pricing).unwrap_or_default(),
-                            );
-                        }
-
-                        // Family: config overrides catalog
-                        if let Some(family) = model_config
-                            .and_then(|mc| mc.family.as_ref())
-                            .or(enrichment.as_ref().and_then(|e| e.family.as_ref()))
-                        {
-                            obj.insert(
-                                "family".to_string(),
-                                serde_json::Value::String(family.clone()),
-                            );
-                        }
-
-                        // Open weights: config overrides catalog
-                        if let Some(ow) = model_config.and_then(|mc| mc.open_weights) {
-                            obj.insert("open_weights".to_string(), serde_json::Value::Bool(ow));
-                        } else if let Some(ref e) = enrichment {
-                            obj.insert(
-                                "open_weights".to_string(),
-                                serde_json::Value::Bool(e.open_weights),
-                            );
-                        }
-
-                        // Image generation metadata (config only)
-                        if let Some(mc) = model_config {
-                            if !mc.image_sizes.is_empty() {
-                                obj.insert(
-                                    "image_sizes".to_string(),
-                                    serde_json::to_value(&mc.image_sizes).unwrap_or_default(),
-                                );
-                            }
-                            if !mc.image_qualities.is_empty() {
-                                obj.insert(
-                                    "image_qualities".to_string(),
-                                    serde_json::to_value(&mc.image_qualities).unwrap_or_default(),
-                                );
-                            }
-                            if let Some(max) = mc.max_images {
-                                obj.insert(
-                                    "max_images".to_string(),
-                                    serde_json::Value::Number(max.into()),
-                                );
-                            }
-                            if !mc.voices.is_empty() {
-                                obj.insert(
-                                    "voices".to_string(),
-                                    serde_json::to_value(&mc.voices).unwrap_or_default(),
-                                );
-                            }
-                        }
-                    }
-
-                    // Sovereignty: merge provider → model override (independent of catalog)
-                    let provider_sov = provider_config.and_then(|pc| pc.sovereignty());
-                    let model_sov = model_config.and_then(|mc| mc.sovereignty.as_ref());
-                    if let Some(merged) =
-                        crate::config::SovereigntyMetadata::merge(provider_sov, model_sov)
-                            .filter(|m| !m.is_empty())
-                    {
+                // Merge metadata: config wins if present, else catalog, else omit.
+                // Only enrich if at least one source has data.
+                if enrichment.is_some() || model_config.is_some() {
+                    // Capabilities: config overrides catalog
+                    if let Some(ref caps) = model_config.and_then(|mc| mc.capabilities.as_ref()) {
                         obj.insert(
-                            "sovereignty".to_string(),
-                            serde_json::to_value(&merged).unwrap_or_default(),
+                            "capabilities".to_string(),
+                            serde_json::to_value(caps).unwrap_or_default(),
+                        );
+                    } else if let Some(ref e) = enrichment {
+                        obj.insert(
+                            "capabilities".to_string(),
+                            serde_json::to_value(&e.capabilities).unwrap_or_default(),
                         );
                     }
-                } else {
-                    model_json = serde_json::json!({ "id": prefixed_id });
+
+                    // Context length: config > provider response > catalog
+                    if let Some(ctx_len) = model_config.and_then(|mc| mc.context_length) {
+                        obj.insert(
+                            "context_length".to_string(),
+                            serde_json::Value::Number(ctx_len.into()),
+                        );
+                    } else if !obj.contains_key("context_length")
+                        && let Some(ctx_len) =
+                            enrichment.as_ref().and_then(|e| e.limits.context_length)
+                    {
+                        obj.insert(
+                            "context_length".to_string(),
+                            serde_json::Value::Number(ctx_len.into()),
+                        );
+                    }
+
+                    // Max output tokens
+                    if let Some(max_out) = model_config.and_then(|mc| mc.max_output_tokens) {
+                        obj.insert(
+                            "max_output_tokens".to_string(),
+                            serde_json::Value::Number(max_out.into()),
+                        );
+                    } else if let Some(max_out) =
+                        enrichment.as_ref().and_then(|e| e.limits.max_output_tokens)
+                    {
+                        obj.insert(
+                            "max_output_tokens".to_string(),
+                            serde_json::Value::Number(max_out.into()),
+                        );
+                    }
+
+                    // Modalities: config overrides catalog
+                    if let Some(ref mods) = model_config.and_then(|mc| mc.modalities.as_ref()) {
+                        obj.insert(
+                            "modalities".to_string(),
+                            serde_json::to_value(mods).unwrap_or_default(),
+                        );
+                    } else if let Some(ref e) = enrichment {
+                        obj.insert(
+                            "modalities".to_string(),
+                            serde_json::to_value(&e.modalities).unwrap_or_default(),
+                        );
+                    }
+
+                    // Tasks: config overrides catalog
+                    let tasks = model_config
+                        .filter(|mc| !mc.tasks.is_empty())
+                        .map(|mc| &mc.tasks)
+                        .or(enrichment
+                            .as_ref()
+                            .filter(|e| !e.tasks.is_empty())
+                            .map(|e| &e.tasks));
+                    if let Some(tasks) = tasks {
+                        obj.insert(
+                            "tasks".to_string(),
+                            serde_json::to_value(tasks).unwrap_or_default(),
+                        );
+                    }
+
+                    // Catalog pricing for display (from catalog only)
+                    if let Some(ref e) = enrichment {
+                        obj.insert(
+                            "catalog_pricing".to_string(),
+                            serde_json::to_value(&e.catalog_pricing).unwrap_or_default(),
+                        );
+                    }
+
+                    // Family: config overrides catalog
+                    if let Some(family) = model_config
+                        .and_then(|mc| mc.family.as_ref())
+                        .or(enrichment.as_ref().and_then(|e| e.family.as_ref()))
+                    {
+                        obj.insert(
+                            "family".to_string(),
+                            serde_json::Value::String(family.clone()),
+                        );
+                    }
+
+                    // Open weights: config overrides catalog
+                    if let Some(ow) = model_config.and_then(|mc| mc.open_weights) {
+                        obj.insert("open_weights".to_string(), serde_json::Value::Bool(ow));
+                    } else if let Some(ref e) = enrichment {
+                        obj.insert(
+                            "open_weights".to_string(),
+                            serde_json::Value::Bool(e.open_weights),
+                        );
+                    }
+
+                    // Image generation metadata (config only)
+                    if let Some(mc) = model_config {
+                        if !mc.image_sizes.is_empty() {
+                            obj.insert(
+                                "image_sizes".to_string(),
+                                serde_json::to_value(&mc.image_sizes).unwrap_or_default(),
+                            );
+                        }
+                        if !mc.image_qualities.is_empty() {
+                            obj.insert(
+                                "image_qualities".to_string(),
+                                serde_json::to_value(&mc.image_qualities).unwrap_or_default(),
+                            );
+                        }
+                        if let Some(max) = mc.max_images {
+                            obj.insert(
+                                "max_images".to_string(),
+                                serde_json::Value::Number(max.into()),
+                            );
+                        }
+                        if !mc.voices.is_empty() {
+                            obj.insert(
+                                "voices".to_string(),
+                                serde_json::to_value(&mc.voices).unwrap_or_default(),
+                            );
+                        }
+                    }
                 }
-                all_models.push(model_json);
+
+                // Sovereignty: merge provider → model override (independent of catalog)
+                let provider_sov = provider_config.and_then(|pc| pc.sovereignty());
+                let model_sov = model_config.and_then(|mc| mc.sovereignty.as_ref());
+                if let Some(merged) =
+                    crate::config::SovereigntyMetadata::merge(provider_sov, model_sov)
+                        .filter(|m| !m.is_empty())
+                {
+                    obj.insert(
+                        "sovereignty".to_string(),
+                        serde_json::to_value(&merged).unwrap_or_default(),
+                    );
+                }
+            } else {
+                model_json = serde_json::json!({ "id": prefixed_id });
             }
+            all_models.push(model_json);
         }
-        // Skip providers that fail to return models
     }
 
     // Mark all static models with source

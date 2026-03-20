@@ -335,6 +335,21 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         None
     };
 
+    // Refresh the static models cache periodically in the background
+    // (initial warming already happened in AppState::new)
+    if config.features.static_models_cache.enabled() {
+        let interval = config.features.static_models_cache.refresh_interval();
+        let state_ref = state.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.tick().await; // skip the immediate first tick (already warmed)
+            loop {
+                ticker.tick().await;
+                state_ref.warm_static_models_cache().await;
+            }
+        });
+    }
+
     let task_tracker = state.task_tracker.clone();
     let app = build_app(&config, state);
 

@@ -156,6 +156,7 @@ impl HadrianGateway {
             default_org_id,
             provider_metrics: Arc::new(services::ProviderMetricsService::new()),
             model_catalog: catalog::ModelCatalogRegistry::new(),
+            static_models_cache: Arc::new(tokio::sync::RwLock::new(Default::default())),
         };
 
         let router = build_wasm_router(state, default_user_id, default_org_id);
@@ -478,7 +479,12 @@ fn wasm_default_config() -> config::GatewayConfig {
         },
         providers: config::ProvidersConfig::default(),
         limits: config::LimitsConfig::default(),
-        features: config::FeaturesConfig::default(),
+        features: config::FeaturesConfig {
+            static_models_cache: config::StaticModelsCacheConfig {
+                refresh_interval_secs: 0,
+            },
+            ..Default::default()
+        },
         observability: config::ObservabilityConfig::default(),
         ui: config::UiConfig {
             pages: config::PagesConfig {
