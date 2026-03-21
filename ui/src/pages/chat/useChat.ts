@@ -39,6 +39,7 @@ import {
   createMCPToolName,
   type ToolExecutorContext,
 } from "./utils/toolExecutors";
+import { getToolStatusLabel } from "@/components/ToolIcons";
 import { useMCPStore } from "@/stores/mcpStore";
 import {
   sendChainedMode,
@@ -1439,6 +1440,7 @@ export function useChat({
           inputArtifacts: [],
           outputArtifacts: [],
           round: roundNumber,
+          statusMessage: getToolStatusLabel(tc.name, tc.name),
         }));
 
         // Add executions to store for real-time UI updates

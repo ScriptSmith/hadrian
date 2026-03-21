@@ -6,5 +6,6 @@ export {
   TOOL_SHORT_NAMES,
   getToolIcon,
   getToolShortName,
+  getToolStatusLabel,
   type ToolIconComponent,
 } from "./ToolIcons";

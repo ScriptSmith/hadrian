@@ -57,11 +57,6 @@ import {
   ResponseActions,
   type ResponseActionConfig as ActionConfig,
 } from "@/components/ResponseActions/ResponseActions";
-import {
-  ToolCallIndicator,
-  type ToolCall,
-  type ToolCallType,
-} from "@/components/ToolCallIndicator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/Tooltip/Tooltip";
 import { UsageDisplay } from "@/components/UsageDisplay/UsageDisplay";
 import {
@@ -76,51 +71,14 @@ import { useViewMode, useExpandedModel, useChatUIStore, useIsEditing } from "@/s
 import type { PlaybackState } from "@/hooks/useAudioPlayback";
 import { useTTSForResponse } from "@/hooks/useTTSManager";
 import {
-  usePendingToolCalls,
   useCitations,
   useArtifacts,
   useToolExecutionRounds,
   useIsStreaming,
-  type ToolCallState,
 } from "@/stores/streamingStore";
 import { cn } from "@/utils/cn";
 import { getModelDisplayName } from "@/utils/modelNames";
 import { getModelStyle } from "@/utils/providers";
-
-/**
- * Convert tool name to ToolCallType for UI display
- */
-function mapToolNameToType(name: string): ToolCallType {
-  switch (name) {
-    case "file_search":
-      return "file_search";
-    case "web_search":
-      return "web_search";
-    case "code_interpreter":
-      return "code_interpreter";
-    case "js_code_interpreter":
-      return "js_code_interpreter";
-    case "sql_query":
-      return "sql_query";
-    case "chart_render":
-      return "chart_render";
-    default:
-      return "function";
-  }
-}
-
-/**
- * Convert ToolCallState from streaming store to ToolCall for indicator display
- */
-function convertToolCallStateToToolCall(state: ToolCallState): ToolCall {
-  return {
-    id: state.id,
-    type: mapToolNameToType(state.name),
-    name: state.name,
-    status: state.status,
-    error: state.error,
-  };
-}
 
 /**
  * MultiModelResponse - Renders Multiple Model Responses with Layout Options
@@ -590,14 +548,6 @@ const ModelResponseCard = memo(function ModelResponseCard({
     stop: handleStopSpeaking,
   } = useTTSForResponse(response.content, groupId, instanceId);
 
-  // Get pending tool calls for this model (for client-side RAG indicator)
-  const pendingToolCallStates = usePendingToolCalls(model);
-  const toolCalls = useMemo(
-    () => pendingToolCallStates.map(convertToolCallStateToToolCall),
-    [pendingToolCallStates]
-  );
-  const hasActiveToolCalls = toolCalls.length > 0;
-
   // Get citations from streaming store (for active/recent streams) or from response props
   const streamingCitations = useCitations(model);
   const citations = useMemo(() => {
@@ -821,19 +771,12 @@ const ModelResponseCard = memo(function ModelResponseCard({
             <span className="text-sm leading-relaxed">{response.error}</span>
           </div>
         ) : response.isStreaming && !response.content && !response.reasoningContent ? (
-          // Show tool call indicator or typing indicator during initial streaming
-          hasActiveToolCalls ? (
-            <ToolCallIndicator toolCalls={toolCalls} />
-          ) : (
-            <div className="flex items-center gap-3 text-muted-foreground">
-              <TypingIndicator />
-              <span className="text-sm">Thinking...</span>
-            </div>
-          )
+          <div className="flex items-center gap-3 text-muted-foreground">
+            <TypingIndicator />
+            <span className="text-sm">Thinking...</span>
+          </div>
         ) : (
           <>
-            {/* Tool call indicator (shown above content when tools are executing) */}
-            {hasActiveToolCalls && <ToolCallIndicator toolCalls={toolCalls} className="mb-3" />}
             {/* Reasoning + content — interleaved per round for multi-round, or single block */}
             {isEditing ? (
               <div className="flex flex-col gap-3">
