@@ -856,9 +856,9 @@ const ModelResponseCard = memo(function ModelResponseCard({
                     <>
                       {rounds.map((round, i) => (
                         <div key={i}>
-                          {i > 0 && <hr className="my-4 border-border" />}
+                          {i > 0 && round.content?.trim() && <hr className="my-4 border-border" />}
                           {round.reasoning && <ReasoningSection content={round.reasoning} />}
-                          {round.content && (
+                          {round.content?.trim() && (
                             <StreamingMarkdown content={round.content} isStreaming={false} />
                           )}
                         </div>

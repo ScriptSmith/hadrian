@@ -986,10 +986,11 @@ export function useChat({
                   const outputText =
                     event.response.output_text ||
                     event.response.output
-                      ?.flatMap((item) =>
-                        item.content
-                          ?.filter((c) => c.type === "output_text")
-                          .map((c) => c.text || "")
+                      ?.flatMap(
+                        (item) =>
+                          item.content
+                            ?.filter((c) => c.type === "output_text")
+                            .map((c) => c.text || "") ?? []
                       )
                       .join("\n\n---\n\n");
 
@@ -1338,18 +1339,21 @@ export function useChat({
           }
         }
 
-        // Track per-round data for interleaved reasoning/content display
+        // Track per-round data for interleaved reasoning/content display.
+        // Only count content as meaningful if it has non-whitespace text —
+        // models sometimes emit trivial whitespace before tool calls.
+        const hasNonTrivialContent = result.hasOutputText && !!result.content?.trim();
         const roundData: { reasoning?: string; content?: string } = {};
         if (result.reasoningContent) roundData.reasoning = result.reasoningContent;
-        if (result.hasOutputText) roundData.content = result.content;
+        if (hasNonTrivialContent) roundData.content = result.content;
         allCompletedRounds.push(roundData);
         // Push to streaming store so the UI can render interleaved rounds during streaming
         streamingStore.pushCompletedRound(storeKey, roundData);
 
         // Accumulate content across rounds with separator.
-        // Only include rounds that had actual text output (output_text deltas),
-        // skipping reasoning-only rounds (e.g., rounds that only call display_artifacts).
-        if (result.hasOutputText) {
+        // Only include rounds that had non-trivial text output,
+        // skipping reasoning-only rounds and whitespace-only rounds.
+        if (hasNonTrivialContent) {
           if (accumulatedContent) {
             accumulatedContent += "\n\n---\n\n" + result.content;
           } else {
@@ -1570,9 +1574,9 @@ export function useChat({
 
         // Add separator to streaming store so the next round's appendContent
         // builds on top of the accumulated content with a visual break.
-        // Only add if this round had actual text output (avoid double separators
-        // from rounds that only had tool calls with no text).
-        if (result.hasOutputText) {
+        // Only add if this round had non-trivial text output (avoid double separators
+        // from rounds that only had tool calls or whitespace-only text).
+        if (hasNonTrivialContent) {
           streamingStore.appendContent(storeKey, "\n\n---\n\n");
         }
       }
