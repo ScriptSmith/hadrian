@@ -396,8 +396,10 @@ export interface MessageUsage {
   cachedTokens?: number;
   /** Reasoning tokens count (if applicable) */
   reasoningTokens?: number;
-  /** Reasoning content (extended thinking output) */
+  /** Reasoning content (extended thinking output — last/only round) */
   reasoningContent?: string;
+  /** Per-round reasoning and content for multi-round tool execution */
+  completedRounds?: Array<{ reasoning?: string; content?: string }>;
 
   // Timing stats (captured client-side during streaming)
   /** Time to first token in milliseconds (from request start) */

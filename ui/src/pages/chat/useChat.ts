@@ -206,6 +206,8 @@ interface StreamResponseResult {
   hasOutputText: boolean;
   usage?: MessageUsage;
   reasoningContent?: string;
+  /** Per-round reasoning and content for multi-round tool execution */
+  completedRounds?: Array<{ reasoning?: string; content?: string }>;
   /** Tool calls detected during streaming (only when clientSideToolExecution is enabled) */
   toolCalls?: ParsedToolCall[];
   /** Tool execution timeline for progressive disclosure UI */
@@ -1279,6 +1281,7 @@ export function useChat({
       let accumulatedContent = "";
       let accumulatedUsage: MessageUsage | undefined;
       let lastReasoningContent: string | undefined;
+      const allCompletedRounds: Array<{ reasoning?: string; content?: string }> = [];
       let iterations = 0;
 
       // Track execution rounds locally (also mirrored in store for real-time UI)
@@ -1320,6 +1323,7 @@ export function useChat({
                 hasOutputText: true,
                 usage: accumulatedUsage,
                 reasoningContent: lastReasoningContent,
+                completedRounds: allCompletedRounds.length > 0 ? allCompletedRounds : undefined,
                 toolExecutionRounds: executionRounds.length > 0 ? executionRounds : undefined,
               };
         }
@@ -1333,6 +1337,14 @@ export function useChat({
             debugStore.setRoundResponseOutput(messageId, model, iterations, result.responseOutput);
           }
         }
+
+        // Track per-round data for interleaved reasoning/content display
+        const roundData: { reasoning?: string; content?: string } = {};
+        if (result.reasoningContent) roundData.reasoning = result.reasoningContent;
+        if (result.hasOutputText) roundData.content = result.content;
+        allCompletedRounds.push(roundData);
+        // Push to streaming store so the UI can render interleaved rounds during streaming
+        streamingStore.pushCompletedRound(storeKey, roundData);
 
         // Accumulate content across rounds with separator.
         // Only include rounds that had actual text output (output_text deltas),
@@ -1358,6 +1370,7 @@ export function useChat({
               reasoningTokens:
                 (accumulatedUsage.reasoningTokens ?? 0) + (result.usage.reasoningTokens ?? 0),
               reasoningContent: lastReasoningContent,
+              completedRounds: allCompletedRounds.length > 1 ? [...allCompletedRounds] : undefined,
             };
           } else {
             accumulatedUsage = { ...result.usage };
@@ -1580,6 +1593,7 @@ export function useChat({
         hasOutputText: true,
         usage: accumulatedUsage,
         reasoningContent: lastReasoningContent,
+        completedRounds: allCompletedRounds.length > 1 ? allCompletedRounds : undefined,
         toolExecutionRounds: executionRounds.length > 0 ? executionRounds : undefined,
       };
     },

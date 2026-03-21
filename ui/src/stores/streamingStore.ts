@@ -70,8 +70,10 @@ export interface StreamingResponse {
    */
   instanceId?: string;
   content: string;
-  /** Reasoning content (extended thinking) */
+  /** Reasoning content for the current round (extended thinking) */
   reasoningContent: string;
+  /** Completed rounds' reasoning and content (for multi-round tool execution) */
+  completedRounds: Array<{ reasoning?: string; content?: string }>;
   isStreaming: boolean;
   error?: string;
   usage?: MessageUsage;
@@ -713,6 +715,8 @@ interface StreamingActions {
   appendReasoningContent: (instanceId: string, delta: string) => void;
   /** Set the full reasoning content for an instance */
   setReasoningContent: (instanceId: string, content: string) => void;
+  /** Push a completed round's reasoning and content, then reset reasoningContent */
+  pushCompletedRound: (instanceId: string, round: { reasoning?: string; content?: string }) => void;
   /** Mark an instance's stream as complete */
   completeStream: (instanceId: string, usage?: MessageUsage) => void;
   /** Set an error for an instance's stream */
@@ -813,6 +817,7 @@ export const useStreamingStore = create<StreamingStore>((set) => ({
           instanceId,
           content: "",
           reasoningContent: "",
+          completedRounds: [],
           isStreaming: true,
           startTime,
         });
@@ -874,6 +879,20 @@ export const useStreamingStore = create<StreamingStore>((set) => ({
       newStreams.set(model, {
         ...existing,
         reasoningContent: content,
+      });
+      return { streams: newStreams };
+    }),
+
+  pushCompletedRound: (model, round) =>
+    set((state) => {
+      const existing = state.streams.get(model);
+      if (!existing) return state;
+
+      const newStreams = new Map(state.streams);
+      newStreams.set(model, {
+        ...existing,
+        completedRounds: [...existing.completedRounds, round],
+        reasoningContent: "",
       });
       return { streams: newStreams };
     }),

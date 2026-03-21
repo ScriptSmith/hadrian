@@ -189,8 +189,10 @@ interface ModelResponse {
    */
   label?: string;
   content: string;
-  /** Reasoning content (extended thinking) */
+  /** Reasoning content for current/last round (extended thinking) */
   reasoningContent?: string;
+  /** Completed rounds' reasoning and content for multi-round tool execution */
+  completedRounds?: Array<{ reasoning?: string; content?: string }>;
   isStreaming: boolean;
   error?: string;
   usage?: MessageUsage;
@@ -804,15 +806,7 @@ const ModelResponseCard = memo(function ModelResponseCard({
           <>
             {/* Tool call indicator (shown above content when tools are executing) */}
             {hasActiveToolCalls && <ToolCallIndicator toolCalls={toolCalls} className="mb-3" />}
-            {/* Reasoning section (extended thinking) */}
-            {(response.reasoningContent || response.usage?.reasoningContent) && (
-              <ReasoningSection
-                content={response.reasoningContent || response.usage?.reasoningContent || ""}
-                isStreaming={response.isStreaming && !response.content}
-                tokenCount={response.usage?.reasoningTokens}
-              />
-            )}
-            {/* Main response content */}
+            {/* Reasoning + content — interleaved per round for multi-round, or single block */}
             {isEditing ? (
               <div className="flex flex-col gap-3">
                 <Textarea
@@ -844,7 +838,71 @@ const ModelResponseCard = memo(function ModelResponseCard({
                 </div>
               </div>
             ) : (
-              <StreamingMarkdown content={response.content} isStreaming={response.isStreaming} />
+              (() => {
+                const rounds = response.completedRounds ?? response.usage?.completedRounds;
+                if (rounds && rounds.length > 0) {
+                  // Multi-round: render each round's reasoning + content, interleaved
+                  // Extract current streaming round's content (not yet in completedRounds)
+                  const parts = response.content ? response.content.split("\n\n---\n\n") : [];
+                  const roundsWithContent = rounds.filter((r) => r.content).length;
+                  const currentContent =
+                    parts.length > roundsWithContent ? parts[parts.length - 1] : null;
+                  const currentReasoning =
+                    response.reasoningContent &&
+                    !rounds.some((r) => r.reasoning === response.reasoningContent)
+                      ? response.reasoningContent
+                      : null;
+                  return (
+                    <>
+                      {rounds.map((round, i) => (
+                        <div key={i}>
+                          {i > 0 && <hr className="my-4 border-border" />}
+                          {round.reasoning && <ReasoningSection content={round.reasoning} />}
+                          {round.content && (
+                            <StreamingMarkdown content={round.content} isStreaming={false} />
+                          )}
+                        </div>
+                      ))}
+                      {/* Current streaming round (not yet in completedRounds) */}
+                      {(currentReasoning || currentContent) && (
+                        <div>
+                          <hr className="my-4 border-border" />
+                          {currentReasoning && (
+                            <ReasoningSection
+                              content={currentReasoning}
+                              isStreaming={response.isStreaming && !currentContent}
+                            />
+                          )}
+                          {currentContent && (
+                            <StreamingMarkdown
+                              content={currentContent}
+                              isStreaming={response.isStreaming}
+                            />
+                          )}
+                        </div>
+                      )}
+                    </>
+                  );
+                }
+                // Single-round: reasoning then content
+                const singleReasoning =
+                  response.reasoningContent || response.usage?.reasoningContent;
+                return (
+                  <>
+                    {singleReasoning && (
+                      <ReasoningSection
+                        content={singleReasoning}
+                        isStreaming={response.isStreaming && !response.content}
+                        tokenCount={response.usage?.reasoningTokens}
+                      />
+                    )}
+                    <StreamingMarkdown
+                      content={response.content}
+                      isStreaming={response.isStreaming}
+                    />
+                  </>
+                );
+              })()
             )}
             {/* Citations from file_search/web_search */}
             {hasCitations && (
@@ -1312,6 +1370,7 @@ function areMultiModelResponsePropsEqual(
     if (prevR.label !== nextR.label) return false;
     if (prevR.content !== nextR.content) return false;
     if (prevR.reasoningContent !== nextR.reasoningContent) return false;
+    if ((prevR.completedRounds?.length ?? 0) !== (nextR.completedRounds?.length ?? 0)) return false;
     if (prevR.isStreaming !== nextR.isStreaming) return false;
     if (prevR.error !== nextR.error) return false;
     if (prevR.usage?.totalTokens !== nextR.usage?.totalTokens) return false;
