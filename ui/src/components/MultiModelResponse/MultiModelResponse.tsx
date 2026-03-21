@@ -36,6 +36,7 @@ import { QuoteSelectionPopover } from "@/components/QuoteSelectionPopover";
 import { ToolExecutionBlock } from "@/components/ToolExecution";
 import type { Artifact as ArtifactType, DisplaySelectionData } from "@/components/chat-types";
 import { useDebugInfo } from "@/stores/debugStore";
+import { ContentRound } from "./ContentRound";
 
 import { Avatar, AvatarFallback } from "@/components/Avatar/Avatar";
 import { Button } from "@/components/Button/Button";
@@ -841,8 +842,7 @@ const ModelResponseCard = memo(function ModelResponseCard({
               (() => {
                 const rounds = response.completedRounds ?? response.usage?.completedRounds;
                 if (rounds && rounds.length > 0) {
-                  // Multi-round: render each round's reasoning + content, interleaved
-                  // Extract current streaming round's content (not yet in completedRounds)
+                  // Multi-round: render each round as a ContentRound with per-round tool execution
                   const parts = response.content ? response.content.split("\n\n---\n\n") : [];
                   const roundsWithContent = rounds.filter((r) => r.content).length;
                   const currentContent =
@@ -853,35 +853,31 @@ const ModelResponseCard = memo(function ModelResponseCard({
                       ? response.reasoningContent
                       : null;
                   return (
-                    <>
+                    <div className="space-y-3">
                       {rounds.map((round, i) => (
-                        <div key={i}>
-                          {i > 0 && round.content?.trim() && <hr className="my-4 border-border" />}
-                          {round.reasoning && <ReasoningSection content={round.reasoning} />}
-                          {round.content?.trim() && (
-                            <StreamingMarkdown content={round.content} isStreaming={false} />
-                          )}
-                        </div>
+                        <ContentRound
+                          key={i}
+                          reasoning={round.reasoning}
+                          content={round.content}
+                          toolExecutionRound={
+                            i < toolExecutionRounds.length ? toolExecutionRounds[i] : undefined
+                          }
+                          isToolsStreaming={
+                            response.isStreaming && i === toolExecutionRounds.length - 1
+                          }
+                          onArtifactClick={handleArtifactClick}
+                        />
                       ))}
                       {/* Current streaming round (not yet in completedRounds) */}
                       {(currentReasoning || currentContent) && (
-                        <div>
-                          <hr className="my-4 border-border" />
-                          {currentReasoning && (
-                            <ReasoningSection
-                              content={currentReasoning}
-                              isStreaming={response.isStreaming && !currentContent}
-                            />
-                          )}
-                          {currentContent && (
-                            <StreamingMarkdown
-                              content={currentContent}
-                              isStreaming={response.isStreaming}
-                            />
-                          )}
-                        </div>
+                        <ContentRound
+                          reasoning={currentReasoning}
+                          content={currentContent}
+                          isStreaming={response.isStreaming}
+                          isReasoningStreaming={response.isStreaming && !currentContent}
+                        />
                       )}
-                    </>
+                    </div>
                   );
                 }
                 // Single-round: reasoning then content
@@ -908,16 +904,31 @@ const ModelResponseCard = memo(function ModelResponseCard({
             {hasCitations && (
               <CitationList citations={citations} className="mt-4 pt-4 border-t" compact={false} />
             )}
-            {/* Tool execution timeline with progressive disclosure, or fallback to flat artifact list */}
+            {/* Tool execution / artifact display */}
             {hasToolExecutionRounds ? (
-              <div className="mt-4 pt-4 border-t">
-                <ToolExecutionBlock
-                  rounds={toolExecutionRounds}
-                  isStreaming={response.isStreaming}
-                  onArtifactClick={handleArtifactClick}
-                  displaySelection={displaySelection}
-                />
-              </div>
+              // Multi-round with completedRounds: per-round tool execution is rendered above.
+              // Only show ToolExecutionBlock for display-selected artifacts or single-round fallback.
+              (response.completedRounds ?? response.usage?.completedRounds) ? (
+                displaySelection && (
+                  <div className="mt-4 pt-4 border-t">
+                    <ToolExecutionBlock
+                      rounds={toolExecutionRounds}
+                      isStreaming={response.isStreaming}
+                      onArtifactClick={handleArtifactClick}
+                      displaySelection={displaySelection}
+                    />
+                  </div>
+                )
+              ) : (
+                <div className="mt-4 pt-4 border-t">
+                  <ToolExecutionBlock
+                    rounds={toolExecutionRounds}
+                    isStreaming={response.isStreaming}
+                    onArtifactClick={handleArtifactClick}
+                    displaySelection={displaySelection}
+                  />
+                </div>
+              )
             ) : (
               hasArtifacts && <ArtifactList artifacts={artifacts} className="mt-4 pt-4 border-t" />
             )}
