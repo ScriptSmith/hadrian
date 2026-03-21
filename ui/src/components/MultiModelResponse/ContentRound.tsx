@@ -1,5 +1,6 @@
-import { memo, useState, useCallback } from "react";
-import type { ToolExecutionRound, Artifact } from "@/components/chat-types";
+import { memo, useState, useCallback, useMemo } from "react";
+import type { ToolExecutionRound, Artifact, DisplaySelectionData } from "@/components/chat-types";
+import { Artifact as ArtifactComponent } from "@/components/Artifact";
 import { ReasoningSection } from "@/components/ReasoningSection/ReasoningSection";
 import { StreamingMarkdown } from "@/components/StreamingMarkdown/StreamingMarkdown";
 import { ExecutionSummaryBar, ExecutionTimeline } from "@/components/ToolExecution";
@@ -21,6 +22,10 @@ interface ContentRoundProps {
   isToolsStreaming?: boolean;
   /** Artifact click handler for tool execution timeline */
   onArtifactClick?: (artifact: Artifact) => void;
+  /** Display selection if display_artifacts was called in this round */
+  displaySelection?: DisplaySelectionData | null;
+  /** All output artifacts across all rounds (for resolving display selection IDs) */
+  allOutputArtifacts?: Artifact[];
 }
 
 /**
@@ -38,15 +43,32 @@ function ContentRoundComponent({
   toolExecutionRound,
   isToolsStreaming = false,
   onArtifactClick,
+  displaySelection,
+  allOutputArtifacts,
 }: ContentRoundProps) {
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const handleToggleTools = useCallback(() => setToolsExpanded((p) => !p), []);
 
+  // Resolve display selection to actual artifacts
+  const displayedArtifacts = useMemo(() => {
+    if (!displaySelection?.artifactIds.length || !allOutputArtifacts) return [];
+    const displayed: Artifact[] = [];
+    for (const id of displaySelection.artifactIds) {
+      const artifact = allOutputArtifacts.find((a) => a.id === id);
+      if (artifact) displayed.push(artifact);
+    }
+    return displayed;
+  }, [displaySelection, allOutputArtifacts]);
+
   const hasContent = !!content?.trim();
   const hasReasoning = !!reasoning;
   const hasTools = !!toolExecutionRound;
+  const hasDisplayedArtifacts = displayedArtifacts.length > 0;
 
-  if (!hasContent && !hasReasoning && !hasTools) return null;
+  if (!hasContent && !hasReasoning && !hasTools && !hasDisplayedArtifacts) return null;
+
+  const layoutClass =
+    displaySelection?.layout === "gallery" ? "grid grid-cols-2 gap-3" : "space-y-3";
 
   return (
     <div className="space-y-1 border-l-2 border-zinc-200 pl-3 dark:border-zinc-700">
@@ -69,6 +91,13 @@ function ContentRoundComponent({
           {toolsExpanded && (
             <ExecutionTimeline rounds={[toolExecutionRound!]} onArtifactClick={onArtifactClick} />
           )}
+        </div>
+      )}
+      {hasDisplayedArtifacts && (
+        <div className={layoutClass}>
+          {displayedArtifacts.map((artifact) => (
+            <ArtifactComponent key={artifact.id} artifact={artifact} />
+          ))}
         </div>
       )}
     </div>

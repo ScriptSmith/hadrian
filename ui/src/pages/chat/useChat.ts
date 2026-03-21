@@ -558,9 +558,10 @@ export function useChat({
             name: "display_artifacts",
             description:
               "After executing tools that produce outputs (code, charts, tables, images), " +
-              "call this to select which artifacts to display prominently to the user. " +
+              "call this to select which artifacts to display prominently to the user inline at this point in the conversation. " +
               "Artifacts not selected will be available in a collapsed 'more outputs' section. " +
-              "Always call this after your tool executions complete to curate the user's view. " +
+              "Call this each time you have outputs to show rather than waiting until the end — " +
+              "artifacts appear where you call this function, so call it right after the relevant tools complete. " +
               "Choose the most relevant and interesting outputs - typically final results rather than intermediate steps.",
             parameters: {
               type: "object",

@@ -620,13 +620,6 @@ const ModelResponseCard = memo(function ModelResponseCard({
   }, [streamingArtifacts, response.artifacts]);
   const hasArtifacts = artifacts.length > 0;
 
-  // Extract display selection from artifacts (if model called display_artifacts)
-  const displaySelection = useMemo((): DisplaySelectionData | null => {
-    const selectionArtifact = artifacts.find((a) => a.type === "display_selection");
-    if (!selectionArtifact) return null;
-    return selectionArtifact.data as DisplaySelectionData;
-  }, [artifacts]);
-
   // Get tool execution rounds from streaming store (for active/recent streams) or from response props
   const streamingToolExecutionRounds = useToolExecutionRounds(model);
   const toolExecutionRounds = useMemo(() => {
@@ -637,6 +630,40 @@ const ModelResponseCard = memo(function ModelResponseCard({
     return response.toolExecutionRounds ?? [];
   }, [streamingToolExecutionRounds, response.toolExecutionRounds]);
   const hasToolExecutionRounds = toolExecutionRounds.length > 0;
+
+  // All output artifacts across all rounds (for resolving display_artifacts selections)
+  const allOutputArtifacts = useMemo(() => {
+    const result: ArtifactType[] = [];
+    for (const round of toolExecutionRounds) {
+      for (const execution of round.executions) {
+        for (const a of execution.outputArtifacts) {
+          if (a.type !== "display_selection") result.push(a);
+        }
+      }
+    }
+    return result;
+  }, [toolExecutionRounds]);
+
+  // Extract display selection for a specific tool execution round
+  const getDisplaySelectionForRound = useCallback(
+    (round: ToolExecutionRound): DisplaySelectionData | null => {
+      for (const execution of round.executions) {
+        if (execution.toolName === "display_artifacts") {
+          const sel = execution.outputArtifacts.find((a) => a.type === "display_selection");
+          if (sel) return sel.data as DisplaySelectionData;
+        }
+      }
+      return null;
+    },
+    []
+  );
+
+  // Global display selection (for single-round fallback)
+  const displaySelection = useMemo((): DisplaySelectionData | null => {
+    const selectionArtifact = artifacts.find((a) => a.type === "display_selection");
+    if (!selectionArtifact) return null;
+    return selectionArtifact.data as DisplaySelectionData;
+  }, [artifacts]);
 
   // Measure header width to determine if we should collapse controls
   const headerRef = useRef<HTMLDivElement>(null);
@@ -854,20 +881,24 @@ const ModelResponseCard = memo(function ModelResponseCard({
                       : null;
                   return (
                     <div className="space-y-3">
-                      {rounds.map((round, i) => (
-                        <ContentRound
-                          key={i}
-                          reasoning={round.reasoning}
-                          content={round.content}
-                          toolExecutionRound={
-                            i < toolExecutionRounds.length ? toolExecutionRounds[i] : undefined
-                          }
-                          isToolsStreaming={
-                            response.isStreaming && i === toolExecutionRounds.length - 1
-                          }
-                          onArtifactClick={handleArtifactClick}
-                        />
-                      ))}
+                      {rounds.map((round, i) => {
+                        const ter =
+                          i < toolExecutionRounds.length ? toolExecutionRounds[i] : undefined;
+                        return (
+                          <ContentRound
+                            key={i}
+                            reasoning={round.reasoning}
+                            content={round.content}
+                            toolExecutionRound={ter}
+                            isToolsStreaming={
+                              response.isStreaming && i === toolExecutionRounds.length - 1
+                            }
+                            onArtifactClick={handleArtifactClick}
+                            displaySelection={ter ? getDisplaySelectionForRound(ter) : null}
+                            allOutputArtifacts={allOutputArtifacts}
+                          />
+                        );
+                      })}
                       {/* Current streaming round (not yet in completedRounds) */}
                       {(currentReasoning || currentContent) && (
                         <ContentRound
@@ -905,11 +936,10 @@ const ModelResponseCard = memo(function ModelResponseCard({
               <CitationList citations={citations} className="mt-4 pt-4 border-t" compact={false} />
             )}
             {/* Tool execution / artifact display */}
-            {hasToolExecutionRounds ? (
-              // Multi-round with completedRounds: per-round tool execution is rendered above.
-              // Only show ToolExecutionBlock for display-selected artifacts or single-round fallback.
-              (response.completedRounds ?? response.usage?.completedRounds) ? (
-                displaySelection && (
+            {hasToolExecutionRounds
+              ? // Multi-round with completedRounds: per-round tool execution + artifacts rendered above.
+                // Only show ToolExecutionBlock for single-round fallback (no completedRounds).
+                !(response.completedRounds ?? response.usage?.completedRounds) && (
                   <div className="mt-4 pt-4 border-t">
                     <ToolExecutionBlock
                       rounds={toolExecutionRounds}
@@ -919,19 +949,9 @@ const ModelResponseCard = memo(function ModelResponseCard({
                     />
                   </div>
                 )
-              ) : (
-                <div className="mt-4 pt-4 border-t">
-                  <ToolExecutionBlock
-                    rounds={toolExecutionRounds}
-                    isStreaming={response.isStreaming}
-                    onArtifactClick={handleArtifactClick}
-                    displaySelection={displaySelection}
-                  />
-                </div>
-              )
-            ) : (
-              hasArtifacts && <ArtifactList artifacts={artifacts} className="mt-4 pt-4 border-t" />
-            )}
+              : hasArtifacts && (
+                  <ArtifactList artifacts={artifacts} className="mt-4 pt-4 border-t" />
+                )}
           </>
         )}
       </div>

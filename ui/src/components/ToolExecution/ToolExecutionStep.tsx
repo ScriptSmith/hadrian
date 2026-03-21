@@ -11,9 +11,15 @@ import {
   Braces,
   Database,
   BarChart3,
+  Eye,
   Maximize2,
 } from "lucide-react";
-import type { ToolExecution, Artifact, CodeArtifactData } from "@/components/chat-types";
+import type {
+  ToolExecution,
+  Artifact,
+  CodeArtifactData,
+  DisplaySelectionData,
+} from "@/components/chat-types";
 import { cn } from "@/utils/cn";
 import { Artifact as ArtifactComponent } from "@/components/Artifact";
 import { HighlightedCode } from "@/components/HighlightedCode/HighlightedCode";
@@ -35,6 +41,7 @@ const TOOL_ICONS: Record<string, typeof Terminal> = {
   js_code_interpreter: Braces,
   sql_query: Database,
   chart_render: BarChart3,
+  display_artifacts: Eye,
 };
 
 /** Tool name to display name mapping */
@@ -45,6 +52,14 @@ const TOOL_NAMES: Record<string, string> = {
   js_code_interpreter: "JavaScript",
   sql_query: "SQL Query",
   chart_render: "Chart",
+  display_artifacts: "Display",
+};
+
+/** Layout mode labels */
+const LAYOUT_LABELS: Record<string, string> = {
+  inline: "inline",
+  gallery: "gallery",
+  stacked: "stacked",
 };
 
 /** Tool name to language mapping for syntax highlighting */
@@ -122,6 +137,18 @@ function ToolExecutionStepComponent({
     [execution.inputArtifacts]
   );
 
+  // Extract display selection metadata for display_artifacts tool
+  const displayMeta = useMemo(() => {
+    if (execution.toolName !== "display_artifacts") return null;
+    const sel = execution.outputArtifacts.find((a) => a.type === "display_selection");
+    if (!sel) return null;
+    const data = sel.data as DisplaySelectionData;
+    return {
+      count: data.artifactIds.length,
+      layout: LAYOUT_LABELS[data.layout] || data.layout,
+    };
+  }, [execution.toolName, execution.outputArtifacts]);
+
   return (
     <div className="relative pl-5">
       {/* Timeline connector line */}
@@ -163,6 +190,14 @@ function ToolExecutionStepComponent({
             </span>
           )}
         </div>
+
+        {/* Display artifacts metadata */}
+        {displayMeta && (
+          <div className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+            Showing {displayMeta.count} {displayMeta.count === 1 ? "artifact" : "artifacts"}
+            {displayMeta.layout !== "inline" && <> &middot; {displayMeta.layout}</>}
+          </div>
+        )}
 
         {/* Inline code preview - always visible */}
         {inlineCode && (
