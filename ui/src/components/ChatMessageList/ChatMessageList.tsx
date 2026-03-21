@@ -347,15 +347,14 @@ export function ChatMessageList({
             <div
               className="relative"
               style={{
-                // Use max of virtualizer size and estimated size to prevent layout jumps
-                height:
-                  Math.max(virtualizer.getTotalSize(), messageGroups.length * 200) +
-                  (hasStreamingResponses ? 200 : 0),
+                height: Math.max(virtualizer.getTotalSize(), messageGroups.length * 200),
               }}
             >
-              {/* Virtualized message groups */}
               {virtualizer.getVirtualItems().map((virtualItem) => {
                 const group = messageGroups[virtualItem.index];
+                const isLastGroup = virtualItem.index === messageGroups.length - 1;
+                const showStreaming =
+                  isLastGroup && hasStreamingResponses && group.assistantResponses.length === 0;
                 return (
                   <div
                     key={group.id}
@@ -370,6 +369,57 @@ export function ChatMessageList({
                       onSaveEdit={onEditAndRerun}
                       onRegenerate={onRegenerateAll}
                     />
+                    {showStreaming && (
+                      <>
+                        <RoutingDecision />
+                        <ChainProgress
+                          models={selectedModels.filter((m) => !disabledModels.includes(m))}
+                        />
+                        <SynthesisProgress
+                          allModels={selectedModels.filter((m) => !disabledModels.includes(m))}
+                        />
+                        <RefinementProgress />
+                        <CritiqueProgress />
+                        <ElectedProgress
+                          allModels={selectedModels.filter((m) => !disabledModels.includes(m))}
+                        />
+                        <TournamentProgress
+                          allModels={selectedModels.filter((m) => !disabledModels.includes(m))}
+                        />
+                        <ConsensusProgress
+                          allModels={selectedModels.filter((m) => !disabledModels.includes(m))}
+                        />
+                        <DebateProgress
+                          allModels={selectedModels.filter((m) => !disabledModels.includes(m))}
+                        />
+                        <CouncilProgress
+                          allModels={selectedModels.filter((m) => !disabledModels.includes(m))}
+                        />
+                        <HierarchicalProgress />
+                        <ScattershotProgress />
+                        <ExplainerProgress />
+                        <ConfidenceProgress
+                          allModels={selectedModels.filter((m) => !disabledModels.includes(m))}
+                        />
+                        <div
+                          key={streamingSessionIdRef.current}
+                          className="animate-slide-up-bounce"
+                        >
+                          <MultiModelResponse
+                            responses={filteredModelResponses.map((r) => {
+                              const instanceId = r.instanceId ?? r.model;
+                              return {
+                                ...r,
+                                instanceId,
+                                label: instanceLabels.get(instanceId),
+                              };
+                            })}
+                            timestamp={streamingTimestampRef.current}
+                            actionConfig={actionConfig}
+                          />
+                        </div>
+                      </>
+                    )}
                     {group.assistantResponses.length > 0 && (
                       <>
                         {/* Show persisted mode indicators for chained/routed messages */}
@@ -587,92 +637,6 @@ export function ChatMessageList({
                   </div>
                 );
               })}
-
-              {/*
-              STREAMING SECTION - Outside Virtualization
-
-              Active streaming responses render here, positioned absolutely at the bottom.
-              This is intentionally outside the virtualized list because:
-              1. Streaming content height changes constantly (every token)
-              2. Virtualization re-measures heights, which would cause jank
-              3. The streaming section should always be visible (no virtualization cutoff)
-
-              The key={streamingSessionIdRef.current} ensures animation only plays once
-              per streaming session, not on every content update.
-            */}
-              {/* Show streaming section when we have streaming responses */}
-              {hasStreamingResponses && (
-                <div
-                  className="absolute left-0 right-0"
-                  style={{
-                    // Use virtualizer total size, with fallback to estimated size for unmeasured groups
-                    transform: `translateY(${Math.max(virtualizer.getTotalSize(), messageGroups.length * 200)}px)`,
-                  }}
-                >
-                  {/* Routing decision indicator for routed mode */}
-                  <RoutingDecision />
-                  {/* Chain progress indicator for chained mode */}
-                  <ChainProgress
-                    models={selectedModels.filter((m) => !disabledModels.includes(m))}
-                  />
-                  {/* Synthesis progress indicator for synthesized mode */}
-                  <SynthesisProgress
-                    allModels={selectedModels.filter((m) => !disabledModels.includes(m))}
-                  />
-                  {/* Refinement progress indicator for refined mode */}
-                  <RefinementProgress />
-                  {/* Critique progress indicator for critiqued mode */}
-                  <CritiqueProgress />
-                  {/* Election progress indicator for elected mode */}
-                  <ElectedProgress
-                    allModels={selectedModels.filter((m) => !disabledModels.includes(m))}
-                  />
-                  {/* Tournament progress indicator for tournament mode */}
-                  <TournamentProgress
-                    allModels={selectedModels.filter((m) => !disabledModels.includes(m))}
-                  />
-                  {/* Consensus progress indicator for consensus mode */}
-                  <ConsensusProgress
-                    allModels={selectedModels.filter((m) => !disabledModels.includes(m))}
-                  />
-                  {/* Debate progress indicator for debated mode */}
-                  <DebateProgress
-                    allModels={selectedModels.filter((m) => !disabledModels.includes(m))}
-                  />
-                  {/* Council progress indicator for council mode */}
-                  <CouncilProgress
-                    allModels={selectedModels.filter((m) => !disabledModels.includes(m))}
-                  />
-                  {/* Hierarchical progress indicator for hierarchical mode */}
-                  <HierarchicalProgress />
-                  {/* Scattershot progress indicator for scattershot mode */}
-                  <ScattershotProgress />
-                  {/* Explainer progress indicator for explainer mode */}
-                  <ExplainerProgress />
-                  {/* Confidence-weighted progress indicator for confidence-weighted mode */}
-                  <ConfidenceProgress
-                    allModels={selectedModels.filter((m) => !disabledModels.includes(m))}
-                  />
-                  {/* Key ensures animation only plays once per streaming session */}
-                  {hasStreamingResponses && (
-                    <div key={streamingSessionIdRef.current} className="animate-slide-up-bounce">
-                      <MultiModelResponse
-                        responses={filteredModelResponses.map((r) => {
-                          // Use instanceId if set, otherwise fall back to model
-                          const instanceId = r.instanceId ?? r.model;
-                          return {
-                            ...r,
-                            instanceId,
-                            label: instanceLabels.get(instanceId),
-                          };
-                        })}
-                        timestamp={streamingTimestampRef.current}
-                        actionConfig={actionConfig}
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
           )}
         </div>
