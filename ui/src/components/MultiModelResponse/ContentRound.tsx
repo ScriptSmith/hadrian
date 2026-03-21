@@ -4,6 +4,7 @@ import { Artifact as ArtifactComponent } from "@/components/Artifact";
 import { ReasoningSection } from "@/components/ReasoningSection/ReasoningSection";
 import { StreamingMarkdown } from "@/components/StreamingMarkdown/StreamingMarkdown";
 import { ExecutionSummaryBar, ExecutionTimeline } from "@/components/ToolExecution";
+import { useCompactMode } from "@/stores/chatUIStore";
 
 interface ContentRoundProps {
   /** Round's reasoning content */
@@ -48,6 +49,7 @@ function ContentRoundComponent({
 }: ContentRoundProps) {
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const handleToggleTools = useCallback(() => setToolsExpanded((p) => !p), []);
+  const compactMode = useCompactMode();
 
   // Resolve display selection to actual artifacts
   const displayedArtifacts = useMemo(() => {
@@ -66,6 +68,39 @@ function ContentRoundComponent({
   const hasDisplayedArtifacts = displayedArtifacts.length > 0;
 
   if (!hasContent && !hasReasoning && !hasTools && !hasDisplayedArtifacts) return null;
+
+  if (compactMode) {
+    // Compact: show content + artifacts only; collapse reasoning/tool-only rounds
+    if (hasContent || hasDisplayedArtifacts) {
+      const layoutClass =
+        displaySelection?.layout === "gallery" ? "grid grid-cols-2 gap-3" : "space-y-3";
+      return (
+        <div className="space-y-1 border-l-2 border-zinc-200 pl-3 dark:border-zinc-700">
+          {hasContent && <StreamingMarkdown content={content!} isStreaming={isStreaming} />}
+          {hasDisplayedArtifacts && (
+            <div className={layoutClass}>
+              {displayedArtifacts.map((artifact) => (
+                <ArtifactComponent key={artifact.id} artifact={artifact} />
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+    // No content — only show an indicator while actively streaming, hide when done
+    const isActive = isReasoningStreaming || isToolsStreaming;
+    if (!isActive) return null;
+    return (
+      <div className="flex items-center gap-3 text-muted-foreground">
+        <div className="flex items-center gap-1.5 py-1">
+          <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot" />
+          <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot-delay-1" />
+          <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot-delay-2" />
+        </div>
+        <span className="text-sm">{hasReasoning ? "Thinking..." : "Processing..."}</span>
+      </div>
+    );
+  }
 
   const layoutClass =
     displaySelection?.layout === "gallery" ? "grid grid-cols-2 gap-3" : "space-y-3";

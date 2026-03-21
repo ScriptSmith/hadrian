@@ -8,6 +8,8 @@ import {
   Eye,
   EyeOff,
   GitFork,
+  ListChevronsDownUp,
+  ListChevronsUpDown,
   Loader2,
   MoreHorizontal,
   Pencil,
@@ -67,7 +69,13 @@ import {
   DropdownSeparator,
 } from "@/components/Dropdown/Dropdown";
 import { Textarea } from "@/components/Textarea/Textarea";
-import { useViewMode, useExpandedModel, useChatUIStore, useIsEditing } from "@/stores/chatUIStore";
+import {
+  useViewMode,
+  useExpandedModel,
+  useChatUIStore,
+  useIsEditing,
+  useCompactMode,
+} from "@/stores/chatUIStore";
 import type { PlaybackState } from "@/hooks/useAudioPlayback";
 import { useTTSForResponse } from "@/hooks/useTTSManager";
 import {
@@ -432,6 +440,7 @@ const ModelResponseCard = memo(function ModelResponseCard({
   const style = getModelStyle(model);
   const isComplete = !response.isStreaming && response.content && !response.error;
   const isAnyStreaming = useIsStreaming();
+  const compactMode = useCompactMode();
 
   // State for artifact modal
   const [selectedArtifact, setSelectedArtifact] = useState<ArtifactType | null>(null);
@@ -857,6 +866,25 @@ const ModelResponseCard = memo(function ModelResponseCard({
                 // Single-round: reasoning then content
                 const singleReasoning =
                   response.reasoningContent || response.usage?.reasoningContent;
+                if (compactMode) {
+                  // Compact: show content only, with a "Thinking" indicator while actively streaming reasoning
+                  return (
+                    <>
+                      {singleReasoning && !response.content && response.isStreaming && (
+                        <div className="flex items-center gap-3 text-muted-foreground">
+                          <TypingIndicator />
+                          <span className="text-sm">Thinking...</span>
+                        </div>
+                      )}
+                      {response.content && (
+                        <StreamingMarkdown
+                          content={response.content}
+                          isStreaming={response.isStreaming}
+                        />
+                      )}
+                    </>
+                  );
+                }
                 return (
                   <>
                     {singleReasoning && (
@@ -879,22 +907,24 @@ const ModelResponseCard = memo(function ModelResponseCard({
               <CitationList citations={citations} className="mt-4 pt-4 border-t" compact={false} />
             )}
             {/* Tool execution / artifact display */}
-            {hasToolExecutionRounds
-              ? // Multi-round with completedRounds: per-round tool execution + artifacts rendered above.
-                // Only show ToolExecutionBlock for single-round fallback (no completedRounds).
-                !(response.completedRounds ?? response.usage?.completedRounds) && (
-                  <div className="mt-4 pt-4 border-t">
-                    <ToolExecutionBlock
-                      rounds={toolExecutionRounds}
-                      isStreaming={response.isStreaming}
-                      onArtifactClick={handleArtifactClick}
-                      displaySelection={displaySelection}
-                    />
-                  </div>
-                )
-              : hasArtifacts && (
-                  <ArtifactList artifacts={artifacts} className="mt-4 pt-4 border-t" />
-                )}
+            {compactMode
+              ? null
+              : hasToolExecutionRounds
+                ? // Multi-round with completedRounds: per-round tool execution + artifacts rendered above.
+                  // Only show ToolExecutionBlock for single-round fallback (no completedRounds).
+                  !(response.completedRounds ?? response.usage?.completedRounds) && (
+                    <div className="mt-4 pt-4 border-t">
+                      <ToolExecutionBlock
+                        rounds={toolExecutionRounds}
+                        isStreaming={response.isStreaming}
+                        onArtifactClick={handleArtifactClick}
+                        displaySelection={displaySelection}
+                      />
+                    </div>
+                  )
+                : hasArtifacts && (
+                    <ArtifactList artifacts={artifacts} className="mt-4 pt-4 border-t" />
+                  )}
           </>
         )}
       </div>
@@ -940,7 +970,8 @@ function MultiModelResponseComponent({
   // Use global UI state from store
   const viewMode = useViewMode();
   const expandedModel = useExpandedModel();
-  const { setViewMode, setExpandedModel } = useChatUIStore();
+  const compactMode = useCompactMode();
+  const { setViewMode, setExpandedModel, toggleCompactMode } = useChatUIStore();
 
   const isMultiResponse = responses.length > 1;
   const showViewToggle = isMultiResponse;
@@ -1169,6 +1200,24 @@ function MultiModelResponseComponent({
             </Tooltip>
           </div>
         )}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={compactMode ? "secondary" : "ghost"}
+              size="sm"
+              className="h-6 w-6 p-0 rounded-md border bg-muted/50"
+              onClick={toggleCompactMode}
+              aria-label={compactMode ? "Show reasoning & tools" : "Compact view"}
+            >
+              {compactMode ? (
+                <ListChevronsDownUp className="h-3.5 w-3.5" />
+              ) : (
+                <ListChevronsUpDown className="h-3.5 w-3.5" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{compactMode ? "Show reasoning & tools" : "Compact view"}</TooltipContent>
+        </Tooltip>
         <div className="h-px flex-1 bg-border" />
       </div>
 

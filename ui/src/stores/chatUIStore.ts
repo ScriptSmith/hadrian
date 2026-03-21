@@ -205,6 +205,12 @@ interface ChatUIState {
    * When null, uses the current streaming model as fallback.
    */
   subAgentModel: string | null;
+  /**
+   * Whether compact mode is enabled for model responses.
+   * Hides reasoning sections, tool execution details, and collapses
+   * rounds without content to minimal "Thinking" / "Processing" indicators.
+   */
+  compactMode: boolean;
 }
 
 interface ChatUIActions {
@@ -317,6 +323,10 @@ interface ChatUIActions {
   clearPendingPrompt: () => void;
   /** Set the default model for sub-agent tool */
   setSubAgentModel: (model: string | null) => void;
+  /** Set compact mode */
+  setCompactMode: (enabled: boolean) => void;
+  /** Toggle compact mode */
+  toggleCompactMode: () => void;
 }
 
 export type ChatUIStore = ChatUIState & ChatUIActions;
@@ -338,6 +348,14 @@ function loadViewMode(): ViewMode {
     // localStorage unavailable (SSR, privacy mode, etc.)
   }
   return "grid";
+}
+
+function loadCompactMode(): boolean {
+  try {
+    return localStorage.getItem("hadrian:compactMode") === "true";
+  } catch {
+    return false;
+  }
 }
 
 const initialState: ChatUIState = {
@@ -369,6 +387,7 @@ const initialState: ChatUIState = {
   editingMessageId: null,
   pendingPrompt: null,
   subAgentModel: null,
+  compactMode: loadCompactMode(),
 };
 
 export const useChatUIStore = create<ChatUIStore>((set) => ({
@@ -623,6 +642,26 @@ export const useChatUIStore = create<ChatUIStore>((set) => ({
   clearPendingPrompt: () => set({ pendingPrompt: null }),
 
   setSubAgentModel: (model) => set({ subAgentModel: model }),
+
+  setCompactMode: (enabled) => {
+    try {
+      localStorage.setItem("hadrian:compactMode", String(enabled));
+    } catch {
+      // localStorage unavailable
+    }
+    set({ compactMode: enabled });
+  },
+
+  toggleCompactMode: () =>
+    set((state) => {
+      const next = !state.compactMode;
+      try {
+        localStorage.setItem("hadrian:compactMode", String(next));
+      } catch {
+        // localStorage unavailable
+      }
+      return { compactMode: next };
+    }),
 }));
 
 /**
@@ -752,6 +791,9 @@ export const usePendingPrompt = () => useChatUIStore((state: ChatUIState) => sta
 
 /** Get the default model for sub-agent tool */
 export const useSubAgentModel = () => useChatUIStore((state: ChatUIState) => state.subAgentModel);
+
+/** Get compact mode state - hides reasoning/tools in model responses */
+export const useCompactMode = () => useChatUIStore((state: ChatUIState) => state.compactMode);
 
 /** Get MCP config modal open state */
 export const useMCPConfigModalOpen = () =>
