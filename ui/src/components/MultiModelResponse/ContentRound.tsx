@@ -49,7 +49,7 @@ function ContentRoundComponent({
   if (!hasContent && !hasReasoning && !hasTools) return null;
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-1 border-l-2 border-zinc-200 pl-3 dark:border-zinc-700">
       {hasReasoning && (
         <ReasoningSection
           content={reasoning!}
