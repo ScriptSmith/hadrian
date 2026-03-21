@@ -202,6 +202,8 @@ const MAX_TOOL_ITERATIONS = 5;
 /** Result from streaming a response, including any tool calls */
 interface StreamResponseResult {
   content: string;
+  /** Whether any output_text deltas were received (vs reasoning-only fallback) */
+  hasOutputText: boolean;
   usage?: MessageUsage;
   reasoningContent?: string;
   /** Tool calls detected during streaming (only when clientSideToolExecution is enabled) */
@@ -800,6 +802,7 @@ export function useChat({
         let usage: MessageUsage | undefined;
         // Fallback: extract tool calls from response.completed if not captured during streaming
         let completedToolCalls: ParsedToolCall[] = [];
+        let hasOutputText = false;
         // Capture response output for debugging
         let responseOutput: unknown[] | undefined;
 
@@ -856,6 +859,7 @@ export function useChat({
 
                 // Handle different Responses API event types
                 if (event.type === "response.output_text.delta" && event.delta) {
+                  hasOutputText = true;
                   content += event.delta;
                   streamingStore.appendContent(storeKey, event.delta);
                 } else if (
@@ -1129,6 +1133,7 @@ export function useChat({
 
         return {
           content,
+          hasOutputText,
           usage,
           reasoningContent: reasoningContent || undefined,
           toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
@@ -1312,6 +1317,7 @@ export function useChat({
             ? null
             : {
                 content: accumulatedContent,
+                hasOutputText: true,
                 usage: accumulatedUsage,
                 reasoningContent: lastReasoningContent,
                 toolExecutionRounds: executionRounds.length > 0 ? executionRounds : undefined,
@@ -1329,10 +1335,9 @@ export function useChat({
         }
 
         // Accumulate content across rounds with separator.
-        // Skip reasoning-only rounds (where content was set from reasoning fallback
-        // rather than actual output text — e.g., rounds that only call display_artifacts).
-        const isActualOutput = result.content && result.content !== result.reasoningContent;
-        if (isActualOutput) {
+        // Only include rounds that had actual text output (output_text deltas),
+        // skipping reasoning-only rounds (e.g., rounds that only call display_artifacts).
+        if (result.hasOutputText) {
           if (accumulatedContent) {
             accumulatedContent += "\n\n---\n\n" + result.content;
           } else {
@@ -1554,9 +1559,15 @@ export function useChat({
         // builds on top of the accumulated content with a visual break.
         // Only add if this round had actual text output (avoid double separators
         // from rounds that only had tool calls with no text).
-        if (isActualOutput) {
+        if (result.hasOutputText) {
           streamingStore.appendContent(storeKey, "\n\n---\n\n");
         }
+      }
+
+      // Sync streaming store with final accumulated content (removes any
+      // trailing separators and ensures consistency with committed content)
+      if (iterations > 1) {
+        streamingStore.setContent(storeKey, accumulatedContent);
       }
 
       // Complete debug capture successfully
@@ -1566,6 +1577,7 @@ export function useChat({
 
       return {
         content: accumulatedContent,
+        hasOutputText: true,
         usage: accumulatedUsage,
         reasoningContent: lastReasoningContent,
         toolExecutionRounds: executionRounds.length > 0 ? executionRounds : undefined,
