@@ -281,6 +281,11 @@ export function ChatMessageList({
     enabled: messageGroups.length > 0,
   });
 
+  // Don't adjust scroll position when the actively-streaming item grows —
+  // the default correction pushes the user further down on every token.
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) =>
+    !(item.index === instance.options.count - 1 && hasStreamingResponses);
+
   // Track message count to detect new user messages
   const prevMessagesLengthRef = useRef(messages.length);
 
