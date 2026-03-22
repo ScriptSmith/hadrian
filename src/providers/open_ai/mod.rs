@@ -100,9 +100,13 @@ impl OpenAICompatibleProvider {
             request
         };
 
-        let request = self.headers.iter().fold(request, |req, (key, value)| {
-            req.header(key.as_str(), value.as_str())
-        });
+        let request = self
+            .headers
+            .iter()
+            .filter(|(_, value)| !value.is_empty())
+            .fold(request, |req, (key, value)| {
+                req.header(key.as_str(), value.as_str())
+            });
 
         request.timeout(self.timeout)
     }
@@ -122,9 +126,13 @@ impl OpenAICompatibleProvider {
             request
         };
 
-        let request = self.headers.iter().fold(request, |req, (key, value)| {
-            req.header(key.as_str(), value.as_str())
-        });
+        let request = self
+            .headers
+            .iter()
+            .filter(|(_, value)| !value.is_empty())
+            .fold(request, |req, (key, value)| {
+                req.header(key.as_str(), value.as_str())
+            });
 
         request.timeout(self.timeout)
     }
