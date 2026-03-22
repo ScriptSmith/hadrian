@@ -1308,24 +1308,36 @@ function MultiModelResponseComponent({
             </Tooltip>
           </div>
         )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant={compactMode ? "secondary" : "ghost"}
-              size="sm"
-              className="h-6 w-6 p-0 rounded-md border bg-muted/50"
-              onClick={toggleCompactMode}
-              aria-label={compactMode ? "Show reasoning & tools" : "Compact view"}
-            >
-              {compactMode ? (
-                <ListChevronsDownUp className="h-3.5 w-3.5" />
-              ) : (
+        <div className="flex items-center gap-0.5 rounded-md border bg-muted/50 p-0.5">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={!compactMode ? "secondary" : "ghost"}
+                size="sm"
+                className="h-6 w-6 p-0"
+                onClick={() => compactMode && toggleCompactMode()}
+                aria-label="Show reasoning & tools"
+              >
                 <ListChevronsUpDown className="h-3.5 w-3.5" />
-              )}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{compactMode ? "Show reasoning & tools" : "Compact view"}</TooltipContent>
-        </Tooltip>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Show reasoning & tools</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={compactMode ? "secondary" : "ghost"}
+                size="sm"
+                className="h-6 w-6 p-0"
+                onClick={() => !compactMode && toggleCompactMode()}
+                aria-label="Compact view"
+              >
+                <ListChevronsDownUp className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Compact view</TooltipContent>
+          </Tooltip>
+        </div>
         <div className="h-px flex-1 bg-border" />
       </div>
 
