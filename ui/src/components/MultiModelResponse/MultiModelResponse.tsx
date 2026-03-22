@@ -8,8 +8,8 @@ import {
   Eye,
   EyeOff,
   GitFork,
-  ListChevronsDownUp,
-  ListChevronsUpDown,
+  MessageSquare,
+  MessageSquarePlus,
   Loader2,
   MoreHorizontal,
   Pencil,
@@ -1317,30 +1317,30 @@ function MultiModelResponseComponent({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                variant={!compactMode ? "secondary" : "ghost"}
-                size="sm"
-                className="h-6 w-6 p-0"
-                onClick={() => compactMode && toggleCompactMode()}
-                aria-label="Show reasoning & tools"
-              >
-                <ListChevronsUpDown className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Show reasoning & tools</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
                 variant={compactMode ? "secondary" : "ghost"}
                 size="sm"
                 className="h-6 w-6 p-0"
                 onClick={() => !compactMode && toggleCompactMode()}
                 aria-label="Compact view"
               >
-                <ListChevronsDownUp className="h-3.5 w-3.5" />
+                <MessageSquare className="h-3.5 w-3.5" />
               </Button>
             </TooltipTrigger>
             <TooltipContent>Compact view</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={!compactMode ? "secondary" : "ghost"}
+                size="sm"
+                className="h-6 w-6 p-0"
+                onClick={() => compactMode && toggleCompactMode()}
+                aria-label="Show reasoning & tools"
+              >
+                <MessageSquarePlus className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Show reasoning & tools</TooltipContent>
           </Tooltip>
         </div>
         <div className="h-px flex-1 bg-border" />

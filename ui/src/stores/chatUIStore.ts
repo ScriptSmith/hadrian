@@ -352,9 +352,9 @@ function loadViewMode(): ViewMode {
 
 function loadCompactMode(): boolean {
   try {
-    return localStorage.getItem("hadrian:compactMode") === "true";
+    return localStorage.getItem("hadrian:compactMode") !== "false";
   } catch {
-    return false;
+    return true;
   }
 }
 
