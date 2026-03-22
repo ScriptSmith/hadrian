@@ -358,8 +358,15 @@ export function ChatMessageList({
               {virtualizer.getVirtualItems().map((virtualItem) => {
                 const group = messageGroups[virtualItem.index];
                 const isLastGroup = virtualItem.index === messageGroups.length - 1;
+                const committedInstanceIds = new Set(
+                  group.assistantResponses.map((r) => r.instanceId ?? r.model ?? "")
+                );
                 const showStreaming =
-                  isLastGroup && hasStreamingResponses && group.assistantResponses.length === 0;
+                  isLastGroup &&
+                  hasStreamingResponses &&
+                  filteredModelResponses.some(
+                    (r) => !committedInstanceIds.has(r.instanceId ?? r.model)
+                  );
                 return (
                   <div
                     key={group.id}
