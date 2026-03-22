@@ -296,15 +296,18 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
             tracing::info!("Usage logging to database enabled");
         }
 
-        // Add OTLP sink if configured
+        // Add OTLP sinks if configured
         #[cfg(feature = "otlp")]
-        if let Some(otlp_config) = &config.observability.usage.otlp
-            && otlp_config.enabled
-        {
+        use usage_sink::UsageSink as _;
+        #[cfg(feature = "otlp")]
+        for otlp_config in &config.observability.usage.otlp {
+            if !otlp_config.enabled {
+                continue;
+            }
             match usage_sink::OtlpSink::new(otlp_config, &config.observability.tracing) {
                 Ok(otlp_sink) => {
+                    tracing::info!(name = otlp_sink.name(), "Usage logging to OTLP enabled");
                     sinks.push(Arc::new(otlp_sink));
-                    tracing::info!("Usage logging to OTLP enabled");
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to initialize OTLP usage sink");
@@ -312,9 +315,7 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
             }
         }
         #[cfg(not(feature = "otlp"))]
-        if let Some(otlp_config) = &config.observability.usage.otlp
-            && otlp_config.enabled
-        {
+        if config.observability.usage.otlp.iter().any(|c| c.enabled) {
             tracing::warn!(
                 "OTLP usage sink is enabled in config but the 'otlp' feature is not compiled. \
                 Rebuild with: cargo build --features otlp"
