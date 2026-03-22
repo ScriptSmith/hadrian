@@ -1919,8 +1919,8 @@ async fn record_fixture(
             // Add OpenRouter-specific headers
             if def.provider == "openrouter" {
                 request = request
-                    .header("HTTP-Referer", "https://github.com/ScriptSmith/hadrian")
-                    .header("X-Title", "Hadrian Gateway Fixture Recording");
+                    .header("HTTP-Referer", "https://hadriangateway.com")
+                    .header("X-OpenRouter-Title", "Hadrian Gateway");
             }
         }
 
