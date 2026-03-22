@@ -75,7 +75,7 @@ function ContentRoundComponent({
       const layoutClass =
         displaySelection?.layout === "gallery" ? "grid grid-cols-2 gap-3" : "space-y-3";
       return (
-        <div className="space-y-1 border-l-2 border-zinc-200 pl-3 dark:border-zinc-700">
+        <div className="space-y-1 border-l-2 border-transparent pl-3 transition-colors hover:border-zinc-200 dark:hover:border-zinc-700">
           {hasContent && <StreamingMarkdown content={content!} isStreaming={isStreaming} />}
           {hasDisplayedArtifacts && (
             <div className={layoutClass}>
@@ -106,7 +106,7 @@ function ContentRoundComponent({
     displaySelection?.layout === "gallery" ? "grid grid-cols-2 gap-3" : "space-y-3";
 
   return (
-    <div className="space-y-1 border-l-2 border-zinc-200 pl-3 dark:border-zinc-700">
+    <div className="space-y-1 border-l-2 border-transparent pl-3 transition-colors hover:border-zinc-200 dark:hover:border-zinc-700">
       {hasReasoning && (
         <ReasoningSection
           content={reasoning!}
