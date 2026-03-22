@@ -66,11 +66,25 @@ impl OpenAICompatibleProvider {
         registry: &CircuitBreakerRegistry,
     ) -> Self {
         let circuit_breaker = registry.get_or_create(provider_name, &config.circuit_breaker);
+        let base_url = config.base_url.trim_end_matches('/').to_string();
+
+        let mut headers = config.headers.clone();
+
+        // OpenRouter app attribution: send Hadrian metadata by default unless
+        // the user has explicitly set these headers (opt-out by overriding).
+        if base_url.contains("openrouter.ai") {
+            headers
+                .entry("HTTP-Referer".to_string())
+                .or_insert_with(|| "https://hadriangateway.com".to_string());
+            headers
+                .entry("X-OpenRouter-Title".to_string())
+                .or_insert_with(|| "Hadrian Gateway".to_string());
+        }
 
         Self {
             api_key: config.api_key.clone(),
-            base_url: config.base_url.trim_end_matches('/').to_string(),
-            headers: config.headers.clone(),
+            base_url,
+            headers,
             timeout: Duration::from_secs(config.timeout_secs),
             retry: config.retry.clone(),
             circuit_breaker_config: config.circuit_breaker.clone(),
@@ -86,9 +100,13 @@ impl OpenAICompatibleProvider {
             request
         };
 
-        let request = self.headers.iter().fold(request, |req, (key, value)| {
-            req.header(key.as_str(), value.as_str())
-        });
+        let request = self
+            .headers
+            .iter()
+            .filter(|(_, value)| !value.is_empty())
+            .fold(request, |req, (key, value)| {
+                req.header(key.as_str(), value.as_str())
+            });
 
         request.timeout(self.timeout)
     }
@@ -108,9 +126,13 @@ impl OpenAICompatibleProvider {
             request
         };
 
-        let request = self.headers.iter().fold(request, |req, (key, value)| {
-            req.header(key.as_str(), value.as_str())
-        });
+        let request = self
+            .headers
+            .iter()
+            .filter(|(_, value)| !value.is_empty())
+            .fold(request, |req, (key, value)| {
+                req.header(key.as_str(), value.as_str())
+            });
 
         request.timeout(self.timeout)
     }

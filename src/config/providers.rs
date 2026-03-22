@@ -606,7 +606,8 @@ pub struct OpenAiProviderConfig {
     pub model_aliases: HashMap<String, String>,
 
     /// Custom headers to include in requests.
-    /// Useful for provider-specific headers like OpenRouter's HTTP-Referer.
+    /// For OpenRouter providers, `HTTP-Referer` and `X-OpenRouter-Title` are set
+    /// automatically for app attribution. Override here to customize or opt out.
     #[serde(default)]
     pub headers: HashMap<String, String>,
 

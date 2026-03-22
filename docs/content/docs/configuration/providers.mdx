@@ -45,10 +45,13 @@ type = "open_ai"
 api_key = "${OPENROUTER_API_KEY}"
 base_url = "https://openrouter.ai/api/v1"
 
-# OpenRouter-specific headers
-[providers.openrouter.headers]
-HTTP-Referer = "https://myapp.example.com"
-X-Title = "My Application"
+# App attribution headers are sent automatically:
+#   HTTP-Referer: https://hadriangateway.com
+#   X-OpenRouter-Title: Hadrian Gateway
+# Override to customize, or set to "" to opt out:
+# [providers.openrouter.headers]
+# HTTP-Referer = "https://myapp.example.com"
+# X-OpenRouter-Title = "My Application"
 ```
 
 **Ollama** (local, no API key needed):
