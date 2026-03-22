@@ -1595,7 +1595,7 @@ export function useChat({
         hasOutputText: true,
         usage: accumulatedUsage,
         reasoningContent: lastReasoningContent,
-        completedRounds: allCompletedRounds.length > 1 ? allCompletedRounds : undefined,
+        completedRounds: allCompletedRounds.length > 0 ? allCompletedRounds : undefined,
         toolExecutionRounds: executionRounds.length > 0 ? executionRounds : undefined,
       };
     },

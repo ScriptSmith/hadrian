@@ -358,8 +358,14 @@ export function ChatMessageList({
               {virtualizer.getVirtualItems().map((virtualItem) => {
                 const group = messageGroups[virtualItem.index];
                 const isLastGroup = virtualItem.index === messageGroups.length - 1;
+                const activeStreamingIds =
+                  isLastGroup && hasStreamingResponses
+                    ? new Set(filteredModelResponses.map((r) => r.instanceId ?? r.model))
+                    : null;
                 const committedInstanceIds = new Set(
-                  group.assistantResponses.map((r) => r.instanceId ?? r.model ?? "")
+                  group.assistantResponses
+                    .filter((r) => !activeStreamingIds?.has(r.instanceId ?? r.model ?? ""))
+                    .map((r) => r.instanceId ?? r.model ?? "")
                 );
                 const showStreaming =
                   isLastGroup &&
@@ -367,6 +373,11 @@ export function ChatMessageList({
                   filteredModelResponses.some(
                     (r) => !committedInstanceIds.has(r.instanceId ?? r.model)
                   );
+                const committedResponses = activeStreamingIds
+                  ? group.assistantResponses.filter(
+                      (r) => !activeStreamingIds.has(r.instanceId ?? r.model ?? "")
+                    )
+                  : group.assistantResponses;
                 return (
                   <div
                     key={group.id}
@@ -432,7 +443,7 @@ export function ChatMessageList({
                         </div>
                       </>
                     )}
-                    {group.assistantResponses.length > 0 && (
+                    {committedResponses.length > 0 && (
                       <>
                         {/* Show persisted mode indicators for chained/routed messages */}
                         {group.assistantResponses[0].modeMetadata?.mode === "routed" && (
@@ -605,7 +616,7 @@ export function ChatMessageList({
                           </div>
                         )}
                         <MultiModelResponse
-                          responses={group.assistantResponses.map((m) => {
+                          responses={committedResponses.map((m) => {
                             // Use instanceId if set, otherwise fall back to model for backwards compat
                             const instanceId = m.instanceId ?? m.model ?? "unknown";
                             return {
