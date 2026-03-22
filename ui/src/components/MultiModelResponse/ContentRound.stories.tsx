@@ -8,7 +8,7 @@ import type { ToolExecutionRound, ToolExecution, Artifact } from "@/components/c
 const makeExecution = (
   toolName: string,
   status: ToolExecution["status"],
-  duration?: number,
+  duration?: number
 ): ToolExecution => ({
   id: `exec-${Math.random().toString(36).slice(2)}`,
   toolName,
@@ -77,7 +77,8 @@ type Story = StoryObj<typeof meta>;
 /** Basic text content renders markdown */
 export const TextOnly: Story = {
   args: {
-    content: "Hello! This is a **bold** response with `inline code` and a list:\n\n- Item one\n- Item two",
+    content:
+      "Hello! This is a **bold** response with `inline code` and a list:\n\n- Item one\n- Item two",
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
@@ -88,8 +89,7 @@ export const TextOnly: Story = {
 /** Reasoning section shown above content */
 export const WithReasoning: Story = {
   args: {
-    reasoning:
-      "Let me think step by step...\n\n1. First consideration\n2. Second consideration",
+    reasoning: "Let me think step by step...\n\n1. First consideration\n2. Second consideration",
     reasoningTokenCount: 42,
     content: "Based on my analysis, the answer is 42.",
   },
