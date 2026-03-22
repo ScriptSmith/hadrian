@@ -44,6 +44,7 @@ import { Avatar, AvatarFallback } from "@/components/Avatar/Avatar";
 import { Button } from "@/components/Button/Button";
 import type {
   Artifact,
+  CompletedRound,
   HistoryMode,
   MessageModeMetadata,
   MessageUsage,
@@ -158,8 +159,8 @@ interface ModelResponse {
   content: string;
   /** Reasoning content for current/last round (extended thinking) */
   reasoningContent?: string;
-  /** Completed rounds' reasoning and content for multi-round tool execution */
-  completedRounds?: Array<{ reasoning?: string; content?: string }>;
+  /** Completed rounds bundling reasoning, content, and tool execution (multi-round tool execution) */
+  completedRounds?: CompletedRound[];
   isStreaming: boolean;
   error?: string;
   usage?: MessageUsage;
@@ -593,6 +594,18 @@ const ModelResponseCard = memo(function ModelResponseCard({
   // All output artifacts across all rounds (for resolving display_artifacts selections)
   const allOutputArtifacts = useMemo(() => {
     const result: ArtifactType[] = [];
+    // Check completedRounds first (unified source for multi-round)
+    const rounds = response.completedRounds ?? [];
+    for (const round of rounds) {
+      if (round.toolExecution) {
+        for (const execution of round.toolExecution.executions) {
+          for (const a of execution.outputArtifacts) {
+            if (a.type !== "display_selection") result.push(a);
+          }
+        }
+      }
+    }
+    // Also check standalone toolExecutionRounds (single-round path)
     for (const round of toolExecutionRounds) {
       for (const execution of round.executions) {
         for (const a of execution.outputArtifacts) {
@@ -601,7 +614,7 @@ const ModelResponseCard = memo(function ModelResponseCard({
       }
     }
     return result;
-  }, [toolExecutionRounds]);
+  }, [response.completedRounds, toolExecutionRounds]);
 
   // Extract display selection for a specific tool execution round
   const getDisplaySelectionForRound = useCallback(
@@ -819,38 +832,38 @@ const ModelResponseCard = memo(function ModelResponseCard({
               </div>
             ) : (
               (() => {
-                const rounds = response.completedRounds ?? response.usage?.completedRounds;
+                const rounds = response.completedRounds;
                 if (rounds && rounds.length > 0) {
-                  // Multi-round: render each round as a ContentRound with per-round tool execution
-                  const parts = response.content ? response.content.split("\n\n---\n\n") : [];
-                  const roundsWithContent = rounds.filter((r) => r.content).length;
-                  const currentContent =
-                    parts.length > roundsWithContent ? parts[parts.length - 1] : null;
+                  // Multi-round: render each round using its bundled toolExecution
                   const currentReasoning =
                     response.reasoningContent &&
                     !rounds.some((r) => r.reasoning === response.reasoningContent)
                       ? response.reasoningContent
                       : null;
+                  // During streaming, content field holds just the current round's text
+                  // (pushCompletedRound resets it). For committed messages, it's empty/null.
+                  const currentContent =
+                    response.isStreaming && response.content?.trim() ? response.content : null;
                   return (
                     <div className="space-y-3">
-                      {rounds.map((round, i) => {
-                        const ter =
-                          i < toolExecutionRounds.length ? toolExecutionRounds[i] : undefined;
-                        return (
-                          <ContentRound
-                            key={i}
-                            reasoning={round.reasoning}
-                            content={round.content}
-                            toolExecutionRound={ter}
-                            isToolsStreaming={
-                              response.isStreaming && i === toolExecutionRounds.length - 1
-                            }
-                            onArtifactClick={handleArtifactClick}
-                            displaySelection={ter ? getDisplaySelectionForRound(ter) : null}
-                            allOutputArtifacts={allOutputArtifacts}
-                          />
-                        );
-                      })}
+                      {rounds.map((round, i) => (
+                        <ContentRound
+                          key={i}
+                          reasoning={round.reasoning}
+                          content={round.content}
+                          toolExecutionRound={round.toolExecution}
+                          isToolsStreaming={
+                            response.isStreaming && i === rounds.length - 1 && !!round.toolExecution
+                          }
+                          onArtifactClick={handleArtifactClick}
+                          displaySelection={
+                            round.toolExecution
+                              ? getDisplaySelectionForRound(round.toolExecution)
+                              : null
+                          }
+                          allOutputArtifacts={allOutputArtifacts}
+                        />
+                      ))}
                       {/* Current streaming round (not yet in completedRounds) */}
                       {(currentReasoning || currentContent) && (
                         <ContentRound
@@ -912,7 +925,7 @@ const ModelResponseCard = memo(function ModelResponseCard({
               : hasToolExecutionRounds
                 ? // Multi-round with completedRounds: per-round tool execution + artifacts rendered above.
                   // Only show ToolExecutionBlock for single-round fallback (no completedRounds).
-                  !(response.completedRounds ?? response.usage?.completedRounds) && (
+                  !response.completedRounds && (
                     <div className="mt-4 pt-4 border-t">
                       <ToolExecutionBlock
                         rounds={toolExecutionRounds}
@@ -1394,6 +1407,13 @@ function areMultiModelResponsePropsEqual(
     if (prevR.content !== nextR.content) return false;
     if (prevR.reasoningContent !== nextR.reasoningContent) return false;
     if ((prevR.completedRounds?.length ?? 0) !== (nextR.completedRounds?.length ?? 0)) return false;
+    // Check if tool executions changed within completed rounds
+    if (prevR.completedRounds && nextR.completedRounds) {
+      for (let j = 0; j < prevR.completedRounds.length; j++) {
+        if (!!prevR.completedRounds[j].toolExecution !== !!nextR.completedRounds[j].toolExecution)
+          return false;
+      }
+    }
     if (prevR.isStreaming !== nextR.isStreaming) return false;
     if (prevR.error !== nextR.error) return false;
     if (prevR.usage?.totalTokens !== nextR.usage?.totalTokens) return false;

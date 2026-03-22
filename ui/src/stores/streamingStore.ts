@@ -6,6 +6,7 @@ import type {
   ResponseFeedbackData,
   Citation,
   Artifact,
+  CompletedRound,
   ToolExecution,
   ToolExecutionRound,
 } from "@/components/chat-types";
@@ -72,8 +73,8 @@ export interface StreamingResponse {
   content: string;
   /** Reasoning content for the current round (extended thinking) */
   reasoningContent: string;
-  /** Completed rounds' reasoning and content (for multi-round tool execution) */
-  completedRounds: Array<{ reasoning?: string; content?: string }>;
+  /** Completed rounds bundling reasoning, content, and tool execution (multi-round tool execution) */
+  completedRounds: CompletedRound[];
   isStreaming: boolean;
   error?: string;
   usage?: MessageUsage;
@@ -715,8 +716,10 @@ interface StreamingActions {
   appendReasoningContent: (instanceId: string, delta: string) => void;
   /** Set the full reasoning content for an instance */
   setReasoningContent: (instanceId: string, content: string) => void;
-  /** Push a completed round's reasoning and content, then reset reasoningContent */
-  pushCompletedRound: (instanceId: string, round: { reasoning?: string; content?: string }) => void;
+  /** Push a completed round, then reset reasoningContent and content for the next round */
+  pushCompletedRound: (instanceId: string, round: CompletedRound) => void;
+  /** Attach tool execution data to the last completed round */
+  setCompletedRoundToolExecution: (instanceId: string, toolExecution: ToolExecutionRound) => void;
   /** Mark an instance's stream as complete */
   completeStream: (instanceId: string, usage?: MessageUsage) => void;
   /** Set an error for an instance's stream */
@@ -893,7 +896,20 @@ export const useStreamingStore = create<StreamingStore>((set) => ({
         ...existing,
         completedRounds: [...existing.completedRounds, round],
         reasoningContent: "",
+        content: "",
       });
+      return { streams: newStreams };
+    }),
+
+  setCompletedRoundToolExecution: (model, toolExecution) =>
+    set((state) => {
+      const existing = state.streams.get(model);
+      if (!existing || existing.completedRounds.length === 0) return state;
+
+      const rounds = [...existing.completedRounds];
+      rounds[rounds.length - 1] = { ...rounds[rounds.length - 1], toolExecution };
+      const newStreams = new Map(state.streams);
+      newStreams.set(model, { ...existing, completedRounds: rounds });
       return { streams: newStreams };
     }),
 

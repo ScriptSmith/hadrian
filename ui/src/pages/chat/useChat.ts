@@ -9,6 +9,7 @@ import {
 } from "@/stores/conversationStore";
 import { useDebugStore } from "@/stores/debugStore";
 import type {
+  CompletedRound,
   ConversationMode,
   ModeConfig,
   MessageModeMetadata,
@@ -207,8 +208,8 @@ interface StreamResponseResult {
   hasOutputText: boolean;
   usage?: MessageUsage;
   reasoningContent?: string;
-  /** Per-round reasoning and content for multi-round tool execution */
-  completedRounds?: Array<{ reasoning?: string; content?: string }>;
+  /** Per-round reasoning, content, and tool execution for multi-round tool execution */
+  completedRounds?: CompletedRound[];
   /** Tool calls detected during streaming (only when clientSideToolExecution is enabled) */
   toolCalls?: ParsedToolCall[];
   /** Tool execution timeline for progressive disclosure UI */
@@ -1281,10 +1282,9 @@ export function useChat({
       }
 
       let currentInputItems = [...initialInputItems];
-      let accumulatedContent = "";
       let accumulatedUsage: MessageUsage | undefined;
       let lastReasoningContent: string | undefined;
-      const allCompletedRounds: Array<{ reasoning?: string; content?: string }> = [];
+      const allCompletedRounds: CompletedRound[] = [];
       let iterations = 0;
 
       // Track execution rounds locally (also mirrored in store for real-time UI)
@@ -1322,7 +1322,10 @@ export function useChat({
           return iterations === 1
             ? null
             : {
-                content: accumulatedContent,
+                content: allCompletedRounds
+                  .map((r) => r.content)
+                  .filter(Boolean)
+                  .join("\n\n---\n\n"),
                 hasOutputText: true,
                 usage: accumulatedUsage,
                 reasoningContent: lastReasoningContent,
@@ -1345,23 +1348,12 @@ export function useChat({
         // Only count content as meaningful if it has non-whitespace text —
         // models sometimes emit trivial whitespace before tool calls.
         const hasNonTrivialContent = result.hasOutputText && !!result.content?.trim();
-        const roundData: { reasoning?: string; content?: string } = {};
+        const roundData: CompletedRound = {};
         if (result.reasoningContent) roundData.reasoning = result.reasoningContent;
         if (hasNonTrivialContent) roundData.content = result.content;
         allCompletedRounds.push(roundData);
         // Push to streaming store so the UI can render interleaved rounds during streaming
         streamingStore.pushCompletedRound(storeKey, roundData);
-
-        // Accumulate content across rounds with separator.
-        // Only include rounds that had non-trivial text output,
-        // skipping reasoning-only rounds and whitespace-only rounds.
-        if (hasNonTrivialContent) {
-          if (accumulatedContent) {
-            accumulatedContent += "\n\n---\n\n" + result.content;
-          } else {
-            accumulatedContent = result.content;
-          }
-        }
         lastReasoningContent = result.reasoningContent;
 
         // Accumulate usage (sum tokens across iterations)
@@ -1376,7 +1368,6 @@ export function useChat({
               reasoningTokens:
                 (accumulatedUsage.reasoningTokens ?? 0) + (result.usage.reasoningTokens ?? 0),
               reasoningContent: lastReasoningContent,
-              completedRounds: allCompletedRounds.length > 1 ? [...allCompletedRounds] : undefined,
             };
           } else {
             accumulatedUsage = { ...result.usage };
@@ -1519,6 +1510,13 @@ export function useChat({
         };
         executionRounds.push(round);
 
+        // Attach tool execution to the current completed round
+        if (allCompletedRounds.length > 0) {
+          const lastIdx = allCompletedRounds.length - 1;
+          allCompletedRounds[lastIdx] = { ...allCompletedRounds[lastIdx], toolExecution: round };
+          streamingStore.setCompletedRoundToolExecution(storeKey, round);
+        }
+
         // Build continuation input with tool results
         const toolResultItems = buildToolResultInputItems(result.toolCalls, toolResults);
 
@@ -1575,19 +1573,7 @@ export function useChat({
         // Clear tool calls from streaming store before next iteration
         streamingStore.clearToolCalls(storeKey);
 
-        // Add separator to streaming store so the next round's appendContent
-        // builds on top of the accumulated content with a visual break.
-        // Only add if this round had non-trivial text output (avoid double separators
-        // from rounds that only had tool calls or whitespace-only text).
-        if (hasNonTrivialContent) {
-          streamingStore.appendContent(storeKey, "\n\n---\n\n");
-        }
-      }
-
-      // Sync streaming store with final accumulated content (removes any
-      // trailing separators and ensures consistency with committed content)
-      if (iterations > 1) {
-        streamingStore.setContent(storeKey, accumulatedContent);
+        // Content for the next round will stream fresh (pushCompletedRound resets it)
       }
 
       // Complete debug capture successfully
@@ -1595,8 +1581,13 @@ export function useChat({
         debugStore.completeDebugCapture(messageId, model, true);
       }
 
+      const flatContent = allCompletedRounds
+        .map((r) => r.content)
+        .filter(Boolean)
+        .join("\n\n---\n\n");
+
       return {
-        content: accumulatedContent,
+        content: flatContent,
         hasOutputText: true,
         usage: accumulatedUsage,
         reasoningContent: lastReasoningContent,
@@ -1744,6 +1735,7 @@ export function useChat({
         citations?: Citation[];
         artifacts?: Artifact[];
         toolExecutionRounds?: ToolExecutionRound[];
+        completedRounds?: CompletedRound[];
         /** Debug message ID for looking up debug info */
         debugMessageId?: string;
       }> = [];
@@ -1773,6 +1765,7 @@ export function useChat({
               citations: stream?.citations,
               artifacts: stream?.artifacts,
               toolExecutionRounds: stream?.toolExecutionRounds,
+              completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
             });
           }
         }
@@ -1791,6 +1784,7 @@ export function useChat({
               citations: stream?.citations,
               artifacts: stream?.artifacts,
               toolExecutionRounds: stream?.toolExecutionRounds,
+              completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
             });
           }
         }
@@ -1811,6 +1805,7 @@ export function useChat({
               citations: stream?.citations,
               artifacts: stream?.artifacts,
               toolExecutionRounds: stream?.toolExecutionRounds,
+              completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
               // Only include debugMessageId for multiple mode (default)
               debugMessageId: conversationMode === "multiple" ? debugMessageId : undefined,
             });
@@ -1825,6 +1820,9 @@ export function useChat({
                 citations: stream?.citations,
                 artifacts: stream?.artifacts,
                 toolExecutionRounds: stream?.toolExecutionRounds,
+                completedRounds: stream?.completedRounds.length
+                  ? stream.completedRounds
+                  : undefined,
                 debugMessageId: conversationMode === "multiple" ? debugMessageId : undefined,
               });
             }

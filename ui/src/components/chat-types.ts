@@ -29,6 +29,13 @@ export type ToolExecutionStatus = ToolExecutionStatusImport;
 export type ToolExecution = ToolExecutionImport;
 export type ToolExecutionRound = ToolExecutionRoundImport;
 
+/** A completed round of multi-round tool execution, bundling reasoning, content, and tool execution */
+export interface CompletedRound {
+  reasoning?: string;
+  content?: string;
+  toolExecution?: ToolExecutionRound;
+}
+
 /** History mode for conversation context sent to models */
 export type HistoryMode = "all" | "same-model";
 
@@ -398,8 +405,6 @@ export interface MessageUsage {
   reasoningTokens?: number;
   /** Reasoning content (extended thinking output — last/only round) */
   reasoningContent?: string;
-  /** Per-round reasoning and content for multi-round tool execution */
-  completedRounds?: Array<{ reasoning?: string; content?: string }>;
 
   // Timing stats (captured client-side during streaming)
   /** Time to first token in milliseconds (from request start) */
@@ -825,6 +830,8 @@ export interface ChatMessage {
   artifacts?: Artifact[];
   /** Tool execution timeline for multi-turn tool calling (assistant messages only) */
   toolExecutionRounds?: ToolExecutionRound[];
+  /** Completed rounds bundling reasoning, content, and tool execution (multi-round tool execution) */
+  completedRounds?: CompletedRound[];
   /** Debug message ID for looking up debug info in debugStore (assistant messages only) */
   debugMessageId?: string;
 }

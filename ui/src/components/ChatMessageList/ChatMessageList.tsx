@@ -622,6 +622,7 @@ export function ChatMessageList({
                               citations: m.citations,
                               artifacts: m.artifacts,
                               toolExecutionRounds: m.toolExecutionRounds,
+                              completedRounds: m.completedRounds,
                               debugMessageId: m.debugMessageId,
                             };
                           })}
