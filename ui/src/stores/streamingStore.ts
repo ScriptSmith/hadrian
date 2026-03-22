@@ -722,6 +722,8 @@ interface StreamingActions {
   setCompletedRoundToolExecution: (instanceId: string, toolExecution: ToolExecutionRound) => void;
   /** Mark an instance's stream as complete */
   completeStream: (instanceId: string, usage?: MessageUsage) => void;
+  /** Resume streaming for an instance (e.g., between tool-calling rounds) */
+  resumeStreaming: (instanceId: string) => void;
   /** Set an error for an instance's stream */
   setError: (instanceId: string, error: string) => void;
   /** Clear all streams and reset mode state */
@@ -932,6 +934,16 @@ export const useStreamingStore = create<StreamingStore>((set) => ({
         streams: newStreams,
         isStreaming: !allComplete,
       };
+    }),
+
+  resumeStreaming: (model) =>
+    set((state) => {
+      const existing = state.streams.get(model);
+      if (!existing) return state;
+
+      const newStreams = new Map(state.streams);
+      newStreams.set(model, { ...existing, isStreaming: true });
+      return { streams: newStreams, isStreaming: true };
     }),
 
   setError: (model, error) =>

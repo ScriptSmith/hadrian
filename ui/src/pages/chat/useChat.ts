@@ -1383,6 +1383,10 @@ export function useChat({
           break;
         }
 
+        // Resume streaming state so the UI shows between-round indicators
+        // (completeStream set isStreaming=false, but we have more rounds coming)
+        streamingStore.resumeStreaming(storeKey);
+
         // Capture tool calls for debug
         if (messageId) {
           debugStore.setRoundToolCalls(

@@ -84,6 +84,7 @@ import {
   useArtifacts,
   useToolExecutionRounds,
   useIsStreaming,
+  useHasActiveToolCalls,
 } from "@/stores/streamingStore";
 import { cn } from "@/utils/cn";
 import { getModelDisplayName } from "@/utils/modelNames";
@@ -209,6 +210,24 @@ interface MultiModelResponseProps {
   actionConfig?: ResponseActionConfig;
   /** History mode used when this message was sent (read-only display) */
   historyMode?: HistoryMode;
+}
+
+/** Detect when streaming content has stalled (no new tokens for a threshold period). */
+function useContentStalled(content: string, isStreaming: boolean, thresholdMs = 1500): boolean {
+  const [stalled, setStalled] = useState(false);
+
+  useEffect(() => {
+    if (!isStreaming || !content) {
+      setStalled(false);
+      return;
+    }
+    // Content just changed — reset stall and start timer
+    setStalled(false);
+    const timer = setTimeout(() => setStalled(true), thresholdMs);
+    return () => clearTimeout(timer);
+  }, [content, isStreaming, thresholdMs]);
+
+  return stalled;
 }
 
 function TypingIndicator() {
@@ -442,6 +461,8 @@ const ModelResponseCard = memo(function ModelResponseCard({
   const isComplete = !response.isStreaming && response.content && !response.error;
   const isAnyStreaming = useIsStreaming();
   const compactMode = useCompactMode();
+  const isContentStalled = useContentStalled(response.content, response.isStreaming);
+  const hasActiveTools = useHasActiveToolCalls(model);
 
   // State for artifact modal
   const [selectedArtifact, setSelectedArtifact] = useState<ArtifactType | null>(null);
@@ -792,7 +813,10 @@ const ModelResponseCard = memo(function ModelResponseCard({
             <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
             <span className="text-sm leading-relaxed">{response.error}</span>
           </div>
-        ) : response.isStreaming && !response.content && !response.reasoningContent ? (
+        ) : response.isStreaming &&
+          !response.content &&
+          !response.reasoningContent &&
+          !response.completedRounds?.length ? (
           <div className="flex items-center gap-3 text-muted-foreground">
             <TypingIndicator />
             <span className="text-sm">Thinking...</span>
@@ -853,7 +877,11 @@ const ModelResponseCard = memo(function ModelResponseCard({
                           content={round.content}
                           toolExecutionRound={round.toolExecution}
                           isToolsStreaming={
-                            response.isStreaming && i === rounds.length - 1 && !!round.toolExecution
+                            response.isStreaming &&
+                            i === rounds.length - 1 &&
+                            !!round.toolExecution?.executions.some(
+                              (e) => e.status === "pending" || e.status === "running"
+                            )
                           }
                           onArtifactClick={handleArtifactClick}
                           displaySelection={
@@ -873,6 +901,24 @@ const ModelResponseCard = memo(function ModelResponseCard({
                           isReasoningStreaming={response.isStreaming && !currentContent}
                         />
                       )}
+                      {/* Between-round indicator: streaming but no new content yet */}
+                      {response.isStreaming &&
+                        !currentReasoning &&
+                        !currentContent &&
+                        (() => {
+                          const lastRound = rounds[rounds.length - 1];
+                          const isProcessing = lastRound?.toolExecution?.executions.some(
+                            (e) => e.status === "pending" || e.status === "running"
+                          );
+                          return (
+                            <div className="flex items-center gap-3 text-muted-foreground">
+                              <TypingIndicator />
+                              <span className="text-sm">
+                                {isProcessing ? "Processing..." : "Thinking..."}
+                              </span>
+                            </div>
+                          );
+                        })()}
                     </div>
                   );
                 }
@@ -914,6 +960,13 @@ const ModelResponseCard = memo(function ModelResponseCard({
                   </>
                 );
               })()
+            )}
+            {/* Stall indicator: prominent status when content stops flowing mid-stream */}
+            {isContentStalled && (
+              <div className="flex items-center gap-3 text-muted-foreground mt-2">
+                <TypingIndicator />
+                <span className="text-sm">{hasActiveTools ? "Processing..." : "Thinking..."}</span>
+              </div>
             )}
             {/* Citations from file_search/web_search */}
             {hasCitations && (
