@@ -283,6 +283,11 @@ function useStreamingPhase(
       return hasActiveTools ? "processing" : "thinking";
     }
 
+    // Compact mode hides reasoning — show thinking when only reasoning is flowing
+    if (compactMode && currentReasoning && !currentContent) {
+      return "thinking";
+    }
+
     return "idle";
   }
 
