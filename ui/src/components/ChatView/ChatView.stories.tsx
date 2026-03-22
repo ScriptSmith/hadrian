@@ -100,23 +100,27 @@ const meta: Meta<typeof ChatView> = {
     },
   },
   decorators: [
-    (Story) => (
-      <QueryClientProvider client={queryClient}>
-        <ConfigProvider>
-          <AuthProvider>
-            <PreferencesProvider>
-              <ToastProvider>
-                <TooltipProvider>
-                  <div className="h-screen">
-                    <Story />
-                  </div>
-                </TooltipProvider>
-              </ToastProvider>
-            </PreferencesProvider>
-          </AuthProvider>
-        </ConfigProvider>
-      </QueryClientProvider>
-    ),
+    (Story) => {
+      // Show reasoning & tools in tests
+      useChatUIStore.setState({ compactMode: false });
+      return (
+        <QueryClientProvider client={queryClient}>
+          <ConfigProvider>
+            <AuthProvider>
+              <PreferencesProvider>
+                <ToastProvider>
+                  <TooltipProvider>
+                    <div className="h-screen">
+                      <Story />
+                    </div>
+                  </TooltipProvider>
+                </ToastProvider>
+              </PreferencesProvider>
+            </AuthProvider>
+          </ConfigProvider>
+        </QueryClientProvider>
+      );
+    },
   ],
 };
 

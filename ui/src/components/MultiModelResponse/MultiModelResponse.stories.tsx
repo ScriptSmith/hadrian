@@ -19,6 +19,7 @@ const meta: Meta<typeof MultiModelResponse> = {
         viewMode: "grid",
         expandedModel: null,
         editingKey: null, // Reset editing state
+        compactMode: false, // Show reasoning & tools in tests
       });
       // Reset streaming store to ensure isStreaming is false
       useStreamingStore.setState({
@@ -145,8 +146,8 @@ export const Streaming: Story = {
     // Verify first model shows partial content
     await expect(canvas.getByText(/I'm thinking about your question/i)).toBeInTheDocument();
 
-    // Verify second model shows "Thinking..." indicator (empty content during streaming)
-    await expect(canvas.getByText("Thinking...")).toBeInTheDocument();
+    // Verify second model shows "Thinking" indicator (empty content during streaming)
+    await expect(canvas.getByText("Thinking")).toBeInTheDocument();
 
     // Verify typing indicator dots are present (the animated dots)
     const typingDots = canvasElement.querySelectorAll('[class*="animate-typing"]');
@@ -544,7 +545,7 @@ export const WithToolCallSearching: Story = {
     const canvas = within(canvasElement);
 
     // While streaming with no content, shows Thinking indicator
-    await expect(canvas.getByText("Thinking...")).toBeInTheDocument();
+    await expect(canvas.getByText("Thinking")).toBeInTheDocument();
   },
 };
 
