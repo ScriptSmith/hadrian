@@ -4,7 +4,6 @@ import { MultiModelResponse } from "./MultiModelResponse";
 import { PreferencesProvider } from "@/preferences/PreferencesProvider";
 import { useChatUIStore } from "@/stores/chatUIStore";
 import { useStreamingStore } from "@/stores/streamingStore";
-import type { ToolCallState } from "@/pages/chat/utils/toolCallParser";
 
 const meta: Meta<typeof MultiModelResponse> = {
   title: "Chat/MultiModelResponse",
@@ -20,6 +19,7 @@ const meta: Meta<typeof MultiModelResponse> = {
         viewMode: "grid",
         expandedModel: null,
         editingKey: null, // Reset editing state
+        compactMode: false, // Show reasoning & tools in tests
       });
       // Reset streaming store to ensure isStreaming is false
       useStreamingStore.setState({
@@ -63,15 +63,12 @@ export const SingleResponse: Story = {
       canvas.getByText(/Hello! I'm Claude, an AI assistant made by Anthropic/)
     ).toBeInTheDocument();
 
-    // Verify model name badge is shown (look for the styled badge element)
-    const modelBadge = canvasElement.querySelector('[class*="rounded-md"][class*="border"]');
+    // Verify model name badge is shown (look for the styled badge with text-xs font-semibold)
+    const modelBadge = canvasElement.querySelector(
+      'span[class*="rounded-md"][class*="font-semibold"]'
+    );
     await expect(modelBadge).toBeInTheDocument();
     await expect(modelBadge?.textContent).toContain("Claude");
-
-    // Verify view toggle buttons are NOT shown for single response
-    // (toggle buttons have h-6 w-6 classes)
-    const toggleButtons = canvasElement.querySelectorAll('button[class*="h-6"][class*="w-6"]');
-    await expect(toggleButtons.length).toBe(0);
 
     // Verify "responses" count badge is NOT shown for single response
     const responsesBadge = canvas.queryByText(/\d+ responses/);
@@ -115,8 +112,10 @@ export const MultipleResponses: Story = {
     const cards = canvasElement.querySelectorAll('[class*="shadow-sm"][class*="rounded-xl"]');
     await expect(cards.length).toBe(2);
 
-    // Verify view toggle buttons are present for multi-response
-    const toggleButtons = canvasElement.querySelectorAll('button[class*="h-6"][class*="w-6"]');
+    // Verify view toggle buttons are present for multi-response (grid + stacked inside toggle group)
+    const toggleGroup = canvasElement.querySelector('[class*="gap-0.5"][class*="rounded-md"]');
+    await expect(toggleGroup).toBeInTheDocument();
+    const toggleButtons = toggleGroup!.querySelectorAll("button");
     await expect(toggleButtons.length).toBe(2);
   },
 };
@@ -147,8 +146,8 @@ export const Streaming: Story = {
     // Verify first model shows partial content
     await expect(canvas.getByText(/I'm thinking about your question/i)).toBeInTheDocument();
 
-    // Verify second model shows "Thinking..." indicator (empty content during streaming)
-    await expect(canvas.getByText("Thinking...")).toBeInTheDocument();
+    // Verify second model shows "Thinking" indicator (empty content during streaming)
+    await expect(canvas.getByText("Thinking")).toBeInTheDocument();
 
     // Verify typing indicator dots are present (the animated dots)
     const typingDots = canvasElement.querySelectorAll('[class*="animate-typing"]');
@@ -272,20 +271,12 @@ export const ViewModeToggle: Story = {
     groupId: "test-group-viewmode",
   },
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
+    // Find the grid/stacked toggle buttons inside the toggle group
+    const toggleGroup = canvasElement.querySelector('[class*="gap-0.5"][class*="rounded-md"]');
+    await expect(toggleGroup).toBeInTheDocument();
+    const toggleButtons = Array.from(toggleGroup!.querySelectorAll("button"));
 
-    // Find the view toggle buttons by their tooltip text
-    // Grid button (side by side) should be active by default
-    const buttons = canvas.getAllByRole("button");
-
-    // Find the grid/stacked toggle buttons (small icon buttons in the header)
-    const toggleButtons = buttons.filter((btn) => {
-      const hasGridIcon = btn.querySelector("svg");
-      const isSmall = btn.className.includes("h-6") || btn.className.includes("w-6");
-      return hasGridIcon && isSmall;
-    });
-
-    // Should have 2 toggle buttons
+    // Should have 2 toggle buttons (grid + stacked)
     await expect(toggleButtons.length).toBe(2);
 
     // In grid mode, cards should have basis-[min(500px,85vw)] class (horizontal layout)
@@ -519,26 +510,7 @@ export const WithReasoningContent: Story = {
 };
 
 /**
- * Helper to create tool call state for stories
- */
-function createToolCallState(
-  id: string,
-  name: string,
-  status: "pending" | "executing" | "completed" | "failed"
-): ToolCallState {
-  return {
-    id,
-    callId: `call_${id}`,
-    name,
-    outputIndex: 0,
-    argumentsBuffer: '{"query": "test query"}',
-    status,
-    parsedArguments: { query: "test query" },
-  };
-}
-
-/**
- * Test: Tool call indicator shows when file_search is executing (no content yet)
+ * Test: Streaming with empty content shows Thinking indicator
  */
 export const WithToolCallSearching: Story = {
   args: {
@@ -547,54 +519,38 @@ export const WithToolCallSearching: Story = {
         model: "anthropic/claude-3-opus",
         content: "",
         isStreaming: true,
+        toolExecutionRounds: [
+          {
+            round: 1,
+            executions: [
+              {
+                id: "tc_1",
+                toolName: "file_search",
+                status: "running",
+                startTime: Date.now(),
+                input: { query: "test query" },
+                inputArtifacts: [],
+                outputArtifacts: [],
+                round: 1,
+              },
+            ],
+          },
+        ],
       },
     ],
     timestamp: new Date(),
     groupId: "test-group-toolcall",
   },
-  decorators: [
-    (Story) => {
-      // Set up streaming store with tool call state
-      const toolCallsMap = new Map<string, ToolCallState>();
-      toolCallsMap.set("tc_1", createToolCallState("tc_1", "file_search", "executing"));
-
-      useStreamingStore.setState({
-        streams: new Map([
-          [
-            "anthropic/claude-3-opus",
-            {
-              model: "anthropic/claude-3-opus",
-              content: "",
-              reasoningContent: "",
-              isStreaming: true,
-              toolCalls: toolCallsMap,
-            },
-          ],
-        ]),
-        isStreaming: true,
-        modeState: { mode: null },
-      });
-
-      return <Story />;
-    },
-  ],
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    // Verify tool call indicator is shown instead of "Thinking..."
-    await expect(canvas.getByText("Searching documents")).toBeInTheDocument();
-
-    // Verify the indicator has the correct role for accessibility
-    const statusElement = canvasElement.querySelector('[role="status"]');
-    await expect(statusElement).toBeInTheDocument();
-
-    // Verify "Thinking..." is NOT shown when tool call is active
-    await expect(canvas.queryByText("Thinking...")).not.toBeInTheDocument();
+    // While streaming with no content, shows Thinking indicator
+    await expect(canvas.getByText("Thinking")).toBeInTheDocument();
   },
 };
 
 /**
- * Test: Tool call indicator shows above content while tool is executing
+ * Test: Tool execution round with content shows both tool block and content
  */
 export const WithToolCallAndContent: Story = {
   args: {
@@ -603,102 +559,103 @@ export const WithToolCallAndContent: Story = {
         model: "anthropic/claude-3-opus",
         content: "Based on my search of your documents, I found the following...",
         isStreaming: true,
+        toolExecutionRounds: [
+          {
+            round: 1,
+            executions: [
+              {
+                id: "tc_2",
+                toolName: "file_search",
+                status: "success",
+                startTime: Date.now() - 1000,
+                endTime: Date.now(),
+                duration: 1000,
+                input: { query: "test query" },
+                inputArtifacts: [],
+                outputArtifacts: [],
+                round: 1,
+              },
+            ],
+          },
+        ],
       },
     ],
     timestamp: new Date(),
     groupId: "test-group-toolcall-content",
   },
-  decorators: [
-    (Story) => {
-      // Set up streaming store with tool call state and content
-      const toolCallsMap = new Map<string, ToolCallState>();
-      toolCallsMap.set("tc_2", createToolCallState("tc_2", "file_search", "executing"));
-
-      useStreamingStore.setState({
-        streams: new Map([
-          [
-            "anthropic/claude-3-opus",
-            {
-              model: "anthropic/claude-3-opus",
-              content: "Based on my search of your documents, I found the following...",
-              reasoningContent: "",
-              isStreaming: true,
-              toolCalls: toolCallsMap,
-            },
-          ],
-        ]),
-        isStreaming: true,
-        modeState: { mode: null },
-      });
-
-      return <Story />;
-    },
-  ],
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    // Verify both tool call indicator and content are shown
-    await expect(canvas.getByText("Searching documents")).toBeInTheDocument();
+    // Verify content is shown
     await expect(canvas.getByText(/Based on my search of your documents/i)).toBeInTheDocument();
 
-    // Verify indicator appears above content (has margin-bottom)
-    const indicator = canvasElement.querySelector('[role="status"]');
-    await expect(indicator?.className).toContain("mb-3");
+    // Verify tool execution block is rendered
+    await expect(canvas.getByText("File Search")).toBeInTheDocument();
   },
 };
 
 /**
- * Test: Multiple tool calls shown in indicator
+ * Test: Multiple tool calls shown in execution rounds
  */
 export const WithMultipleToolCalls: Story = {
   args: {
     responses: [
       {
         model: "anthropic/claude-3-opus",
-        content: "",
-        isStreaming: true,
+        content: "Here are the results from my research...",
+        isStreaming: false,
+        toolExecutionRounds: [
+          {
+            round: 1,
+            executions: [
+              {
+                id: "tc_3",
+                toolName: "file_search",
+                status: "success",
+                startTime: Date.now() - 2000,
+                endTime: Date.now() - 1000,
+                duration: 1000,
+                input: { query: "test query" },
+                inputArtifacts: [],
+                outputArtifacts: [],
+                round: 1,
+              },
+              {
+                id: "tc_4",
+                toolName: "web_search",
+                status: "success",
+                startTime: Date.now() - 1000,
+                endTime: Date.now(),
+                duration: 1000,
+                input: { query: "web query" },
+                inputArtifacts: [],
+                outputArtifacts: [],
+                round: 1,
+              },
+            ],
+          },
+        ],
       },
     ],
     timestamp: new Date(),
     groupId: "test-group-multi-toolcall",
   },
-  decorators: [
-    (Story) => {
-      // Set up streaming store with multiple tool calls
-      const toolCallsMap = new Map<string, ToolCallState>();
-      toolCallsMap.set("tc_3", createToolCallState("tc_3", "file_search", "executing"));
-      toolCallsMap.set("tc_4", createToolCallState("tc_4", "web_search", "pending"));
-
-      useStreamingStore.setState({
-        streams: new Map([
-          [
-            "anthropic/claude-3-opus",
-            {
-              model: "anthropic/claude-3-opus",
-              content: "",
-              reasoningContent: "",
-              isStreaming: true,
-              toolCalls: toolCallsMap,
-            },
-          ],
-        ]),
-        isStreaming: true,
-        modeState: { mode: null },
-      });
-
-      return <Story />;
-    },
-  ],
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    // Verify both tool calls are shown
-    await expect(canvas.getByText("Searching documents")).toBeInTheDocument();
-    await expect(canvas.getByText("Searching web")).toBeInTheDocument();
+    // Verify content is shown
+    await expect(canvas.getByText(/Here are the results/i)).toBeInTheDocument();
 
-    // Verify summary shows running/queued counts
-    await expect(canvas.getByText(/1 running/i)).toBeInTheDocument();
-    await expect(canvas.getByText(/1 queued/i)).toBeInTheDocument();
+    // Verify tool execution summary bar shows "2 tools" (collapsed by default when not streaming)
+    await expect(canvas.getByText(/2 tools/)).toBeInTheDocument();
+
+    // Click the summary bar to expand and show individual tool names
+    const summaryBar = canvas.getByText(/2 tools/);
+    await userEvent.click(summaryBar);
+
+    // Verify both tool names are now visible in the expanded timeline
+    await expect(canvas.getByText("File Search")).toBeInTheDocument();
+    await expect(canvas.getByText("Web Search")).toBeInTheDocument();
   },
 };
 
@@ -721,7 +678,6 @@ export const WithHideCallback: Story = {
     ],
     timestamp: new Date(),
     groupId: "test-group-hide",
-    onFeedback: fn(),
     onSelectBest: fn(),
     onRegenerate: fn(),
     onHide: fn(),

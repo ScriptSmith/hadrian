@@ -8,6 +8,8 @@ import {
   Eye,
   EyeOff,
   GitFork,
+  MessageSquare,
+  MessageSquarePlus,
   Loader2,
   MoreHorizontal,
   Pencil,
@@ -36,11 +38,13 @@ import { QuoteSelectionPopover } from "@/components/QuoteSelectionPopover";
 import { ToolExecutionBlock } from "@/components/ToolExecution";
 import type { Artifact as ArtifactType, DisplaySelectionData } from "@/components/chat-types";
 import { useDebugInfo } from "@/stores/debugStore";
+import { ContentRound } from "./ContentRound";
 
 import { Avatar, AvatarFallback } from "@/components/Avatar/Avatar";
 import { Button } from "@/components/Button/Button";
 import type {
   Artifact,
+  CompletedRound,
   HistoryMode,
   MessageModeMetadata,
   MessageUsage,
@@ -56,11 +60,6 @@ import {
   ResponseActions,
   type ResponseActionConfig as ActionConfig,
 } from "@/components/ResponseActions/ResponseActions";
-import {
-  ToolCallIndicator,
-  type ToolCall,
-  type ToolCallType,
-} from "@/components/ToolCallIndicator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/Tooltip/Tooltip";
 import { UsageDisplay } from "@/components/UsageDisplay/UsageDisplay";
 import {
@@ -71,55 +70,25 @@ import {
   DropdownSeparator,
 } from "@/components/Dropdown/Dropdown";
 import { Textarea } from "@/components/Textarea/Textarea";
-import { useViewMode, useExpandedModel, useChatUIStore, useIsEditing } from "@/stores/chatUIStore";
+import {
+  useViewMode,
+  useExpandedModel,
+  useChatUIStore,
+  useIsEditing,
+  useCompactMode,
+} from "@/stores/chatUIStore";
 import type { PlaybackState } from "@/hooks/useAudioPlayback";
 import { useTTSForResponse } from "@/hooks/useTTSManager";
 import {
-  usePendingToolCalls,
   useCitations,
   useArtifacts,
   useToolExecutionRounds,
   useIsStreaming,
-  type ToolCallState,
+  useHasActiveToolCalls,
 } from "@/stores/streamingStore";
 import { cn } from "@/utils/cn";
 import { getModelDisplayName } from "@/utils/modelNames";
 import { getModelStyle } from "@/utils/providers";
-
-/**
- * Convert tool name to ToolCallType for UI display
- */
-function mapToolNameToType(name: string): ToolCallType {
-  switch (name) {
-    case "file_search":
-      return "file_search";
-    case "web_search":
-      return "web_search";
-    case "code_interpreter":
-      return "code_interpreter";
-    case "js_code_interpreter":
-      return "js_code_interpreter";
-    case "sql_query":
-      return "sql_query";
-    case "chart_render":
-      return "chart_render";
-    default:
-      return "function";
-  }
-}
-
-/**
- * Convert ToolCallState from streaming store to ToolCall for indicator display
- */
-function convertToolCallStateToToolCall(state: ToolCallState): ToolCall {
-  return {
-    id: state.id,
-    type: mapToolNameToType(state.name),
-    name: state.name,
-    status: state.status,
-    error: state.error,
-  };
-}
 
 /**
  * MultiModelResponse - Renders Multiple Model Responses with Layout Options
@@ -189,8 +158,10 @@ interface ModelResponse {
    */
   label?: string;
   content: string;
-  /** Reasoning content (extended thinking) */
+  /** Reasoning content for current/last round (extended thinking) */
   reasoningContent?: string;
+  /** Completed rounds bundling reasoning, content, and tool execution (multi-round tool execution) */
+  completedRounds?: CompletedRound[];
   isStreaming: boolean;
   error?: string;
   usage?: MessageUsage;
@@ -241,12 +212,116 @@ interface MultiModelResponseProps {
   historyMode?: HistoryMode;
 }
 
-function TypingIndicator() {
+/**
+ * Streaming phase for a model response.
+ * - "idle": not streaming or content is actively flowing
+ * - "thinking": waiting for network, model reasoning, or content stalled
+ * - "processing": tool calls are executing
+ */
+type StreamingPhase = "idle" | "thinking" | "processing";
+
+/** Detect when streaming content has stalled (no new tokens for a threshold period). */
+function useContentStalled(content: string, isStreaming: boolean, thresholdMs = 1500): boolean {
+  const [stalled, setStalled] = useState(false);
+
+  useEffect(() => {
+    if (!isStreaming || !content) {
+      setStalled(false);
+      return;
+    }
+    setStalled(false);
+    const timer = setTimeout(() => setStalled(true), thresholdMs);
+    return () => clearTimeout(timer);
+  }, [content, isStreaming, thresholdMs]);
+
+  return stalled;
+}
+
+/**
+ * Compute the streaming phase for a model response. Centralises all status
+ * logic so the rendering layer has a single value to check.
+ */
+function useStreamingPhase(
+  response: {
+    isStreaming: boolean;
+    content: string;
+    reasoningContent?: string;
+    completedRounds?: CompletedRound[];
+  },
+  hasActiveTools: boolean,
+  compactMode: boolean
+): StreamingPhase {
+  const isStalled = useContentStalled(response.content, response.isStreaming);
+
+  if (!response.isStreaming) return "idle";
+
+  const hasContent = !!response.content?.trim();
+  const hasReasoning = !!response.reasoningContent;
+  const rounds = response.completedRounds;
+  const hasRounds = !!rounds?.length;
+
+  // No output at all yet — waiting for first token
+  if (!hasContent && !hasReasoning && !hasRounds) {
+    return "thinking";
+  }
+
+  // Multi-round: check whether the current (in-flight) round has content yet
+  if (hasRounds) {
+    const currentReasoning =
+      hasReasoning && !rounds!.some((r) => r.reasoning === response.reasoningContent)
+        ? response.reasoningContent
+        : null;
+    const currentContent = hasContent ? response.content : null;
+
+    // Between rounds — no new content flowing
+    if (!currentReasoning && !currentContent) {
+      return hasActiveTools ? "processing" : "thinking";
+    }
+
+    // Current round content stalled
+    if (currentContent && isStalled) {
+      return hasActiveTools ? "processing" : "thinking";
+    }
+
+    // Compact mode hides reasoning — show thinking when only reasoning is flowing
+    if (compactMode && currentReasoning && !currentContent) {
+      return "thinking";
+    }
+
+    return "idle";
+  }
+
+  // Single-round: reasoning streaming but no content yet
+  // (non-compact shows ReasoningSection which has its own indicator)
+  if (hasReasoning && !hasContent) {
+    return compactMode ? "thinking" : "idle";
+  }
+
+  // Content stalled
+  if (isStalled) {
+    return hasActiveTools ? "processing" : "thinking";
+  }
+
+  return "idle";
+}
+
+const PHASE_LABEL: Record<StreamingPhase, string> = {
+  idle: "",
+  thinking: "Thinking",
+  processing: "Processing",
+};
+
+/** Animated dots + label shown when the model is thinking or processing. */
+function StreamingStatusIndicator({ phase }: { phase: StreamingPhase }) {
+  if (phase === "idle") return null;
   return (
-    <div className="flex items-center gap-1.5 py-1">
-      <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot" />
-      <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot-delay-1" />
-      <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot-delay-2" />
+    <div className="flex items-baseline gap-1.5 pl-3 border-l-2 border-transparent text-muted-foreground">
+      <span className="text-sm">{PHASE_LABEL[phase]}</span>
+      <div className="flex items-baseline gap-1 py-1">
+        <span className="h-1 w-1 rounded-full bg-muted-foreground/60 animate-typing-dot" />
+        <span className="h-1 w-1 rounded-full bg-muted-foreground/60 animate-typing-dot-delay-1" />
+        <span className="h-1 w-1 rounded-full bg-muted-foreground/60 animate-typing-dot-delay-2" />
+      </div>
     </div>
   );
 }
@@ -471,6 +546,9 @@ const ModelResponseCard = memo(function ModelResponseCard({
   const style = getModelStyle(model);
   const isComplete = !response.isStreaming && response.content && !response.error;
   const isAnyStreaming = useIsStreaming();
+  const compactMode = useCompactMode();
+  const hasActiveTools = useHasActiveToolCalls(model);
+  const streamingPhase = useStreamingPhase(response, hasActiveTools, compactMode);
 
   // State for artifact modal
   const [selectedArtifact, setSelectedArtifact] = useState<ArtifactType | null>(null);
@@ -587,14 +665,6 @@ const ModelResponseCard = memo(function ModelResponseCard({
     stop: handleStopSpeaking,
   } = useTTSForResponse(response.content, groupId, instanceId);
 
-  // Get pending tool calls for this model (for client-side RAG indicator)
-  const pendingToolCallStates = usePendingToolCalls(model);
-  const toolCalls = useMemo(
-    () => pendingToolCallStates.map(convertToolCallStateToToolCall),
-    [pendingToolCallStates]
-  );
-  const hasActiveToolCalls = toolCalls.length > 0;
-
   // Get citations from streaming store (for active/recent streams) or from response props
   const streamingCitations = useCitations(model);
   const citations = useMemo(() => {
@@ -617,13 +687,6 @@ const ModelResponseCard = memo(function ModelResponseCard({
   }, [streamingArtifacts, response.artifacts]);
   const hasArtifacts = artifacts.length > 0;
 
-  // Extract display selection from artifacts (if model called display_artifacts)
-  const displaySelection = useMemo((): DisplaySelectionData | null => {
-    const selectionArtifact = artifacts.find((a) => a.type === "display_selection");
-    if (!selectionArtifact) return null;
-    return selectionArtifact.data as DisplaySelectionData;
-  }, [artifacts]);
-
   // Get tool execution rounds from streaming store (for active/recent streams) or from response props
   const streamingToolExecutionRounds = useToolExecutionRounds(model);
   const toolExecutionRounds = useMemo(() => {
@@ -634,6 +697,52 @@ const ModelResponseCard = memo(function ModelResponseCard({
     return response.toolExecutionRounds ?? [];
   }, [streamingToolExecutionRounds, response.toolExecutionRounds]);
   const hasToolExecutionRounds = toolExecutionRounds.length > 0;
+
+  // All output artifacts across all rounds (for resolving display_artifacts selections)
+  const allOutputArtifacts = useMemo(() => {
+    const result: ArtifactType[] = [];
+    // Check completedRounds first (unified source for multi-round)
+    const rounds = response.completedRounds ?? [];
+    for (const round of rounds) {
+      if (round.toolExecution) {
+        for (const execution of round.toolExecution.executions) {
+          for (const a of execution.outputArtifacts) {
+            if (a.type !== "display_selection") result.push(a);
+          }
+        }
+      }
+    }
+    // Also check standalone toolExecutionRounds (single-round path)
+    for (const round of toolExecutionRounds) {
+      for (const execution of round.executions) {
+        for (const a of execution.outputArtifacts) {
+          if (a.type !== "display_selection") result.push(a);
+        }
+      }
+    }
+    return result;
+  }, [response.completedRounds, toolExecutionRounds]);
+
+  // Extract display selection for a specific tool execution round
+  const getDisplaySelectionForRound = useCallback(
+    (round: ToolExecutionRound): DisplaySelectionData | null => {
+      for (const execution of round.executions) {
+        if (execution.toolName === "display_artifacts") {
+          const sel = execution.outputArtifacts.find((a) => a.type === "display_selection");
+          if (sel) return sel.data as DisplaySelectionData;
+        }
+      }
+      return null;
+    },
+    []
+  );
+
+  // Global display selection (for single-round fallback)
+  const displaySelection = useMemo((): DisplaySelectionData | null => {
+    const selectionArtifact = artifacts.find((a) => a.type === "display_selection");
+    if (!selectionArtifact) return null;
+    return selectionArtifact.data as DisplaySelectionData;
+  }, [artifacts]);
 
   // Measure header width to determine if we should collapse controls
   const headerRef = useRef<HTMLDivElement>(null);
@@ -790,79 +899,145 @@ const ModelResponseCard = memo(function ModelResponseCard({
             <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
             <span className="text-sm leading-relaxed">{response.error}</span>
           </div>
-        ) : response.isStreaming && !response.content && !response.reasoningContent ? (
-          // Show tool call indicator or typing indicator during initial streaming
-          hasActiveToolCalls ? (
-            <ToolCallIndicator toolCalls={toolCalls} />
-          ) : (
-            <div className="flex items-center gap-3 text-muted-foreground">
-              <TypingIndicator />
-              <span className="text-sm">Thinking...</span>
+        ) : isEditing ? (
+          <div className="flex flex-col gap-3">
+            <Textarea
+              ref={textareaRef}
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+              onKeyDown={handleEditKeyDown}
+              className="min-h-[200px] resize-y font-mono text-sm"
+              placeholder="Edit response..."
+            />
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">
+                Ctrl+Enter to save · Escape to cancel
+              </span>
+              <div className="flex gap-2">
+                <Button variant="ghost" size="sm" onClick={handleCancelEdit}>
+                  <X className="h-3 w-3 mr-1" />
+                  Cancel
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleSaveEditClick}
+                  disabled={!editContent.trim() || editContent === response.content}
+                >
+                  Save
+                </Button>
+              </div>
             </div>
-          )
+          </div>
         ) : (
           <>
-            {/* Tool call indicator (shown above content when tools are executing) */}
-            {hasActiveToolCalls && <ToolCallIndicator toolCalls={toolCalls} className="mb-3" />}
-            {/* Reasoning section (extended thinking) */}
-            {(response.reasoningContent || response.usage?.reasoningContent) && (
-              <ReasoningSection
-                content={response.reasoningContent || response.usage?.reasoningContent || ""}
-                isStreaming={response.isStreaming && !response.content}
-                tokenCount={response.usage?.reasoningTokens}
-              />
-            )}
-            {/* Main response content */}
-            {isEditing ? (
-              <div className="flex flex-col gap-3">
-                <Textarea
-                  ref={textareaRef}
-                  value={editContent}
-                  onChange={(e) => setEditContent(e.target.value)}
-                  onKeyDown={handleEditKeyDown}
-                  className="min-h-[200px] resize-y font-mono text-sm"
-                  placeholder="Edit response..."
-                />
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">
-                    Ctrl+Enter to save · Escape to cancel
-                  </span>
-                  <div className="flex gap-2">
-                    <Button variant="ghost" size="sm" onClick={handleCancelEdit}>
-                      <X className="h-3 w-3 mr-1" />
-                      Cancel
-                    </Button>
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      onClick={handleSaveEditClick}
-                      disabled={!editContent.trim() || editContent === response.content}
-                    >
-                      Save
-                    </Button>
+            {/* Content: rounds or single-round reasoning + content */}
+            {(() => {
+              const rounds = response.completedRounds;
+              if (rounds && rounds.length > 0) {
+                // Multi-round: render each completed round + in-flight round
+                const currentReasoning =
+                  response.reasoningContent &&
+                  !rounds.some((r) => r.reasoning === response.reasoningContent)
+                    ? response.reasoningContent
+                    : null;
+                const currentContent =
+                  response.isStreaming && response.content?.trim() ? response.content : null;
+                return (
+                  <div className="space-y-3">
+                    {rounds.map((round, i) => (
+                      <ContentRound
+                        key={i}
+                        reasoning={round.reasoning}
+                        content={round.content}
+                        toolExecutionRound={round.toolExecution}
+                        isToolsStreaming={
+                          response.isStreaming &&
+                          i === rounds.length - 1 &&
+                          !!round.toolExecution?.executions.some(
+                            (e) => e.status === "pending" || e.status === "running"
+                          )
+                        }
+                        onArtifactClick={handleArtifactClick}
+                        displaySelection={
+                          round.toolExecution
+                            ? getDisplaySelectionForRound(round.toolExecution)
+                            : null
+                        }
+                        allOutputArtifacts={allOutputArtifacts}
+                      />
+                    ))}
+                    {(currentReasoning || currentContent) && (
+                      <ContentRound
+                        reasoning={currentReasoning}
+                        content={currentContent}
+                        isStreaming={response.isStreaming}
+                        isReasoningStreaming={response.isStreaming && !currentContent}
+                      />
+                    )}
+                    <StreamingStatusIndicator phase={streamingPhase} />
                   </div>
-                </div>
-              </div>
-            ) : (
-              <StreamingMarkdown content={response.content} isStreaming={response.isStreaming} />
+                );
+              }
+              // Single-round: reasoning then content
+              const singleReasoning = response.reasoningContent || response.usage?.reasoningContent;
+              if (compactMode) {
+                return (
+                  <>
+                    {response.content && (
+                      <StreamingMarkdown
+                        content={response.content}
+                        isStreaming={response.isStreaming}
+                      />
+                    )}
+                  </>
+                );
+              }
+              return (
+                <>
+                  {singleReasoning && (
+                    <ReasoningSection
+                      content={singleReasoning}
+                      isStreaming={response.isStreaming && !response.content}
+                      tokenCount={response.usage?.reasoningTokens}
+                    />
+                  )}
+                  {response.content && (
+                    <StreamingMarkdown
+                      content={response.content}
+                      isStreaming={response.isStreaming}
+                    />
+                  )}
+                </>
+              );
+            })()}
+            {/* Streaming status indicator (outside multi-round div for single-round paths) */}
+            {!response.completedRounds?.length && (
+              <StreamingStatusIndicator phase={streamingPhase} />
             )}
             {/* Citations from file_search/web_search */}
             {hasCitations && (
               <CitationList citations={citations} className="mt-4 pt-4 border-t" compact={false} />
             )}
-            {/* Tool execution timeline with progressive disclosure, or fallback to flat artifact list */}
-            {hasToolExecutionRounds ? (
-              <div className="mt-4 pt-4 border-t">
-                <ToolExecutionBlock
-                  rounds={toolExecutionRounds}
-                  isStreaming={response.isStreaming}
-                  onArtifactClick={handleArtifactClick}
-                  displaySelection={displaySelection}
-                />
-              </div>
-            ) : (
-              hasArtifacts && <ArtifactList artifacts={artifacts} className="mt-4 pt-4 border-t" />
-            )}
+            {/* Tool execution / artifact display */}
+            {compactMode
+              ? null
+              : hasToolExecutionRounds
+                ? // Multi-round with completedRounds: per-round tool execution + artifacts rendered above.
+                  // Only show ToolExecutionBlock for single-round fallback (no completedRounds).
+                  !response.completedRounds && (
+                    <div className="mt-4 pt-4 border-t">
+                      <ToolExecutionBlock
+                        rounds={toolExecutionRounds}
+                        isStreaming={response.isStreaming}
+                        onArtifactClick={handleArtifactClick}
+                        displaySelection={displaySelection}
+                      />
+                    </div>
+                  )
+                : hasArtifacts && (
+                    <ArtifactList artifacts={artifacts} className="mt-4 pt-4 border-t" />
+                  )}
           </>
         )}
       </div>
@@ -908,7 +1083,8 @@ function MultiModelResponseComponent({
   // Use global UI state from store
   const viewMode = useViewMode();
   const expandedModel = useExpandedModel();
-  const { setViewMode, setExpandedModel } = useChatUIStore();
+  const compactMode = useCompactMode();
+  const { setViewMode, setExpandedModel, toggleCompactMode } = useChatUIStore();
 
   const isMultiResponse = responses.length > 1;
   const showViewToggle = isMultiResponse;
@@ -1137,6 +1313,36 @@ function MultiModelResponseComponent({
             </Tooltip>
           </div>
         )}
+        <div className="flex items-center gap-0.5 rounded-md border bg-muted/50 p-0.5">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={compactMode ? "secondary" : "ghost"}
+                size="sm"
+                className="h-6 w-6 p-0"
+                onClick={() => !compactMode && toggleCompactMode()}
+                aria-label="Compact view"
+              >
+                <MessageSquare className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Compact view</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={!compactMode ? "secondary" : "ghost"}
+                size="sm"
+                className="h-6 w-6 p-0"
+                onClick={() => compactMode && toggleCompactMode()}
+                aria-label="Show reasoning & tools"
+              >
+                <MessageSquarePlus className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Show reasoning & tools</TooltipContent>
+          </Tooltip>
+        </div>
         <div className="h-px flex-1 bg-border" />
       </div>
 
@@ -1312,6 +1518,14 @@ function areMultiModelResponsePropsEqual(
     if (prevR.label !== nextR.label) return false;
     if (prevR.content !== nextR.content) return false;
     if (prevR.reasoningContent !== nextR.reasoningContent) return false;
+    if ((prevR.completedRounds?.length ?? 0) !== (nextR.completedRounds?.length ?? 0)) return false;
+    // Check if tool executions changed within completed rounds
+    if (prevR.completedRounds && nextR.completedRounds) {
+      for (let j = 0; j < prevR.completedRounds.length; j++) {
+        if (!!prevR.completedRounds[j].toolExecution !== !!nextR.completedRounds[j].toolExecution)
+          return false;
+      }
+    }
     if (prevR.isStreaming !== nextR.isStreaming) return false;
     if (prevR.error !== nextR.error) return false;
     if (prevR.usage?.totalTokens !== nextR.usage?.totalTokens) return false;

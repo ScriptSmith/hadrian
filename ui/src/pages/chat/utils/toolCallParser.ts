@@ -28,10 +28,27 @@
  * ```
  */
 
-import type { ToolCall, ToolCallType, ToolCallStatus } from "@/components/ToolCallIndicator";
+/** Types of tool calls that can be displayed */
+export type ToolCallType =
+  | "file_search"
+  | "web_search"
+  | "code_interpreter"
+  | "js_code_interpreter"
+  | "sql_query"
+  | "chart_render"
+  | "function";
 
-// Re-export for convenience
-export type { ToolCall, ToolCallType, ToolCallStatus };
+/** Status of a tool call execution */
+export type ToolCallStatus = "pending" | "executing" | "completed" | "failed";
+
+/** Represents a single tool call being executed */
+export interface ToolCall {
+  id: string;
+  type: ToolCallType;
+  name?: string;
+  status: ToolCallStatus;
+  error?: string;
+}
 
 /**
  * SSE event types emitted by the backend for function calls

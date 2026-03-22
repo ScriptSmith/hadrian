@@ -5,6 +5,7 @@ import type {
   Artifact,
   ChatMessage,
   Citation,
+  CompletedRound,
   Conversation,
   HistoryMode,
   MessageModeMetadata,
@@ -100,6 +101,7 @@ interface ConversationActions {
       citations?: Citation[];
       artifacts?: Artifact[];
       toolExecutionRounds?: ToolExecutionRound[];
+      completedRounds?: CompletedRound[];
       debugMessageId?: string;
     }>
   ) => void;
@@ -202,6 +204,7 @@ export const useConversationStore = create<ConversationStore>((set) => ({
           citations: m.citations,
           artifacts: m.artifacts,
           toolExecutionRounds: m.toolExecutionRounds,
+          completedRounds: m.completedRounds,
           debugMessageId: m.debugMessageId,
         })),
       ],

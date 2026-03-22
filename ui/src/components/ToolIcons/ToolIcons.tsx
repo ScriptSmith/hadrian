@@ -1,7 +1,7 @@
 /**
  * ToolIcons - Custom icons for tool types
  *
- * These icons are used across ToolsMenu, ToolCallIndicator, ExecutionSummaryBar,
+ * These icons are used across ToolsMenu, ExecutionSummaryBar,
  * and ArtifactThumbnail for consistent tool identification.
  */
 
@@ -227,4 +227,24 @@ export const TOOL_SHORT_NAMES: Record<string, string> = {
 /** Get short display name for a tool */
 export function getToolShortName(toolId: string): string {
   return TOOL_SHORT_NAMES[toolId] || toolId;
+}
+
+/** Tool status labels for in-progress display */
+const TOOL_STATUS_LABELS: Record<string, string> = {
+  file_search: "Searching documents",
+  code_interpreter: "Running Python",
+  js_code_interpreter: "Running JavaScript",
+  sql_query: "Running SQL",
+  chart_render: "Rendering chart",
+  web_search: "Searching web",
+  web_fetch: "Fetching URL",
+  wikipedia: "Searching Wikipedia",
+  wikidata: "Querying Wikidata",
+  sub_agent: "Running agent",
+  mcp: "Calling tool",
+};
+
+/** Get human-readable status label for a running tool */
+export function getToolStatusLabel(toolId: string, toolName?: string): string {
+  return TOOL_STATUS_LABELS[toolId] || (toolName ? `Calling ${toolName}` : "Calling function");
 }

@@ -9,6 +9,7 @@ import {
 } from "@/stores/conversationStore";
 import { useDebugStore } from "@/stores/debugStore";
 import type {
+  CompletedRound,
   ConversationMode,
   ModeConfig,
   MessageModeMetadata,
@@ -39,6 +40,7 @@ import {
   createMCPToolName,
   type ToolExecutorContext,
 } from "./utils/toolExecutors";
+import { getToolStatusLabel } from "@/components/ToolIcons";
 import { useMCPStore } from "@/stores/mcpStore";
 import {
   sendChainedMode,
@@ -202,8 +204,12 @@ const MAX_TOOL_ITERATIONS = 5;
 /** Result from streaming a response, including any tool calls */
 interface StreamResponseResult {
   content: string;
+  /** Whether any output_text deltas were received (vs reasoning-only fallback) */
+  hasOutputText: boolean;
   usage?: MessageUsage;
   reasoningContent?: string;
+  /** Per-round reasoning, content, and tool execution for multi-round tool execution */
+  completedRounds?: CompletedRound[];
   /** Tool calls detected during streaming (only when clientSideToolExecution is enabled) */
   toolCalls?: ParsedToolCall[];
   /** Tool execution timeline for progressive disclosure UI */
@@ -554,9 +560,10 @@ export function useChat({
             name: "display_artifacts",
             description:
               "After executing tools that produce outputs (code, charts, tables, images), " +
-              "call this to select which artifacts to display prominently to the user. " +
+              "call this to select which artifacts to display prominently to the user inline at this point in the conversation. " +
               "Artifacts not selected will be available in a collapsed 'more outputs' section. " +
-              "Always call this after your tool executions complete to curate the user's view. " +
+              "Call this each time you have outputs to show rather than waiting until the end — " +
+              "artifacts appear where you call this function, so call it right after the relevant tools complete. " +
               "Choose the most relevant and interesting outputs - typically final results rather than intermediate steps.",
             parameters: {
               type: "object",
@@ -800,6 +807,7 @@ export function useChat({
         let usage: MessageUsage | undefined;
         // Fallback: extract tool calls from response.completed if not captured during streaming
         let completedToolCalls: ParsedToolCall[] = [];
+        let hasOutputText = false;
         // Capture response output for debugging
         let responseOutput: unknown[] | undefined;
 
@@ -856,6 +864,7 @@ export function useChat({
 
                 // Handle different Responses API event types
                 if (event.type === "response.output_text.delta" && event.delta) {
+                  hasOutputText = true;
                   content += event.delta;
                   streamingStore.appendContent(storeKey, event.delta);
                 } else if (
@@ -980,10 +989,11 @@ export function useChat({
                   const outputText =
                     event.response.output_text ||
                     event.response.output
-                      ?.flatMap((item) =>
-                        item.content
-                          ?.filter((c) => c.type === "output_text")
-                          .map((c) => c.text || "")
+                      ?.flatMap(
+                        (item) =>
+                          item.content
+                            ?.filter((c) => c.type === "output_text")
+                            .map((c) => c.text || "") ?? []
                       )
                       .join("\n\n---\n\n");
 
@@ -1129,6 +1139,7 @@ export function useChat({
 
         return {
           content,
+          hasOutputText,
           usage,
           reasoningContent: reasoningContent || undefined,
           toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
@@ -1271,9 +1282,9 @@ export function useChat({
       }
 
       let currentInputItems = [...initialInputItems];
-      let accumulatedContent = "";
       let accumulatedUsage: MessageUsage | undefined;
       let lastReasoningContent: string | undefined;
+      const allCompletedRounds: CompletedRound[] = [];
       let iterations = 0;
 
       // Track execution rounds locally (also mirrored in store for real-time UI)
@@ -1311,9 +1322,14 @@ export function useChat({
           return iterations === 1
             ? null
             : {
-                content: accumulatedContent,
+                content: allCompletedRounds
+                  .map((r) => r.content)
+                  .filter(Boolean)
+                  .join("\n\n---\n\n"),
+                hasOutputText: true,
                 usage: accumulatedUsage,
                 reasoningContent: lastReasoningContent,
+                completedRounds: allCompletedRounds.length > 0 ? allCompletedRounds : undefined,
                 toolExecutionRounds: executionRounds.length > 0 ? executionRounds : undefined,
               };
         }
@@ -1328,17 +1344,16 @@ export function useChat({
           }
         }
 
-        // Accumulate content across rounds with separator.
-        // Skip reasoning-only rounds (where content was set from reasoning fallback
-        // rather than actual output text — e.g., rounds that only call display_artifacts).
-        const isActualOutput = result.content && result.content !== result.reasoningContent;
-        if (isActualOutput) {
-          if (accumulatedContent) {
-            accumulatedContent += "\n\n---\n\n" + result.content;
-          } else {
-            accumulatedContent = result.content;
-          }
-        }
+        // Track per-round data for interleaved reasoning/content display.
+        // Only count content as meaningful if it has non-whitespace text —
+        // models sometimes emit trivial whitespace before tool calls.
+        const hasNonTrivialContent = result.hasOutputText && !!result.content?.trim();
+        const roundData: CompletedRound = {};
+        if (result.reasoningContent) roundData.reasoning = result.reasoningContent;
+        if (hasNonTrivialContent) roundData.content = result.content;
+        allCompletedRounds.push(roundData);
+        // Push to streaming store so the UI can render interleaved rounds during streaming
+        streamingStore.pushCompletedRound(storeKey, roundData);
         lastReasoningContent = result.reasoningContent;
 
         // Accumulate usage (sum tokens across iterations)
@@ -1367,6 +1382,10 @@ export function useChat({
           }
           break;
         }
+
+        // Resume streaming state so the UI shows between-round indicators
+        // (completeStream set isStreaming=false, but we have more rounds coming)
+        streamingStore.resumeStreaming(storeKey);
 
         // Capture tool calls for debug
         if (messageId) {
@@ -1416,6 +1435,7 @@ export function useChat({
           inputArtifacts: [],
           outputArtifacts: [],
           round: roundNumber,
+          statusMessage: getToolStatusLabel(tc.name, tc.name),
         }));
 
         // Add executions to store for real-time UI updates
@@ -1494,6 +1514,13 @@ export function useChat({
         };
         executionRounds.push(round);
 
+        // Attach tool execution to the current completed round
+        if (allCompletedRounds.length > 0) {
+          const lastIdx = allCompletedRounds.length - 1;
+          allCompletedRounds[lastIdx] = { ...allCompletedRounds[lastIdx], toolExecution: round };
+          streamingStore.setCompletedRoundToolExecution(storeKey, round);
+        }
+
         // Build continuation input with tool results
         const toolResultItems = buildToolResultInputItems(result.toolCalls, toolResults);
 
@@ -1550,13 +1577,7 @@ export function useChat({
         // Clear tool calls from streaming store before next iteration
         streamingStore.clearToolCalls(storeKey);
 
-        // Add separator to streaming store so the next round's appendContent
-        // builds on top of the accumulated content with a visual break.
-        // Only add if this round had actual text output (avoid double separators
-        // from rounds that only had tool calls with no text).
-        if (isActualOutput) {
-          streamingStore.appendContent(storeKey, "\n\n---\n\n");
-        }
+        // Content for the next round will stream fresh (pushCompletedRound resets it)
       }
 
       // Complete debug capture successfully
@@ -1564,10 +1585,17 @@ export function useChat({
         debugStore.completeDebugCapture(messageId, model, true);
       }
 
+      const flatContent = allCompletedRounds
+        .map((r) => r.content)
+        .filter(Boolean)
+        .join("\n\n---\n\n");
+
       return {
-        content: accumulatedContent,
+        content: flatContent,
+        hasOutputText: true,
         usage: accumulatedUsage,
         reasoningContent: lastReasoningContent,
+        completedRounds: allCompletedRounds.length > 0 ? allCompletedRounds : undefined,
         toolExecutionRounds: executionRounds.length > 0 ? executionRounds : undefined,
       };
     },
@@ -1711,6 +1739,7 @@ export function useChat({
         citations?: Citation[];
         artifacts?: Artifact[];
         toolExecutionRounds?: ToolExecutionRound[];
+        completedRounds?: CompletedRound[];
         /** Debug message ID for looking up debug info */
         debugMessageId?: string;
       }> = [];
@@ -1740,6 +1769,7 @@ export function useChat({
               citations: stream?.citations,
               artifacts: stream?.artifacts,
               toolExecutionRounds: stream?.toolExecutionRounds,
+              completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
             });
           }
         }
@@ -1758,6 +1788,7 @@ export function useChat({
               citations: stream?.citations,
               artifacts: stream?.artifacts,
               toolExecutionRounds: stream?.toolExecutionRounds,
+              completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
             });
           }
         }
@@ -1778,6 +1809,7 @@ export function useChat({
               citations: stream?.citations,
               artifacts: stream?.artifacts,
               toolExecutionRounds: stream?.toolExecutionRounds,
+              completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
               // Only include debugMessageId for multiple mode (default)
               debugMessageId: conversationMode === "multiple" ? debugMessageId : undefined,
             });
@@ -1792,6 +1824,9 @@ export function useChat({
                 citations: stream?.citations,
                 artifacts: stream?.artifacts,
                 toolExecutionRounds: stream?.toolExecutionRounds,
+                completedRounds: stream?.completedRounds.length
+                  ? stream.completedRounds
+                  : undefined,
                 debugMessageId: conversationMode === "multiple" ? debugMessageId : undefined,
               });
             }
