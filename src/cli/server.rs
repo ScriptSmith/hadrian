@@ -298,18 +298,15 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
 
         // Add OTLP sinks if configured
         #[cfg(feature = "otlp")]
+        use usage_sink::UsageSink as _;
+        #[cfg(feature = "otlp")]
         for otlp_config in &config.observability.usage.otlp {
             if !otlp_config.enabled {
                 continue;
             }
-            let sink_name = otlp_config
-                .name
-                .clone()
-                .or_else(|| otlp_config.endpoint.clone())
-                .unwrap_or_else(|| "otlp".to_string());
             match usage_sink::OtlpSink::new(otlp_config, &config.observability.tracing) {
                 Ok(otlp_sink) => {
-                    tracing::info!(name = sink_name, "Usage logging to OTLP enabled");
+                    tracing::info!(name = otlp_sink.name(), "Usage logging to OTLP enabled");
                     sinks.push(Arc::new(otlp_sink));
                 }
                 Err(e) => {
