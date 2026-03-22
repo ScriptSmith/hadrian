@@ -14,9 +14,16 @@
 //! [observability.usage]
 //! database = true  # Enable database logging (default)
 //!
-//! [observability.usage.otlp]
-//! enabled = true
-//! endpoint = "http://localhost:4317"  # or inherit from tracing.otlp
+//! # Fan out to multiple OTLP endpoints:
+//! [[observability.usage.otlp]]
+//! name = "grafana"
+//! endpoint = "https://otlp-gateway.grafana.net/otlp"
+//! headers = { Authorization = "Basic xxx" }
+//!
+//! [[observability.usage.otlp]]
+//! name = "datadog"
+//! endpoint = "https://otel.datadoghq.com"
+//! headers = { "DD-API-KEY" = "xxx" }
 //! ```
 
 use std::sync::Arc;
@@ -48,7 +55,7 @@ pub trait UsageSink: Send + Sync {
     async fn write_batch(&self, entries: &[UsageLogEntry]) -> Result<usize, UsageSinkError>;
 
     /// Get the sink name for logging/metrics.
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
 }
 
 /// Errors from usage sinks.
@@ -138,7 +145,7 @@ impl UsageSink for DatabaseSink {
         }
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "database"
     }
 }
@@ -160,6 +167,7 @@ impl UsageSink for DatabaseSink {
 /// Requires the `otlp` feature.
 #[cfg(feature = "otlp")]
 pub struct OtlpSink {
+    name: String,
     logger_provider: opentelemetry_sdk::logs::SdkLoggerProvider,
     logger: opentelemetry_sdk::logs::SdkLogger,
 }
@@ -203,7 +211,14 @@ impl OtlpSink {
 
         let logger = provider.logger("hadrian.usage");
 
+        let name = config
+            .name
+            .clone()
+            .or_else(|| config.endpoint.clone())
+            .unwrap_or_else(|| "otlp".to_string());
+
         Ok(Self {
+            name,
             logger_provider: provider,
             logger,
         })
@@ -484,8 +499,8 @@ impl UsageSink for OtlpSink {
         Ok(success_count)
     }
 
-    fn name(&self) -> &'static str {
-        "otlp"
+    fn name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -554,7 +569,7 @@ impl UsageSink for CompositeSink {
         }
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "composite"
     }
 }

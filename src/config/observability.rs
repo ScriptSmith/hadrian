@@ -763,10 +763,23 @@ pub struct UsageConfig {
     #[serde(default = "default_true")]
     pub database: bool,
 
-    /// OTLP exporter for usage data.
-    /// Sends usage records as OTLP log records to any OpenTelemetry-compatible backend.
+    /// OTLP exporters for usage data.
+    /// Sends usage records as OTLP log records to one or more OpenTelemetry-compatible backends.
+    /// Each entry creates an independent exporter, allowing fan-out to multiple destinations.
+    ///
+    /// ```toml
+    /// [[observability.usage.otlp]]
+    /// name = "grafana"
+    /// endpoint = "https://otlp-gateway.grafana.net/otlp"
+    /// headers = { Authorization = "Basic xxx" }
+    ///
+    /// [[observability.usage.otlp]]
+    /// name = "datadog"
+    /// endpoint = "https://otel.datadoghq.com"
+    /// headers = { "DD-API-KEY" = "xxx" }
+    /// ```
     #[serde(default)]
-    pub otlp: Option<UsageOtlpConfig>,
+    pub otlp: Vec<UsageOtlpConfig>,
 
     /// Buffer configuration for batched writes.
     #[serde(default)]
@@ -777,7 +790,7 @@ impl Default for UsageConfig {
     fn default() -> Self {
         Self {
             database: true,
-            otlp: None,
+            otlp: Vec::new(),
             buffer: UsageBufferConfig::default(),
         }
     }
@@ -791,6 +804,11 @@ pub struct UsageOtlpConfig {
     /// Enable OTLP usage export.
     #[serde(default = "default_true")]
     pub enabled: bool,
+
+    /// Human-readable name for this endpoint (used in logs/metrics).
+    /// Defaults to the endpoint URL if not specified.
+    #[serde(default)]
+    pub name: Option<String>,
 
     /// OTLP endpoint URL.
     /// If not specified, uses the tracing OTLP endpoint.
