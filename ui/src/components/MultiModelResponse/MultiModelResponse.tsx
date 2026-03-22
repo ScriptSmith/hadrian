@@ -302,21 +302,21 @@ function useStreamingPhase(
 
 const PHASE_LABEL: Record<StreamingPhase, string> = {
   idle: "",
-  thinking: "Thinking...",
-  processing: "Processing...",
+  thinking: "Thinking",
+  processing: "Processing",
 };
 
 /** Animated dots + label shown when the model is thinking or processing. */
 function StreamingStatusIndicator({ phase }: { phase: StreamingPhase }) {
   if (phase === "idle") return null;
   return (
-    <div className="flex items-center gap-3 text-muted-foreground">
-      <div className="flex items-center gap-1.5 py-1">
-        <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot" />
-        <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot-delay-1" />
-        <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot-delay-2" />
-      </div>
+    <div className="flex items-baseline gap-1.5 pl-3 border-l-2 border-transparent text-muted-foreground">
       <span className="text-sm">{PHASE_LABEL[phase]}</span>
+      <div className="flex items-baseline gap-1 py-1">
+        <span className="h-1 w-1 rounded-full bg-muted-foreground/60 animate-typing-dot" />
+        <span className="h-1 w-1 rounded-full bg-muted-foreground/60 animate-typing-dot-delay-1" />
+        <span className="h-1 w-1 rounded-full bg-muted-foreground/60 animate-typing-dot-delay-2" />
+      </div>
     </div>
   );
 }
