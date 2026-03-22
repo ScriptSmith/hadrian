@@ -212,6 +212,14 @@ interface MultiModelResponseProps {
   historyMode?: HistoryMode;
 }
 
+/**
+ * Streaming phase for a model response.
+ * - "idle": not streaming or content is actively flowing
+ * - "thinking": waiting for network, model reasoning, or content stalled
+ * - "processing": tool calls are executing
+ */
+type StreamingPhase = "idle" | "thinking" | "processing";
+
 /** Detect when streaming content has stalled (no new tokens for a threshold period). */
 function useContentStalled(content: string, isStreaming: boolean, thresholdMs = 1500): boolean {
   const [stalled, setStalled] = useState(false);
@@ -221,7 +229,6 @@ function useContentStalled(content: string, isStreaming: boolean, thresholdMs = 
       setStalled(false);
       return;
     }
-    // Content just changed — reset stall and start timer
     setStalled(false);
     const timer = setTimeout(() => setStalled(true), thresholdMs);
     return () => clearTimeout(timer);
@@ -230,12 +237,86 @@ function useContentStalled(content: string, isStreaming: boolean, thresholdMs = 
   return stalled;
 }
 
-function TypingIndicator() {
+/**
+ * Compute the streaming phase for a model response. Centralises all status
+ * logic so the rendering layer has a single value to check.
+ */
+function useStreamingPhase(
+  response: {
+    isStreaming: boolean;
+    content: string;
+    reasoningContent?: string;
+    completedRounds?: CompletedRound[];
+  },
+  hasActiveTools: boolean,
+  compactMode: boolean
+): StreamingPhase {
+  const isStalled = useContentStalled(response.content, response.isStreaming);
+
+  if (!response.isStreaming) return "idle";
+
+  const hasContent = !!response.content?.trim();
+  const hasReasoning = !!response.reasoningContent;
+  const rounds = response.completedRounds;
+  const hasRounds = !!rounds?.length;
+
+  // No output at all yet — waiting for first token
+  if (!hasContent && !hasReasoning && !hasRounds) {
+    return "thinking";
+  }
+
+  // Multi-round: check whether the current (in-flight) round has content yet
+  if (hasRounds) {
+    const currentReasoning =
+      hasReasoning && !rounds!.some((r) => r.reasoning === response.reasoningContent)
+        ? response.reasoningContent
+        : null;
+    const currentContent = hasContent ? response.content : null;
+
+    // Between rounds — no new content flowing
+    if (!currentReasoning && !currentContent) {
+      return hasActiveTools ? "processing" : "thinking";
+    }
+
+    // Current round content stalled
+    if (currentContent && isStalled) {
+      return hasActiveTools ? "processing" : "thinking";
+    }
+
+    return "idle";
+  }
+
+  // Single-round: reasoning streaming but no content yet
+  // (non-compact shows ReasoningSection which has its own indicator)
+  if (hasReasoning && !hasContent) {
+    return compactMode ? "thinking" : "idle";
+  }
+
+  // Content stalled
+  if (isStalled) {
+    return hasActiveTools ? "processing" : "thinking";
+  }
+
+  return "idle";
+}
+
+const PHASE_LABEL: Record<StreamingPhase, string> = {
+  idle: "",
+  thinking: "Thinking...",
+  processing: "Processing...",
+};
+
+/** Animated dots + label shown when the model is thinking or processing. */
+function StreamingStatusIndicator({ phase }: { phase: StreamingPhase }) {
+  if (phase === "idle") return null;
   return (
-    <div className="flex items-center gap-1.5 py-1">
-      <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot" />
-      <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot-delay-1" />
-      <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot-delay-2" />
+    <div className="flex items-center gap-3 text-muted-foreground">
+      <div className="flex items-center gap-1.5 py-1">
+        <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot" />
+        <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot-delay-1" />
+        <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot-delay-2" />
+      </div>
+      <span className="text-sm">{PHASE_LABEL[phase]}</span>
     </div>
   );
 }
@@ -461,8 +542,8 @@ const ModelResponseCard = memo(function ModelResponseCard({
   const isComplete = !response.isStreaming && response.content && !response.error;
   const isAnyStreaming = useIsStreaming();
   const compactMode = useCompactMode();
-  const isContentStalled = useContentStalled(response.content, response.isStreaming);
   const hasActiveTools = useHasActiveToolCalls(model);
+  const streamingPhase = useStreamingPhase(response, hasActiveTools, compactMode);
 
   // State for artifact modal
   const [selectedArtifact, setSelectedArtifact] = useState<ArtifactType | null>(null);
@@ -813,160 +894,121 @@ const ModelResponseCard = memo(function ModelResponseCard({
             <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
             <span className="text-sm leading-relaxed">{response.error}</span>
           </div>
-        ) : response.isStreaming &&
-          !response.content &&
-          !response.reasoningContent &&
-          !response.completedRounds?.length ? (
-          <div className="flex items-center gap-3 text-muted-foreground">
-            <TypingIndicator />
-            <span className="text-sm">Thinking...</span>
+        ) : isEditing ? (
+          <div className="flex flex-col gap-3">
+            <Textarea
+              ref={textareaRef}
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+              onKeyDown={handleEditKeyDown}
+              className="min-h-[200px] resize-y font-mono text-sm"
+              placeholder="Edit response..."
+            />
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">
+                Ctrl+Enter to save · Escape to cancel
+              </span>
+              <div className="flex gap-2">
+                <Button variant="ghost" size="sm" onClick={handleCancelEdit}>
+                  <X className="h-3 w-3 mr-1" />
+                  Cancel
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleSaveEditClick}
+                  disabled={!editContent.trim() || editContent === response.content}
+                >
+                  Save
+                </Button>
+              </div>
+            </div>
           </div>
         ) : (
           <>
-            {/* Reasoning + content — interleaved per round for multi-round, or single block */}
-            {isEditing ? (
-              <div className="flex flex-col gap-3">
-                <Textarea
-                  ref={textareaRef}
-                  value={editContent}
-                  onChange={(e) => setEditContent(e.target.value)}
-                  onKeyDown={handleEditKeyDown}
-                  className="min-h-[200px] resize-y font-mono text-sm"
-                  placeholder="Edit response..."
-                />
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">
-                    Ctrl+Enter to save · Escape to cancel
-                  </span>
-                  <div className="flex gap-2">
-                    <Button variant="ghost" size="sm" onClick={handleCancelEdit}>
-                      <X className="h-3 w-3 mr-1" />
-                      Cancel
-                    </Button>
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      onClick={handleSaveEditClick}
-                      disabled={!editContent.trim() || editContent === response.content}
-                    >
-                      Save
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              (() => {
-                const rounds = response.completedRounds;
-                if (rounds && rounds.length > 0) {
-                  // Multi-round: render each round using its bundled toolExecution
-                  const currentReasoning =
-                    response.reasoningContent &&
-                    !rounds.some((r) => r.reasoning === response.reasoningContent)
-                      ? response.reasoningContent
-                      : null;
-                  // During streaming, content field holds just the current round's text
-                  // (pushCompletedRound resets it). For committed messages, it's empty/null.
-                  const currentContent =
-                    response.isStreaming && response.content?.trim() ? response.content : null;
-                  return (
-                    <div className="space-y-3">
-                      {rounds.map((round, i) => (
-                        <ContentRound
-                          key={i}
-                          reasoning={round.reasoning}
-                          content={round.content}
-                          toolExecutionRound={round.toolExecution}
-                          isToolsStreaming={
-                            response.isStreaming &&
-                            i === rounds.length - 1 &&
-                            !!round.toolExecution?.executions.some(
-                              (e) => e.status === "pending" || e.status === "running"
-                            )
-                          }
-                          onArtifactClick={handleArtifactClick}
-                          displaySelection={
-                            round.toolExecution
-                              ? getDisplaySelectionForRound(round.toolExecution)
-                              : null
-                          }
-                          allOutputArtifacts={allOutputArtifacts}
-                        />
-                      ))}
-                      {/* Current streaming round (not yet in completedRounds) */}
-                      {(currentReasoning || currentContent) && (
-                        <ContentRound
-                          reasoning={currentReasoning}
-                          content={currentContent}
-                          isStreaming={response.isStreaming}
-                          isReasoningStreaming={response.isStreaming && !currentContent}
-                        />
-                      )}
-                      {/* Between-round indicator: streaming but no new content yet */}
-                      {response.isStreaming &&
-                        !currentReasoning &&
-                        !currentContent &&
-                        (() => {
-                          const lastRound = rounds[rounds.length - 1];
-                          const isProcessing = lastRound?.toolExecution?.executions.some(
-                            (e) => e.status === "pending" || e.status === "running"
-                          );
-                          return (
-                            <div className="flex items-center gap-3 text-muted-foreground">
-                              <TypingIndicator />
-                              <span className="text-sm">
-                                {isProcessing ? "Processing..." : "Thinking..."}
-                              </span>
-                            </div>
-                          );
-                        })()}
-                    </div>
-                  );
-                }
-                // Single-round: reasoning then content
-                const singleReasoning =
-                  response.reasoningContent || response.usage?.reasoningContent;
-                if (compactMode) {
-                  // Compact: show content only, with a "Thinking" indicator while actively streaming reasoning
-                  return (
-                    <>
-                      {singleReasoning && !response.content && response.isStreaming && (
-                        <div className="flex items-center gap-3 text-muted-foreground">
-                          <TypingIndicator />
-                          <span className="text-sm">Thinking...</span>
-                        </div>
-                      )}
-                      {response.content && (
-                        <StreamingMarkdown
-                          content={response.content}
-                          isStreaming={response.isStreaming}
-                        />
-                      )}
-                    </>
-                  );
-                }
+            {/* Content: rounds or single-round reasoning + content */}
+            {(() => {
+              const rounds = response.completedRounds;
+              if (rounds && rounds.length > 0) {
+                // Multi-round: render each completed round + in-flight round
+                const currentReasoning =
+                  response.reasoningContent &&
+                  !rounds.some((r) => r.reasoning === response.reasoningContent)
+                    ? response.reasoningContent
+                    : null;
+                const currentContent =
+                  response.isStreaming && response.content?.trim() ? response.content : null;
                 return (
-                  <>
-                    {singleReasoning && (
-                      <ReasoningSection
-                        content={singleReasoning}
-                        isStreaming={response.isStreaming && !response.content}
-                        tokenCount={response.usage?.reasoningTokens}
+                  <div className="space-y-3">
+                    {rounds.map((round, i) => (
+                      <ContentRound
+                        key={i}
+                        reasoning={round.reasoning}
+                        content={round.content}
+                        toolExecutionRound={round.toolExecution}
+                        isToolsStreaming={
+                          response.isStreaming &&
+                          i === rounds.length - 1 &&
+                          !!round.toolExecution?.executions.some(
+                            (e) => e.status === "pending" || e.status === "running"
+                          )
+                        }
+                        onArtifactClick={handleArtifactClick}
+                        displaySelection={
+                          round.toolExecution
+                            ? getDisplaySelectionForRound(round.toolExecution)
+                            : null
+                        }
+                        allOutputArtifacts={allOutputArtifacts}
+                      />
+                    ))}
+                    {(currentReasoning || currentContent) && (
+                      <ContentRound
+                        reasoning={currentReasoning}
+                        content={currentContent}
+                        isStreaming={response.isStreaming}
+                        isReasoningStreaming={response.isStreaming && !currentContent}
                       />
                     )}
+                    <StreamingStatusIndicator phase={streamingPhase} />
+                  </div>
+                );
+              }
+              // Single-round: reasoning then content
+              const singleReasoning = response.reasoningContent || response.usage?.reasoningContent;
+              if (compactMode) {
+                return (
+                  <>
+                    {response.content && (
+                      <StreamingMarkdown
+                        content={response.content}
+                        isStreaming={response.isStreaming}
+                      />
+                    )}
+                  </>
+                );
+              }
+              return (
+                <>
+                  {singleReasoning && (
+                    <ReasoningSection
+                      content={singleReasoning}
+                      isStreaming={response.isStreaming && !response.content}
+                      tokenCount={response.usage?.reasoningTokens}
+                    />
+                  )}
+                  {response.content && (
                     <StreamingMarkdown
                       content={response.content}
                       isStreaming={response.isStreaming}
                     />
-                  </>
-                );
-              })()
-            )}
-            {/* Stall indicator: prominent status when content stops flowing mid-stream */}
-            {isContentStalled && (
-              <div className="flex items-center gap-3 text-muted-foreground mt-2">
-                <TypingIndicator />
-                <span className="text-sm">{hasActiveTools ? "Processing..." : "Thinking..."}</span>
-              </div>
+                  )}
+                </>
+              );
+            })()}
+            {/* Streaming status indicator (outside multi-round div for single-round paths) */}
+            {!response.completedRounds?.length && (
+              <StreamingStatusIndicator phase={streamingPhase} />
             )}
             {/* Citations from file_search/web_search */}
             {hasCitations && (

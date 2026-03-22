@@ -87,19 +87,8 @@ function ContentRoundComponent({
         </div>
       );
     }
-    // No content — only show an indicator while actively streaming, hide when done
-    const isActive = isReasoningStreaming || isToolsStreaming;
-    if (!isActive) return null;
-    return (
-      <div className="flex items-center gap-3 text-muted-foreground">
-        <div className="flex items-center gap-1.5 py-1">
-          <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot" />
-          <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot-delay-1" />
-          <span className="h-2 w-2 rounded-full bg-muted-foreground/60 animate-typing-dot-delay-2" />
-        </div>
-        <span className="text-sm">{hasReasoning ? "Thinking..." : "Processing..."}</span>
-      </div>
-    );
+    // No content in compact mode — parent manages status indicators
+    return null;
   }
 
   const layoutClass =
