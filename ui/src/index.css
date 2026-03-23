@@ -300,22 +300,6 @@
     animation: bounce 1s infinite;
   }
 
-  /* Blink animation for streaming cursor */
-  @keyframes blink {
-    0%,
-    50% {
-      opacity: 1;
-    }
-    51%,
-    100% {
-      opacity: 0;
-    }
-  }
-
-  .animate-blink {
-    animation: blink 1s step-end infinite;
-  }
-
   /* Bouncy scale entrance */
   @keyframes bounce-in {
     0% {

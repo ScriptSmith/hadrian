@@ -23,6 +23,7 @@ import {
 import { Avatar, AvatarFallback } from "@/components/Avatar/Avatar";
 import { Button } from "@/components/Button/Button";
 import { Markdown } from "@/components/Markdown/Markdown";
+import { StreamingMarkdown } from "@/components/StreamingMarkdown/StreamingMarkdown";
 import { QuoteSelectionPopover } from "@/components/QuoteSelectionPopover";
 import { Textarea } from "@/components/Textarea/Textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/Tooltip/Tooltip";
@@ -324,19 +325,10 @@ function ChatMessageComponent({
               ) : (
                 <Markdown content={message.content} />
               )
+            ) : isStreaming ? (
+              <StreamingMarkdown content={message.content} isStreaming />
             ) : (
-              <>
-                <Markdown content={message.content} />
-                {isStreaming && (
-                  <>
-                    <span
-                      className="inline-block h-4 w-0.5 animate-blink rounded-full bg-primary"
-                      aria-hidden="true"
-                    />
-                    <span className="sr-only">Generating response...</span>
-                  </>
-                )}
-              </>
+              <Markdown content={message.content} />
             )}
           </div>
         </div>
