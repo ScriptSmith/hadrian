@@ -10,6 +10,11 @@ async function bootstrap() {
   if (import.meta.env.VITE_WASM_MODE === "true") {
     const { registerWasmServiceWorker } = await import("./service-worker/register");
     await registerWasmServiceWorker();
+  } else if ("serviceWorker" in navigator) {
+    // Unregister any lingering WASM service workers so they don't intercept
+    // requests when running the normal dev server.
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(registrations.map((r) => r.unregister()));
   }
 
   createRoot(document.getElementById("root")!).render(
