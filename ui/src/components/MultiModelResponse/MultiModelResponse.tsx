@@ -85,6 +85,8 @@ import {
   useToolExecutionRounds,
   useIsStreaming,
   useHasActiveToolCalls,
+  useHasRunningExecution,
+  useRunningExecutionStatusMessage,
 } from "@/stores/streamingStore";
 import { cn } from "@/utils/cn";
 import { getModelDisplayName } from "@/utils/modelNames";
@@ -260,9 +262,9 @@ function useStreamingPhase(
   const rounds = response.completedRounds;
   const hasRounds = !!rounds?.length;
 
-  // No output at all yet — waiting for first token
+  // No output at all yet — waiting for first token (unless tools are executing)
   if (!hasContent && !hasReasoning && !hasRounds) {
-    return "thinking";
+    return hasActiveTools ? "processing" : "thinking";
   }
 
   // Multi-round: check whether the current (in-flight) round has content yet
@@ -312,11 +314,20 @@ const PHASE_LABEL: Record<StreamingPhase, string> = {
 };
 
 /** Animated dots + label shown when the model is thinking or processing. */
-function StreamingStatusIndicator({ phase }: { phase: StreamingPhase }) {
+function StreamingStatusIndicator({
+  phase,
+  toolStatusMessage,
+}: {
+  phase: StreamingPhase;
+  toolStatusMessage?: string;
+}) {
   if (phase === "idle") return null;
+  // Strip trailing dots/ellipsis from tool status messages since we show animated dots
+  const label =
+    (phase === "processing" && toolStatusMessage?.replace(/\.+$/, "")) || PHASE_LABEL[phase];
   return (
     <div className="flex items-baseline gap-1.5 pl-3 border-l-2 border-transparent text-muted-foreground">
-      <span className="text-sm">{PHASE_LABEL[phase]}</span>
+      <span className="text-sm">{label}</span>
       <div className="flex items-baseline gap-1 py-1">
         <span className="h-1 w-1 rounded-full bg-muted-foreground/60 animate-typing-dot" />
         <span className="h-1 w-1 rounded-full bg-muted-foreground/60 animate-typing-dot-delay-1" />
@@ -547,7 +558,14 @@ const ModelResponseCard = memo(function ModelResponseCard({
   const isComplete = !response.isStreaming && response.content && !response.error;
   const isAnyStreaming = useIsStreaming();
   const compactMode = useCompactMode();
-  const hasActiveTools = useHasActiveToolCalls(model);
+  // Only query streaming store for actively-streaming responses — committed
+  // messages must not read the current stream's state (same model key would
+  // leak status from a newer message into older ones).
+  const streamingModelKey = response.isStreaming ? model : "";
+  const hasActiveToolCalls = useHasActiveToolCalls(streamingModelKey);
+  const hasRunningExecution = useHasRunningExecution(streamingModelKey);
+  const hasActiveTools = hasActiveToolCalls || hasRunningExecution;
+  const toolStatusMessage = useRunningExecutionStatusMessage(streamingModelKey);
   const streamingPhase = useStreamingPhase(response, hasActiveTools, compactMode);
 
   // State for artifact modal
@@ -665,35 +683,27 @@ const ModelResponseCard = memo(function ModelResponseCard({
     stop: handleStopSpeaking,
   } = useTTSForResponse(response.content, groupId, instanceId);
 
-  // Get citations from streaming store (for active/recent streams) or from response props
-  const streamingCitations = useCitations(model);
+  // Get citations from streaming store (for active/recent streams) or from response props.
+  // Use streamingModelKey ("" for committed) to avoid leaking state across messages.
+  const streamingCitations = useCitations(streamingModelKey);
   const citations = useMemo(() => {
-    // Use streaming citations if available, otherwise use response citations
-    if (streamingCitations.length > 0) {
-      return streamingCitations;
-    }
+    if (streamingCitations.length > 0) return streamingCitations;
     return response.citations ?? [];
   }, [streamingCitations, response.citations]);
   const hasCitations = citations.length > 0;
 
   // Get artifacts from streaming store (for active/recent streams) or from response props
-  const streamingArtifacts = useArtifacts(model);
+  const streamingArtifacts = useArtifacts(streamingModelKey);
   const artifacts = useMemo(() => {
-    // Use streaming artifacts if available, otherwise use response artifacts
-    if (streamingArtifacts.length > 0) {
-      return streamingArtifacts;
-    }
+    if (streamingArtifacts.length > 0) return streamingArtifacts;
     return response.artifacts ?? [];
   }, [streamingArtifacts, response.artifacts]);
   const hasArtifacts = artifacts.length > 0;
 
   // Get tool execution rounds from streaming store (for active/recent streams) or from response props
-  const streamingToolExecutionRounds = useToolExecutionRounds(model);
+  const streamingToolExecutionRounds = useToolExecutionRounds(streamingModelKey);
   const toolExecutionRounds = useMemo(() => {
-    // Use streaming rounds if available, otherwise use response rounds
-    if (streamingToolExecutionRounds.length > 0) {
-      return streamingToolExecutionRounds;
-    }
+    if (streamingToolExecutionRounds.length > 0) return streamingToolExecutionRounds;
     return response.toolExecutionRounds ?? [];
   }, [streamingToolExecutionRounds, response.toolExecutionRounds]);
   const hasToolExecutionRounds = toolExecutionRounds.length > 0;
@@ -975,7 +985,10 @@ const ModelResponseCard = memo(function ModelResponseCard({
                         isReasoningStreaming={response.isStreaming && !currentContent}
                       />
                     )}
-                    <StreamingStatusIndicator phase={streamingPhase} />
+                    <StreamingStatusIndicator
+                      phase={streamingPhase}
+                      toolStatusMessage={toolStatusMessage}
+                    />
                   </div>
                 );
               }
@@ -1013,7 +1026,10 @@ const ModelResponseCard = memo(function ModelResponseCard({
             })()}
             {/* Streaming status indicator (outside multi-round div for single-round paths) */}
             {!response.completedRounds?.length && (
-              <StreamingStatusIndicator phase={streamingPhase} />
+              <StreamingStatusIndicator
+                phase={streamingPhase}
+                toolStatusMessage={toolStatusMessage}
+              />
             )}
             {/* Citations from file_search/web_search */}
             {hasCitations && (
