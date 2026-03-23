@@ -1920,7 +1920,8 @@ async fn record_fixture(
             if def.provider == "openrouter" {
                 request = request
                     .header("HTTP-Referer", "https://hadriangateway.com")
-                    .header("X-OpenRouter-Title", "Hadrian Gateway");
+                    .header("X-OpenRouter-Title", "Hadrian Gateway")
+                    .header("X-OpenRouter-Categories", "general-chat");
             }
         }
 

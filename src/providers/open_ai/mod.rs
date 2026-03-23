@@ -79,6 +79,9 @@ impl OpenAICompatibleProvider {
             headers
                 .entry("X-OpenRouter-Title".to_string())
                 .or_insert_with(|| "Hadrian Gateway".to_string());
+            headers
+                .entry("X-OpenRouter-Categories".to_string())
+                .or_insert_with(|| "general-chat".to_string());
         }
 
         Self {
