@@ -449,7 +449,7 @@ export const NoModelsSelected: Story = {
 };
 
 /**
- * Test: Multi-model conversation with system prompt indicator
+ * Test: Multi-model conversation
  */
 function MultiModelConversationStory({
   onSendMessage,
@@ -497,7 +497,6 @@ function MultiModelConversationStory({
   useStoreSetup({
     messages: multiModelMessages,
     selectedModels: ["anthropic/claude-4.6-opus", "openai/gpt-5.3", "google/gemini-3.1-pro"],
-    systemPrompt: "You are a helpful coding assistant.",
   });
 
   return (
@@ -531,11 +530,6 @@ export const MultiModelConversation: Story = {
     await expect(tryCatchElements.length).toBeGreaterThan(0);
     await expect(canvas.getByText(/error boundaries/)).toBeInTheDocument();
     await expect(canvas.getByText(/neverthrow/)).toBeInTheDocument();
-
-    // Verify system prompt is active - settings button has text-primary class
-    // (The button turns primary color when system prompt is set)
-    const settingsButton = canvasElement.querySelector('button[class*="text-primary"]');
-    await expect(settingsButton).toBeInTheDocument();
 
     // Verify total usage is displayed (80 + 65 + 75 = 220 tokens)
     await expect(canvas.getByText(/220/)).toBeInTheDocument();
