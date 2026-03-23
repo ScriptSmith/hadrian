@@ -3,6 +3,7 @@ import { createCodePlugin } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import "katex/dist/katex.min.css";
+import "streamdown/styles.css";
 import { memo } from "react";
 
 import { cn } from "@/utils/cn";
@@ -89,12 +90,10 @@ function StreamingMarkdownComponent({ content, isStreaming, className }: Streami
         mode={isStreaming ? "streaming" : "static"}
         isAnimating={isStreaming}
         parseIncompleteMarkdown={isStreaming}
+        animated
       >
         {content}
       </Streamdown>
-      {isStreaming && (
-        <span className="inline-block h-4 w-0.5 animate-blink rounded-full bg-primary" />
-      )}
     </div>
   );
 }
