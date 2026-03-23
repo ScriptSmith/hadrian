@@ -1620,3 +1620,16 @@ export const useHasRunningExecution = (model: string) =>
     if (!stream?.toolExecutionRounds) return false;
     return stream.toolExecutionRounds.some((r) => r.executions.some((e) => e.status === "running"));
   });
+
+/** Get the status message of the currently running execution (if any) */
+export const useRunningExecutionStatusMessage = (model: string) =>
+  useStreamingStore((state) => {
+    const stream = state.streams.get(model);
+    if (!stream?.toolExecutionRounds) return undefined;
+    for (const round of stream.toolExecutionRounds) {
+      for (const exec of round.executions) {
+        if (exec.status === "running" && exec.statusMessage) return exec.statusMessage;
+      }
+    }
+    return undefined;
+  });
