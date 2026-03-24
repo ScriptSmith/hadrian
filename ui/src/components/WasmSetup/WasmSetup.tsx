@@ -14,6 +14,7 @@ import {
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   meProvidersCreateMutation,
+  meProvidersDeleteMutation,
   meProvidersListQueryKey,
   apiV1ModelsQueryKey,
 } from "@/api/generated/@tanstack/react-query.gen";
@@ -32,6 +33,7 @@ import { Input } from "@/components/Input/Input";
 import { FormField } from "@/components/FormField/FormField";
 import { HadrianIcon } from "@/components/HadrianIcon/HadrianIcon";
 import { startOpenRouterOAuth, isInIframe } from "./openrouter-oauth";
+import { cn } from "@/utils/cn";
 
 interface ProviderTemplate {
   id: string;
@@ -147,6 +149,23 @@ export function WasmSetup({
     ...meProvidersCreateMutation(),
   });
 
+  const deleteMutation = useMutation({
+    ...meProvidersDeleteMutation(),
+  });
+
+  const handleDeleteExisting = useCallback(
+    async (id: string) => {
+      try {
+        await deleteMutation.mutateAsync({ path: { id } });
+        queryClient.invalidateQueries({ queryKey: meProvidersListQueryKey() });
+        queryClient.invalidateQueries({ queryKey: apiV1ModelsQueryKey() });
+      } catch (err) {
+        console.error("Failed to delete provider:", err);
+      }
+    },
+    [deleteMutation, queryClient]
+  );
+
   const updateEntry = useCallback((key: string, update: Partial<ProviderEntry>) => {
     setEntries((prev) => prev.map((e) => (e.key === key ? { ...e, ...update } : e)));
   }, []);
@@ -244,6 +263,8 @@ export function WasmSetup({
           ollamaConnecting={ollamaConnecting}
           hasExistingOllama={hasExistingOllama}
           onOllamaConnect={onOllamaConnect}
+          existingProviders={existingProviders}
+          onDeleteExisting={handleDeleteExisting}
         />
       )}
       {step === "providers" && (
@@ -266,6 +287,8 @@ export function WasmSetup({
           ollamaConnecting={ollamaConnecting}
           hasExistingOllama={hasExistingOllama}
           onOllamaConnect={onOllamaConnect}
+          existingProviders={existingProviders}
+          onDeleteExisting={handleDeleteExisting}
         />
       )}
       {step === "done" && <DoneStep savedCount={savedCount} onComplete={onComplete} />}
@@ -284,6 +307,8 @@ function WelcomeStep({
   ollamaConnecting,
   hasExistingOllama,
   onOllamaConnect,
+  existingProviders,
+  onDeleteExisting,
 }: {
   onNext: () => void;
   onReady: () => void;
@@ -295,6 +320,8 @@ function WelcomeStep({
   ollamaConnecting?: boolean;
   hasExistingOllama: boolean;
   onOllamaConnect?: () => void;
+  existingProviders?: DynamicProviderResponse[];
+  onDeleteExisting: (id: string) => void;
 }) {
   const hasProvider = hasExistingOpenRouter || hasExistingOllama;
   return (
@@ -314,18 +341,13 @@ function WelcomeStep({
         <h3 className="text-base font-semibold">Connect your providers</h3>
 
         {hasExistingOpenRouter ? (
-          <div className="mt-4 rounded-lg border border-border bg-muted/30 p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium">OpenRouter</p>
-                <p className="text-xs text-muted-foreground">https://openrouter.ai/api/v1</p>
-              </div>
-              <div className="flex items-center gap-1.5 text-sm text-green-700 dark:text-green-400">
-                <CheckCircle2 className="h-4 w-4" />
-                Connected
-              </div>
-            </div>
-          </div>
+          <ExistingProviderCard
+            name="OpenRouter"
+            baseUrl="https://openrouter.ai/api/v1"
+            className="mt-4"
+            existingProviders={existingProviders}
+            onDelete={onDeleteExisting}
+          />
         ) : (
           <div className="mt-4 rounded-lg border border-violet-200 bg-violet-50 p-4 dark:border-violet-500/20 dark:bg-violet-500/5">
             <p className="text-sm font-medium mb-1">OpenRouter</p>
@@ -348,18 +370,13 @@ function WelcomeStep({
         )}
 
         {hasExistingOllama ? (
-          <div className="mt-3 rounded-lg border border-border bg-muted/30 p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium">Ollama</p>
-                <p className="text-xs text-muted-foreground">http://localhost:11434/v1</p>
-              </div>
-              <div className="flex items-center gap-1.5 text-sm text-green-700 dark:text-green-400">
-                <CheckCircle2 className="h-4 w-4" />
-                Connected
-              </div>
-            </div>
-          </div>
+          <ExistingProviderCard
+            name="Ollama"
+            baseUrl="http://localhost:11434/v1"
+            className="mt-3"
+            existingProviders={existingProviders}
+            onDelete={onDeleteExisting}
+          />
         ) : ollamaDetected ? (
           <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-500/20 dark:bg-emerald-500/5">
             <p className="text-sm font-medium mb-1">Ollama</p>
@@ -504,6 +521,8 @@ function ProvidersStep({
   ollamaConnecting,
   hasExistingOllama,
   onOllamaConnect,
+  existingProviders,
+  onDeleteExisting,
 }: {
   entries: ProviderEntry[];
   onUpdate: (key: string, update: Partial<ProviderEntry>) => void;
@@ -523,6 +542,8 @@ function ProvidersStep({
   ollamaConnecting?: boolean;
   hasExistingOllama: boolean;
   onOllamaConnect?: () => void;
+  existingProviders?: DynamicProviderResponse[];
+  onDeleteExisting: (id: string) => void;
 }) {
   return (
     <>
@@ -533,18 +554,13 @@ function ProvidersStep({
       <ModalContent>
         {/* OpenRouter OAuth section */}
         {hasExistingOpenRouter ? (
-          <div className="mb-4 rounded-lg border border-border bg-muted/30 p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium">OpenRouter</p>
-                <p className="text-xs text-muted-foreground">https://openrouter.ai/api/v1</p>
-              </div>
-              <div className="flex items-center gap-1.5 text-sm text-green-700 dark:text-green-400">
-                <CheckCircle2 className="h-4 w-4" />
-                Connected
-              </div>
-            </div>
-          </div>
+          <ExistingProviderCard
+            name="OpenRouter"
+            baseUrl="https://openrouter.ai/api/v1"
+            className="mb-4"
+            existingProviders={existingProviders}
+            onDelete={onDeleteExisting}
+          />
         ) : (
           <div className="mb-4 rounded-lg border border-violet-200 bg-violet-50/50 p-3 dark:border-violet-500/20 dark:bg-violet-500/5">
             <div className="flex items-center justify-between gap-3">
@@ -578,18 +594,13 @@ function ProvidersStep({
 
         {/* Ollama section */}
         {hasExistingOllama ? (
-          <div className="mb-4 rounded-lg border border-border bg-muted/30 p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium">Ollama</p>
-                <p className="text-xs text-muted-foreground">http://localhost:11434/v1</p>
-              </div>
-              <div className="flex items-center gap-1.5 text-sm text-green-700 dark:text-green-400">
-                <CheckCircle2 className="h-4 w-4" />
-                Connected
-              </div>
-            </div>
-          </div>
+          <ExistingProviderCard
+            name="Ollama"
+            baseUrl="http://localhost:11434/v1"
+            className="mb-4"
+            existingProviders={existingProviders}
+            onDelete={onDeleteExisting}
+          />
         ) : ollamaDetected ? (
           <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50/50 p-3 dark:border-emerald-500/20 dark:bg-emerald-500/5">
             <div className="flex items-center justify-between gap-3">
@@ -666,6 +677,48 @@ function ProvidersStep({
         </div>
       </ModalFooter>
     </>
+  );
+}
+
+function ExistingProviderCard({
+  name,
+  baseUrl,
+  className,
+  existingProviders,
+  onDelete,
+}: {
+  name: string;
+  baseUrl: string;
+  className?: string;
+  existingProviders?: DynamicProviderResponse[];
+  onDelete: (id: string) => void;
+}) {
+  const provider = existingProviders?.find((p) => p.base_url.includes(new URL(baseUrl).host));
+  return (
+    <div className={cn("rounded-lg border border-border bg-muted/30 p-4", className)}>
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium">{name}</p>
+          <p className="text-xs text-muted-foreground">{baseUrl}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 text-sm text-green-700 dark:text-green-400">
+            <CheckCircle2 className="h-4 w-4" />
+            Connected
+          </div>
+          {provider && (
+            <button
+              type="button"
+              onClick={() => onDelete(provider.id)}
+              className="text-muted-foreground hover:text-destructive"
+              aria-label={`Remove ${name} provider`}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

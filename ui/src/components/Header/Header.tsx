@@ -148,8 +148,15 @@ export function Header({ onMenuClick, showMenuButton = false, className }: Heade
       <div className="flex items-center gap-2">
         <ThemeToggle />
         {isWasm && (
-          <Button variant="ghost" size="icon" onClick={openSetupWizard} aria-label="Setup Wizard">
-            <WandSparkles className="h-4 w-4" />
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 border-dashed text-muted-foreground hover:text-foreground"
+            onClick={openSetupWizard}
+            aria-label="Setup Wizard"
+          >
+            <WandSparkles className="h-3.5 w-3.5" />
+            Setup
           </Button>
         )}
         <UserMenu />
