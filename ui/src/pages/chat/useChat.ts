@@ -1533,6 +1533,14 @@ export function useChat({
           arguments: JSON.stringify(tc.arguments),
         }));
 
+        // Extract assistant output message items from response output.
+        // When the model emits text AND tool calls in the same turn, the text
+        // must be included in the continuation so the next round has full context.
+        const outputMessageItems = (result.responseOutput ?? []).filter((item) => {
+          const obj = item as Record<string, unknown>;
+          return obj.type === "message" && obj.role === "assistant";
+        }) as Array<Record<string, unknown>>;
+
         // Capture debug data: tool results and continuation items
         if (messageId) {
           // Convert toolResults Map to array for debug store
@@ -1557,6 +1565,7 @@ export function useChat({
 
           // Capture continuation items (what gets sent to the next round)
           debugStore.setRoundContinuationItems(messageId, model, iterations, [
+            ...outputMessageItems,
             ...functionCallItems,
             ...toolResultItems,
           ]);
@@ -1568,6 +1577,8 @@ export function useChat({
         // Continue conversation with function calls and their results
         currentInputItems = [
           ...currentInputItems,
+          // The assistant's output message (text emitted before/alongside tool calls)
+          ...outputMessageItems,
           // The assistant's function call(s)
           ...functionCallItems,
           // The tool results
