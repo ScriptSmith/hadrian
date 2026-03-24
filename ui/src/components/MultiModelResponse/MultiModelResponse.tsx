@@ -561,7 +561,7 @@ const ModelResponseCard = memo(function ModelResponseCard({
   // Only query streaming store for actively-streaming responses — committed
   // messages must not read the current stream's state (same model key would
   // leak status from a newer message into older ones).
-  const streamingModelKey = response.isStreaming ? model : "";
+  const streamingModelKey = response.isStreaming ? instanceId : "";
   const hasActiveToolCalls = useHasActiveToolCalls(streamingModelKey);
   const hasRunningExecution = useHasRunningExecution(streamingModelKey);
   const hasActiveTools = hasActiveToolCalls || hasRunningExecution;

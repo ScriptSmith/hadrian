@@ -199,7 +199,7 @@ interface UseChatReturn {
 }
 
 /** Maximum number of tool execution iterations to prevent infinite loops */
-const MAX_TOOL_ITERATIONS = 5;
+const MAX_TOOL_ITERATIONS = 25;
 
 /** Result from streaming a response, including any tool calls */
 interface StreamResponseResult {
@@ -883,12 +883,8 @@ export function useChat({
                   // Final reasoning text
                   reasoningContent = event.text;
                   streamingStore.setReasoningContent(storeKey, reasoningContent);
-                } else if (event.type === "response.output_text.done" && event.text) {
-                  // Use the final text from done event for the local content.
-                  // Don't call setContent on the streaming store — appendContent
-                  // already accumulated the right content, and setContent would
-                  // overwrite content from earlier rounds in multi-round tool use.
-                  content = event.text;
+                } else if (event.type === "response.output_text.done") {
+                  // Completion signal only — streamed deltas are authoritative.
                 } else if (event.type === "response.output_item.done" && event.item) {
                   // Handle file_search_call output items (server-side file search)
                   if (event.item.type === "file_search_call" && event.item.results) {
@@ -1024,9 +1020,10 @@ export function useChat({
                     streamingStore.setReasoningContent(storeKey, reasoningContent);
                   }
 
-                  // Prefer actual output over reasoning, but use reasoning as fallback
-                  const finalText = outputText || reasoningText || content;
-                  content = finalText;
+                  // Only use response object text as fallback when no streamed deltas were received
+                  if (!hasOutputText) {
+                    content = outputText || reasoningText || content;
+                  }
 
                   // Extract usage data if present
                   if (event.response.usage) {
