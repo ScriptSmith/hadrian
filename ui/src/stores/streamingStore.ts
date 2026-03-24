@@ -1148,10 +1148,12 @@ export const useStreamingStore = create<StreamingStore>((set) => ({
       if (!existing) return state;
 
       const existingArtifacts = existing.artifacts ?? [];
-      const newArtifacts = [...existingArtifacts, ...artifacts];
+      const existingIds = new Set(existingArtifacts.map((a) => a.id));
+      const deduped = artifacts.filter((a) => !existingIds.has(a.id));
+      if (deduped.length === 0) return state;
 
       const newStreams = new Map(state.streams);
-      newStreams.set(model, { ...existing, artifacts: newArtifacts });
+      newStreams.set(model, { ...existing, artifacts: [...existingArtifacts, ...deduped] });
       return { streams: newStreams };
     }),
 
