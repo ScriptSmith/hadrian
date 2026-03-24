@@ -76,7 +76,16 @@ struct ExaSearchRequest {
 
 #[derive(Debug, Serialize)]
 struct ExaContents {
-    text: bool,
+    text: ExaTextOptions,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExaTextOptions {
+    /// Maximum characters of text to return per result.
+    /// Omit to return full text (Exa default).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_characters: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,6 +112,15 @@ pub async fn execute_web_search(
     max_results: usize,
 ) -> Result<Vec<WebSearchResult>, WebSearchError> {
     let timeout = std::time::Duration::from_secs(config.timeout_secs);
+    let max_chars = config.max_content_chars;
+
+    let truncate = |s: String| -> String {
+        if max_chars == 0 || s.len() <= max_chars {
+            return s;
+        }
+        let end = s.floor_char_boundary(max_chars);
+        format!("{}…[truncated]", &s[..end])
+    };
 
     match config.provider {
         WebSearchProvider::Tavily => {
@@ -146,10 +164,15 @@ pub async fn execute_web_search(
                 .collect())
         }
         WebSearchProvider::Exa => {
+            let max_chars = config.max_content_chars;
             let req = ExaSearchRequest {
                 query: query.to_string(),
                 num_results: max_results,
-                contents: ExaContents { text: true },
+                contents: ExaContents {
+                    text: ExaTextOptions {
+                        max_characters: if max_chars > 0 { Some(max_chars) } else { None },
+                    },
+                },
             };
             let resp = client
                 .post("https://api.exa.ai/search")
