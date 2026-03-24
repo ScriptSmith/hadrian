@@ -2194,6 +2194,13 @@ pub struct WebSearchConfig {
     /// Lower than file_search since web search rarely needs multiple rounds.
     #[serde(default = "default_web_search_max_iterations")]
     pub max_iterations: usize,
+
+    /// Maximum characters of content text per search result.
+    /// Applies to Exa's `text.maxCharacters` parameter. Tavily returns concise
+    /// summaries by default so this is not needed there.
+    /// Set to 0 to disable (return full text). Default: 2000.
+    #[serde(default = "default_web_search_max_content_chars")]
+    pub max_content_chars: usize,
 }
 
 impl std::fmt::Debug for WebSearchConfig {
@@ -2208,6 +2215,7 @@ impl std::fmt::Debug for WebSearchConfig {
                 &self.cost_microcents_per_request,
             )
             .field("max_iterations", &self.max_iterations)
+            .field("max_content_chars", &self.max_content_chars)
             .finish()
     }
 }
@@ -2235,6 +2243,10 @@ fn default_web_search_cost() -> i64 {
 
 fn default_web_search_max_iterations() -> usize {
     3
+}
+
+fn default_web_search_max_content_chars() -> usize {
+    2000
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
