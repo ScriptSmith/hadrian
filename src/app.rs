@@ -2087,7 +2087,8 @@ pub fn build_app(config: &config::GatewayConfig, state: AppState) -> Router {
         app = app.layer(cors_layer);
     }
 
-    app.layer(TraceLayer::new_for_http())
+    app.layer(axum::extract::DefaultBodyLimit::disable())
+        .layer(TraceLayer::new_for_http())
         .layer(RequestBodyLimitLayer::new(config.server.body_limit_bytes))
         .with_state(state)
 }
