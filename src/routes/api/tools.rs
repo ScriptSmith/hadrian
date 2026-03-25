@@ -164,7 +164,6 @@ pub async fn execute_web_search(
                 .collect())
         }
         WebSearchProvider::Exa => {
-            let max_chars = config.max_content_chars;
             let req = ExaSearchRequest {
                 query: query.to_string(),
                 num_results: max_results,

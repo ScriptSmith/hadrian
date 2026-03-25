@@ -419,13 +419,20 @@ function ServerForm({ editingServer, onSubmit, onCancel }: ServerFormProps) {
 
     const values = form.getValues();
     let headers: Record<string, string> | undefined;
+    const extra: Record<string, string> = {};
     if (values.headers) {
       try {
-        headers = JSON.parse(values.headers);
+        Object.assign(extra, JSON.parse(values.headers));
       } catch {
         setTestStatus("error");
         setTestMessage("Invalid JSON in headers field");
         return;
+      }
+    }
+    if (values.bearerToken || Object.keys(extra).length > 0) {
+      headers = { ...extra };
+      if (values.bearerToken) {
+        headers["Authorization"] = `Bearer ${values.bearerToken}`;
       }
     }
 
