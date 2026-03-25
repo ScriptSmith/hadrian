@@ -2401,15 +2401,65 @@ const mcpToolExecutor: ToolExecutor = async (toolCall, context) => {
 
   const { serverId, toolName } = parsed;
   const args = toolCall.arguments as Record<string, unknown> | undefined;
+  const toolId = toolCall.id;
 
   // Report status
   context.onStatusMessage?.(toolCall.id, `Calling ${toolName} on MCP server...`);
+
+  // Build artifacts for timeline display
+  const artifacts: Artifact[] = [];
+  let artifactIndex = 0;
+
+  // Input artifact: show the arguments sent to the tool
+  if (args && Object.keys(args).length > 0) {
+    artifacts.push({
+      id: `mcp-input-${toolId}-${artifactIndex++}`,
+      type: "code",
+      title: toolName,
+      role: "input",
+      toolCallId: toolId,
+      data: { language: "json", code: JSON.stringify(args, null, 2) },
+    });
+  }
 
   try {
     const result = await callMCPTool(serverId, toolName, args);
 
     // Clear status message
     context.onStatusMessage?.(toolCall.id, "");
+
+    // Build output artifacts from MCP content
+    for (const item of result.content) {
+      if (item.type === "text" && item.text) {
+        artifacts.push({
+          id: `mcp-output-${toolId}-${artifactIndex++}`,
+          type: "code",
+          title: "Output",
+          role: "output",
+          toolCallId: toolId,
+          data: { language: "text", code: item.text },
+        });
+      } else if (item.type === "image") {
+        artifacts.push({
+          id: `mcp-image-${toolId}-${artifactIndex++}`,
+          type: "image",
+          title: "Image",
+          role: "output",
+          toolCallId: toolId,
+          data: `data:${item.mimeType};base64,${item.data}`,
+          mimeType: item.mimeType,
+        });
+      } else if (item.type === "resource" && item.resource.text) {
+        artifacts.push({
+          id: `mcp-resource-${toolId}-${artifactIndex++}`,
+          type: "code",
+          title: item.resource.uri,
+          role: "output",
+          toolCallId: toolId,
+          data: { language: "text", code: item.resource.text },
+        });
+      }
+    }
 
     // Check for error response
     if (result.isError) {
@@ -2418,6 +2468,7 @@ const mcpToolExecutor: ToolExecutor = async (toolCall, context) => {
         success: false,
         error: errorOutput || "MCP tool returned an error",
         output: JSON.stringify({ error: errorOutput, serverId, toolName }),
+        artifacts,
       };
     }
 
@@ -2428,6 +2479,7 @@ const mcpToolExecutor: ToolExecutor = async (toolCall, context) => {
       success: true,
       output:
         output || JSON.stringify({ result: "Tool executed successfully", serverId, toolName }),
+      artifacts,
     };
   } catch (error) {
     // Clear status message on error
@@ -2443,6 +2495,7 @@ const mcpToolExecutor: ToolExecutor = async (toolCall, context) => {
         serverId,
         toolName,
       }),
+      artifacts,
     };
   }
 };

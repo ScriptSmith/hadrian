@@ -204,6 +204,7 @@ export const TOOL_ICON_MAP: Record<string, ToolIconComponent> = {
 
 /** Get icon for a tool ID */
 export function getToolIcon(toolId: string): ToolIconComponent {
+  if (toolId.startsWith("mcp_")) return TOOL_ICON_MAP.mcp;
   return TOOL_ICON_MAP[toolId] || Wrench;
 }
 
@@ -226,6 +227,12 @@ export const TOOL_SHORT_NAMES: Record<string, string> = {
 
 /** Get short display name for a tool */
 export function getToolShortName(toolId: string): string {
+  if (toolId.startsWith("mcp_")) {
+    // Parse "mcp_{serverId}_{toolName}" → toolName
+    const withoutPrefix = toolId.slice(4);
+    const underscoreIndex = withoutPrefix.indexOf("_");
+    return underscoreIndex !== -1 ? withoutPrefix.slice(underscoreIndex + 1) : withoutPrefix;
+  }
   return TOOL_SHORT_NAMES[toolId] || toolId;
 }
 
@@ -246,5 +253,9 @@ const TOOL_STATUS_LABELS: Record<string, string> = {
 
 /** Get human-readable status label for a running tool */
 export function getToolStatusLabel(toolId: string, toolName?: string): string {
+  if (toolId.startsWith("mcp_")) {
+    const shortName = getToolShortName(toolId);
+    return `Calling ${shortName}`;
+  }
   return TOOL_STATUS_LABELS[toolId] || (toolName ? `Calling ${toolName}` : "Calling function");
 }
