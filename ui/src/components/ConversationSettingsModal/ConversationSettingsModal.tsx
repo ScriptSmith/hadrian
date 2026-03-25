@@ -41,6 +41,10 @@ interface ConversationSettingsModalProps {
   clientSideRAG?: boolean;
   /** Callback when client-side RAG setting changes */
   onClientSideRAGChange?: (enabled: boolean) => void;
+  /** Maximum tool execution iterations */
+  maxToolIterations?: number;
+  /** Callback when max tool iterations changes */
+  onMaxToolIterationsChange?: (iterations: number) => void;
   /** Whether to capture raw SSE events for debugging */
   captureRawSSEEvents?: boolean;
   /** Callback when SSE capture setting changes */
@@ -74,6 +78,8 @@ export function ConversationSettingsModal({
   vectorStoreOwnerId,
   clientSideRAG,
   onClientSideRAGChange,
+  maxToolIterations = 25,
+  onMaxToolIterationsChange,
   captureRawSSEEvents,
   onCaptureRawSSEEventsChange,
   ttsVoice = DEFAULT_TTS_VOICE,
@@ -90,6 +96,15 @@ export function ConversationSettingsModal({
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
   }, []);
+
+  // Stable ref callback so auto-resize only fires on mount, not every render
+  // (an inline ref would re-fire and collapse the textarea, scrolling the modal to top)
+  const textareaRef = useCallback(
+    (el: HTMLTextAreaElement | null) => {
+      if (el) autoResize(el);
+    },
+    [autoResize]
+  );
 
   const handleSaveAsTemplate = () => {
     setPromptFormOpen(true);
@@ -168,9 +183,7 @@ export function ConversationSettingsModal({
             </div>
           </div>
           <textarea
-            ref={(el) => {
-              if (el) autoResize(el);
-            }}
+            ref={textareaRef}
             value={displayedPrompt}
             onChange={(e) => {
               onSystemPromptChange(e.target.value);
@@ -333,30 +346,44 @@ export function ConversationSettingsModal({
           </div>
         )}
 
-        {/* Debug Section */}
-        {onCaptureRawSSEEventsChange && (
+        {/* Advanced Section */}
+        {(onMaxToolIterationsChange || onCaptureRawSSEEventsChange) && (
           <div className="space-y-3 mb-6">
             <div>
-              <h3 className="text-sm font-medium mb-1">Debug Options</h3>
+              <h3 className="text-sm font-medium mb-1">Advanced</h3>
               <p className="text-xs text-muted-foreground">
-                Advanced options for debugging and development.
+                Advanced options for tool execution and debugging.
               </p>
             </div>
-            <div className="rounded-lg border p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-sm">Capture raw SSE events</span>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Record streaming events for inspection in the debug view. Can generate
-                    significant data.
-                  </p>
-                </div>
-                <Switch
-                  checked={captureRawSSEEvents ?? false}
-                  onChange={(e) => onCaptureRawSSEEventsChange(e.target.checked)}
-                  aria-label="Capture raw SSE events"
+            <div className="rounded-lg border p-4 space-y-4">
+              {onMaxToolIterationsChange && (
+                <Slider
+                  label="Max tool iterations"
+                  value={maxToolIterations}
+                  onChange={onMaxToolIterationsChange}
+                  min={1}
+                  max={100}
+                  step={1}
+                  showValue
+                  aria-label="Maximum tool iterations"
                 />
-              </div>
+              )}
+              {onCaptureRawSSEEventsChange && (
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-sm">Capture raw SSE events</span>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Record streaming events for inspection in the debug view. Can generate
+                      significant data.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={captureRawSSEEvents ?? false}
+                    onChange={(e) => onCaptureRawSSEEventsChange(e.target.checked)}
+                    aria-label="Capture raw SSE events"
+                  />
+                </div>
+              )}
             </div>
           </div>
         )}

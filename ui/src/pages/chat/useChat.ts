@@ -114,6 +114,11 @@ interface UseChatOptions {
    */
   dataFiles?: DataFileInfo[];
   /**
+   * Maximum number of tool execution iterations to prevent infinite loops.
+   * Defaults to 25.
+   */
+  maxToolIterations?: number;
+  /**
    * Whether to capture raw SSE events for debugging.
    * When enabled, SSE events are stored in debugStore for inspection.
    */
@@ -203,8 +208,8 @@ interface UseChatReturn {
   editAndRerun: (messageId: string, newContent: string) => void;
 }
 
-/** Maximum number of tool execution iterations to prevent infinite loops */
-const MAX_TOOL_ITERATIONS = 25;
+/** Default maximum number of tool execution iterations to prevent infinite loops */
+const DEFAULT_maxToolIterations = 25;
 
 /** Result from streaming a response, including any tool calls */
 interface StreamResponseResult {
@@ -246,6 +251,7 @@ export function useChat({
   clientSideToolExecution = false,
   enabledTools = [],
   dataFiles = [],
+  maxToolIterations = DEFAULT_maxToolIterations,
   captureRawSSEEvents = false,
   subAgentModel,
   projectId,
@@ -1218,7 +1224,7 @@ export function useChat({
    * 1. Stream the initial response while tracking tool calls
    * 2. If tool calls are detected, execute them using the tool executor system
    * 3. Send the tool results back to continue the conversation
-   * 4. Repeat until no more tool calls or MAX_TOOL_ITERATIONS is reached
+   * 4. Repeat until no more tool calls or maxToolIterations is reached
    *
    * Also builds a ToolExecutionRound timeline for progressive disclosure UI.
    *
@@ -1302,7 +1308,7 @@ export function useChat({
       // Track execution rounds locally (also mirrored in store for real-time UI)
       const executionRounds: ToolExecutionRound[] = [];
 
-      while (iterations < MAX_TOOL_ITERATIONS) {
+      while (iterations < maxToolIterations) {
         iterations++;
         currentDebugRound = iterations;
 
@@ -1629,6 +1635,7 @@ export function useChat({
       token,
       streamingStore,
       debugStore,
+      maxToolIterations,
       captureRawSSEEvents,
       subAgentModel,
     ]
