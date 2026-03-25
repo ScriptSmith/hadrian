@@ -8,6 +8,7 @@
 
 import { ChevronDown, Loader2, Plus, Settings, Wrench, X } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 
 import type { VectorStoreOwnerType } from "@/api/generated/types.gen";
 import { Button } from "@/components/Button/Button";
@@ -390,7 +391,7 @@ export function ToolsBar({
       // Delay exiting stable mode to allow popover transitions
       stableModeTimeoutRef.current = setTimeout(() => {
         setIsStableMode(false);
-      }, 300);
+      }, 3000);
     }
     return () => {
       if (stableModeTimeoutRef.current) {
@@ -443,7 +444,21 @@ export function ToolsBar({
     [enabledTools, onEnabledToolsChange]
   );
 
+  const isMobile = useIsMobile();
   const hasEnabledTools = enabledTools.length > 0;
+
+  /** Toggle all implemented tools on/off (desktop only) */
+  const toggleAllTools = useCallback(() => {
+    if (isMobile) return;
+    if (hasEnabledTools) {
+      onEnabledToolsChange([]);
+    } else {
+      const allImplemented = VISIBLE_TOOLS.filter((t) => t.implemented && canEnableTool(t.id)).map(
+        (t) => t.id
+      );
+      onEnabledToolsChange(allImplemented);
+    }
+  }, [isMobile, hasEnabledTools, onEnabledToolsChange, canEnableTool]);
 
   // All tools with metadata and icons
   const allToolsData = useMemo(
@@ -559,12 +574,21 @@ export function ToolsBar({
       onMouseEnter={() => setIsHovering(true)}
       onMouseLeave={() => setIsHovering(false)}
     >
-      {/* Wrench icon - always visible */}
-      <div className="flex items-center justify-center w-8 h-8 shrink-0">
+      {/* Wrench icon - always visible, toggles all tools on click (desktop only) */}
+      <button
+        type="button"
+        onClick={toggleAllTools}
+        aria-label={hasEnabledTools ? "Disable all tools" : "Enable all tools"}
+        className={cn(
+          "flex items-center justify-center w-8 h-8 shrink-0 rounded-md",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          !isMobile && "cursor-pointer hover:bg-accent-foreground/5"
+        )}
+      >
         <Wrench
           className={cn("h-4 w-4", hasEnabledTools ? "text-primary" : "text-muted-foreground")}
         />
-      </div>
+      </button>
 
       {/* Plus icon when no tools enabled and collapsed */}
       {!hasEnabledTools && !isStableMode && (
