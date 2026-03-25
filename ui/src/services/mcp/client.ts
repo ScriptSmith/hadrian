@@ -97,6 +97,12 @@ export class MCPClient {
   private eventSource?: EventSource;
   private lastEventId?: string;
 
+  // SSE reconnection state
+  private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private sseErrorCount = 0;
+  private static readonly MAX_SSE_RECONNECT_ATTEMPTS = 5;
+  private static readonly SSE_RECONNECT_BASE_DELAY = 1000;
+
   constructor(config: MCPClientConfig) {
     this.config = {
       timeout: 30000,
@@ -169,6 +175,12 @@ export class MCPClient {
       return;
     }
 
+    // Clean up any stale state from previous connection attempts
+    this.closeEventSource();
+    this.clearReconnectTimer();
+    this.sessionId = undefined;
+    this.sseErrorCount = 0;
+
     this.setStatus("connecting");
 
     try {
@@ -216,11 +228,8 @@ export class MCPClient {
    * Disconnect from the server
    */
   async disconnect(): Promise<void> {
-    // Close SSE stream
-    if (this.eventSource) {
-      this.eventSource.close();
-      this.eventSource = undefined;
-    }
+    this.closeEventSource();
+    this.clearReconnectTimer();
 
     // Send DELETE to terminate session if we have a session ID
     if (this.sessionId) {
@@ -241,7 +250,26 @@ export class MCPClient {
     this.lastEventId = undefined;
     this.serverInfo = undefined;
     this.capabilities = undefined;
+    this.sseErrorCount = 0;
     this.setStatus("disconnected");
+  }
+
+  /** Close the SSE EventSource if open */
+  private closeEventSource(): void {
+    if (this.eventSource) {
+      this.eventSource.onmessage = null;
+      this.eventSource.onerror = null;
+      this.eventSource.close();
+      this.eventSource = undefined;
+    }
+  }
+
+  /** Clear any pending reconnection timer */
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
   }
 
   /**
@@ -260,6 +288,10 @@ export class MCPClient {
    *
    * In Streamable HTTP transport, clients can GET the endpoint to open
    * an SSE stream for receiving server notifications and requests.
+   *
+   * We disable the browser's native EventSource auto-reconnect and handle
+   * reconnection ourselves with exponential backoff so we can detect when
+   * the session has expired and perform a full re-initialization.
    */
   private setupServerMessageStream(): void {
     // Only set up if server supports notifications
@@ -272,9 +304,10 @@ export class MCPClient {
       return;
     }
 
+    // Close existing EventSource before opening a new one
+    this.closeEventSource();
+
     try {
-      // Build URL with session ID as query param if needed
-      // (EventSource doesn't support custom headers)
       const url = new URL(this.config.url);
       if (this.sessionId) {
         url.searchParams.set("sessionId", this.sessionId);
@@ -283,10 +316,15 @@ export class MCPClient {
         url.searchParams.set("lastEventId", this.lastEventId);
       }
 
-      this.eventSource = new EventSource(url.toString());
+      const es = new EventSource(url.toString());
+      this.eventSource = es;
 
-      this.eventSource.onmessage = (event) => {
-        // Track event ID for resumability
+      es.onopen = () => {
+        // Reset error count on successful connection
+        this.sseErrorCount = 0;
+      };
+
+      es.onmessage = (event) => {
         if (event.lastEventId) {
           this.lastEventId = event.lastEventId;
         }
@@ -301,13 +339,35 @@ export class MCPClient {
         }
       };
 
-      this.eventSource.onerror = () => {
-        // SSE connection error - attempt to reconnect with lastEventId
-        console.warn("MCP SSE connection error, will attempt reconnection");
-        // EventSource automatically reconnects, and we've set lastEventId
+      es.onerror = () => {
+        // Close the EventSource immediately to prevent browser auto-reconnect
+        // We manage reconnection ourselves to handle session expiry properly
+        this.closeEventSource();
+
+        this.sseErrorCount++;
+
+        if (this.sseErrorCount > MCPClient.MAX_SSE_RECONNECT_ATTEMPTS) {
+          console.warn(
+            `MCP SSE: giving up after ${MCPClient.MAX_SSE_RECONNECT_ATTEMPTS} reconnect attempts`
+          );
+          // SSE is not critical — the connection is still usable for requests.
+          // Just stop trying to reopen the notification stream.
+          return;
+        }
+
+        // Exponential backoff: 1s, 2s, 4s, 8s, 16s
+        const delay = MCPClient.SSE_RECONNECT_BASE_DELAY * Math.pow(2, this.sseErrorCount - 1);
+        console.debug(`MCP SSE: reconnecting in ${delay}ms (attempt ${this.sseErrorCount})`);
+
+        this.clearReconnectTimer();
+        this.reconnectTimer = setTimeout(() => {
+          // Only reconnect if we're still supposed to be connected
+          if (this.status === "connected") {
+            this.setupServerMessageStream();
+          }
+        }, delay);
       };
     } catch {
-      // SSE setup failed - not critical, continue without real-time notifications
       console.warn("Failed to set up MCP server message stream");
     }
   }
@@ -358,6 +418,13 @@ export class MCPClient {
       });
 
       if (!response.ok) {
+        // 404/410 means the session expired — the caller should reconnect
+        if (response.status === 404 || response.status === 410) {
+          this.sessionId = undefined;
+          this.closeEventSource();
+          this.setStatus("disconnected");
+          throw new Error("MCP session expired — please reconnect");
+        }
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 

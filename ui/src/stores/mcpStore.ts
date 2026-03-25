@@ -85,6 +85,9 @@ export type MCPStore = MCPState & MCPActions;
 /** Map of server ID to MCPClient instance */
 const clients = new Map<string, MCPClient>();
 
+/** Map of server ID to cleanup functions for listeners */
+const listenerCleanups = new Map<string, Array<() => void>>();
+
 /** Get or create a client for a server */
 function getClient(server: MCPServerConfig): MCPClient {
   let client = clients.get(server.id);
@@ -99,8 +102,18 @@ function getClient(server: MCPServerConfig): MCPClient {
   return client;
 }
 
+/** Remove listener subscriptions for a server */
+function cleanupListeners(serverId: string): void {
+  const cleanups = listenerCleanups.get(serverId);
+  if (cleanups) {
+    cleanups.forEach((fn) => fn());
+    listenerCleanups.delete(serverId);
+  }
+}
+
 /** Remove and disconnect a client */
 function removeClient(serverId: string): void {
+  cleanupListeners(serverId);
   const client = clients.get(serverId);
   if (client) {
     client.disconnect();
@@ -170,16 +183,44 @@ export const useMCPStore = create<MCPStore>()(
           throw new Error(`Server not found: ${serverId}`);
         }
 
+        // Clean up any existing listeners before (re)connecting
+        cleanupListeners(serverId);
+
         // Update status to connecting
         get()._setServerStatus(serverId, "connecting");
 
         try {
           const client = getClient(server);
 
-          // Set up status listener
-          client.onStatusChange((status, error) => {
-            get()._setServerStatus(serverId, status, error);
-          });
+          // Set up status listener (tracked for cleanup)
+          const cleanups: Array<() => void> = [];
+
+          cleanups.push(
+            client.onStatusChange((status, error) => {
+              get()._setServerStatus(serverId, status, error);
+            })
+          );
+
+          // Set up notification listener so tool/resource/prompt changes
+          // are automatically re-discovered
+          cleanups.push(
+            client.onNotification(async (method) => {
+              const c = clients.get(serverId);
+              if (!c?.isConnected()) return;
+
+              try {
+                if (method === "notifications/tools/list_changed") {
+                  const tools = await c.listAllTools();
+                  get()._setServerTools(serverId, tools);
+                }
+                // Future: handle resources/prompts list_changed similarly
+              } catch (err) {
+                console.debug("MCP notification handler error:", err);
+              }
+            })
+          );
+
+          listenerCleanups.set(serverId, cleanups);
 
           // Connect to server
           await client.connect();
@@ -188,14 +229,17 @@ export const useMCPStore = create<MCPStore>()(
           const tools = await client.listAllTools();
           get()._setServerTools(serverId, tools);
 
-          // Enable all tools by default
+          // Enable all tools by default (preserve existing preferences)
           set((state) => ({
             servers: state.servers.map((s) => {
               if (s.id !== serverId) return s;
-              const toolsEnabled: Record<string, boolean> = {};
-              tools.forEach((t) => {
-                toolsEnabled[t.name] = true;
-              });
+              const toolsEnabled: Record<string, boolean> = { ...s.toolsEnabled };
+              for (const t of tools) {
+                // Only set default for tools we haven't seen before
+                if (!(t.name in toolsEnabled)) {
+                  toolsEnabled[t.name] = true;
+                }
+              }
               return { ...s, toolsEnabled };
             }),
           }));
@@ -292,7 +336,7 @@ export const useMCPStore = create<MCPStore>()(
       disconnectAll: () => {
         const { servers } = get();
         for (const server of servers) {
-          if (server.status === "connected") {
+          if (server.status !== "disconnected") {
             removeClient(server.id);
           }
         }
@@ -411,7 +455,7 @@ export function getMCPClient(serverId: string): MCPClient | undefined {
   return clients.get(serverId);
 }
 
-/** Call a tool on an MCP server */
+/** Call a tool on an MCP server, auto-reconnecting on session expiry */
 export async function callMCPTool(
   serverId: string,
   toolName: string,
@@ -424,5 +468,22 @@ export async function callMCPTool(
   if (!client.isConnected()) {
     throw new Error(`Server not connected: ${serverId}`);
   }
-  return client.callTool(toolName, args);
+
+  try {
+    return await client.callTool(toolName, args);
+  } catch (err) {
+    // Auto-reconnect once on session expiry, then retry the call
+    if (err instanceof Error && err.message.includes("session expired")) {
+      console.debug("MCP session expired during tool call, reconnecting…");
+      const store = useMCPStore.getState();
+      await store.connectServer(serverId);
+      // Retry with the (possibly new) client
+      const newClient = clients.get(serverId);
+      if (!newClient?.isConnected()) {
+        throw new Error(`Reconnection failed for server: ${serverId}`);
+      }
+      return newClient.callTool(toolName, args);
+    }
+    throw err;
+  }
 }

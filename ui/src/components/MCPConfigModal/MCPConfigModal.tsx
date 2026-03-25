@@ -3,28 +3,28 @@
  *
  * Allows users to:
  * - Add/edit/remove MCP server configurations
- * - Connect/disconnect from servers
- * - Enable/disable servers and individual tools
- * - View connection status and discovered tools
+ * - Test connections before saving
+ * - Connect/disconnect from servers via a single toggle
+ * - Enable/disable individual tools with expandable descriptions
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import {
   AlertCircle,
-  Check,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Loader2,
   Pencil,
   Plug,
   Plus,
-  Power,
-  PowerOff,
   Trash2,
+  Wifi,
   Wrench,
+  XCircle,
 } from "lucide-react";
 
 import { Button } from "@/components/Button/Button";
@@ -41,7 +41,8 @@ import {
 import { Switch } from "@/components/Switch/Switch";
 import { cn } from "@/utils/cn";
 import { useMCPStore, useMCPServers } from "@/stores/mcpStore";
-import type { MCPServerState, MCPConnectionStatus } from "@/services/mcp";
+import { MCPClient, type MCPServerState, type MCPConnectionStatus } from "@/services/mcp";
+import type { MCPToolDefinition, JSONSchema } from "@/services/mcp";
 
 // =============================================================================
 // Types
@@ -71,7 +72,7 @@ type ServerFormValues = z.infer<typeof serverFormSchema>;
 /** Status badge for connection state */
 function StatusBadge({ status }: { status: MCPConnectionStatus }) {
   const config = {
-    disconnected: { color: "bg-muted text-muted-foreground", label: "Disconnected" },
+    disconnected: { color: "bg-muted text-muted-foreground", label: "Off" },
     connecting: { color: "bg-primary/10 text-primary", label: "Connecting" },
     connected: { color: "bg-success/10 text-success", label: "Connected" },
     error: { color: "bg-destructive/10 text-destructive", label: "Error" },
@@ -85,7 +86,119 @@ function StatusBadge({ status }: { status: MCPConnectionStatus }) {
   );
 }
 
-/** Individual server card with controls */
+// =============================================================================
+// Tool Item (expandable description + schema)
+// =============================================================================
+
+interface ToolItemProps {
+  tool: MCPToolDefinition;
+  isEnabled: boolean;
+  onToggle: (toolName: string, enabled: boolean) => void;
+}
+
+/** Render a JSON Schema property list */
+function SchemaProperties({ schema }: { schema: JSONSchema }) {
+  const properties = schema.properties;
+  if (!properties || Object.keys(properties).length === 0) {
+    return <span className="text-xs text-muted-foreground italic">No parameters</span>;
+  }
+
+  return (
+    <div className="bg-muted/50 rounded p-2 space-y-1.5">
+      {Object.entries(properties).map(([name, prop]) => {
+        const propSchema = prop as JSONSchema;
+        const isRequired = schema.required?.includes(name);
+        return (
+          <div key={name} className="text-xs">
+            <div className="flex items-baseline gap-1.5 flex-wrap">
+              <code className="font-mono font-medium text-foreground">{name}</code>
+              {propSchema.type && (
+                <span className="text-muted-foreground font-mono text-[11px]">
+                  {String(propSchema.type)}
+                </span>
+              )}
+              {isRequired && (
+                <span className="text-destructive text-[10px] font-semibold">required</span>
+              )}
+            </div>
+            {propSchema.description && (
+              <p className="text-muted-foreground mt-0.5 pl-0.5">{propSchema.description}</p>
+            )}
+            {propSchema.enum && (
+              <p className="text-muted-foreground mt-0.5 pl-0.5 font-mono text-[11px]">
+                enum: {propSchema.enum.map(String).join(" | ")}
+              </p>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ToolItem({ tool, isEnabled, onToggle }: ToolItemProps) {
+  const [expanded, setExpanded] = useState(false);
+  const hasSchema =
+    tool.inputSchema?.properties && Object.keys(tool.inputSchema.properties).length > 0;
+  const hasDetails = !!tool.description || hasSchema;
+
+  return (
+    <div className="rounded hover:bg-muted/50">
+      <div className="flex items-center gap-3 p-2">
+        <Switch
+          checked={isEnabled}
+          onChange={() => onToggle(tool.name, !isEnabled)}
+          aria-label={`Toggle ${tool.name} tool`}
+          label=""
+          className="shrink-0"
+        />
+        <button
+          type="button"
+          className="flex-1 min-w-0 text-left cursor-pointer"
+          onClick={() => hasDetails && setExpanded(!expanded)}
+          aria-expanded={expanded}
+        >
+          <div className="flex items-center gap-1.5">
+            {hasDetails && (
+              <span className="shrink-0 text-muted-foreground">
+                {expanded ? (
+                  <ChevronDown className="h-3 w-3" />
+                ) : (
+                  <ChevronRight className="h-3 w-3" />
+                )}
+              </span>
+            )}
+            <span className="text-sm font-medium">{tool.name}</span>
+          </div>
+          {tool.description && !expanded && (
+            <div className="text-xs text-muted-foreground truncate mt-0.5">{tool.description}</div>
+          )}
+        </button>
+      </div>
+
+      {expanded && hasDetails && (
+        <div className="px-2 pb-2 pl-12 space-y-2">
+          {tool.description && (
+            <p className="text-xs text-muted-foreground leading-relaxed">{tool.description}</p>
+          )}
+          {hasSchema && (
+            <div className="space-y-1">
+              <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+                Parameters
+              </div>
+              <SchemaProperties schema={tool.inputSchema} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// Server Card
+// =============================================================================
+
 interface ServerCardProps {
   server: MCPServerState;
   onEdit: (server: MCPServerState) => void;
@@ -94,27 +207,31 @@ interface ServerCardProps {
 
 function ServerCard({ server, onEdit, onDelete }: ServerCardProps) {
   const [expanded, setExpanded] = useState(false);
-  const { connectServer, disconnectServer, toggleServerEnabled, setToolEnabled } = useMCPStore();
-  const [isConnecting, setIsConnecting] = useState(false);
+  const { connectServer, disconnectServer, setToolEnabled } = useMCPStore();
+  const [isToggling, setIsToggling] = useState(false);
 
-  const handleConnect = useCallback(async () => {
-    setIsConnecting(true);
+  // Unified toggle: switch ON = enable + connect, switch OFF = disconnect + disable
+  const handleToggle = useCallback(async () => {
+    if (isToggling) return;
+    setIsToggling(true);
     try {
-      await connectServer(server.id);
-    } catch {
-      // Error is stored in server state
+      if (server.enabled) {
+        // Turning OFF
+        disconnectServer(server.id);
+        useMCPStore.getState().toggleServerEnabled(server.id);
+      } else {
+        // Turning ON: enable first, then connect
+        useMCPStore.getState().toggleServerEnabled(server.id);
+        try {
+          await connectServer(server.id);
+        } catch {
+          // Error is stored in server state and shown inline
+        }
+      }
     } finally {
-      setIsConnecting(false);
+      setIsToggling(false);
     }
-  }, [connectServer, server.id]);
-
-  const handleDisconnect = useCallback(() => {
-    disconnectServer(server.id);
-  }, [disconnectServer, server.id]);
-
-  const handleToggleEnabled = useCallback(() => {
-    toggleServerEnabled(server.id);
-  }, [toggleServerEnabled, server.id]);
+  }, [server.enabled, server.id, isToggling, connectServer, disconnectServer]);
 
   const handleToolToggle = useCallback(
     (toolName: string, enabled: boolean) => {
@@ -123,8 +240,7 @@ function ServerCard({ server, onEdit, onDelete }: ServerCardProps) {
     [setToolEnabled, server.id]
   );
 
-  const isConnected = server.status === "connected";
-  const isConnectingStatus = server.status === "connecting" || isConnecting;
+  const isConnectingStatus = server.status === "connecting" || isToggling;
   const hasTools = server.tools.length > 0;
 
   return (
@@ -147,9 +263,16 @@ function ServerCard({ server, onEdit, onDelete }: ServerCardProps) {
             )}
           </button>
 
-          {/* Server icon */}
+          {/* Server icon — color reflects connection status */}
           <Plug
-            className={cn("h-4 w-4", server.enabled ? "text-primary" : "text-muted-foreground")}
+            className={cn(
+              "h-4 w-4 shrink-0",
+              server.status === "connected"
+                ? "text-primary"
+                : server.status === "connecting"
+                  ? "text-primary/50"
+                  : "text-muted-foreground"
+            )}
           />
 
           {/* Name and URL */}
@@ -168,40 +291,15 @@ function ServerCard({ server, onEdit, onDelete }: ServerCardProps) {
             </span>
           )}
 
-          {/* Enable/disable switch */}
+          {/* Single toggle: enable+connect / disconnect+disable */}
           <Switch
             checked={server.enabled}
-            onChange={handleToggleEnabled}
-            aria-label={`Toggle ${server.name} server`}
+            onChange={handleToggle}
+            disabled={isConnectingStatus}
+            aria-label={server.enabled ? `Disconnect ${server.name}` : `Connect ${server.name}`}
             label=""
             className="shrink-0"
           />
-
-          {/* Connect/Disconnect button */}
-          {server.enabled && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={isConnected ? handleDisconnect : handleConnect}
-              disabled={isConnectingStatus}
-              className="shrink-0"
-              aria-label={
-                isConnectingStatus
-                  ? "Connecting"
-                  : isConnected
-                    ? "Disconnect server"
-                    : "Connect server"
-              }
-            >
-              {isConnectingStatus ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : isConnected ? (
-                <PowerOff className="h-4 w-4" />
-              ) : (
-                <Power className="h-4 w-4" />
-              )}
-            </Button>
-          )}
 
           {/* Edit button */}
           <Button
@@ -243,33 +341,15 @@ function ServerCard({ server, onEdit, onDelete }: ServerCardProps) {
               <Wrench className="h-3 w-3" />
               Available Tools
             </div>
-            <div className="space-y-1">
-              {server.tools.map((tool) => {
-                const isEnabled = server.toolsEnabled[tool.name] !== false;
-                return (
-                  <div
-                    key={tool.name}
-                    className="flex items-center gap-3 p-2 rounded hover:bg-muted/50"
-                  >
-                    <Switch
-                      checked={isEnabled}
-                      onChange={() => handleToolToggle(tool.name, !isEnabled)}
-                      aria-label={`Toggle ${tool.name} tool`}
-                      label=""
-                      className="shrink-0"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium">{tool.name}</div>
-                      {tool.description && (
-                        <div className="text-xs text-muted-foreground truncate">
-                          {tool.description}
-                        </div>
-                      )}
-                    </div>
-                    {isEnabled && <Check className="h-4 w-4 text-green-500 shrink-0" />}
-                  </div>
-                );
-              })}
+            <div className="space-y-0.5">
+              {server.tools.map((tool) => (
+                <ToolItem
+                  key={tool.name}
+                  tool={tool}
+                  isEnabled={server.toolsEnabled[tool.name] !== false}
+                  onToggle={handleToolToggle}
+                />
+              ))}
             </div>
           </div>
         </div>
@@ -278,12 +358,17 @@ function ServerCard({ server, onEdit, onDelete }: ServerCardProps) {
   );
 }
 
-/** Form for adding/editing a server */
+// =============================================================================
+// Server Form (with test connection)
+// =============================================================================
+
 interface ServerFormProps {
   editingServer?: MCPServerState | null;
   onSubmit: (values: ServerFormValues) => void;
   onCancel: () => void;
 }
+
+type TestStatus = "idle" | "testing" | "success" | "error";
 
 function ServerForm({ editingServer, onSubmit, onCancel }: ServerFormProps) {
   const form = useForm<ServerFormValues>({
@@ -294,6 +379,65 @@ function ServerForm({ editingServer, onSubmit, onCancel }: ServerFormProps) {
       headers: editingServer?.headers ? JSON.stringify(editingServer.headers, null, 2) : "",
     },
   });
+
+  const [testStatus, setTestStatus] = useState<TestStatus>("idle");
+  const [testMessage, setTestMessage] = useState<string>();
+  const [testLatency, setTestLatency] = useState<number>();
+
+  // Reset test results when URL or headers change
+  const watchedUrl = form.watch("url");
+  const watchedHeaders = form.watch("headers");
+  useEffect(() => {
+    if (testStatus !== "idle" && testStatus !== "testing") {
+      setTestStatus("idle");
+      setTestMessage(undefined);
+      setTestLatency(undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only reset on field changes
+  }, [watchedUrl, watchedHeaders]);
+
+  const handleTestConnection = useCallback(async () => {
+    // Validate URL field first
+    const valid = await form.trigger("url");
+    if (!valid) return;
+
+    const values = form.getValues();
+    let headers: Record<string, string> | undefined;
+    if (values.headers) {
+      try {
+        headers = JSON.parse(values.headers);
+      } catch {
+        setTestStatus("error");
+        setTestMessage("Invalid JSON in headers field");
+        return;
+      }
+    }
+
+    setTestStatus("testing");
+    setTestMessage(undefined);
+    setTestLatency(undefined);
+
+    const client = new MCPClient({ url: values.url, headers, timeout: 10000 });
+    const start = performance.now();
+
+    try {
+      await client.connect();
+      const elapsed = Math.round(performance.now() - start);
+      const info = client.getServerInfo();
+      setTestStatus("success");
+      setTestLatency(elapsed);
+      setTestMessage(info ? `${info.name} v${info.version}` : "Connection successful");
+    } catch (err) {
+      setTestStatus("error");
+      setTestMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      try {
+        await client.disconnect();
+      } catch {
+        // ignore
+      }
+    }
+  }, [form]);
 
   const handleSubmit = form.handleSubmit((values) => {
     onSubmit(values);
@@ -334,11 +478,50 @@ function ServerForm({ editingServer, onSubmit, onCancel }: ServerFormProps) {
         />
       </FormField>
 
-      <div className="flex justify-end gap-2 pt-2">
+      {/* Test connection result */}
+      {testStatus !== "idle" && (
+        <div role="status" aria-live="polite">
+          {testStatus === "testing" && (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Testing connection...
+            </div>
+          )}
+          {testStatus === "success" && (
+            <div className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+              <CheckCircle2 className="h-3 w-3" />
+              {testMessage}
+              {testLatency != null && (
+                <span className="text-muted-foreground">({testLatency}ms)</span>
+              )}
+            </div>
+          )}
+          {testStatus === "error" && (
+            <div className="flex items-start gap-1.5 text-xs text-destructive">
+              <XCircle className="h-3 w-3 shrink-0 mt-0.5" />
+              <span>{testMessage ?? "Connection failed"}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="flex justify-between pt-2">
         <Button type="button" variant="ghost" onClick={onCancel}>
           Cancel
         </Button>
-        <Button type="submit">{editingServer ? "Save" : "Add Server"}</Button>
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleTestConnection}
+            isLoading={testStatus === "testing"}
+            disabled={testStatus === "testing"}
+          >
+            <Wifi className="h-4 w-4 mr-1.5" />
+            Test
+          </Button>
+          <Button type="submit">{editingServer ? "Save" : "Add Server"}</Button>
+        </div>
       </div>
     </form>
   );

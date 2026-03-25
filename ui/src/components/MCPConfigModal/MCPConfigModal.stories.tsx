@@ -24,34 +24,86 @@ type Story = StoryObj<typeof meta>;
 const mockTools: MCPToolDefinition[] = [
   {
     name: "github_search",
-    description: "Search GitHub repositories and code",
-    inputSchema: { type: "object", properties: { query: { type: "string" } } },
+    description:
+      "Search GitHub repositories, code, issues, and pull requests using the GitHub API. Supports advanced query syntax including qualifiers for language, stars, forks, and more.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Search query using GitHub search syntax",
+        },
+        scope: {
+          type: "string",
+          description: "What to search",
+          enum: ["repositories", "code", "issues", "commits"],
+        },
+        per_page: {
+          type: "number",
+          description: "Results per page (max 100)",
+        },
+      },
+      required: ["query"],
+    },
   },
   {
     name: "github_issues",
     description: "Create, list, and manage GitHub issues",
-    inputSchema: { type: "object", properties: { repo: { type: "string" } } },
+    inputSchema: {
+      type: "object",
+      properties: {
+        repo: {
+          type: "string",
+          description: "Repository in owner/repo format",
+        },
+        action: {
+          type: "string",
+          enum: ["list", "create", "update", "close"],
+        },
+        title: { type: "string" },
+        body: { type: "string" },
+        labels: { type: "array", description: "Issue labels to apply" },
+      },
+      required: ["repo", "action"],
+    },
   },
   {
     name: "github_pr",
     description: "Create and review pull requests",
-    inputSchema: { type: "object", properties: { repo: { type: "string" } } },
+    inputSchema: {
+      type: "object",
+      properties: {
+        repo: { type: "string", description: "Repository in owner/repo format" },
+      },
+      required: ["repo"],
+    },
   },
 ];
 
 const mockSlackTools: MCPToolDefinition[] = [
   {
     name: "slack_send",
-    description: "Send messages to Slack channels",
+    description: "Send messages to Slack channels or users via the Slack Web API",
     inputSchema: {
       type: "object",
-      properties: { channel: { type: "string" }, message: { type: "string" } },
+      properties: {
+        channel: { type: "string", description: "Channel name or ID" },
+        message: { type: "string", description: "Message text (supports Slack markdown)" },
+        thread_ts: { type: "string", description: "Thread timestamp to reply in a thread" },
+      },
+      required: ["channel", "message"],
     },
   },
   {
     name: "slack_search",
     description: "Search Slack messages and files",
-    inputSchema: { type: "object", properties: { query: { type: "string" } } },
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search query" },
+      },
+      required: ["query"],
+    },
   },
 ];
 
@@ -153,7 +205,7 @@ export const WithConnectedServers: Story = {
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground max-w-md">
         Two connected servers with 5 tools total. Expand each server to see and toggle individual
-        tools.
+        tools. Click a tool name to expand its full description and parameter schema.
       </p>
       <ModalWrapper initialServers={createMockServers()} />
     </div>
@@ -164,7 +216,7 @@ export const WithDisconnectedServer: Story = {
   render: () => (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground max-w-md">
-        One connected server and one disconnected. The disconnected server shows no tools.
+        One connected server and one disconnected. Toggle the switch to connect or disconnect.
       </p>
       <ModalWrapper
         initialServers={createMockServers([
@@ -173,6 +225,7 @@ export const WithDisconnectedServer: Story = {
             id: "mcp-notion",
             name: "Notion API",
             url: "https://mcp.notion.so",
+            enabled: false,
             status: "disconnected",
             tools: [],
           },
@@ -195,6 +248,7 @@ export const WithConnectionError: Story = {
             id: "mcp-broken",
             name: "Broken Server",
             url: "https://mcp.broken.com",
+            enabled: true,
             status: "error",
             error: "Connection refused: ECONNREFUSED 127.0.0.1:8080",
             tools: [],
@@ -227,35 +281,12 @@ export const WithConnectingServer: Story = {
   ),
 };
 
-export const WithDisabledServer: Story = {
-  render: () => (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground max-w-md">
-        A server that is disabled. Disabled servers don&apos;t show connect button and their tools
-        are not available.
-      </p>
-      <ModalWrapper
-        initialServers={createMockServers([
-          { status: "connected", tools: mockTools },
-          {
-            id: "mcp-disabled",
-            name: "Disabled Server",
-            url: "https://mcp.disabled.com",
-            enabled: false,
-            status: "disconnected",
-            tools: [],
-          },
-        ])}
-      />
-    </div>
-  ),
-};
-
 export const WithManyTools: Story = {
   render: () => (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground max-w-md">
-        A server with many tools. Demonstrates scrolling behavior in the tools list.
+        A server with many tools. Demonstrates scrolling behavior in the tools list. Click any tool
+        to expand its description and parameters.
       </p>
       <ModalWrapper
         initialServers={[
@@ -266,8 +297,31 @@ export const WithManyTools: Story = {
             enabled: true,
             status: "connected",
             tools: [
-              { name: "file_read", description: "Read file contents", inputSchema: {} },
-              { name: "file_write", description: "Write to files", inputSchema: {} },
+              {
+                name: "file_read",
+                description: "Read the contents of a file at the given path",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    path: { type: "string", description: "Absolute file path" },
+                    encoding: { type: "string", enum: ["utf-8", "base64", "binary"] },
+                  },
+                  required: ["path"],
+                },
+              },
+              {
+                name: "file_write",
+                description: "Write content to a file, creating it if it does not exist",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    path: { type: "string", description: "Absolute file path" },
+                    content: { type: "string", description: "Content to write" },
+                    append: { type: "boolean", description: "Append instead of overwrite" },
+                  },
+                  required: ["path", "content"],
+                },
+              },
               { name: "file_delete", description: "Delete files", inputSchema: {} },
               { name: "directory_list", description: "List directory contents", inputSchema: {} },
               { name: "http_get", description: "Make HTTP GET requests", inputSchema: {} },
