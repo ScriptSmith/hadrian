@@ -384,7 +384,7 @@ rstest = "0.24"
 serial_test = "3.2"
 temp-env = "0.3"
 tempfile = "3.23.0"
-testcontainers-modules = { version = "0.14", features = ["postgres", "redis"] }
+testcontainers-modules = { version = "0.15", features = ["postgres", "redis"] }
 tokio-stream = "0.1.17"
 wiremock = "0.6"
 
