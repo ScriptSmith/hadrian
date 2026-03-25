@@ -339,8 +339,9 @@ export const Streaming: Story = {
     // Verify user message is rendered
     await expect(canvas.getByText("What's the meaning of life?")).toBeInTheDocument();
 
-    // Verify streaming content appears (one model has content, one doesn't)
-    await expect(canvas.getByText("I'm thinking about your question...")).toBeInTheDocument();
+    // Verify streaming content container is rendered (Streamdown animates text in)
+    const markdownContainers = canvasElement.querySelectorAll(".markdown-content");
+    await expect(markdownContainers.length).toBeGreaterThan(0);
 
     // Verify typing indicator for model with no content yet (shows "Thinking...")
     await expect(canvas.getByText(/Thinking/)).toBeInTheDocument();

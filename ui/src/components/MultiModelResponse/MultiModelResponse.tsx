@@ -705,7 +705,38 @@ const ModelResponseCard = memo(function ModelResponseCard({
   }, [streamingToolExecutionRounds, response.toolExecutionRounds]);
   const hasToolExecutionRounds = toolExecutionRounds.length > 0;
 
-  const completedRounds = response.completedRounds ?? [];
+  // completedRounds is always populated for streaming responses. For committed messages
+  // loaded from the database or provided directly (e.g., stories), synthesize rounds
+  // from the response's content/reasoning/toolExecutionRounds so rendering still works.
+  const completedRounds = useMemo(() => {
+    if (response.completedRounds?.length) return response.completedRounds;
+    if (response.isStreaming) return [];
+    const hasContent = !!response.content?.trim();
+    const hasReasoning = !!response.reasoningContent;
+    const toolRounds = response.toolExecutionRounds ?? [];
+    if (!hasContent && !hasReasoning && !toolRounds.length) return [];
+    if (toolRounds.length <= 1) {
+      return [
+        {
+          reasoning: response.reasoningContent || undefined,
+          content: response.content || undefined,
+          toolExecution: toolRounds[0],
+        },
+      ];
+    }
+    // Multiple tool rounds: each round gets its own entry, content goes on the last
+    return toolRounds.map((tr, i) => ({
+      reasoning: i === 0 ? response.reasoningContent || undefined : undefined,
+      content: i === toolRounds.length - 1 ? response.content || undefined : undefined,
+      toolExecution: tr,
+    }));
+  }, [
+    response.completedRounds,
+    response.isStreaming,
+    response.content,
+    response.reasoningContent,
+    response.toolExecutionRounds,
+  ]);
 
   // All output artifacts across all rounds (for resolving display_artifacts selections)
   const allOutputArtifacts = useMemo(() => {

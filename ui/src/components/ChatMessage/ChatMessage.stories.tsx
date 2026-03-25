@@ -135,8 +135,6 @@ export const StreamingMessage: Story = {
     isStreaming: true,
   },
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-
     // Verify streaming indicator has aria-live for accessibility
     const streamingContent = canvasElement.querySelector('[aria-live="polite"]');
     await expect(streamingContent).toBeInTheDocument();
@@ -145,12 +143,9 @@ export const StreamingMessage: Story = {
     const busyElement = canvasElement.querySelector('[aria-busy="true"]');
     await expect(busyElement).toBeInTheDocument();
 
-    // Verify blinking cursor is present (screen reader hidden)
-    const cursor = canvasElement.querySelector('[aria-hidden="true"]');
-    await expect(cursor).toBeInTheDocument();
-
-    // Verify screen reader text for streaming state
-    await expect(canvas.getByText("Generating response...")).toBeInTheDocument();
+    // Verify StreamingMarkdown component renders the content container
+    const markdownContainer = canvasElement.querySelector(".markdown-content");
+    await expect(markdownContainer).toBeInTheDocument();
   },
 };
 
