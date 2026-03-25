@@ -469,12 +469,13 @@ fn default_frame_options() -> Option<String> {
 /// - `frame-src blob:` — HTML artifact preview iframes
 /// - `img-src data: blob:` — Generated charts/images and inline assets
 /// - `media-src blob:` — Audio playback from generated TTS blob URLs
-/// - `connect-src https://cdn.jsdelivr.net https://*.wikipedia.org https://www.wikidata.org` —
-///   Pyodide/DuckDB fetch WASM/packages from CDN; Wikipedia and Wikidata tools query REST APIs
+/// - `connect-src https: http: wss: ws:` — MCP servers are user-configured at arbitrary URLs
+///   and discovered at runtime (stored in localStorage), so connect-src must allow all schemes.
+///   Also covers Pyodide/DuckDB CDN fetches and Wikipedia/Wikidata tool queries.
 /// - `object-src 'none'` — Blocks plugins (Flash, Java applets)
 /// - `base-uri 'self'` — Prevents `<base>` tag injection
 fn default_csp() -> Option<String> {
-    Some("default-src 'self'; script-src 'self' blob: 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://*.wikipedia.org https://www.wikidata.org; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'".to_string())
+    Some("default-src 'self'; script-src 'self' blob: 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' https: http: wss: ws:; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'".to_string())
 }
 
 fn default_xss_protection() -> Option<String> {
