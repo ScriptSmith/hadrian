@@ -17,6 +17,8 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Eye,
+  EyeOff,
   Loader2,
   Pencil,
   Plug,
@@ -60,6 +62,7 @@ export interface MCPConfigModalProps {
 const serverFormSchema = z.object({
   name: z.string().min(1, "Name is required"),
   url: z.string().url("Must be a valid URL"),
+  bearerToken: z.string(),
   headers: z.string(),
 });
 
@@ -371,12 +374,25 @@ interface ServerFormProps {
 type TestStatus = "idle" | "testing" | "success" | "error";
 
 function ServerForm({ editingServer, onSubmit, onCancel }: ServerFormProps) {
+  const [showToken, setShowToken] = useState(false);
+
+  // Extract bearer token from existing headers, pass the rest as extra headers
+  const existingHeaders = editingServer?.headers ?? {};
+  const existingBearer = (() => {
+    const auth = existingHeaders["Authorization"] ?? existingHeaders["authorization"] ?? "";
+    return auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  })();
+  const extraHeaders = Object.fromEntries(
+    Object.entries(existingHeaders).filter(([k]) => k.toLowerCase() !== "authorization")
+  );
+
   const form = useForm<ServerFormValues>({
     resolver: zodResolver(serverFormSchema),
     defaultValues: {
       name: editingServer?.name ?? "",
       url: editingServer?.url ?? "",
-      headers: editingServer?.headers ? JSON.stringify(editingServer.headers, null, 2) : "",
+      bearerToken: existingBearer,
+      headers: Object.keys(extraHeaders).length > 0 ? JSON.stringify(extraHeaders, null, 2) : "",
     },
   });
 
@@ -465,15 +481,40 @@ function ServerForm({ editingServer, onSubmit, onCancel }: ServerFormProps) {
       </FormField>
 
       <FormField
-        label="Headers (JSON)"
+        label="Authorization"
+        htmlFor="server-bearer-token"
+        helpText="Bearer token for authenticating with the MCP server"
+        error={form.formState.errors.bearerToken?.message}
+      >
+        <div className="relative">
+          <Input
+            id="server-bearer-token"
+            type={showToken ? "text" : "password"}
+            {...form.register("bearerToken")}
+            placeholder="your-api-key"
+            className="pr-10 font-mono"
+          />
+          <button
+            type="button"
+            onClick={() => setShowToken(!showToken)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-muted text-muted-foreground"
+            aria-label={showToken ? "Hide token" : "Show token"}
+          >
+            {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+          </button>
+        </div>
+      </FormField>
+
+      <FormField
+        label="Additional Headers (JSON)"
         htmlFor="server-headers"
-        helpText="Optional HTTP headers for authentication (e.g., API keys)"
+        helpText="Optional extra HTTP headers beyond authorization"
         error={form.formState.errors.headers?.message}
       >
         <textarea
           id="server-headers"
           {...form.register("headers")}
-          placeholder='{"Authorization": "Bearer your-api-key"}'
+          placeholder='{"X-Custom-Header": "value"}'
           className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono min-h-[80px]"
         />
       </FormField>
@@ -554,13 +595,20 @@ export function MCPConfigModal({ open, onClose }: MCPConfigModalProps) {
 
   const handleFormSubmit = useCallback(
     (values: ServerFormValues) => {
-      // Parse headers JSON if provided
+      // Merge bearer token + extra headers
       let headers: Record<string, string> | undefined;
+      const extra: Record<string, string> = {};
       if (values.headers) {
         try {
-          headers = JSON.parse(values.headers);
+          Object.assign(extra, JSON.parse(values.headers));
         } catch {
-          // Invalid JSON - ignore headers
+          // Invalid JSON - ignore extra headers
+        }
+      }
+      if (values.bearerToken || Object.keys(extra).length > 0) {
+        headers = { ...extra };
+        if (values.bearerToken) {
+          headers["Authorization"] = `Bearer ${values.bearerToken}`;
         }
       }
 
