@@ -1,7 +1,12 @@
 import { useCallback, useRef } from "react";
 
 import { useAuth } from "@/auth";
-import { useStreamingStore, useAllStreams, useIsStreaming } from "@/stores/streamingStore";
+import {
+  useStreamingStore,
+  useAllStreams,
+  useIsStreaming,
+  type StreamingResponse,
+} from "@/stores/streamingStore";
 import {
   useConversationStore,
   useMessages,
@@ -218,6 +223,16 @@ interface StreamResponseResult {
   requestBody?: Record<string, unknown>;
   /** The response.output array from the completed response (for debugging) */
   responseOutput?: unknown[];
+}
+
+/** Extract the metadata fields from a streaming response for committing to the conversation store. */
+function commitFieldsFromStream(stream: StreamingResponse | undefined) {
+  return {
+    citations: stream?.citations,
+    artifacts: stream?.artifacts,
+    toolExecutionRounds: stream?.toolExecutionRounds,
+    completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
+  };
 }
 
 export function useChat({
@@ -1774,10 +1789,7 @@ export function useChat({
               content: result.content,
               usage: result.usage,
               modeMetadata: result.modeMetadata,
-              citations: stream?.citations,
-              artifacts: stream?.artifacts,
-              toolExecutionRounds: stream?.toolExecutionRounds,
-              completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
+              ...commitFieldsFromStream(stream),
             });
           }
         }
@@ -1793,10 +1805,7 @@ export function useChat({
               content: result.content,
               usage: result.usage,
               modeMetadata: result.modeMetadata,
-              citations: stream?.citations,
-              artifacts: stream?.artifacts,
-              toolExecutionRounds: stream?.toolExecutionRounds,
-              completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
+              ...commitFieldsFromStream(stream),
             });
           }
         }
@@ -1807,6 +1816,8 @@ export function useChat({
           const instance = instances[index];
           // Use instance ID for stream lookup (streams are keyed by instance ID)
           const stream = currentStreams.get(instance.id);
+          // Only include debugMessageId for multiple mode (default)
+          const msgDebugId = conversationMode === "multiple" ? debugMessageId : undefined;
           if (result !== null) {
             allResponses.push({
               model: instance.modelId,
@@ -1814,30 +1825,18 @@ export function useChat({
               content: result.content,
               usage: result.usage,
               modeMetadata: result.modeMetadata,
-              citations: stream?.citations,
-              artifacts: stream?.artifacts,
-              toolExecutionRounds: stream?.toolExecutionRounds,
-              completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
-              // Only include debugMessageId for multiple mode (default)
-              debugMessageId: conversationMode === "multiple" ? debugMessageId : undefined,
+              debugMessageId: msgDebugId,
+              ...commitFieldsFromStream(stream),
             });
-          } else {
-            // Check if this instance has an error in the streaming store
-            if (stream?.error) {
-              allResponses.push({
-                model: instance.modelId,
-                instanceId: instance.id,
-                content: "",
-                error: stream.error,
-                citations: stream?.citations,
-                artifacts: stream?.artifacts,
-                toolExecutionRounds: stream?.toolExecutionRounds,
-                completedRounds: stream?.completedRounds.length
-                  ? stream.completedRounds
-                  : undefined,
-                debugMessageId: conversationMode === "multiple" ? debugMessageId : undefined,
-              });
-            }
+          } else if (stream?.error) {
+            allResponses.push({
+              model: instance.modelId,
+              instanceId: instance.id,
+              content: "",
+              error: stream.error,
+              debugMessageId: msgDebugId,
+              ...commitFieldsFromStream(stream),
+            });
           }
         }
       }
@@ -1913,11 +1912,8 @@ export function useChat({
         replaceAssistantMessage(userMessageId, model, {
           content: result.content,
           usage: result.usage,
-          completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
-          toolExecutionRounds: stream?.toolExecutionRounds,
-          citations: stream?.citations,
-          artifacts: stream?.artifacts,
           debugMessageId,
+          ...commitFieldsFromStream(stream),
         });
       }
 
@@ -2029,11 +2025,8 @@ export function useChat({
               instanceId: instance.id,
               content: result.content,
               usage: result.usage,
-              citations: stream?.citations,
-              artifacts: stream?.artifacts,
-              toolExecutionRounds: stream?.toolExecutionRounds,
-              completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
               debugMessageId,
+              ...commitFieldsFromStream(stream),
             });
           } else if (stream?.error) {
             allResponses.push({
@@ -2041,11 +2034,8 @@ export function useChat({
               instanceId: instance.id,
               content: "",
               error: stream.error,
-              citations: stream?.citations,
-              artifacts: stream?.artifacts,
-              toolExecutionRounds: stream?.toolExecutionRounds,
-              completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
               debugMessageId,
+              ...commitFieldsFromStream(stream),
             });
           }
         }
