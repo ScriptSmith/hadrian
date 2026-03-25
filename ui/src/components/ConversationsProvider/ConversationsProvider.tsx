@@ -31,24 +31,13 @@ const SYNC_DEBOUNCE_MS = 2000;
 const MAX_RETRY_ATTEMPTS = 3;
 const BASE_RETRY_DELAY_MS = 1000;
 
+/** Stored message: same as ChatMessage but with timestamp serialized to string. */
+type StoredMessage = Omit<ChatMessage, "timestamp"> & { timestamp: string };
+
 interface StoredConversation {
   id: string;
   title: string;
-  messages: Array<{
-    id: string;
-    role: "user" | "assistant" | "system";
-    content: string;
-    model?: string;
-    timestamp: string;
-    files?: Array<{
-      id: string;
-      name: string;
-      type: string;
-      size: number;
-      base64: string;
-      preview?: string;
-    }>;
-  }>;
+  messages: StoredMessage[];
   models: string[];
   createdAt: string;
   updatedAt: string;
