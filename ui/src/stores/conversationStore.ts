@@ -113,8 +113,7 @@ interface ConversationActions {
   replaceAssistantMessage: (
     userMessageId: string,
     model: string,
-    content: string,
-    usage?: MessageUsage
+    updates: Partial<ChatMessage>
   ) => void;
   /** Set feedback on a message */
   setMessageFeedback: (userMessageId: string, model: string, feedback: ResponseFeedback) => void;
@@ -223,7 +222,7 @@ export const useConversationStore = create<ConversationStore>((set) => ({
       return { messages: state.messages.slice(0, messageIndex + 1) };
     }),
 
-  replaceAssistantMessage: (userMessageId, model, content, usage) =>
+  replaceAssistantMessage: (userMessageId, model, updates) =>
     set((state) => {
       const messages = [...state.messages];
       const userIndex = messages.findIndex((m) => m.id === userMessageId);
@@ -235,8 +234,7 @@ export const useConversationStore = create<ConversationStore>((set) => ({
         if (messages[i].role === "assistant" && messages[i].model === model) {
           messages[i] = {
             ...messages[i],
-            content,
-            usage,
+            ...updates,
             timestamp: new Date(),
           };
           replaced = true;
@@ -253,10 +251,10 @@ export const useConversationStore = create<ConversationStore>((set) => ({
         messages.splice(insertIndex, 0, {
           id: crypto.randomUUID(),
           role: "assistant",
-          content,
+          content: updates.content ?? "",
           model,
           timestamp: new Date(),
-          usage,
+          ...updates,
         });
       }
 

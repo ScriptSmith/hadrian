@@ -1896,19 +1896,43 @@ export function useChat({
       const controller = new AbortController();
       abortControllersRef.current = [controller];
 
-      // Stream the response
-      const result = await streamResponse(model, inputItems, controller, settings);
+      const debugMessageId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
+      // Stream the response (with tool execution support)
+      const result = await streamWithToolExecution(
+        model,
+        inputItems,
+        controller,
+        settings,
+        model,
+        debugMessageId
+      );
 
       if (result !== null) {
-        // Use the conversation store's replaceAssistantMessage action
-        replaceAssistantMessage(userMessageId, model, result.content, result.usage);
+        const stream = useStreamingStore.getState().streams.get(model);
+        replaceAssistantMessage(userMessageId, model, {
+          content: result.content,
+          usage: result.usage,
+          completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
+          toolExecutionRounds: stream?.toolExecutionRounds,
+          citations: stream?.citations,
+          artifacts: stream?.artifacts,
+          debugMessageId,
+        });
       }
 
       // Clear streaming state
       streamingStore.clearStreams();
       abortControllersRef.current = [];
     },
-    [messages, settings, historyMode, streamResponse, streamingStore, replaceAssistantMessage]
+    [
+      messages,
+      settings,
+      historyMode,
+      streamWithToolExecution,
+      streamingStore,
+      replaceAssistantMessage,
+    ]
   );
 
   /**
@@ -1954,6 +1978,7 @@ export function useChat({
         abortControllersRef.current = controllers;
 
         const filterFn = createFilterFn();
+        const debugMessageId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
         // Get messages up to and including the edited message (use updated content)
         // We need to read the latest messages from the store after our updates
@@ -1969,7 +1994,7 @@ export function useChat({
             controllers[index],
             settings,
             instance.id,
-            undefined,
+            debugMessageId,
             instance.parameters,
             instance.label
           );
@@ -1990,6 +2015,8 @@ export function useChat({
           citations?: Citation[];
           artifacts?: Artifact[];
           toolExecutionRounds?: ToolExecutionRound[];
+          completedRounds?: CompletedRound[];
+          debugMessageId?: string;
         }> = [];
 
         for (let index = 0; index < instances.length; index++) {
@@ -2005,6 +2032,8 @@ export function useChat({
               citations: stream?.citations,
               artifacts: stream?.artifacts,
               toolExecutionRounds: stream?.toolExecutionRounds,
+              completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
+              debugMessageId,
             });
           } else if (stream?.error) {
             allResponses.push({
@@ -2015,6 +2044,8 @@ export function useChat({
               citations: stream?.citations,
               artifacts: stream?.artifacts,
               toolExecutionRounds: stream?.toolExecutionRounds,
+              completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
+              debugMessageId,
             });
           }
         }

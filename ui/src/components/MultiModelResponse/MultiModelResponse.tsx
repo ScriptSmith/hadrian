@@ -35,7 +35,6 @@ import { ArtifactList, ArtifactModal } from "@/components/Artifact";
 import { CitationList } from "@/components/CitationList";
 import { DebugModal } from "@/components/DebugModal";
 import { QuoteSelectionPopover } from "@/components/QuoteSelectionPopover";
-import { ToolExecutionBlock } from "@/components/ToolExecution";
 import type { Artifact as ArtifactType, DisplaySelectionData } from "@/components/chat-types";
 import { useDebugInfo } from "@/stores/debugStore";
 import { ContentRound } from "./ContentRound";
@@ -54,8 +53,6 @@ import type {
   ToolExecutionRound,
 } from "@/components/chat-types";
 import { DEFAULT_ACTION_CONFIG } from "@/components/chat-types";
-import { ReasoningSection } from "@/components/ReasoningSection/ReasoningSection";
-import { StreamingMarkdown } from "@/components/StreamingMarkdown/StreamingMarkdown";
 import {
   ResponseActions,
   type ResponseActionConfig as ActionConfig,
@@ -708,12 +705,12 @@ const ModelResponseCard = memo(function ModelResponseCard({
   }, [streamingToolExecutionRounds, response.toolExecutionRounds]);
   const hasToolExecutionRounds = toolExecutionRounds.length > 0;
 
+  const completedRounds = response.completedRounds ?? [];
+
   // All output artifacts across all rounds (for resolving display_artifacts selections)
   const allOutputArtifacts = useMemo(() => {
     const result: ArtifactType[] = [];
-    // Check completedRounds first (unified source for multi-round)
-    const rounds = response.completedRounds ?? [];
-    for (const round of rounds) {
+    for (const round of completedRounds) {
       if (round.toolExecution) {
         for (const execution of round.toolExecution.executions) {
           for (const a of execution.outputArtifacts) {
@@ -722,16 +719,8 @@ const ModelResponseCard = memo(function ModelResponseCard({
         }
       }
     }
-    // Also check standalone toolExecutionRounds (single-round path)
-    for (const round of toolExecutionRounds) {
-      for (const execution of round.executions) {
-        for (const a of execution.outputArtifacts) {
-          if (a.type !== "display_selection") result.push(a);
-        }
-      }
-    }
     return result;
-  }, [response.completedRounds, toolExecutionRounds]);
+  }, [completedRounds]);
 
   // Extract display selection for a specific tool execution round
   const getDisplaySelectionForRound = useCallback(
@@ -746,13 +735,6 @@ const ModelResponseCard = memo(function ModelResponseCard({
     },
     []
   );
-
-  // Global display selection (for single-round fallback)
-  const displaySelection = useMemo((): DisplaySelectionData | null => {
-    const selectionArtifact = artifacts.find((a) => a.type === "display_selection");
-    if (!selectionArtifact) return null;
-    return selectionArtifact.data as DisplaySelectionData;
-  }, [artifacts]);
 
   // Measure header width to determine if we should collapse controls
   const headerRef = useRef<HTMLDivElement>(null);
@@ -941,119 +923,70 @@ const ModelResponseCard = memo(function ModelResponseCard({
           </div>
         ) : (
           <>
-            {/* Content: rounds or single-round reasoning + content */}
+            {/* Content: unified rendering via ContentRound for all responses */}
             {(() => {
-              const rounds = response.completedRounds;
-              if (rounds && rounds.length > 0) {
-                // Multi-round: render each completed round + in-flight round
-                const currentReasoning =
-                  response.reasoningContent &&
-                  !rounds.some((r) => r.reasoning === response.reasoningContent)
-                    ? response.reasoningContent
-                    : null;
-                const currentContent =
-                  response.isStreaming && response.content?.trim() ? response.content : null;
-                return (
-                  <div className="space-y-3">
-                    {rounds.map((round, i) => (
-                      <ContentRound
-                        key={i}
-                        reasoning={round.reasoning}
-                        content={round.content}
-                        toolExecutionRound={round.toolExecution}
-                        isToolsStreaming={
-                          response.isStreaming &&
-                          i === rounds.length - 1 &&
-                          !!round.toolExecution?.executions.some(
-                            (e) => e.status === "pending" || e.status === "running"
-                          )
-                        }
-                        onArtifactClick={handleArtifactClick}
-                        displaySelection={
-                          round.toolExecution
-                            ? getDisplaySelectionForRound(round.toolExecution)
-                            : null
-                        }
-                        allOutputArtifacts={allOutputArtifacts}
-                      />
-                    ))}
-                    {(currentReasoning || currentContent) && (
-                      <ContentRound
-                        reasoning={currentReasoning}
-                        content={currentContent}
-                        isStreaming={response.isStreaming}
-                        isReasoningStreaming={response.isStreaming && !currentContent}
-                      />
-                    )}
-                    <StreamingStatusIndicator
-                      phase={streamingPhase}
-                      toolStatusMessage={toolStatusMessage}
-                    />
-                  </div>
-                );
-              }
-              // Single-round: reasoning then content
-              const singleReasoning = response.reasoningContent || response.usage?.reasoningContent;
-              if (compactMode) {
-                return (
-                  <>
-                    {response.content && (
-                      <StreamingMarkdown
-                        content={response.content}
-                        isStreaming={response.isStreaming}
-                      />
-                    )}
-                  </>
-                );
-              }
+              // Detect in-flight content that hasn't been captured in a completed round yet
+              const currentReasoning =
+                response.isStreaming &&
+                response.reasoningContent &&
+                !completedRounds.some((r) => r.reasoning === response.reasoningContent)
+                  ? response.reasoningContent
+                  : null;
+              const currentContent =
+                response.isStreaming && response.content?.trim() ? response.content : null;
+              // During first streaming frame (no rounds yet), show in-flight content directly
+              const showInFlight =
+                completedRounds.length === 0 || currentReasoning || currentContent;
               return (
-                <>
-                  {singleReasoning && (
-                    <ReasoningSection
-                      content={singleReasoning}
-                      isStreaming={response.isStreaming && !response.content}
-                      tokenCount={response.usage?.reasoningTokens}
+                <div className="space-y-3">
+                  {completedRounds.map((round, i) => (
+                    <ContentRound
+                      key={i}
+                      reasoning={round.reasoning}
+                      content={round.content}
+                      reasoningTokenCount={
+                        completedRounds.length === 1 ? response.usage?.reasoningTokens : undefined
+                      }
+                      toolExecutionRound={round.toolExecution}
+                      isToolsStreaming={
+                        response.isStreaming &&
+                        i === completedRounds.length - 1 &&
+                        !!round.toolExecution?.executions.some(
+                          (e) => e.status === "pending" || e.status === "running"
+                        )
+                      }
+                      onArtifactClick={handleArtifactClick}
+                      displaySelection={
+                        round.toolExecution
+                          ? getDisplaySelectionForRound(round.toolExecution)
+                          : null
+                      }
+                      allOutputArtifacts={allOutputArtifacts}
                     />
-                  )}
-                  {response.content && (
-                    <StreamingMarkdown
-                      content={response.content}
+                  ))}
+                  {showInFlight && completedRounds.length > 0 && (
+                    <ContentRound
+                      reasoning={currentReasoning}
+                      content={currentContent}
                       isStreaming={response.isStreaming}
+                      isReasoningStreaming={response.isStreaming && !currentContent}
                     />
                   )}
-                </>
+                  <StreamingStatusIndicator
+                    phase={streamingPhase}
+                    toolStatusMessage={toolStatusMessage}
+                  />
+                </div>
               );
             })()}
-            {/* Streaming status indicator (outside multi-round div for single-round paths) */}
-            {!response.completedRounds?.length && (
-              <StreamingStatusIndicator
-                phase={streamingPhase}
-                toolStatusMessage={toolStatusMessage}
-              />
-            )}
             {/* Citations from file_search/web_search */}
             {hasCitations && (
               <CitationList citations={citations} className="mt-4 pt-4 border-t" compact={false} />
             )}
-            {/* Tool execution / artifact display */}
-            {compactMode
-              ? null
-              : hasToolExecutionRounds
-                ? // Multi-round with completedRounds: per-round tool execution + artifacts rendered above.
-                  // Only show ToolExecutionBlock for single-round fallback (no completedRounds).
-                  !response.completedRounds && (
-                    <div className="mt-4 pt-4 border-t">
-                      <ToolExecutionBlock
-                        rounds={toolExecutionRounds}
-                        isStreaming={response.isStreaming}
-                        onArtifactClick={handleArtifactClick}
-                        displaySelection={displaySelection}
-                      />
-                    </div>
-                  )
-                : hasArtifacts && (
-                    <ArtifactList artifacts={artifacts} className="mt-4 pt-4 border-t" />
-                  )}
+            {/* Standalone artifacts (not from tool execution) */}
+            {!compactMode && hasArtifacts && !hasToolExecutionRounds && (
+              <ArtifactList artifacts={artifacts} className="mt-4 pt-4 border-t" />
+            )}
           </>
         )}
       </div>
