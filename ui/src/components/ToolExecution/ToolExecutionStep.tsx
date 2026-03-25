@@ -12,6 +12,7 @@ import {
   Database,
   BarChart3,
   Eye,
+  Plug,
   Maximize2,
 } from "lucide-react";
 import type {
@@ -109,8 +110,15 @@ function ToolExecutionStepComponent({
 }: ToolExecutionStepProps) {
   const [isFullCodeExpanded, setIsFullCodeExpanded] = useState(defaultInputExpanded);
 
-  const Icon = TOOL_ICONS[execution.toolName] || Terminal;
-  const displayName = TOOL_NAMES[execution.toolName] || execution.toolName;
+  const isMCP = execution.toolName.startsWith("mcp_");
+  const Icon = isMCP ? Plug : TOOL_ICONS[execution.toolName] || Terminal;
+  const displayName = isMCP
+    ? (() => {
+        const withoutPrefix = execution.toolName.slice(4);
+        const idx = withoutPrefix.indexOf("_");
+        return idx !== -1 ? withoutPrefix.slice(idx + 1) : withoutPrefix;
+      })()
+    : TOOL_NAMES[execution.toolName] || execution.toolName;
 
   // Filter out display_selection artifacts - they're meta-artifacts for controlling display
   const visibleOutputArtifacts = useMemo(
