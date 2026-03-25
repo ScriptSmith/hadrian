@@ -158,7 +158,7 @@ pub async fn execute_web_search(
                 .map(|r| WebSearchResult {
                     title: r.title,
                     url: r.url,
-                    content: r.content,
+                    content: truncate(r.content),
                     score: r.score,
                 })
                 .collect())
