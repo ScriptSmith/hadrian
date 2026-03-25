@@ -396,7 +396,7 @@
         "max_response_body_bytes": 104857600,
         "port": 8080,
         "security_headers": {
-          "content_security_policy": "default-src 'self'; script-src 'self' blob: 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://*.wikipedia.org https://www.wikidata.org; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'",
+          "content_security_policy": "default-src 'self'; script-src 'self' blob: 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' https: http: wss: ws:; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'",
           "content_type_options": "nosniff",
           "enabled": true,
           "frame_options": "DENY",
@@ -8011,7 +8011,7 @@
       "properties": {
         "content_security_policy": {
           "description": "Content-Security-Policy header value. Controls resource loading to prevent XSS attacks.",
-          "default": "default-src 'self'; script-src 'self' blob: 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://*.wikipedia.org https://www.wikidata.org; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'",
+          "default": "default-src 'self'; script-src 'self' blob: 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' https: http: wss: ws:; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'",
           "type": [
             "string",
             "null"
@@ -8302,7 +8302,7 @@
         "security_headers": {
           "description": "Security headers configuration.",
           "default": {
-            "content_security_policy": "default-src 'self'; script-src 'self' blob: 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://*.wikipedia.org https://www.wikidata.org; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'",
+            "content_security_policy": "default-src 'self'; script-src 'self' blob: 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' https: http: wss: ws:; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'",
             "content_type_options": "nosniff",
             "enabled": true,
             "frame_options": "DENY",
