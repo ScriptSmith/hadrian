@@ -971,6 +971,10 @@ fn generate_config(mode: DeploymentMode, wizard_config: &WizardConfig) -> String
     config.push_str("[server]\n");
     config.push_str("host = \"0.0.0.0\"\n");
     config.push_str("port = 8080\n");
+    if matches!(mode, DeploymentMode::LocalDev) {
+        config.push_str("# Allow providers on localhost (e.g. Ollama)\n");
+        config.push_str("allow_loopback_urls = true\n");
+    }
     config.push('\n');
 
     // CORS (always enabled for UI)
@@ -1179,6 +1183,7 @@ mod tests {
         let config = generate_config(DeploymentMode::LocalDev, &wizard_config);
 
         assert!(config.contains("[server]"));
+        assert!(config.contains("allow_loopback_urls = true"));
         assert!(config.contains("[database]"));
         assert!(config.contains("type = \"sqlite\""));
         assert!(config.contains("[cache]"));
@@ -1222,6 +1227,7 @@ mod tests {
 
         let config = generate_config(DeploymentMode::SingleNode, &wizard_config);
 
+        assert!(!config.contains("allow_loopback_urls"));
         assert!(config.contains("[auth.mode]"));
         assert!(config.contains("type = \"api_key\""));
         assert!(config.contains("[auth.api_key]"));
