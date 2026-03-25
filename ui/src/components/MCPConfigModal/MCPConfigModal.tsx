@@ -64,6 +64,7 @@ const serverFormSchema = z.object({
   url: z.string().url("Must be a valid URL"),
   bearerToken: z.string(),
   headers: z.string(),
+  timeout: z.number().int().min(1, "Must be at least 1 second"),
 });
 
 type ServerFormValues = z.infer<typeof serverFormSchema>;
@@ -393,6 +394,7 @@ function ServerForm({ editingServer, onSubmit, onCancel }: ServerFormProps) {
       url: editingServer?.url ?? "",
       bearerToken: existingBearer,
       headers: Object.keys(extraHeaders).length > 0 ? JSON.stringify(extraHeaders, null, 2) : "",
+      timeout: Math.round((editingServer?.timeout ?? 300000) / 1000),
     },
   });
 
@@ -526,6 +528,20 @@ function ServerForm({ editingServer, onSubmit, onCancel }: ServerFormProps) {
         />
       </FormField>
 
+      <FormField
+        label="Request Timeout (seconds)"
+        htmlFor="server-timeout"
+        helpText="Maximum time to wait for MCP tool responses"
+        error={form.formState.errors.timeout?.message}
+      >
+        <Input
+          id="server-timeout"
+          type="number"
+          min={1}
+          {...form.register("timeout", { valueAsNumber: true })}
+        />
+      </FormField>
+
       {/* Test connection result */}
       {testStatus !== "idle" && (
         <div role="status" aria-live="polite">
@@ -619,12 +635,15 @@ export function MCPConfigModal({ open, onClose }: MCPConfigModalProps) {
         }
       }
 
+      const timeout = values.timeout * 1000;
+
       if (editingServer) {
         // Update existing server
         updateServer(editingServer.id, {
           name: values.name,
           url: values.url,
           headers,
+          timeout,
         });
       } else {
         // Add new server
@@ -633,6 +652,7 @@ export function MCPConfigModal({ open, onClose }: MCPConfigModalProps) {
           url: values.url,
           enabled: true,
           headers,
+          timeout,
         });
       }
 

@@ -26,7 +26,7 @@
  *
  * ## Persistence
  *
- * Only server configurations are persisted (id, name, url, enabled, headers).
+ * Only server configurations are persisted (id, name, url, enabled, headers, timeout).
  * Runtime state (status, tools, resources) is reset on page reload.
  */
 
@@ -98,6 +98,7 @@ function getClient(server: MCPServerConfig): MCPClient {
       url: server.url,
       name: server.name,
       headers: server.headers,
+      timeout: server.timeout,
     });
     clients.set(server.id, client);
   }
@@ -179,7 +180,7 @@ export const useMCPStore = create<MCPStore>()(
       updateServer: (serverId, updates) => {
         // If URL or headers change, we need to recreate the client
         const server = get().servers.find((s) => s.id === serverId);
-        if (server && (updates.url || updates.headers)) {
+        if (server && (updates.url || updates.headers || updates.timeout)) {
           removeClient(serverId);
         }
 
@@ -400,6 +401,7 @@ export const useMCPStore = create<MCPStore>()(
           url: s.url,
           enabled: s.enabled,
           headers: s.headers,
+          timeout: s.timeout,
           // Persist tool enable/disable preferences
           toolsEnabled: s.toolsEnabled,
         })),

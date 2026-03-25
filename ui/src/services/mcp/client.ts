@@ -54,7 +54,7 @@ export interface MCPClientConfig {
   name?: string;
   /** Optional HTTP headers for auth */
   headers?: Record<string, string>;
-  /** Request timeout in ms (default: 30000) */
+  /** Request timeout in ms (default: 300000) */
   timeout?: number;
 }
 
@@ -105,7 +105,7 @@ export class MCPClient {
 
   constructor(config: MCPClientConfig) {
     this.config = {
-      timeout: 30000,
+      timeout: 300000,
       ...config,
     };
   }

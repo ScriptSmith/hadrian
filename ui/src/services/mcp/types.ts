@@ -312,6 +312,8 @@ export interface MCPServerConfig {
   enabled: boolean;
   /** Optional HTTP headers for authentication */
   headers?: Record<string, string>;
+  /** Request timeout in ms (default: 300000) */
+  timeout?: number;
 }
 
 /** MCP Server state (config + runtime state) */
