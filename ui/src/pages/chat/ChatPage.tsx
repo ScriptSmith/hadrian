@@ -24,6 +24,7 @@ import {
   useClientSideRAG,
   useEnabledTools,
   useDataFiles,
+  useMaxToolIterations,
   useCaptureRawSSEEvents,
   useSubAgentModel,
 } from "@/stores/chatUIStore";
@@ -56,6 +57,7 @@ export default function ChatPage() {
   const clientSideRAG = useClientSideRAG();
   const enabledTools = useEnabledTools();
   const dataFiles = useDataFiles();
+  const maxToolIterations = useMaxToolIterations();
   const captureRawSSEEvents = useCaptureRawSSEEvents();
   const subAgentModel = useSubAgentModel();
 
@@ -164,6 +166,7 @@ export default function ChatPage() {
     clientSideToolExecution,
     enabledTools,
     dataFiles: registeredDataFiles.length > 0 ? registeredDataFiles : undefined,
+    maxToolIterations,
     captureRawSSEEvents,
     subAgentModel,
     projectId: currentConversation?.projectId ?? pendingProject.id ?? undefined,

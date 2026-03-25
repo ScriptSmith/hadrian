@@ -383,12 +383,14 @@ export const WithPromptTemplates: Story = {
 function WithDebugOptionsStory() {
   const [open, setOpen] = useState(true);
   const [systemPrompt, setSystemPrompt] = useState("");
+  const [maxToolIterations, setMaxToolIterations] = useState(25);
   const [captureRawSSEEvents, setCaptureRawSSEEvents] = useState(false);
 
   return (
     <>
       <Button onClick={() => setOpen(true)}>Open Settings</Button>
       <div className="mt-4 text-sm text-muted-foreground">
+        <div>Max tool iterations: {maxToolIterations}</div>
         <div>Capture SSE events: {captureRawSSEEvents ? "enabled" : "disabled"}</div>
       </div>
       <ConversationSettingsModal
@@ -396,6 +398,8 @@ function WithDebugOptionsStory() {
         onClose={() => setOpen(false)}
         systemPrompt={systemPrompt}
         onSystemPromptChange={setSystemPrompt}
+        maxToolIterations={maxToolIterations}
+        onMaxToolIterationsChange={setMaxToolIterations}
         captureRawSSEEvents={captureRawSSEEvents}
         onCaptureRawSSEEventsChange={setCaptureRawSSEEvents}
       />
@@ -414,6 +418,7 @@ function AllFeaturesStory() {
   );
   const [vectorStoreIds, setVectorStoreIds] = useState<string[]>(["vs_001", "vs_002"]);
   const [clientSideRAG, setClientSideRAG] = useState(false);
+  const [maxToolIterations, setMaxToolIterations] = useState(25);
   const [captureRawSSEEvents, setCaptureRawSSEEvents] = useState(false);
 
   return (
@@ -425,7 +430,7 @@ function AllFeaturesStory() {
           <li>System Prompt with templates</li>
           <li>Knowledge Base (vector stores)</li>
           <li>Response Actions</li>
-          <li>Debug Options</li>
+          <li>Advanced options</li>
         </ul>
         <p className="mt-2 text-xs">
           Note: Per-model parameters are now configured via the settings icon on each model chip in
@@ -443,6 +448,8 @@ function AllFeaturesStory() {
         vectorStoreOwnerId="user_123"
         clientSideRAG={clientSideRAG}
         onClientSideRAGChange={setClientSideRAG}
+        maxToolIterations={maxToolIterations}
+        onMaxToolIterationsChange={setMaxToolIterations}
         captureRawSSEEvents={captureRawSSEEvents}
         onCaptureRawSSEEventsChange={setCaptureRawSSEEvents}
       />

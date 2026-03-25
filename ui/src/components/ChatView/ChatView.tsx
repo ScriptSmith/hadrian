@@ -15,6 +15,7 @@ import {
   useVectorStoreIds,
   useClientSideRAG,
   useEnabledTools,
+  useMaxToolIterations,
   useCaptureRawSSEEvents,
   useTTSVoice,
   useTTSSpeed,
@@ -107,6 +108,7 @@ export function ChatView({
   const vectorStoreIds = useVectorStoreIds();
   const clientSideRAG = useClientSideRAG();
   const enabledTools = useEnabledTools();
+  const maxToolIterations = useMaxToolIterations();
   const captureRawSSEEvents = useCaptureRawSSEEvents();
   const ttsVoice = useTTSVoice();
   const ttsSpeed = useTTSSpeed();
@@ -125,6 +127,7 @@ export function ChatView({
     setVectorStoreIds,
     setClientSideRAG,
     setEnabledTools,
+    setMaxToolIterations,
     setCaptureRawSSEEvents,
     setTTSVoice,
     setTTSSpeed,
@@ -254,6 +257,8 @@ export function ChatView({
         vectorStoreOwnerId={vectorStoreOwnerId}
         clientSideRAG={clientSideRAG}
         onClientSideRAGChange={setClientSideRAG}
+        maxToolIterations={maxToolIterations}
+        onMaxToolIterationsChange={setMaxToolIterations}
         captureRawSSEEvents={captureRawSSEEvents}
         onCaptureRawSSEEventsChange={setCaptureRawSSEEvents}
         ttsVoice={ttsVoice}

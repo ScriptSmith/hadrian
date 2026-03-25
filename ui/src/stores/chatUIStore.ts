@@ -147,6 +147,11 @@ interface ChatUIState {
    */
   dataFiles: DataFile[];
   /**
+   * Maximum number of tool execution iterations before stopping.
+   * Prevents infinite loops when client-side tool execution is enabled.
+   */
+  maxToolIterations: number;
+  /**
    * Whether to capture raw SSE events during streaming for debugging.
    * Disabled by default as it can generate significant data.
    */
@@ -283,6 +288,8 @@ interface ChatUIActions {
   ) => void;
   /** Clear all data files */
   clearDataFiles: () => void;
+  /** Set maximum tool execution iterations */
+  setMaxToolIterations: (iterations: number) => void;
   /** Set whether to capture raw SSE events */
   setCaptureRawSSEEvents: (capture: boolean) => void;
   /** Hide a specific response by groupId and instanceId */
@@ -376,6 +383,7 @@ const initialState: ChatUIState = {
   clientSideRAG: false,
   enabledTools: [],
   dataFiles: [],
+  maxToolIterations: 25,
   captureRawSSEEvents: false,
   hiddenResponseIds: new Set<string>(),
   ttsActiveResponseId: null,
@@ -566,6 +574,8 @@ export const useChatUIStore = create<ChatUIStore>((set) => ({
 
   clearDataFiles: () => set({ dataFiles: [] }),
 
+  setMaxToolIterations: (iterations) => set({ maxToolIterations: iterations }),
+
   setCaptureRawSSEEvents: (capture) => set({ captureRawSSEEvents: capture }),
 
   hideResponse: (groupId, instanceId) =>
@@ -731,6 +741,10 @@ export const useIsToolEnabled = (toolId: string) =>
 
 /** Get data files registered with DuckDB */
 export const useDataFiles = () => useChatUIStore((state: ChatUIState) => state.dataFiles);
+
+/** Get maximum tool execution iterations */
+export const useMaxToolIterations = () =>
+  useChatUIStore((state: ChatUIState) => state.maxToolIterations);
 
 /** Get whether to capture raw SSE events */
 export const useCaptureRawSSEEvents = () =>
