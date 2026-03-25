@@ -176,6 +176,8 @@ pub(crate) fn default_config_toml() -> &'static str {
 [server]
 host = "127.0.0.1"
 port = 8080
+# Allow providers on localhost (e.g. Ollama)
+allow_loopback_urls = true
 
 # CORS: Allow local development origins
 [server.cors]
