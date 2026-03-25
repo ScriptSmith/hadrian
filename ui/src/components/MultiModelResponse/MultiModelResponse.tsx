@@ -925,7 +925,9 @@ const ModelResponseCard = memo(function ModelResponseCard({
           <>
             {/* Content: unified rendering via ContentRound for all responses */}
             {(() => {
-              // Detect in-flight content that hasn't been captured in a completed round yet
+              // Detect in-flight content that hasn't been captured in a completed round yet.
+              // completedRounds is always populated (even for single-round responses),
+              // so this only shows content actively streaming in the current round.
               const currentReasoning =
                 response.isStreaming &&
                 response.reasoningContent &&
@@ -934,9 +936,7 @@ const ModelResponseCard = memo(function ModelResponseCard({
                   : null;
               const currentContent =
                 response.isStreaming && response.content?.trim() ? response.content : null;
-              // During first streaming frame (no rounds yet), show in-flight content directly
-              const showInFlight =
-                completedRounds.length === 0 || currentReasoning || currentContent;
+              const showInFlight = currentReasoning || currentContent;
               return (
                 <div className="space-y-3">
                   {completedRounds.map((round, i) => (
@@ -964,7 +964,7 @@ const ModelResponseCard = memo(function ModelResponseCard({
                       allOutputArtifacts={allOutputArtifacts}
                     />
                   ))}
-                  {showInFlight && completedRounds.length > 0 && (
+                  {showInFlight && (
                     <ContentRound
                       reasoning={currentReasoning}
                       content={currentContent}

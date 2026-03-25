@@ -1296,6 +1296,15 @@ export function useChat({
           debugStore.endDebugRound(messageId, model, 1);
           debugStore.completeDebugCapture(messageId, model, true);
         }
+        // Push a completed round so the UI always has completedRounds to render
+        // (same as the tool-execution loop does after each iteration)
+        if (result) {
+          const roundData: CompletedRound = {};
+          if (result.reasoningContent) roundData.reasoning = result.reasoningContent;
+          if (result.hasOutputText && result.content?.trim()) roundData.content = result.content;
+          streamingStore.pushCompletedRound(storeKey, roundData);
+          result.completedRounds = [roundData];
+        }
         return result;
       }
 
