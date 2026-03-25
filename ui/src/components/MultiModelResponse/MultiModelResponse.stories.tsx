@@ -51,6 +51,12 @@ export const SingleResponse: Story = {
         model: "anthropic/claude-3-opus",
         content: "Hello! I'm Claude, an AI assistant made by Anthropic. How can I help you today?",
         isStreaming: false,
+        completedRounds: [
+          {
+            content:
+              "Hello! I'm Claude, an AI assistant made by Anthropic. How can I help you today?",
+          },
+        ],
       },
     ],
     timestamp: new Date(),
@@ -87,12 +93,24 @@ export const MultipleResponses: Story = {
         content:
           "Here's a solution using a recursive approach:\n\n```python\ndef factorial(n):\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)\n```\n\nThis is elegant but may hit recursion limits for large numbers.",
         isStreaming: false,
+        completedRounds: [
+          {
+            content:
+              "Here's a solution using a recursive approach:\n\n```python\ndef factorial(n):\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)\n```\n\nThis is elegant but may hit recursion limits for large numbers.",
+          },
+        ],
       },
       {
         model: "openai/gpt-4",
         content:
           "I'd recommend an iterative approach:\n\n```python\ndef factorial(n):\n    result = 1\n    for i in range(2, n + 1):\n        result *= i\n    return result\n```\n\nThis avoids stack overflow and is more memory efficient.",
         isStreaming: false,
+        completedRounds: [
+          {
+            content:
+              "I'd recommend an iterative approach:\n\n```python\ndef factorial(n):\n    result = 1\n    for i in range(2, n + 1):\n        result *= i\n    return result\n```\n\nThis avoids stack overflow and is more memory efficient.",
+          },
+        ],
       },
     ],
     timestamp: new Date(),
@@ -143,8 +161,9 @@ export const Streaming: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    // Verify first model shows partial content
-    await expect(canvas.getByText(/I'm thinking about your question/i)).toBeInTheDocument();
+    // Verify first model's StreamingMarkdown container is rendered (content animates in via Streamdown)
+    const markdownContainers = canvasElement.querySelectorAll(".markdown-content");
+    await expect(markdownContainers.length).toBeGreaterThan(0);
 
     // Verify second model shows "Thinking" indicator (empty content during streaming)
     await expect(canvas.getByText("Thinking")).toBeInTheDocument();
@@ -169,6 +188,7 @@ export const WithError: Story = {
         model: "anthropic/claude-3-opus",
         content: "Here's my response to your question...",
         isStreaming: false,
+        completedRounds: [{ content: "Here's my response to your question..." }],
       },
       {
         model: "openai/gpt-4",
@@ -212,21 +232,39 @@ export const FourModels: Story = {
         content:
           "Claude's response: This is a comprehensive answer from Anthropic's flagship model.",
         isStreaming: false,
+        completedRounds: [
+          {
+            content:
+              "Claude's response: This is a comprehensive answer from Anthropic's flagship model.",
+          },
+        ],
       },
       {
         model: "openai/gpt-4-turbo",
         content: "GPT-4's response: Here's OpenAI's perspective on the question.",
         isStreaming: false,
+        completedRounds: [
+          { content: "GPT-4's response: Here's OpenAI's perspective on the question." },
+        ],
       },
       {
         model: "google/gemini-1.5-pro",
         content: "Gemini's response: Google's take on the problem at hand.",
         isStreaming: false,
+        completedRounds: [
+          { content: "Gemini's response: Google's take on the problem at hand." },
+        ],
       },
       {
         model: "mistral/mistral-large",
         content: "Mistral's response: An alternative viewpoint from the open-source leader.",
         isStreaming: false,
+        completedRounds: [
+          {
+            content:
+              "Mistral's response: An alternative viewpoint from the open-source leader.",
+          },
+        ],
       },
     ],
     timestamp: new Date(),
@@ -260,11 +298,13 @@ export const ViewModeToggle: Story = {
         model: "anthropic/claude-3-opus",
         content: "First model response for layout testing.",
         isStreaming: false,
+        completedRounds: [{ content: "First model response for layout testing." }],
       },
       {
         model: "openai/gpt-4",
         content: "Second model response for layout testing.",
         isStreaming: false,
+        completedRounds: [{ content: "Second model response for layout testing." }],
       },
     ],
     timestamp: new Date(),
@@ -306,6 +346,7 @@ export const WithTokenUsage: Story = {
         model: "anthropic/claude-3-opus",
         content: "Response with token usage information displayed.",
         isStreaming: false,
+        completedRounds: [{ content: "Response with token usage information displayed." }],
         usage: {
           inputTokens: 50,
           outputTokens: 100,
@@ -317,6 +358,7 @@ export const WithTokenUsage: Story = {
         model: "openai/gpt-4",
         content: "Another response with different usage stats.",
         isStreaming: false,
+        completedRounds: [{ content: "Another response with different usage stats." }],
         usage: {
           inputTokens: 45,
           outputTokens: 80,
@@ -361,11 +403,13 @@ export const WithSelectedBest: Story = {
         model: "anthropic/claude-3-opus",
         content: "This response was selected as the best.",
         isStreaming: false,
+        completedRounds: [{ content: "This response was selected as the best." }],
       },
       {
         model: "openai/gpt-4",
         content: "This response was not selected.",
         isStreaming: false,
+        completedRounds: [{ content: "This response was not selected." }],
       },
     ],
     timestamp: new Date(),
@@ -404,11 +448,13 @@ export const WithActionCallbacks: Story = {
         model: "anthropic/claude-3-opus",
         content: "Response with available actions.",
         isStreaming: false,
+        completedRounds: [{ content: "Response with available actions." }],
       },
       {
         model: "openai/gpt-4",
         content: "Another response with actions.",
         isStreaming: false,
+        completedRounds: [{ content: "Another response with actions." }],
       },
     ],
     timestamp: new Date(),
@@ -441,11 +487,13 @@ export const WithHistoryModeBadge: Story = {
         model: "anthropic/claude-3-opus",
         content: "Response generated with same-model history mode.",
         isStreaming: false,
+        completedRounds: [{ content: "Response generated with same-model history mode." }],
       },
       {
         model: "openai/gpt-4",
         content: "Each model only saw its own previous responses.",
         isStreaming: false,
+        completedRounds: [{ content: "Each model only saw its own previous responses." }],
       },
     ],
     timestamp: new Date(),
@@ -476,6 +524,13 @@ export const WithReasoningContent: Story = {
         reasoningContent:
           "Let me think about this step by step... First, I need to consider the question carefully...",
         isStreaming: false,
+        completedRounds: [
+          {
+            reasoning:
+              "Let me think about this step by step... First, I need to consider the question carefully...",
+            content: "The answer is 42.",
+          },
+        ],
         usage: {
           inputTokens: 20,
           outputTokens: 50,
@@ -558,7 +613,7 @@ export const WithToolCallAndContent: Story = {
       {
         model: "anthropic/claude-3-opus",
         content: "Based on my search of your documents, I found the following...",
-        isStreaming: true,
+        isStreaming: false,
         toolExecutionRounds: [
           {
             round: 1,
@@ -578,6 +633,28 @@ export const WithToolCallAndContent: Story = {
             ],
           },
         ],
+        completedRounds: [
+          {
+            toolExecution: {
+              round: 1,
+              executions: [
+                {
+                  id: "tc_2",
+                  toolName: "file_search",
+                  status: "success" as const,
+                  startTime: Date.now() - 1000,
+                  endTime: Date.now(),
+                  duration: 1000,
+                  input: { query: "test query" },
+                  inputArtifacts: [],
+                  outputArtifacts: [],
+                  round: 1,
+                },
+              ],
+            },
+            content: "Based on my search of your documents, I found the following...",
+          },
+        ],
       },
     ],
     timestamp: new Date(),
@@ -589,8 +666,8 @@ export const WithToolCallAndContent: Story = {
     // Verify content is shown
     await expect(canvas.getByText(/Based on my search of your documents/i)).toBeInTheDocument();
 
-    // Verify tool execution block is rendered
-    await expect(canvas.getByText("File Search")).toBeInTheDocument();
+    // Verify tool execution summary bar is rendered (shows "1 tool" collapsed)
+    await expect(canvas.getByText(/1 tool\b/)).toBeInTheDocument();
   },
 };
 
@@ -635,6 +712,40 @@ export const WithMultipleToolCalls: Story = {
             ],
           },
         ],
+        completedRounds: [
+          {
+            toolExecution: {
+              round: 1,
+              executions: [
+                {
+                  id: "tc_3",
+                  toolName: "file_search",
+                  status: "success" as const,
+                  startTime: Date.now() - 2000,
+                  endTime: Date.now() - 1000,
+                  duration: 1000,
+                  input: { query: "test query" },
+                  inputArtifacts: [],
+                  outputArtifacts: [],
+                  round: 1,
+                },
+                {
+                  id: "tc_4",
+                  toolName: "web_search",
+                  status: "success" as const,
+                  startTime: Date.now() - 1000,
+                  endTime: Date.now(),
+                  duration: 1000,
+                  input: { query: "web query" },
+                  inputArtifacts: [],
+                  outputArtifacts: [],
+                  round: 1,
+                },
+              ],
+            },
+            content: "Here are the results from my research...",
+          },
+        ],
       },
     ],
     timestamp: new Date(),
@@ -669,11 +780,13 @@ export const WithHideCallback: Story = {
         model: "anthropic/claude-3-opus",
         content: "Response that can be hidden.",
         isStreaming: false,
+        completedRounds: [{ content: "Response that can be hidden." }],
       },
       {
         model: "openai/gpt-4",
         content: "Another response for hide testing.",
         isStreaming: false,
+        completedRounds: [{ content: "Another response for hide testing." }],
       },
     ],
     timestamp: new Date(),
@@ -728,6 +841,7 @@ export const WithHiddenResponses: Story = {
         model: "anthropic/claude-3-opus",
         content: "This response is visible.",
         isStreaming: false,
+        completedRounds: [{ content: "This response is visible." }],
       },
     ],
     hiddenResponses: [
@@ -792,11 +906,13 @@ export const WithSingleHiddenResponse: Story = {
         model: "anthropic/claude-3-opus",
         content: "This response is visible.",
         isStreaming: false,
+        completedRounds: [{ content: "This response is visible." }],
       },
       {
         model: "openai/gpt-4",
         content: "Another visible response.",
         isStreaming: false,
+        completedRounds: [{ content: "Another visible response." }],
       },
     ],
     hiddenResponses: [
@@ -849,33 +965,66 @@ export const SixModelsScrollNavigation: Story = {
         content:
           "Claude Opus response: A thorough analysis considering multiple perspectives and edge cases.",
         isStreaming: false,
+        completedRounds: [
+          {
+            content:
+              "Claude Opus response: A thorough analysis considering multiple perspectives and edge cases.",
+          },
+        ],
       },
       {
         model: "openai/gpt-4-turbo",
         content: "GPT-4 Turbo response: A fast, detailed answer with practical code examples.",
         isStreaming: false,
+        completedRounds: [
+          {
+            content:
+              "GPT-4 Turbo response: A fast, detailed answer with practical code examples.",
+          },
+        ],
       },
       {
         model: "google/gemini-1.5-pro",
         content:
           "Gemini Pro response: Leveraging multimodal understanding for comprehensive analysis.",
         isStreaming: false,
+        completedRounds: [
+          {
+            content:
+              "Gemini Pro response: Leveraging multimodal understanding for comprehensive analysis.",
+          },
+        ],
       },
       {
         model: "mistral/mistral-large",
         content:
           "Mistral Large response: An efficient, open-weight model perspective on the topic.",
         isStreaming: false,
+        completedRounds: [
+          {
+            content:
+              "Mistral Large response: An efficient, open-weight model perspective on the topic.",
+          },
+        ],
       },
       {
         model: "anthropic/claude-3-haiku",
         content: "Claude Haiku response: A concise and rapid answer to your question.",
         isStreaming: false,
+        completedRounds: [
+          { content: "Claude Haiku response: A concise and rapid answer to your question." },
+        ],
       },
       {
         model: "openai/gpt-4o",
         content: "GPT-4o response: Combining speed and intelligence for a balanced answer.",
         isStreaming: false,
+        completedRounds: [
+          {
+            content:
+              "GPT-4o response: Combining speed and intelligence for a balanced answer.",
+          },
+        ],
       },
     ],
     timestamp: new Date(),
@@ -912,12 +1061,14 @@ export const WithEditButton: Story = {
         messageId: "msg-1",
         content: "This response can be edited by the user.",
         isStreaming: false,
+        completedRounds: [{ content: "This response can be edited by the user." }],
       },
       {
         model: "openai/gpt-4",
         messageId: "msg-2",
         content: "This response can also be edited.",
         isStreaming: false,
+        completedRounds: [{ content: "This response can also be edited." }],
       },
     ],
     timestamp: new Date(),
@@ -954,6 +1105,7 @@ export const WithoutEditButtonWhenNoMessageId: Story = {
         // No messageId provided
         content: "This response cannot be edited (no messageId).",
         isStreaming: false,
+        completedRounds: [{ content: "This response cannot be edited (no messageId)." }],
       },
     ],
     timestamp: new Date(),

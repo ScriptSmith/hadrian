@@ -402,9 +402,9 @@ export const Streaming: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
 
-    // Verify streaming content from both models
-    await expect(canvas.getByText(/key differences/)).toBeInTheDocument();
-    await expect(canvas.getByText(/Redux and React Context/)).toBeInTheDocument();
+    // Verify streaming content containers are rendered (Streamdown animates text in)
+    const markdownContainers = canvasElement.querySelectorAll(".markdown-content");
+    await expect(markdownContainers.length).toBeGreaterThan(0);
 
     // Verify stop button is visible during streaming
     const stopButton = canvas.getByRole("button", { name: /stop/i });
@@ -997,7 +997,8 @@ export const ExecuteCode: Story = {
     await expect(canvas.getByText(/butterfly/)).toBeInTheDocument();
     await expect(canvas.getByText(/strange attractors/)).toBeInTheDocument();
 
-    // Verify tool execution block is rendered (2 tools across 2 rounds)
-    await expect(canvas.getByText(/2 tools/)).toBeInTheDocument();
+    // Verify tool execution blocks are rendered (1 tool per round, 2 rounds)
+    const toolBars = canvas.getAllByText(/1 tool\b/);
+    await expect(toolBars.length).toBe(2);
   },
 };
