@@ -771,6 +771,8 @@ export function useChat({
 
         // Add MCP tools from connected servers
         if (enabledTools.includes("mcp")) {
+          // Ensure enabled servers are connected before building tools list
+          await useMCPStore.getState().ensureConnected();
           const mcpState = useMCPStore.getState();
           for (const server of mcpState.servers) {
             // Skip disabled or disconnected servers

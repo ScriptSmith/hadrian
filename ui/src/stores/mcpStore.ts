@@ -72,6 +72,8 @@ interface MCPActions {
   _setServerTools: (serverId: string, tools: MCPToolDefinition[]) => void;
   /** Get all enabled tools across all connected servers */
   getEnabledTools: () => Array<{ server: MCPServerState; tool: MCPToolDefinition }>;
+  /** Connect all enabled servers that aren't already connected/connecting */
+  ensureConnected: () => Promise<void>;
   /** Disconnect all servers */
   disconnectAll: () => void;
 }
@@ -154,6 +156,15 @@ export const useMCPStore = create<MCPStore>()(
         set((state) => ({
           servers: [...state.servers, serverState],
         }));
+
+        // Auto-connect if enabled
+        if (serverConfig.enabled) {
+          get()
+            .connectServer(id)
+            .catch((err) => {
+              console.debug("MCP auto-connect failed:", err);
+            });
+        }
 
         return id;
       },
@@ -286,6 +297,15 @@ export const useMCPStore = create<MCPStore>()(
             s.id === serverId ? { ...s, enabled: newEnabled } : s
           ),
         }));
+
+        // If enabling, auto-connect
+        if (newEnabled) {
+          get()
+            .connectServer(serverId)
+            .catch((err) => {
+              console.debug("MCP auto-connect failed:", err);
+            });
+        }
       },
 
       setToolEnabled: (serverId, toolName, enabled) => {
@@ -331,6 +351,22 @@ export const useMCPStore = create<MCPStore>()(
         }
 
         return result;
+      },
+
+      ensureConnected: async () => {
+        const { servers } = get();
+        const needsConnect = servers.filter(
+          (s) => s.enabled && s.status !== "connected" && s.status !== "connecting"
+        );
+        await Promise.all(
+          needsConnect.map((s) =>
+            get()
+              .connectServer(s.id)
+              .catch((err) => {
+                console.debug(`MCP auto-connect failed for ${s.name}:`, err);
+              })
+          )
+        );
       },
 
       disconnectAll: () => {

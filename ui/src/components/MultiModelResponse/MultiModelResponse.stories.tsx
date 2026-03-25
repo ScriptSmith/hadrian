@@ -251,9 +251,7 @@ export const FourModels: Story = {
         model: "google/gemini-1.5-pro",
         content: "Gemini's response: Google's take on the problem at hand.",
         isStreaming: false,
-        completedRounds: [
-          { content: "Gemini's response: Google's take on the problem at hand." },
-        ],
+        completedRounds: [{ content: "Gemini's response: Google's take on the problem at hand." }],
       },
       {
         model: "mistral/mistral-large",
@@ -261,8 +259,7 @@ export const FourModels: Story = {
         isStreaming: false,
         completedRounds: [
           {
-            content:
-              "Mistral's response: An alternative viewpoint from the open-source leader.",
+            content: "Mistral's response: An alternative viewpoint from the open-source leader.",
           },
         ],
       },
@@ -978,8 +975,7 @@ export const SixModelsScrollNavigation: Story = {
         isStreaming: false,
         completedRounds: [
           {
-            content:
-              "GPT-4 Turbo response: A fast, detailed answer with practical code examples.",
+            content: "GPT-4 Turbo response: A fast, detailed answer with practical code examples.",
           },
         ],
       },
@@ -1021,8 +1017,7 @@ export const SixModelsScrollNavigation: Story = {
         isStreaming: false,
         completedRounds: [
           {
-            content:
-              "GPT-4o response: Combining speed and intelligence for a balanced answer.",
+            content: "GPT-4o response: Combining speed and intelligence for a balanced answer.",
           },
         ],
       },
