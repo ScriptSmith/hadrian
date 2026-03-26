@@ -55,6 +55,11 @@ export function ScreenshotRenderer({
     (totalUsage?.grandTotal.totalTokens ?? 0) + (titleGenerationUsage?.totalTokens ?? 0);
   const grandTotalCost = (totalUsage?.grandTotal.cost ?? 0) + (titleGenerationUsage?.cost ?? 0);
 
+  const onCompleteRef = useRef(onComplete);
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
+
   useEffect(() => {
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout>;
@@ -66,10 +71,10 @@ export function ScreenshotRenderer({
           const el = containerRef.current;
           if (!el) throw new Error("Screenshot container not found");
           const blob = await captureElementAsBlob(el);
-          if (!cancelled) onComplete(blob);
+          if (!cancelled) onCompleteRef.current(blob);
         } catch (err) {
           if (!cancelled)
-            onComplete(undefined, err instanceof Error ? err : new Error(String(err)));
+            onCompleteRef.current(undefined, err instanceof Error ? err : new Error(String(err)));
         }
       }, 500);
     });
@@ -79,7 +84,7 @@ export function ScreenshotRenderer({
       cancelAnimationFrame(raf);
       clearTimeout(timeoutId);
     };
-  }, [title, onComplete]);
+  }, [title]);
 
   const themeClass = document.documentElement.classList.contains("dark") ? "dark" : "";
 

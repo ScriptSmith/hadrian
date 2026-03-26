@@ -25,6 +25,9 @@ export function useScreenshotExport() {
         toast.error("Screenshot failed", error?.message ?? "Unknown error");
         return;
       }
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+      }
       const url = URL.createObjectURL(result);
       objectUrlRef.current = url;
       setScreenshot({ blob: result, url });
