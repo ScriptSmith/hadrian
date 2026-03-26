@@ -5,7 +5,8 @@
 If you discover a security vulnerability, please report it responsibly:
 
 1. **Do not** open a public GitHub issue
-2. Email security concerns to security at hadriangateway.com
+2. Use [GitHub's private vulnerability reporting](https://github.com/hadriangateway/hadrian/security/advisories/new) to submit a report.
+   Navigate to the repository's **Security** tab → **Advisories** → **New draft security advisory**, or use the link above.
 3. Include steps to reproduce, potential impact, and any suggested fixes
 4. Allow up to 90 days for a fix before public disclosure
 
