@@ -122,7 +122,9 @@
       "@modelcontextprotocol/sdk>hono": ">=4.12.4",
       "@modelcontextprotocol/sdk>@hono/node-server": ">=1.19.10",
       "@modelcontextprotocol/sdk>express-rate-limit": ">=8.2.2",
-      "flatted": ">=3.4.2"
+      "flatted": ">=3.4.2",
+      "picomatch": ">=4.0.4",
+      "@rollup/pluginutils>picomatch": ">=2.3.2 <4.0.0 || >=4.0.4"
     }
   }
 }
