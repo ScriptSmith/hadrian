@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Check,
@@ -7,6 +8,7 @@ import {
   FileText,
   FolderOpen,
   GitFork,
+  Image,
   Maximize2,
   Minimize2,
   Trash2,
@@ -35,6 +37,9 @@ import {
   useWidescreenMode,
 } from "@/stores/chatUIStore";
 import { useUserProjects } from "@/hooks/useUserProjects";
+import { ScreenshotPreviewModal } from "@/components/ScreenshotRenderer/ScreenshotPreviewModal";
+import { ScreenshotRenderer } from "@/components/ScreenshotRenderer/ScreenshotRenderer";
+import { useScreenshotExport } from "@/hooks/useScreenshotExport";
 import { downloadConversation } from "@/utils/exportConversation";
 import { formatCost, formatTokens } from "@/utils/formatters";
 
@@ -106,6 +111,39 @@ export function ChatHeader({
   const widescreenMode = useWidescreenMode();
   const { setConversationMode, setModeConfig, toggleWidescreenMode } = useChatUIStore();
   const canExport = conversation && conversation.messages.length > 0;
+  const { isCapturing, screenshot, startCapture, onCaptureComplete, dismissPreview } =
+    useScreenshotExport();
+
+  // Build instance labels map for screenshot
+  const instanceLabels = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const inst of selectedInstances) {
+      if (inst.label) map.set(inst.id, inst.label);
+    }
+    return map;
+  }, [selectedInstances]);
+
+  // Build message groups for screenshot (all messages, no hidden filtering)
+  const screenshotGroups = useMemo(() => {
+    if (!conversation) return [];
+    const groups: {
+      id: string;
+      userMessage: (typeof conversation.messages)[number];
+      assistantResponses: (typeof conversation.messages)[number][];
+    }[] = [];
+    const msgs = conversation.messages;
+    for (let i = 0; i < msgs.length; i++) {
+      const msg = msgs[i];
+      if (msg.role === "user") {
+        const responses: typeof msgs = [];
+        for (let j = i + 1; j < msgs.length && msgs[j].role !== "user"; j++) {
+          if (msgs[j].role === "assistant") responses.push(msgs[j]);
+        }
+        groups.push({ id: msg.id, userMessage: msg, assistantResponses: responses });
+      }
+    }
+    return groups;
+  }, [conversation]);
 
   // Fetch user projects for the project picker
   const { projects } = useUserProjects();
@@ -333,8 +371,35 @@ export function ChatHeader({
                     <FileText className="h-4 w-4" />
                     Markdown (readable)
                   </DropdownItem>
+                  <DropdownItem
+                    onClick={startCapture}
+                    disabled={isStreaming || isCapturing}
+                    className="gap-2"
+                  >
+                    <Image className="h-4 w-4" />
+                    Screenshot (PNG)
+                  </DropdownItem>
                 </DropdownContent>
               </Dropdown>
+            )}
+            {isCapturing && canExport && (
+              <ScreenshotRenderer
+                title={conversation.title}
+                messageGroups={screenshotGroups}
+                instanceLabels={instanceLabels}
+                totalUsage={totalUsage}
+                titleGenerationUsage={conversation.titleGenerationUsage}
+                onComplete={onCaptureComplete}
+              />
+            )}
+            {screenshot && canExport && (
+              <ScreenshotPreviewModal
+                open
+                onClose={dismissPreview}
+                imageUrl={screenshot.url}
+                blob={screenshot.blob}
+                title={conversation.title}
+              />
             )}
             {/* Fork button - hidden on mobile */}
             {canExport && onFork && (

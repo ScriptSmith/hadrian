@@ -6,6 +6,7 @@ import type { Conversation, MessageUsage, ModelInstance } from "@/components/cha
 import type { ModelInfo } from "@/components/ModelPicker/ModelPicker";
 import { PreferencesProvider } from "@/preferences/PreferencesProvider";
 import type { TotalUsageResult } from "@/stores/conversationStore";
+import { ToastProvider } from "@/components/Toast/Toast";
 import { TooltipProvider } from "@/components/Tooltip/Tooltip";
 
 import { ChatHeader } from "./ChatHeader";
@@ -63,11 +64,13 @@ const meta: Meta<typeof ChatHeader> = {
     (Story) => (
       <QueryClientProvider client={queryClient}>
         <PreferencesProvider>
-          <TooltipProvider>
-            <div className="w-full max-w-4xl mx-auto">
-              <Story />
-            </div>
-          </TooltipProvider>
+          <ToastProvider>
+            <TooltipProvider>
+              <div className="w-full max-w-4xl mx-auto">
+                <Story />
+              </div>
+            </TooltipProvider>
+          </ToastProvider>
         </PreferencesProvider>
       </QueryClientProvider>
     ),
