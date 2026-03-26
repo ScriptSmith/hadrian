@@ -91,6 +91,7 @@ export function ScreenshotRenderer({
   return createPortal(
     <div
       ref={containerRef}
+      aria-hidden="true"
       className={`${themeClass} bg-background text-foreground`}
       style={{
         position: "fixed",

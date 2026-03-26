@@ -14,6 +14,11 @@ export function useScreenshotExport() {
   const toast = useToast();
 
   const startCapture = useCallback(() => {
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current);
+      objectUrlRef.current = null;
+    }
+    setScreenshot(null);
     setIsCapturing(true);
     toast.info("Capturing screenshot…", "Rendering all messages");
   }, [toast]);

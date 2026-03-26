@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Copy, Download } from "lucide-react";
 
 import { Button } from "@/components/Button/Button";
@@ -30,6 +30,11 @@ export function ScreenshotPreviewModal({
 }: ScreenshotPreviewModalProps) {
   const [copied, setCopied] = useState(false);
   const toast = useToast();
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => {
+    return () => clearTimeout(copyTimerRef.current);
+  }, []);
 
   const handleDownload = useCallback(() => {
     downloadBlob(blob, generateScreenshotFilename(title));
@@ -39,7 +44,8 @@ export function ScreenshotPreviewModal({
     try {
       await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
     } catch {
       toast.error("Copy failed", "Your browser may not support copying images");
     }
