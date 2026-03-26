@@ -30,7 +30,7 @@ export function ScreenshotPreviewModal({
 }: ScreenshotPreviewModalProps) {
   const [copied, setCopied] = useState(false);
   const toast = useToast();
-  const copyTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => {
     return () => clearTimeout(copyTimerRef.current);
