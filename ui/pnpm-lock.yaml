@@ -69,6 +69,9 @@ importers:
       '@tanstack/react-virtual':
         specifier: ^3.13.19
         version: 3.13.19(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@zumer/snapdom':
+        specifier: ^2.6.0
+        version: 2.6.0
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
@@ -2329,6 +2332,9 @@ packages:
 
   '@vitest/utils@4.0.18':
     resolution: {integrity: sha512-msMRKLMVLWygpK3u2Hybgi4MNjcYJvwTb0Ru09+fOyCXIgT5raYP041DRRdiJiI3k/2U6SEbAETB3YtBrUkCFA==}
+
+  '@zumer/snapdom@2.6.0':
+    resolution: {integrity: sha512-JpPPkuMzozRVX6KArgCiMgLpgVW82kWgyoFk5DWGKE5msWGEshXEUdQHLLEyZRO7qioI1pI+yaBJz81tEP9gPg==}
 
   accepts@2.0.0:
     resolution: {integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==}
@@ -7879,6 +7885,8 @@ snapshots:
     dependencies:
       '@vitest/pretty-format': 4.0.18
       tinyrainbow: 3.0.3
+
+  '@zumer/snapdom@2.6.0': {}
 
   accepts@2.0.0:
     dependencies:

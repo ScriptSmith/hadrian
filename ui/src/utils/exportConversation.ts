@@ -3,7 +3,7 @@ import type { ChatMessage, Conversation, MessageUsage } from "@/components/chat-
 /**
  * Export format options for conversations
  */
-export type ExportFormat = "json" | "markdown";
+export type ExportFormat = "json" | "markdown" | "png";
 
 /**
  * JSON export structure - includes all metadata

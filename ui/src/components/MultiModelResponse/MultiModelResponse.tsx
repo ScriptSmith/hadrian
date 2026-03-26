@@ -209,6 +209,8 @@ interface MultiModelResponseProps {
   actionConfig?: ResponseActionConfig;
   /** History mode used when this message was sent (read-only display) */
   historyMode?: HistoryMode;
+  /** Force stacked layout regardless of global viewMode (used for screenshot export) */
+  forceStacked?: boolean;
 }
 
 /**
@@ -1059,6 +1061,7 @@ function MultiModelResponseComponent({
   selectedBest,
   actionConfig = DEFAULT_ACTION_CONFIG,
   historyMode,
+  forceStacked = false,
 }: MultiModelResponseProps) {
   // Use global UI state from store
   const viewMode = useViewMode();
@@ -1171,7 +1174,7 @@ function MultiModelResponseComponent({
   const hasHiddenResponses = hiddenResponses.length > 0;
 
   // "grid" = horizontal layout with fixed-width cards, "stacked" = vertical full-width
-  const useHorizontalLayout = viewMode === "grid" && displayedResponses.length > 1;
+  const useHorizontalLayout = !forceStacked && viewMode === "grid" && displayedResponses.length > 1;
 
   // Horizontal scroll navigation state
   const scrollContainerRef = useRef<HTMLDivElement>(null);
