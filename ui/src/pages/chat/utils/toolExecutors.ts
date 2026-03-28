@@ -61,6 +61,8 @@ export interface ToolExecutorContext {
   onStatusMessage?: (toolCallId: string, message: string) => void;
   /** Default model for sub-agent tool when no model is specified in arguments */
   defaultModel?: string;
+  /** Conversation ID for per-conversation MCP sessions */
+  conversationId?: string;
 }
 
 /**
@@ -2423,7 +2425,7 @@ const mcpToolExecutor: ToolExecutor = async (toolCall, context) => {
   }
 
   try {
-    const result = await callMCPTool(serverId, toolName, args);
+    const result = await callMCPTool(serverId, toolName, args, context.conversationId);
 
     // Clear status message
     context.onStatusMessage?.(toolCall.id, "");

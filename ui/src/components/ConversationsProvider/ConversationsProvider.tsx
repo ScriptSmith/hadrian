@@ -19,6 +19,7 @@ import {
 import type { ConversationWithProject, Message } from "@/api/generated/types.gen";
 import { useAuth } from "@/auth";
 import { useIndexedDB } from "@/hooks/useIndexedDB";
+import { useMCPStore } from "@/stores/mcpStore";
 
 import type { ChatMessage, Conversation } from "@/components/chat-types";
 import { usePreferences } from "@/preferences/PreferencesProvider";
@@ -579,6 +580,9 @@ export function ConversationsProvider({ children }: ConversationsProviderProps) 
 
   const deleteConversation = useCallback(
     (id: string) => {
+      // Clean up any per-conversation MCP sessions
+      useMCPStore.getState().disconnectConversation(id);
+
       // Find the conversation to get remoteId before deleting
       const conv = storedConversations.find((c) => c.id === id);
       if (conv?.remoteId && canSync) {
