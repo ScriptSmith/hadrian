@@ -1487,7 +1487,6 @@ export function useChat({
           },
           // Use configured sub-agent model, fall back to current streaming model
           defaultModel: subAgentModel || model,
-          conversationId: conversationIdRef.current,
         };
 
         const toolResults = await executeToolCalls(result.toolCalls, toolContext);
