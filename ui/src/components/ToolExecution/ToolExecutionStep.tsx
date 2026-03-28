@@ -78,10 +78,20 @@ function extractCodeFromInput(input: unknown): string | null {
   if (typeof obj.code === "string") return obj.code;
   if (typeof obj.sql === "string") return obj.sql;
   if (typeof obj.query === "string") return obj.query;
-  if (obj.spec && typeof obj.spec === "object") return JSON.stringify(obj.spec, null, 2);
+  if (obj.spec && typeof obj.spec === "object") {
+    try {
+      return JSON.stringify(obj.spec, null, 2);
+    } catch {
+      return null;
+    }
+  }
   // Generic fallback: show all args as JSON
-  const json = JSON.stringify(obj, null, 2);
-  return json === "{}" ? null : json;
+  try {
+    const json = JSON.stringify(obj, null, 2);
+    return json === "{}" ? null : json;
+  } catch {
+    return null;
+  }
 }
 
 /** Format duration in human-readable form */

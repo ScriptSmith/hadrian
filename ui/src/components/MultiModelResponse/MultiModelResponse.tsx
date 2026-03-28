@@ -744,15 +744,24 @@ const ModelResponseCard = memo(function ModelResponseCard({
   // ContentRound can render the execution timeline while tools are still running.
   // Gated on isStreaming so committed (DB-loaded) messages are unaffected.
   const completedRoundsWithLiveTools = useMemo(() => {
-    if (!response.isStreaming || !completedRounds.length || !toolExecutionRounds.length) {
+    if (!response.isStreaming || !toolExecutionRounds.length) {
       return completedRounds;
     }
+    const liveRound = toolExecutionRounds[toolExecutionRounds.length - 1];
+    // No completed rounds yet (model called tool immediately) — synthesize one
+    if (!completedRounds.length) {
+      return [{ toolExecution: liveRound }];
+    }
     const last = completedRounds[completedRounds.length - 1];
-    if (last.toolExecution) return completedRounds;
+    // Last round already has tool execution (back-to-back tool calls) — append new round
+    if (last.toolExecution) {
+      return [...completedRounds, { toolExecution: liveRound }];
+    }
+    // Last round is text-only — inject live tools into it
     const merged = [...completedRounds];
     merged[merged.length - 1] = {
       ...last,
-      toolExecution: toolExecutionRounds[toolExecutionRounds.length - 1],
+      toolExecution: liveRound,
     };
     return merged;
   }, [completedRounds, toolExecutionRounds, response.isStreaming]);

@@ -1,4 +1,4 @@
-import { memo, useState, useCallback, useMemo, useEffect } from "react";
+import { memo, useState, useCallback, useMemo, useEffect, useRef } from "react";
 import type { ToolExecutionRound, Artifact, DisplaySelectionData } from "@/components/chat-types";
 import { Artifact as ArtifactComponent } from "@/components/Artifact";
 import { ReasoningSection } from "@/components/ReasoningSection/ReasoningSection";
@@ -57,9 +57,13 @@ function ContentRoundComponent({
     return isManuallyExpanded;
   }, [isToolsStreaming, isManuallyExpanded, userOverride]);
 
-  // Reset user override when a new streaming session starts
+  // Reset user override only on false→true transition (new streaming session)
+  const prevStreamingRef = useRef(false);
   useEffect(() => {
-    if (isToolsStreaming) setUserOverride(false);
+    if (isToolsStreaming && !prevStreamingRef.current) {
+      setUserOverride(false);
+    }
+    prevStreamingRef.current = isToolsStreaming;
   }, [isToolsStreaming]);
 
   const handleToggleTools = useCallback(() => {
