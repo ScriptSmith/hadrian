@@ -71,6 +71,29 @@ const TOOL_LANGUAGES: Record<string, string> = {
   chart_render: "json",
 };
 
+/** Extract a displayable code string from raw tool input (before artifacts are populated) */
+function extractCodeFromInput(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null;
+  const obj = input as Record<string, unknown>;
+  if (typeof obj.code === "string") return obj.code;
+  if (typeof obj.sql === "string") return obj.sql;
+  if (typeof obj.query === "string") return obj.query;
+  if (obj.spec && typeof obj.spec === "object") {
+    try {
+      return JSON.stringify(obj.spec, null, 2);
+    } catch {
+      return null;
+    }
+  }
+  // Generic fallback: show all args as JSON
+  try {
+    const json = JSON.stringify(obj, null, 2);
+    return json === "{}" ? null : json;
+  } catch {
+    return null;
+  }
+}
+
 /** Format duration in human-readable form */
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
@@ -127,17 +150,25 @@ function ToolExecutionStepComponent({
   );
   const hasOutputArtifacts = visibleOutputArtifacts.length > 0;
 
-  // Extract inline code preview from first code input artifact
+  // Extract inline code preview from first code input artifact, falling back to raw input
   const inlineCode = useMemo(() => {
     const codeArtifact = execution.inputArtifacts.find((a) => a.type === "code");
-    if (!codeArtifact) return null;
-    const code = getCodeFromArtifact(codeArtifact);
-    if (!code) return null;
-    const { preview, isTruncated } = getCodePreview(code, 4);
-    const language =
-      (codeArtifact.data as CodeArtifactData)?.language || TOOL_LANGUAGES[execution.toolName];
-    return { code, preview, isTruncated, artifact: codeArtifact, language };
-  }, [execution.inputArtifacts, execution.toolName]);
+    if (codeArtifact) {
+      const code = getCodeFromArtifact(codeArtifact);
+      if (code) {
+        const { preview, isTruncated } = getCodePreview(code, 4);
+        const language =
+          (codeArtifact.data as CodeArtifactData)?.language || TOOL_LANGUAGES[execution.toolName];
+        return { code, preview, isTruncated, artifact: codeArtifact, language };
+      }
+    }
+    // Fallback: extract from raw input (available immediately, before artifacts populate)
+    const rawCode = extractCodeFromInput(execution.input);
+    if (!rawCode) return null;
+    const { preview, isTruncated } = getCodePreview(rawCode, 4);
+    const language = TOOL_LANGUAGES[execution.toolName] || "json";
+    return { code: rawCode, preview, isTruncated, artifact: null, language };
+  }, [execution.inputArtifacts, execution.toolName, execution.input]);
 
   // Other input artifacts (non-code)
   const otherInputArtifacts = useMemo(
@@ -225,18 +256,20 @@ function ToolExecutionStepComponent({
                   {inlineCode.language || displayName}
                 </span>
                 <div className="flex-1" />
-                <button
-                  type="button"
-                  onClick={() => onArtifactClick?.(inlineCode.artifact)}
-                  className={cn(
-                    "p-0.5 rounded",
-                    "text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-200",
-                    "opacity-0 group-hover/code:opacity-100 transition-opacity"
-                  )}
-                  aria-label="Expand"
-                >
-                  <Maximize2 className="h-3.5 w-3.5" />
-                </button>
+                {inlineCode.artifact && (
+                  <button
+                    type="button"
+                    onClick={() => onArtifactClick?.(inlineCode.artifact!)}
+                    className={cn(
+                      "p-0.5 rounded",
+                      "text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-200",
+                      "opacity-0 group-hover/code:opacity-100 transition-opacity"
+                    )}
+                    aria-label="Expand"
+                  >
+                    <Maximize2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
 
               {/* Code content */}

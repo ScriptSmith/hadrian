@@ -562,7 +562,7 @@ export const WithReasoningContent: Story = {
 };
 
 /**
- * Test: Streaming with empty content shows Thinking indicator
+ * Test: Streaming with running tool shows tool execution UI (not Thinking indicator)
  */
 export const WithToolCallSearching: Story = {
   args: {
@@ -596,8 +596,9 @@ export const WithToolCallSearching: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    // While streaming with no content, shows Thinking indicator
-    await expect(canvas.getByText("Thinking")).toBeInTheDocument();
+    // While tools are visibly running, shows tool status instead of Thinking indicator
+    const runningElements = canvas.getAllByText("running");
+    await expect(runningElements.length).toBeGreaterThan(0);
   },
 };
 

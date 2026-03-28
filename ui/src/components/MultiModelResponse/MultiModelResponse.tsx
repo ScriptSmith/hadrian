@@ -740,10 +740,36 @@ const ModelResponseCard = memo(function ModelResponseCard({
     response.toolExecutionRounds,
   ]);
 
+  // Bridge live tool execution data into the last completed round so that
+  // ContentRound can render the execution timeline while tools are still running.
+  // Gated on isStreaming so committed (DB-loaded) messages are unaffected.
+  const completedRoundsWithLiveTools = useMemo(() => {
+    if (!response.isStreaming || !toolExecutionRounds.length) {
+      return completedRounds;
+    }
+    const liveRound = toolExecutionRounds[toolExecutionRounds.length - 1];
+    // No completed rounds yet (model called tool immediately) — synthesize one
+    if (!completedRounds.length) {
+      return [{ toolExecution: liveRound }];
+    }
+    const last = completedRounds[completedRounds.length - 1];
+    // Last round already has tool execution (back-to-back tool calls) — append new round
+    if (last.toolExecution) {
+      return [...completedRounds, { toolExecution: liveRound }];
+    }
+    // Last round is text-only — inject live tools into it
+    const merged = [...completedRounds];
+    merged[merged.length - 1] = {
+      ...last,
+      toolExecution: liveRound,
+    };
+    return merged;
+  }, [completedRounds, toolExecutionRounds, response.isStreaming]);
+
   // All output artifacts across all rounds (for resolving display_artifacts selections)
   const allOutputArtifacts = useMemo(() => {
     const result: ArtifactType[] = [];
-    for (const round of completedRounds) {
+    for (const round of completedRoundsWithLiveTools) {
       if (round.toolExecution) {
         for (const execution of round.toolExecution.executions) {
           for (const a of execution.outputArtifacts) {
@@ -753,7 +779,7 @@ const ModelResponseCard = memo(function ModelResponseCard({
       }
     }
     return result;
-  }, [completedRounds]);
+  }, [completedRoundsWithLiveTools]);
 
   // Extract display selection for a specific tool execution round
   const getDisplaySelectionForRound = useCallback(
@@ -959,31 +985,44 @@ const ModelResponseCard = memo(function ModelResponseCard({
             {/* Content: unified rendering via ContentRound for all responses */}
             {(() => {
               // Detect in-flight content that hasn't been captured in a completed round yet.
-              // completedRounds is always populated (even for single-round responses),
+              // completedRoundsWithLiveTools is always populated (even for single-round responses),
               // so this only shows content actively streaming in the current round.
               const currentReasoning =
                 response.isStreaming &&
                 response.reasoningContent &&
-                !completedRounds.some((r) => r.reasoning === response.reasoningContent)
+                !completedRoundsWithLiveTools.some((r) => r.reasoning === response.reasoningContent)
                   ? response.reasoningContent
                   : null;
               const currentContent =
                 response.isStreaming && response.content?.trim() ? response.content : null;
               const showInFlight = currentReasoning || currentContent;
+
+              // Suppress the streaming status indicator when running tools are
+              // already visible in expanded ContentRounds (non-compact mode only)
+              const hasVisibleRunningTools =
+                !compactMode &&
+                completedRoundsWithLiveTools.some((r) =>
+                  r.toolExecution?.executions.some(
+                    (e) => e.status === "running" || e.status === "pending"
+                  )
+                );
+
               return (
                 <div className="space-y-3">
-                  {completedRounds.map((round, i) => (
+                  {completedRoundsWithLiveTools.map((round, i) => (
                     <ContentRound
                       key={i}
                       reasoning={round.reasoning}
                       content={round.content}
                       reasoningTokenCount={
-                        completedRounds.length === 1 ? response.usage?.reasoningTokens : undefined
+                        completedRoundsWithLiveTools.length === 1
+                          ? response.usage?.reasoningTokens
+                          : undefined
                       }
                       toolExecutionRound={round.toolExecution}
                       isToolsStreaming={
                         response.isStreaming &&
-                        i === completedRounds.length - 1 &&
+                        i === completedRoundsWithLiveTools.length - 1 &&
                         !!round.toolExecution?.executions.some(
                           (e) => e.status === "pending" || e.status === "running"
                         )
@@ -1005,10 +1044,12 @@ const ModelResponseCard = memo(function ModelResponseCard({
                       isReasoningStreaming={response.isStreaming && !currentContent}
                     />
                   )}
-                  <StreamingStatusIndicator
-                    phase={streamingPhase}
-                    toolStatusMessage={toolStatusMessage}
-                  />
+                  {!hasVisibleRunningTools && (
+                    <StreamingStatusIndicator
+                      phase={streamingPhase}
+                      toolStatusMessage={toolStatusMessage}
+                    />
+                  )}
                 </div>
               );
             })()}

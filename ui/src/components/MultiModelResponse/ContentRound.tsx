@@ -1,4 +1,4 @@
-import { memo, useState, useCallback, useMemo } from "react";
+import { memo, useState, useCallback, useMemo, useEffect, useRef } from "react";
 import type { ToolExecutionRound, Artifact, DisplaySelectionData } from "@/components/chat-types";
 import { Artifact as ArtifactComponent } from "@/components/Artifact";
 import { ReasoningSection } from "@/components/ReasoningSection/ReasoningSection";
@@ -47,8 +47,33 @@ function ContentRoundComponent({
   displaySelection,
   allOutputArtifacts,
 }: ContentRoundProps) {
-  const [toolsExpanded, setToolsExpanded] = useState(false);
-  const handleToggleTools = useCallback(() => setToolsExpanded((p) => !p), []);
+  const [isManuallyExpanded, setIsManuallyExpanded] = useState(false);
+  const [userOverride, setUserOverride] = useState(false);
+  const [wasAutoExpanded, setWasAutoExpanded] = useState(false);
+
+  // Auto-expand when tools are streaming, stay open after stream ends until user collapses
+  const toolsExpanded = useMemo(() => {
+    if (userOverride) return isManuallyExpanded;
+    if (isToolsStreaming) return true;
+    if (wasAutoExpanded) return true;
+    return isManuallyExpanded;
+  }, [isToolsStreaming, isManuallyExpanded, userOverride, wasAutoExpanded]);
+
+  // Reset user override only on false→true transition (new streaming session)
+  const prevStreamingRef = useRef(false);
+  useEffect(() => {
+    if (isToolsStreaming && !prevStreamingRef.current) {
+      setUserOverride(false);
+      setWasAutoExpanded(true);
+    }
+    prevStreamingRef.current = isToolsStreaming;
+  }, [isToolsStreaming]);
+
+  const handleToggleTools = useCallback(() => {
+    setIsManuallyExpanded(!toolsExpanded);
+    setUserOverride(true);
+    setWasAutoExpanded(false);
+  }, [toolsExpanded]);
   const compactMode = useCompactMode();
 
   // Resolve display selection to actual artifacts
