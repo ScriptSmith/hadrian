@@ -1,9 +1,6 @@
 import { apiV1ChatCompletions } from "@/api/generated/sdk.gen";
 import type { MessageUsage } from "@/components/chat-types";
 
-/** Maximum characters for a conversation title */
-const MAX_TITLE_LENGTH = 25;
-
 /** Result from LLM title generation including usage data */
 export interface TitleGenerationResult {
   title: string;
@@ -17,10 +14,7 @@ export interface TitleGenerationResult {
  */
 export function generateSimpleTitle(userMessage: string): string {
   const firstLine = userMessage.split("\n")[0].trim();
-  if (!firstLine) return "New Chat";
-  return firstLine.length > MAX_TITLE_LENGTH
-    ? firstLine.slice(0, MAX_TITLE_LENGTH - 3) + "..."
-    : firstLine;
+  return firstLine || "New Chat";
 }
 
 /**
@@ -43,7 +37,7 @@ export async function generateTitleWithLLM(
           {
             role: "system",
             content:
-              "Generate a very short title (2-4 words, max 25 characters) for a conversation. " +
+              "Generate a concise title (3-6 words) for a conversation. " +
               "Return ONLY the title, no quotes, no punctuation at the end.",
           },
           {
@@ -51,8 +45,6 @@ export async function generateTitleWithLLM(
             content: userMessage.slice(0, 500), // Limit input to save tokens
           },
         ],
-        max_tokens: 20,
-        temperature: 0.3,
       },
       throwOnError: true,
     });
@@ -78,13 +70,9 @@ export async function generateTitleWithLLM(
       : undefined;
 
     if (title && title.length > 0) {
-      // Ensure title isn't too long and remove any trailing punctuation
+      // Remove any trailing punctuation the LLM may have added
       const cleaned = title.replace(/[.!?:]+$/, "").trim();
-      const finalTitle =
-        cleaned.length > MAX_TITLE_LENGTH
-          ? cleaned.slice(0, MAX_TITLE_LENGTH - 3) + "..."
-          : cleaned;
-      return { title: finalTitle, usage };
+      return { title: cleaned, usage };
     }
 
     // Fallback if no valid title in response
