@@ -11,8 +11,9 @@
  * ┌─────────────────────────────────────────────────────────────────┐
  * │                         mcpStore                                │
  * ├─────────────────────────────────────────────────────────────────┤
- * │  servers: MCPServerState[]     - Server configs + runtime state │
- * │  clients: Map<string, MCPClient> - Active client instances      │
+ * │  servers: MCPServerState[]              - Server configs + state  │
+ * │  globalClients: Map<id, MCPClient>      - Discovery clients     │
+ * │  conversationClients: Map<key, MCPClient> - Per-conv clients    │
  * ├─────────────────────────────────────────────────────────────────┤
  * │  addServer()      - Add new server config                       │
  * │  removeServer()   - Remove server and disconnect                │
@@ -368,6 +369,7 @@ export const useMCPStore = create<MCPStore>()(
 
       disconnectServer: (serverId) => {
         removeClient(serverId);
+        removeAllConversationClientsForServer(serverId);
         set((state) => ({
           servers: state.servers.map((s) =>
             s.id === serverId
@@ -393,8 +395,10 @@ export const useMCPStore = create<MCPStore>()(
         const newEnabled = !server.enabled;
 
         // If disabling, disconnect global + all conversation clients
-        if (!newEnabled && server.status === "connected") {
-          get().disconnectServer(serverId);
+        if (!newEnabled) {
+          if (server.status === "connected") {
+            get().disconnectServer(serverId);
+          }
           removeAllConversationClientsForServer(serverId);
         }
 
@@ -487,6 +491,7 @@ export const useMCPStore = create<MCPStore>()(
           client.disconnect();
         }
         conversationClients.clear();
+        connectingPromises.clear();
         set((state) => ({
           servers: state.servers.map((s) => ({
             ...s,
