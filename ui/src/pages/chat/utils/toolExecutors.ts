@@ -61,8 +61,6 @@ export interface ToolExecutorContext {
   onStatusMessage?: (toolCallId: string, message: string) => void;
   /** Default model for sub-agent tool when no model is specified in arguments */
   defaultModel?: string;
-  /** Conversation ID for per-conversation MCP sessions */
-  conversationId?: string;
 }
 
 /**
@@ -1717,8 +1715,9 @@ interface ChartRenderArguments {
 /**
  * Execute the chart_render tool
  *
- * Takes a Vega-Lite specification and returns it as a chart artifact for rendering.
- * The chart is rendered client-side using vega-embed.
+ * Takes a Vega-Lite specification, validates it by compiling, and returns it as
+ * a chart artifact for rendering. If the spec is invalid, returns an error so
+ * the model can retry with a corrected spec.
  */
 export const chartRenderExecutor: ToolExecutor = async (
   toolCall,
@@ -1739,6 +1738,20 @@ export const chartRenderExecutor: ToolExecutor = async (
       success: false,
       error: "No valid Vega-Lite spec provided to chart_render",
       output: JSON.stringify({ error: "No valid Vega-Lite specification provided" }),
+    };
+  }
+
+  // Validate the spec by compiling it with vega-lite before reporting success.
+  // This catches invalid specs early so the model can retry.
+  try {
+    const { compile } = await import("vega-lite");
+    compile(spec as unknown as Parameters<typeof compile>[0]);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      success: false,
+      error: message,
+      output: JSON.stringify({ error: `Invalid Vega-Lite spec: ${message}` }),
     };
   }
 
@@ -2425,7 +2438,7 @@ const mcpToolExecutor: ToolExecutor = async (toolCall, context) => {
   }
 
   try {
-    const result = await callMCPTool(serverId, toolName, args, context.conversationId);
+    const result = await callMCPTool(serverId, toolName, args);
 
     // Clear status message
     context.onStatusMessage?.(toolCall.id, "");
