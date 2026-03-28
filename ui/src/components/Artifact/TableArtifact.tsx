@@ -166,7 +166,7 @@ function TableArtifactComponent({ artifact, className }: TableArtifactProps) {
       {/* Table */}
       <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
         <table className="w-full text-sm">
-          <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
+          <thead className="sticky top-0 bg-muted">
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id} className="border-b">
                 {headerGroup.headers.map((header) => (
