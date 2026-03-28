@@ -49,19 +49,22 @@ function ContentRoundComponent({
 }: ContentRoundProps) {
   const [isManuallyExpanded, setIsManuallyExpanded] = useState(false);
   const [userOverride, setUserOverride] = useState(false);
+  const [wasAutoExpanded, setWasAutoExpanded] = useState(false);
 
-  // Auto-expand when tools are streaming, respect manual toggle otherwise
+  // Auto-expand when tools are streaming, stay open after stream ends until user collapses
   const toolsExpanded = useMemo(() => {
     if (userOverride) return isManuallyExpanded;
     if (isToolsStreaming) return true;
+    if (wasAutoExpanded) return true;
     return isManuallyExpanded;
-  }, [isToolsStreaming, isManuallyExpanded, userOverride]);
+  }, [isToolsStreaming, isManuallyExpanded, userOverride, wasAutoExpanded]);
 
   // Reset user override only on false→true transition (new streaming session)
   const prevStreamingRef = useRef(false);
   useEffect(() => {
     if (isToolsStreaming && !prevStreamingRef.current) {
       setUserOverride(false);
+      setWasAutoExpanded(true);
     }
     prevStreamingRef.current = isToolsStreaming;
   }, [isToolsStreaming]);
@@ -69,6 +72,7 @@ function ContentRoundComponent({
   const handleToggleTools = useCallback(() => {
     setIsManuallyExpanded((p) => !p);
     setUserOverride(true);
+    setWasAutoExpanded(false);
   }, []);
   const compactMode = useCompactMode();
 
