@@ -1,4 +1,4 @@
-import { memo, useState, useCallback, useMemo } from "react";
+import { memo, useState, useCallback, useMemo, useEffect } from "react";
 import type { ToolExecutionRound, Artifact, DisplaySelectionData } from "@/components/chat-types";
 import { Artifact as ArtifactComponent } from "@/components/Artifact";
 import { ReasoningSection } from "@/components/ReasoningSection/ReasoningSection";
@@ -47,8 +47,25 @@ function ContentRoundComponent({
   displaySelection,
   allOutputArtifacts,
 }: ContentRoundProps) {
-  const [toolsExpanded, setToolsExpanded] = useState(false);
-  const handleToggleTools = useCallback(() => setToolsExpanded((p) => !p), []);
+  const [isManuallyExpanded, setIsManuallyExpanded] = useState(false);
+  const [userOverride, setUserOverride] = useState(false);
+
+  // Auto-expand when tools are streaming, respect manual toggle otherwise
+  const toolsExpanded = useMemo(() => {
+    if (userOverride) return isManuallyExpanded;
+    if (isToolsStreaming) return true;
+    return isManuallyExpanded;
+  }, [isToolsStreaming, isManuallyExpanded, userOverride]);
+
+  // Reset user override when a new streaming session starts
+  useEffect(() => {
+    if (isToolsStreaming) setUserOverride(false);
+  }, [isToolsStreaming]);
+
+  const handleToggleTools = useCallback(() => {
+    setIsManuallyExpanded((p) => !p);
+    setUserOverride(true);
+  }, []);
   const compactMode = useCompactMode();
 
   // Resolve display selection to actual artifacts
