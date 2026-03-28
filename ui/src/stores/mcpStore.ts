@@ -118,7 +118,7 @@ function getClient(server: MCPServerConfig): MCPClient {
   return client;
 }
 
-/** Create a new client for a per-conversation session */
+/** Get or create a client for a per-conversation session */
 function getConversationClient(server: MCPServerConfig, conversationId: string): MCPClient {
   const key = clientKey(server.id, conversationId);
   let client = conversationClients.get(key);
@@ -170,15 +170,22 @@ function removeConversationClient(serverId: string, conversationId: string): voi
     client.disconnect();
     conversationClients.delete(key);
   }
+  connectingPromises.delete(key);
 }
 
 /** Disconnect all per-conversation clients for a given conversation */
 function removeAllClientsForConversation(conversationId: string): void {
   const suffix = `::${conversationId}`;
+  // Deleting from a Map during iteration is safe in ES6+
   for (const [key, client] of conversationClients) {
     if (key.endsWith(suffix)) {
       client.disconnect();
       conversationClients.delete(key);
+    }
+  }
+  for (const key of connectingPromises.keys()) {
+    if (key.endsWith(suffix)) {
+      connectingPromises.delete(key);
     }
   }
 }
@@ -186,10 +193,16 @@ function removeAllClientsForConversation(conversationId: string): void {
 /** Disconnect all per-conversation clients for a given server */
 function removeAllConversationClientsForServer(serverId: string): void {
   const prefix = `${serverId}::`;
+  // Deleting from a Map during iteration is safe in ES6+
   for (const [key, client] of conversationClients) {
     if (key.startsWith(prefix)) {
       client.disconnect();
       conversationClients.delete(key);
+    }
+  }
+  for (const key of connectingPromises.keys()) {
+    if (key.startsWith(prefix)) {
+      connectingPromises.delete(key);
     }
   }
 }
