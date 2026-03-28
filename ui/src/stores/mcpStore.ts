@@ -11,8 +11,9 @@
  * ┌─────────────────────────────────────────────────────────────────┐
  * │                         mcpStore                                │
  * ├─────────────────────────────────────────────────────────────────┤
- * │  servers: MCPServerState[]     - Server configs + runtime state │
- * │  clients: Map<string, MCPClient> - Active client instances      │
+ * │  servers: MCPServerState[]              - Server configs + state  │
+ * │  globalClients: Map<id, MCPClient>      - Discovery clients     │
+ * │  conversationClients: Map<key, MCPClient> - Per-conv clients    │
  * ├─────────────────────────────────────────────────────────────────┤
  * │  addServer()      - Add new server config                       │
  * │  removeServer()   - Remove server and disconnect                │
@@ -76,6 +77,8 @@ interface MCPActions {
   ensureConnected: () => Promise<void>;
   /** Disconnect all servers */
   disconnectAll: () => void;
+  /** Disconnect all per-conversation MCP sessions for a conversation */
+  disconnectConversation: (conversationId: string) => void;
 }
 
 export type MCPStore = MCPState & MCPActions;
@@ -84,15 +87,26 @@ export type MCPStore = MCPState & MCPActions;
 // Client Management (outside Zustand for reference stability)
 // =============================================================================
 
-/** Map of server ID to MCPClient instance */
-const clients = new Map<string, MCPClient>();
+/** Global clients: Map of server ID to MCPClient instance (for discovery/status) */
+const globalClients = new Map<string, MCPClient>();
 
-/** Map of server ID to cleanup functions for listeners */
-const listenerCleanups = new Map<string, Array<() => void>>();
+/** Global listener cleanups: Map of server ID to cleanup functions */
+const globalListenerCleanups = new Map<string, Array<() => void>>();
 
-/** Get or create a client for a server */
+/** Per-conversation clients: Map of `${serverId}::${conversationId}` to MCPClient */
+const conversationClients = new Map<string, MCPClient>();
+
+/** Dedup map to prevent concurrent lazy-connect calls for the same key */
+const connectingPromises = new Map<string, Promise<MCPClient>>();
+
+/** Composite key for conversation clients */
+function clientKey(serverId: string, conversationId: string): string {
+  return `${serverId}::${conversationId}`;
+}
+
+/** Get or create a global client for a server */
 function getClient(server: MCPServerConfig): MCPClient {
-  let client = clients.get(server.id);
+  let client = globalClients.get(server.id);
   if (!client) {
     client = new MCPClient({
       url: server.url,
@@ -100,27 +114,116 @@ function getClient(server: MCPServerConfig): MCPClient {
       headers: server.headers,
       timeout: server.timeout,
     });
-    clients.set(server.id, client);
+    globalClients.set(server.id, client);
   }
   return client;
 }
 
-/** Remove listener subscriptions for a server */
-function cleanupListeners(serverId: string): void {
-  const cleanups = listenerCleanups.get(serverId);
-  if (cleanups) {
-    cleanups.forEach((fn) => fn());
-    listenerCleanups.delete(serverId);
+/** Get or create a client for a per-conversation session */
+function getConversationClient(server: MCPServerConfig, conversationId: string): MCPClient {
+  const key = clientKey(server.id, conversationId);
+  let client = conversationClients.get(key);
+  if (!client) {
+    client = new MCPClient({
+      url: server.url,
+      name: server.name,
+      headers: server.headers,
+      timeout: server.timeout,
+    });
+    conversationClients.set(key, client);
+  }
+  return client;
+}
+
+/** Get or connect a per-conversation client, deduplicating concurrent calls */
+async function ensureConversationClient(
+  serverId: string,
+  conversationId: string
+): Promise<MCPClient> {
+  const key = clientKey(serverId, conversationId);
+  const existing = conversationClients.get(key);
+  if (existing?.isConnected()) return existing;
+
+  const pending = connectingPromises.get(key);
+  if (pending) return pending;
+
+  const promise = (async () => {
+    const server = useMCPStore.getState().servers.find((s) => s.id === serverId);
+    if (!server) throw new Error(`Server not found: ${serverId}`);
+    const client = getConversationClient(server, conversationId);
+    await client.connect();
+    return client;
+  })();
+
+  connectingPromises.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    connectingPromises.delete(key);
   }
 }
 
-/** Remove and disconnect a client */
-function removeClient(serverId: string): void {
-  cleanupListeners(serverId);
-  const client = clients.get(serverId);
+/** Disconnect and remove a single per-conversation client */
+function removeConversationClient(serverId: string, conversationId: string): void {
+  const key = clientKey(serverId, conversationId);
+  const client = conversationClients.get(key);
   if (client) {
     client.disconnect();
-    clients.delete(serverId);
+    conversationClients.delete(key);
+  }
+  connectingPromises.delete(key);
+}
+
+/** Disconnect all per-conversation clients for a given conversation */
+function removeAllClientsForConversation(conversationId: string): void {
+  const suffix = `::${conversationId}`;
+  // Deleting from a Map during iteration is safe in ES6+
+  for (const [key, client] of conversationClients) {
+    if (key.endsWith(suffix)) {
+      client.disconnect();
+      conversationClients.delete(key);
+    }
+  }
+  for (const key of connectingPromises.keys()) {
+    if (key.endsWith(suffix)) {
+      connectingPromises.delete(key);
+    }
+  }
+}
+
+/** Disconnect all per-conversation clients for a given server */
+function removeAllConversationClientsForServer(serverId: string): void {
+  const prefix = `${serverId}::`;
+  // Deleting from a Map during iteration is safe in ES6+
+  for (const [key, client] of conversationClients) {
+    if (key.startsWith(prefix)) {
+      client.disconnect();
+      conversationClients.delete(key);
+    }
+  }
+  for (const key of connectingPromises.keys()) {
+    if (key.startsWith(prefix)) {
+      connectingPromises.delete(key);
+    }
+  }
+}
+
+/** Remove listener subscriptions for a server */
+function cleanupListeners(serverId: string): void {
+  const cleanups = globalListenerCleanups.get(serverId);
+  if (cleanups) {
+    cleanups.forEach((fn) => fn());
+    globalListenerCleanups.delete(serverId);
+  }
+}
+
+/** Remove and disconnect a global client */
+function removeClient(serverId: string): void {
+  cleanupListeners(serverId);
+  const client = globalClients.get(serverId);
+  if (client) {
+    client.disconnect();
+    globalClients.delete(serverId);
   }
 }
 
@@ -172,6 +275,7 @@ export const useMCPStore = create<MCPStore>()(
 
       removeServer: (serverId) => {
         removeClient(serverId);
+        removeAllConversationClientsForServer(serverId);
         set((state) => ({
           servers: state.servers.filter((s) => s.id !== serverId),
         }));
@@ -182,6 +286,7 @@ export const useMCPStore = create<MCPStore>()(
         const server = get().servers.find((s) => s.id === serverId);
         if (server && (updates.url || updates.headers || updates.timeout)) {
           removeClient(serverId);
+          removeAllConversationClientsForServer(serverId);
         }
 
         set((state) => ({
@@ -217,7 +322,7 @@ export const useMCPStore = create<MCPStore>()(
           // are automatically re-discovered
           cleanups.push(
             client.onNotification(async (method) => {
-              const c = clients.get(serverId);
+              const c = globalClients.get(serverId);
               if (!c?.isConnected()) return;
 
               try {
@@ -232,7 +337,7 @@ export const useMCPStore = create<MCPStore>()(
             })
           );
 
-          listenerCleanups.set(serverId, cleanups);
+          globalListenerCleanups.set(serverId, cleanups);
 
           // Connect to server
           await client.connect();
@@ -264,6 +369,7 @@ export const useMCPStore = create<MCPStore>()(
 
       disconnectServer: (serverId) => {
         removeClient(serverId);
+        removeAllConversationClientsForServer(serverId);
         set((state) => ({
           servers: state.servers.map((s) =>
             s.id === serverId
@@ -288,9 +394,12 @@ export const useMCPStore = create<MCPStore>()(
 
         const newEnabled = !server.enabled;
 
-        // If disabling, disconnect
-        if (!newEnabled && server.status === "connected") {
-          get().disconnectServer(serverId);
+        // If disabling, disconnect global + all conversation clients
+        if (!newEnabled) {
+          if (server.status === "connected") {
+            get().disconnectServer(serverId);
+          }
+          removeAllConversationClientsForServer(serverId);
         }
 
         set((state) => ({
@@ -377,6 +486,12 @@ export const useMCPStore = create<MCPStore>()(
             removeClient(server.id);
           }
         }
+        // Also disconnect all per-conversation clients
+        for (const [, client] of conversationClients) {
+          client.disconnect();
+        }
+        conversationClients.clear();
+        connectingPromises.clear();
         set((state) => ({
           servers: state.servers.map((s) => ({
             ...s,
@@ -389,6 +504,10 @@ export const useMCPStore = create<MCPStore>()(
             capabilities: undefined,
           })),
         }));
+      },
+
+      disconnectConversation: (conversationId) => {
+        removeAllClientsForConversation(conversationId);
       },
     }),
     {
@@ -488,18 +607,38 @@ export const useMCPErrors = () =>
 // Utility Functions
 // =============================================================================
 
-/** Get MCPClient instance for a server (for making tool calls) */
-export function getMCPClient(serverId: string): MCPClient | undefined {
-  return clients.get(serverId);
+/** Get MCPClient instance for a server (global or per-conversation) */
+export function getMCPClient(serverId: string, conversationId?: string): MCPClient | undefined {
+  if (conversationId) {
+    return conversationClients.get(clientKey(serverId, conversationId));
+  }
+  return globalClients.get(serverId);
 }
 
-/** Call a tool on an MCP server, auto-reconnecting on session expiry */
+/**
+ * Call a tool on an MCP server, auto-reconnecting on session expiry.
+ * If conversationId is provided, uses a per-conversation session (lazily created).
+ * Otherwise falls back to the global client.
+ */
 export async function callMCPTool(
+  serverId: string,
+  toolName: string,
+  args?: Record<string, unknown>,
+  conversationId?: string
+) {
+  if (conversationId) {
+    return callMCPToolWithConversationClient(serverId, toolName, args, conversationId);
+  }
+  return callMCPToolWithGlobalClient(serverId, toolName, args);
+}
+
+/** Call a tool using the global client (existing behavior) */
+async function callMCPToolWithGlobalClient(
   serverId: string,
   toolName: string,
   args?: Record<string, unknown>
 ) {
-  const client = clients.get(serverId);
+  const client = globalClients.get(serverId);
   if (!client) {
     throw new Error(`No client for server: ${serverId}`);
   }
@@ -515,12 +654,33 @@ export async function callMCPTool(
       console.debug("MCP session expired during tool call, reconnecting…");
       const store = useMCPStore.getState();
       await store.connectServer(serverId);
-      // Retry with the (possibly new) client
-      const newClient = clients.get(serverId);
+      const newClient = globalClients.get(serverId);
       if (!newClient?.isConnected()) {
         throw new Error(`Reconnection failed for server: ${serverId}`);
       }
       return newClient.callTool(toolName, args);
+    }
+    throw err;
+  }
+}
+
+/** Call a tool using a per-conversation client (lazy init, auto-reconnect) */
+async function callMCPToolWithConversationClient(
+  serverId: string,
+  toolName: string,
+  args: Record<string, unknown> | undefined,
+  conversationId: string
+) {
+  let client = await ensureConversationClient(serverId, conversationId);
+
+  try {
+    return await client.callTool(toolName, args);
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("session expired")) {
+      console.debug("MCP conversation session expired, reconnecting…");
+      removeConversationClient(serverId, conversationId);
+      client = await ensureConversationClient(serverId, conversationId);
+      return client.callTool(toolName, args);
     }
     throw err;
   }

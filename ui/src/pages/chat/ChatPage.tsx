@@ -170,6 +170,7 @@ export default function ChatPage() {
     captureRawSSEEvents,
     subAgentModel,
     projectId: currentConversation?.projectId ?? pendingProject.id ?? undefined,
+    conversationId,
   });
 
   const { moveToProject } = useConversationsContext();

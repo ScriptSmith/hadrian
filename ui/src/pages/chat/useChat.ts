@@ -130,6 +130,8 @@ interface UseChatOptions {
   subAgentModel?: string | null;
   /** Project ID for usage attribution (sent as X-Hadrian-Project header) */
   projectId?: string;
+  /** Conversation ID for per-conversation MCP sessions */
+  conversationId?: string;
 }
 
 /**
@@ -255,6 +257,7 @@ export function useChat({
   captureRawSSEEvents = false,
   subAgentModel,
   projectId,
+  conversationId,
 }: UseChatOptions): UseChatReturn {
   const { token } = useAuth();
   const abortControllersRef = useRef<AbortController[]>([]);
@@ -267,6 +270,8 @@ export function useChat({
   // and used as a ref to ensure the latest value is available at fetch time.
   const projectIdRef = useRef(projectId);
   projectIdRef.current = projectId;
+  const conversationIdRef = useRef(conversationId);
+  conversationIdRef.current = conversationId;
   const streamingStore = useStreamingStore();
   const debugStore = useDebugStore();
   const modelResponses = useAllStreams();
@@ -1482,6 +1487,7 @@ export function useChat({
           },
           // Use configured sub-agent model, fall back to current streaming model
           defaultModel: subAgentModel || model,
+          conversationId: conversationIdRef.current,
         };
 
         const toolResults = await executeToolCalls(result.toolCalls, toolContext);
