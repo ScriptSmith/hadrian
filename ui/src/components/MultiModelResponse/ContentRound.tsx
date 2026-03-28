@@ -70,10 +70,10 @@ function ContentRoundComponent({
   }, [isToolsStreaming]);
 
   const handleToggleTools = useCallback(() => {
-    setIsManuallyExpanded((p) => !p);
+    setIsManuallyExpanded(!toolsExpanded);
     setUserOverride(true);
     setWasAutoExpanded(false);
-  }, []);
+  }, [toolsExpanded]);
   const compactMode = useCompactMode();
 
   // Resolve display selection to actual artifacts
