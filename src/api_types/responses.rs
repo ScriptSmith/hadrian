@@ -1334,12 +1334,12 @@ pub struct CreateResponsesPayload {
     #[cfg_attr(feature = "utoipa", schema(value_type = Object))]
     pub truncation: Option<serde_json::Value>,
 
-    /// Presence penalty (-2.0 to 2.0)
+    /// **Hadrian Extension:** Presence penalty (-2.0 to 2.0)
     #[validate(range(min = -2.0, max = 2.0))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presence_penalty: Option<f64>,
 
-    /// Frequency penalty (-2.0 to 2.0)
+    /// **Hadrian Extension:** Frequency penalty (-2.0 to 2.0)
     #[validate(range(min = -2.0, max = 2.0))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frequency_penalty: Option<f64>,
