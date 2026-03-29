@@ -479,6 +479,13 @@ export function Sidebar({
     ? location.pathname.split("/")[2]
     : null;
 
+  // Check if a conversation matches the active URL (may be local id or server remoteId)
+  const isActive = useCallback(
+    (conv: Conversation) =>
+      activeConversationId === conv.id || activeConversationId === conv.remoteId,
+    [activeConversationId]
+  );
+
   const filteredConversations = searchQuery
     ? conversations.filter((c) => c.title.toLowerCase().includes(searchQuery.toLowerCase()))
     : conversations;
@@ -528,7 +535,7 @@ export function Sidebar({
 
   const handleDeleteConversation = (conv: Conversation) => {
     deleteConversation(conv.id);
-    if (activeConversationId === conv.id) {
+    if (isActive(conv)) {
       navigate("/chat");
     }
   };
@@ -814,7 +821,7 @@ export function Sidebar({
                                 <SortablePinnedItem
                                   key={conv.id}
                                   conv={conv}
-                                  isActive={activeConversationId === conv.id && isChatRoute}
+                                  isActive={isActive(conv) && isChatRoute}
                                   isEditing={editingId === conv.id}
                                   editTitle={editTitle}
                                   onEditTitleChange={setEditTitle}
@@ -904,7 +911,7 @@ export function Sidebar({
                                           className={cn(
                                             "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm",
                                             "hover:bg-accent/50",
-                                            activeConversationId === conv.id && isChatRoute
+                                            isActive(conv) && isChatRoute
                                               ? "bg-accent text-accent-foreground font-medium"
                                               : "text-foreground/80"
                                           )}
@@ -925,7 +932,7 @@ export function Sidebar({
                                                 className={cn(
                                                   "inline-flex items-center justify-center h-6 w-6 shrink-0 rounded-md p-0 opacity-0 transition-opacity hover:bg-muted",
                                                   "group-hover:opacity-100",
-                                                  activeConversationId === conv.id && "opacity-100"
+                                                  isActive(conv) && "opacity-100"
                                                 )}
                                               >
                                                 <MoreHorizontal className="h-4 w-4" />
@@ -1059,7 +1066,7 @@ export function Sidebar({
                                                   className={cn(
                                                     "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm",
                                                     "hover:bg-accent/50",
-                                                    activeConversationId === conv.id && isChatRoute
+                                                    isActive(conv) && isChatRoute
                                                       ? "bg-accent text-accent-foreground font-medium"
                                                       : "text-muted-foreground"
                                                   )}

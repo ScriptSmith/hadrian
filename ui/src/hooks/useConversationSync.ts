@@ -95,6 +95,9 @@ export function useConversationSync(conversationId: string | undefined) {
   // triggers the save effect, but nothing actually changed — saving would bump updatedAt
   // and cause the conversation to jump to the top of the sidebar)
   const skipNextSaveRef = useRef(false);
+  // Ref for currentConversationId so the save effect doesn't re-trigger on conversation
+  // switch (which would consume the skipNextSaveRef before the real message-load render)
+  const currentConversationIdRef = useRef(currentConversation?.id);
 
   // Load conversation when it changes
   useEffect(() => {
@@ -127,11 +130,15 @@ export function useConversationSync(conversationId: string | undefined) {
     }
   }, [currentConversation?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Save conversation when messages change (debounced)
-  const currentConversationId = currentConversation?.id;
+  // Save conversation when messages change (debounced).
+  // currentConversationId is accessed via ref so that switching conversations doesn't
+  // trigger this effect — otherwise it fires before the message-load render and
+  // consumes skipNextSaveRef too early, causing a spurious save that bumps updatedAt.
+  currentConversationIdRef.current = currentConversation?.id;
   useEffect(() => {
-    if (isStreaming || !currentConversationId || messages.length === 0) return;
-    if (loadedConversationIdRef.current !== currentConversationId) return;
+    const convId = currentConversationIdRef.current;
+    if (isStreaming || !convId || messages.length === 0) return;
+    if (loadedConversationIdRef.current !== convId) return;
 
     // After loading a conversation, the messages store changes which triggers this effect.
     // Skip that first save to avoid bumping updatedAt (which reorders the sidebar).
@@ -145,7 +152,7 @@ export function useConversationSync(conversationId: string | undefined) {
     }
 
     saveTimeoutRef.current = setTimeout(() => {
-      updateConversation(currentConversationId, messages, selectedModels);
+      updateConversation(currentConversationIdRef.current!, messages, selectedModels);
     }, 100);
 
     return () => {
@@ -153,7 +160,7 @@ export function useConversationSync(conversationId: string | undefined) {
         clearTimeout(saveTimeoutRef.current);
       }
     };
-  }, [messages, isStreaming, currentConversationId, selectedModels, updateConversation]);
+  }, [messages, isStreaming, selectedModels, updateConversation]);
 
   /**
    * Fork a conversation, optionally up to a specific message.
