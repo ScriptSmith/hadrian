@@ -1481,7 +1481,10 @@ impl CreateResponsesResponse {
         let mut val = serde_json::to_value(self).unwrap_or_default();
         if let serde_json::Value::Object(ref mut map) = val {
             if self.status == Some(ResponsesResponseStatus::Completed) {
-                map.insert("completed_at".into(), serde_json::json!(self.created_at));
+                map.insert(
+                    "completed_at".into(),
+                    serde_json::json!(chrono::Utc::now().timestamp() as f64),
+                );
             }
             for (k, v) in echo_fields {
                 // Don't overwrite reasoning if the struct already has it set from conversion
@@ -1509,8 +1512,12 @@ impl CreateResponsesPayload {
                     .into_iter()
                     .map(|mut t| {
                         if let serde_json::Value::Object(ref mut obj) = t {
-                            obj.entry("strict").or_insert(serde_json::Value::Null);
-                            obj.entry("description").or_insert(serde_json::Value::Null);
+                            let is_function =
+                                obj.get("type").and_then(|v| v.as_str()) == Some("function");
+                            if is_function {
+                                obj.entry("strict").or_insert(serde_json::Value::Null);
+                                obj.entry("description").or_insert(serde_json::Value::Null);
+                            }
                         }
                         t
                     })
@@ -1624,9 +1631,14 @@ impl CreateResponsesPayload {
                 })
                 .unwrap_or(serde_json::Value::Null),
         );
+        m.insert(
+            "metadata".into(),
+            serde_json::to_value(self.metadata.clone()).unwrap_or(serde_json::Value::Null),
+        );
         m.insert("error".into(), serde_json::Value::Null);
         m.insert("incomplete_details".into(), serde_json::Value::Null);
         m.insert("max_tool_calls".into(), serde_json::Value::Null);
+        // top_logprobs is not a request parameter on the Responses API; default to 0 per spec
         m.insert("top_logprobs".into(), serde_json::json!(0));
         // Ensure reasoning is echoed (null if not configured)
         m.insert(
