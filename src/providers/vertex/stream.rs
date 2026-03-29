@@ -574,6 +574,8 @@ impl<S> VertexToResponsesStream<S> {
         obj.insert("status".into(), serde_json::json!(status));
         obj.insert("output".into(), output);
         obj.insert("completed_at".into(), serde_json::Value::Null);
+        obj.insert("error".into(), serde_json::Value::Null);
+        obj.insert("incomplete_details".into(), serde_json::Value::Null);
         obj.insert("usage".into(), serde_json::Value::Null);
         for (k, v) in &self.state.echo_fields {
             obj.insert(k.clone(), v.clone());

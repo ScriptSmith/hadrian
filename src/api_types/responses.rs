@@ -1633,10 +1633,11 @@ impl CreateResponsesPayload {
         );
         m.insert(
             "metadata".into(),
-            serde_json::to_value(self.metadata.clone()).unwrap_or(serde_json::Value::Null),
+            self.metadata
+                .as_ref()
+                .map(|md| serde_json::to_value(md).unwrap_or_default())
+                .unwrap_or_else(|| serde_json::json!({})),
         );
-        m.insert("error".into(), serde_json::Value::Null);
-        m.insert("incomplete_details".into(), serde_json::Value::Null);
         m.insert("max_tool_calls".into(), serde_json::Value::Null);
         // top_logprobs is not a request parameter on the Responses API; default to 0 per spec
         m.insert("top_logprobs".into(), serde_json::json!(0));
