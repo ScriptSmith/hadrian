@@ -684,6 +684,8 @@ impl Provider for BedrockProvider {
             .clone()
             .unwrap_or_else(|| "anthropic.claude-3-sonnet-20240229-v1:0".to_string());
 
+        let echo_fields = payload.echo_fields_json();
+
         // Convert Responses API input to Bedrock Converse format
         let (system, messages) =
             convert_responses_input_to_bedrock_messages(payload.input, payload.instructions);
@@ -757,8 +759,12 @@ impl Provider for BedrockProvider {
             }
 
             let byte_stream = response.bytes_stream();
-            let transformed_stream =
-                BedrockToResponsesStream::new(byte_stream, model, &self.streaming_buffer);
+            let transformed_stream = BedrockToResponsesStream::new(
+                byte_stream,
+                model,
+                &self.streaming_buffer,
+                echo_fields,
+            );
 
             return streaming_response(status, transformed_stream);
         }
@@ -797,7 +803,7 @@ impl Provider for BedrockProvider {
             payload.reasoning.as_ref(),
             payload.user,
         );
-        json_response(status, &responses_response)
+        json_response(status, &responses_response.to_json_with_echo(echo_fields))
     }
 
     #[tracing::instrument(

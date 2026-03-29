@@ -463,6 +463,7 @@ impl Provider for VertexProvider {
             .unwrap_or_else(|| "gemini-2.0-flash".to_string());
 
         let stream = payload.stream;
+        let echo_fields = payload.echo_fields_json();
 
         // Convert Responses API input to Vertex format
         let (system_instruction, contents) =
@@ -536,8 +537,12 @@ impl Provider for VertexProvider {
             let byte_stream = response
                 .bytes_stream()
                 .map(|result| result.map_err(std::io::Error::other));
-            let transformed_stream =
-                VertexToResponsesStream::new(byte_stream, model, &self.streaming_buffer);
+            let transformed_stream = VertexToResponsesStream::new(
+                byte_stream,
+                model,
+                &self.streaming_buffer,
+                echo_fields,
+            );
 
             return streaming_response(status, transformed_stream);
         }
@@ -555,7 +560,7 @@ impl Provider for VertexProvider {
             payload.reasoning.as_ref(),
             payload.user,
         );
-        json_response(status, &responses_response)
+        json_response(status, &responses_response.to_json_with_echo(echo_fields))
     }
 
     #[tracing::instrument(

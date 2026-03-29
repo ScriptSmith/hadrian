@@ -19,9 +19,10 @@ where
 }
 use validator::Validate;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseInputImageDetail {
+    #[default]
     Auto,
     High,
     Low,
@@ -268,6 +269,7 @@ pub enum ResponseInputContentItem {
         cache_control: Option<CacheControl>,
     },
     InputImage {
+        #[serde(default)]
         detail: ResponseInputImageDetail,
         #[serde(skip_serializing_if = "Option::is_none")]
         image_url: Option<String>,
@@ -530,9 +532,9 @@ pub enum ResponsesAnnotation {
 pub enum OutputMessageContentItem {
     OutputText {
         text: String,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(default)]
         annotations: Vec<ResponsesAnnotation>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(default)]
         logprobs: Vec<serde_json::Value>,
     },
     Refusal {
@@ -1332,6 +1334,16 @@ pub struct CreateResponsesPayload {
     #[cfg_attr(feature = "utoipa", schema(value_type = Object))]
     pub truncation: Option<serde_json::Value>,
 
+    /// Presence penalty (-2.0 to 2.0)
+    #[validate(range(min = -2.0, max = 2.0))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f64>,
+
+    /// Frequency penalty (-2.0 to 2.0)
+    #[validate(range(min = -2.0, max = 2.0))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f64>,
+
     /// Enable streaming
     #[serde(default)]
     pub stream: bool,
@@ -1428,53 +1440,207 @@ pub struct CreateResponsesResponse {
     pub user: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub safety_identifier: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ResponsesErrorField>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub incomplete_details: Option<ResponsesIncompleteDetails>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<ResponsesUsage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<f64>,
     pub max_tool_calls: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub top_logprobs: Option<f64>,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "serialize_as_integer"
-    )]
+    #[serde(serialize_with = "serialize_as_integer")]
     pub max_output_tokens: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f64>,
+    pub frequency_penalty: Option<f64>,
     pub instructions: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<ResponsesToolDefinition>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<ResponsesToolChoice>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub parallel_tool_calls: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<ResponsesPrompt>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ResponsesReasoningConfigOutput>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<ResponsesServiceTier>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub store: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub truncation: Option<ResponsesTruncation>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<ResponseTextConfig>,
+}
+
+impl CreateResponsesResponse {
+    /// Serialize to JSON with echo fields merged in per OpenAI Responses API spec.
+    pub fn to_json_with_echo(
+        &self,
+        echo_fields: serde_json::Map<String, serde_json::Value>,
+    ) -> serde_json::Value {
+        let mut val = serde_json::to_value(self).unwrap_or_default();
+        if let serde_json::Value::Object(ref mut map) = val {
+            if self.status == Some(ResponsesResponseStatus::Completed) {
+                map.insert("completed_at".into(), serde_json::json!(self.created_at));
+            }
+            for (k, v) in echo_fields {
+                // Don't overwrite reasoning if the struct already has it set from conversion
+                if k == "reasoning" && self.reasoning.is_some() {
+                    continue;
+                }
+                map.insert(k, v);
+            }
+        }
+        val
+    }
+}
+
+impl CreateResponsesPayload {
+    /// Produce a JSON map of echo fields for streaming response.completed events.
+    pub fn echo_fields_json(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut m = serde_json::Map::new();
+
+        // Echo tools with required fields (strict, description) filled in
+        let tools_json =
+            serde_json::to_value(self.tools.clone().unwrap_or_default()).unwrap_or_default();
+        let tools_json = if let serde_json::Value::Array(tools) = tools_json {
+            serde_json::Value::Array(
+                tools
+                    .into_iter()
+                    .map(|mut t| {
+                        if let serde_json::Value::Object(ref mut obj) = t {
+                            obj.entry("strict").or_insert(serde_json::Value::Null);
+                            obj.entry("description").or_insert(serde_json::Value::Null);
+                        }
+                        t
+                    })
+                    .collect(),
+            )
+        } else {
+            tools_json
+        };
+        m.insert("tools".into(), tools_json);
+        m.insert(
+            "tool_choice".into(),
+            serde_json::to_value(
+                self.tool_choice
+                    .clone()
+                    .unwrap_or(ResponsesToolChoice::String(
+                        ResponsesToolChoiceDefault::Auto,
+                    )),
+            )
+            .unwrap_or_default(),
+        );
+        m.insert(
+            "parallel_tool_calls".into(),
+            serde_json::Value::Bool(self.parallel_tool_calls.unwrap_or(true)),
+        );
+        m.insert(
+            "temperature".into(),
+            serde_json::json!(self.temperature.unwrap_or(1.0)),
+        );
+        m.insert("top_p".into(), serde_json::json!(self.top_p.unwrap_or(1.0)));
+        m.insert(
+            "store".into(),
+            serde_json::Value::Bool(self.store.unwrap_or(true)),
+        );
+        m.insert(
+            "background".into(),
+            serde_json::Value::Bool(self.background.unwrap_or(false)),
+        );
+        m.insert(
+            "truncation".into(),
+            serde_json::to_value(
+                self.truncation
+                    .as_ref()
+                    .and_then(|v| serde_json::from_value::<ResponsesTruncation>(v.clone()).ok())
+                    .unwrap_or(ResponsesTruncation::Disabled),
+            )
+            .unwrap_or_default(),
+        );
+        m.insert(
+            "text".into(),
+            serde_json::to_value(self.text.clone().unwrap_or(ResponseTextConfig {
+                format: Some(ResponseFormatTextConfig::Text),
+                verbosity: None,
+            }))
+            .unwrap_or_default(),
+        );
+        m.insert(
+            "service_tier".into(),
+            serde_json::to_value(
+                self.service_tier
+                    .as_ref()
+                    .and_then(|v| serde_json::from_value::<ResponsesServiceTier>(v.clone()).ok())
+                    .unwrap_or(ResponsesServiceTier::Default),
+            )
+            .unwrap_or_default(),
+        );
+        m.insert(
+            "presence_penalty".into(),
+            serde_json::json!(self.presence_penalty.unwrap_or(0.0)),
+        );
+        m.insert(
+            "frequency_penalty".into(),
+            serde_json::json!(self.frequency_penalty.unwrap_or(0.0)),
+        );
+        m.insert(
+            "instructions".into(),
+            self.instructions
+                .as_ref()
+                .map(|s| serde_json::Value::String(s.clone()))
+                .unwrap_or(serde_json::Value::Null),
+        );
+        m.insert(
+            "previous_response_id".into(),
+            self.previous_response_id
+                .as_ref()
+                .map(|s| serde_json::Value::String(s.clone()))
+                .unwrap_or(serde_json::Value::Null),
+        );
+        m.insert(
+            "prompt_cache_key".into(),
+            self.prompt_cache_key
+                .as_ref()
+                .map(|s| serde_json::Value::String(s.clone()))
+                .unwrap_or(serde_json::Value::Null),
+        );
+        m.insert(
+            "safety_identifier".into(),
+            self.safety_identifier
+                .as_ref()
+                .map(|s| serde_json::Value::String(s.clone()))
+                .unwrap_or(serde_json::Value::Null),
+        );
+        m.insert(
+            "max_output_tokens".into(),
+            self.max_output_tokens
+                .map(|v| {
+                    if v.fract() == 0.0 {
+                        serde_json::json!(v as i64)
+                    } else {
+                        serde_json::json!(v)
+                    }
+                })
+                .unwrap_or(serde_json::Value::Null),
+        );
+        m.insert("error".into(), serde_json::Value::Null);
+        m.insert("incomplete_details".into(), serde_json::Value::Null);
+        m.insert("max_tool_calls".into(), serde_json::Value::Null);
+        m.insert("top_logprobs".into(), serde_json::json!(0));
+        // Ensure reasoning is echoed (null if not configured)
+        m.insert(
+            "reasoning".into(),
+            self.reasoning
+                .as_ref()
+                .map(|r| {
+                    serde_json::json!({
+                        "effort": r.effort.as_ref().map(|e| serde_json::to_value(e).unwrap_or_default()),
+                        "summary": r.summary.as_ref().map(|s| serde_json::to_value(s).unwrap_or_default()),
+                    })
+                })
+                .unwrap_or(serde_json::Value::Null),
+        );
+        m
+    }
 }

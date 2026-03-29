@@ -508,6 +508,8 @@ pub(super) struct ResponsesStreamState {
     pub finish_reason: Option<String>,
     /// Sequence number for Responses API events
     pub sequence_number: i32,
+    /// Echo fields from request payload for response.completed
+    pub echo_fields: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Stream transformer that converts Vertex SSE to OpenAI Responses API SSE format
@@ -523,7 +525,12 @@ pub struct VertexToResponsesStream<S> {
 }
 
 impl<S> VertexToResponsesStream<S> {
-    pub fn new(inner: S, model: String, streaming_buffer: &StreamingBufferConfig) -> Self {
+    pub fn new(
+        inner: S,
+        model: String,
+        streaming_buffer: &StreamingBufferConfig,
+        echo_fields: serde_json::Map<String, serde_json::Value>,
+    ) -> Self {
         Self {
             inner,
             state: ResponsesStreamState {
@@ -531,6 +538,7 @@ impl<S> VertexToResponsesStream<S> {
                 message_id: format!("msg_{}", uuid::Uuid::new_v4().simple()),
                 reasoning_id: format!("rs_{}", uuid::Uuid::new_v4().simple()),
                 model,
+                echo_fields,
                 ..ResponsesStreamState::default()
             },
             output_buffer: Vec::new(),
@@ -547,6 +555,30 @@ impl<S> VertexToResponsesStream<S> {
         let seq = self.state.sequence_number;
         self.state.sequence_number += 1;
         seq
+    }
+
+    /// Build a response JSON object with echo fields for streaming events.
+    fn build_response_json(
+        &self,
+        status: &str,
+        output: serde_json::Value,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        let mut obj = serde_json::Map::new();
+        obj.insert("id".into(), serde_json::json!(self.state.response_id));
+        obj.insert("object".into(), serde_json::json!("response"));
+        obj.insert(
+            "created_at".into(),
+            serde_json::json!(Self::created_timestamp()),
+        );
+        obj.insert("model".into(), serde_json::json!(self.state.model));
+        obj.insert("status".into(), serde_json::json!(status));
+        obj.insert("output".into(), output);
+        obj.insert("completed_at".into(), serde_json::Value::Null);
+        obj.insert("usage".into(), serde_json::Value::Null);
+        for (k, v) in &self.state.echo_fields {
+            obj.insert(k.clone(), v.clone());
+        }
+        obj
     }
 
     /// Parse a Vertex SSE line and generate Responses API SSE chunks
@@ -582,19 +614,8 @@ impl<S> VertexToResponsesStream<S> {
         // Emit response.created on first chunk
         if !self.state.emitted_response_created {
             self.state.emitted_response_created = true;
-            self.emit_event(
-                "response.created",
-                serde_json::json!({
-                    "response": {
-                        "id": self.state.response_id,
-                        "object": "response",
-                        "created_at": Self::created_timestamp(),
-                        "model": self.state.model,
-                        "status": "in_progress",
-                        "output": []
-                    }
-                }),
-            );
+            let resp = self.build_response_json("in_progress", serde_json::json!([]));
+            self.emit_event("response.created", serde_json::json!({ "response": resp }));
         }
 
         // Update usage if available
@@ -962,26 +983,29 @@ impl<S> VertexToResponsesStream<S> {
             _ => "completed",
         };
 
+        // Build response object with echo fields
+        let mut response_obj = self.build_response_json(status, serde_json::json!(output));
+        response_obj.insert(
+            "usage".into(),
+            serde_json::json!({
+                "input_tokens": self.state.input_tokens,
+                "input_tokens_details": { "cached_tokens": 0 },
+                "output_tokens": self.state.output_tokens,
+                "output_tokens_details": { "reasoning_tokens": self.state.reasoning_tokens },
+                "total_tokens": self.state.input_tokens + self.state.output_tokens
+            }),
+        );
+        if status == "completed" {
+            response_obj.insert(
+                "completed_at".into(),
+                serde_json::json!(Self::created_timestamp()),
+            );
+        }
+
         // Emit response.completed with reasoning tokens in usage
         self.emit_event(
             "response.completed",
-            serde_json::json!({
-                "response": {
-                    "id": self.state.response_id,
-                    "object": "response",
-                    "created_at": Self::created_timestamp(),
-                    "model": self.state.model,
-                    "status": status,
-                    "output": output,
-                    "usage": {
-                        "input_tokens": self.state.input_tokens,
-                        "input_tokens_details": { "cached_tokens": 0 },
-                        "output_tokens": self.state.output_tokens,
-                        "output_tokens_details": { "reasoning_tokens": self.state.reasoning_tokens },
-                        "total_tokens": self.state.input_tokens + self.state.output_tokens
-                    }
-                }
-            }),
+            serde_json::json!({ "response": response_obj }),
         );
     }
 

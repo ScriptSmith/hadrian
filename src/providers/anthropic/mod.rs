@@ -291,6 +291,8 @@ impl Provider for AnthropicProvider {
             .or(self.default_max_tokens)
             .unwrap_or(DEFAULT_MAX_TOKENS);
 
+        let echo_fields = payload.echo_fields_json();
+
         // Convert Responses API input to Anthropic messages format
         let (system, messages) =
             convert_responses_input_to_messages(payload.input, payload.instructions.clone());
@@ -384,7 +386,7 @@ impl Provider for AnthropicProvider {
                         result.map_err(std::io::Error::other)
                     });
             let transformed_stream =
-                AnthropicToResponsesStream::new(byte_stream, &self.streaming_buffer);
+                AnthropicToResponsesStream::new(byte_stream, &self.streaming_buffer, echo_fields);
 
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -401,7 +403,7 @@ impl Provider for AnthropicProvider {
                 payload.reasoning.as_ref(),
                 payload.user,
             );
-            json_response(status, &responses_response)
+            json_response(status, &responses_response.to_json_with_echo(echo_fields))
         }
     }
 
