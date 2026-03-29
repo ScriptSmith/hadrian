@@ -703,6 +703,8 @@ struct ResponsesStreamState {
     stop_reason: Option<String>,
     /// Sequence number for Responses API events
     sequence_number: i32,
+    /// Echo fields from request payload for response.completed
+    echo_fields: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Stream transformer that converts Anthropic SSE to OpenAI Responses API SSE format
@@ -718,10 +720,17 @@ pub struct AnthropicToResponsesStream<S> {
 }
 
 impl<S> AnthropicToResponsesStream<S> {
-    pub fn new(inner: S, streaming_buffer: &StreamingBufferConfig) -> Self {
+    pub fn new(
+        inner: S,
+        streaming_buffer: &StreamingBufferConfig,
+        echo_fields: serde_json::Map<String, serde_json::Value>,
+    ) -> Self {
         Self {
             inner,
-            state: ResponsesStreamState::default(),
+            state: ResponsesStreamState {
+                echo_fields,
+                ..ResponsesStreamState::default()
+            },
             output_buffer: Vec::new(),
             max_input_buffer_bytes: streaming_buffer.max_input_buffer_bytes,
             max_output_buffer_chunks: streaming_buffer.max_output_buffer_chunks,
@@ -736,6 +745,21 @@ impl<S> AnthropicToResponsesStream<S> {
         let seq = self.state.sequence_number;
         self.state.sequence_number += 1;
         seq
+    }
+
+    fn build_response_json(
+        &self,
+        status: &str,
+        output: serde_json::Value,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        crate::api_types::responses::build_streaming_response_json(
+            &self.state.response_id,
+            &self.state.model,
+            Self::created_timestamp(),
+            status,
+            output,
+            &self.state.echo_fields,
+        )
     }
 
     /// Calculate the output index for message (accounting for reasoning if present)
@@ -810,19 +834,8 @@ impl<S> AnthropicToResponsesStream<S> {
                 // Emit response.created
                 if !self.state.emitted_response_created {
                     self.state.emitted_response_created = true;
-                    self.emit_event(
-                        "response.created",
-                        serde_json::json!({
-                            "response": {
-                                "id": self.state.response_id,
-                                "object": "response",
-                                "created_at": Self::created_timestamp(),
-                                "model": self.state.model,
-                                "status": "in_progress",
-                                "output": []
-                            }
-                        }),
-                    );
+                    let resp = self.build_response_json("in_progress", serde_json::json!([]));
+                    self.emit_event("response.created", serde_json::json!({ "response": resp }));
                 }
             }
 
@@ -1219,26 +1232,26 @@ impl<S> AnthropicToResponsesStream<S> {
                     _ => "completed",
                 };
 
+                // Build response object with echo fields
+                let mut response_obj = self.build_response_json(status, serde_json::json!(output));
+                response_obj.insert("usage".into(), serde_json::json!({
+                    "input_tokens": self.state.input_tokens,
+                    "input_tokens_details": { "cached_tokens": self.state.cache_read_input_tokens },
+                    "output_tokens": self.state.output_tokens,
+                    "output_tokens_details": { "reasoning_tokens": 0 },
+                    "total_tokens": self.state.input_tokens + self.state.output_tokens
+                }));
+                if status == "completed" {
+                    response_obj.insert(
+                        "completed_at".into(),
+                        serde_json::json!(Self::created_timestamp()),
+                    );
+                }
+
                 // Emit response.completed
                 self.emit_event(
                     "response.completed",
-                    serde_json::json!({
-                        "response": {
-                            "id": self.state.response_id,
-                            "object": "response",
-                            "created_at": Self::created_timestamp(),
-                            "model": self.state.model,
-                            "status": status,
-                            "output": output,
-                            "usage": {
-                                "input_tokens": self.state.input_tokens,
-                                "input_tokens_details": { "cached_tokens": self.state.cache_read_input_tokens },
-                                "output_tokens": self.state.output_tokens,
-                                "output_tokens_details": { "reasoning_tokens": 0 },
-                                "total_tokens": self.state.input_tokens + self.state.output_tokens
-                            }
-                        }
-                    }),
+                    serde_json::json!({ "response": response_obj }),
                 );
 
                 // Emit [DONE] to signal end of stream (OpenAI Responses API convention)

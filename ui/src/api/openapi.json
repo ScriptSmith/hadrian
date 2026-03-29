@@ -21629,6 +21629,14 @@
             ],
             "description": "Run in background"
           },
+          "frequency_penalty": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "**Hadrian Extension:** Frequency penalty (-2.0 to 2.0)"
+          },
           "include": {
             "type": "array",
             "items": {
@@ -21689,6 +21697,14 @@
               "type": "object"
             },
             "description": "**Hadrian Extension:** Plugins to enable for this request"
+          },
+          "presence_penalty": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "**Hadrian Extension:** Presence penalty (-2.0 to 2.0)"
           },
           "previous_response_id": {
             "type": [
@@ -27879,10 +27895,12 @@
         ],
         "properties": {
           "current_session_id": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "uuid",
-            "description": "The session ID of the current request (if authenticated via session cookie).\nAllows the UI to highlight the current session and warn before self-revocation.",
-            "nullable": true
+            "description": "The session ID of the current request (if authenticated via session cookie).\nAllows the UI to highlight the current session and warn before self-revocation."
           },
           "data": {
             "type": "array",

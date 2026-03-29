@@ -531,6 +531,8 @@ pub(super) struct ResponsesStreamState {
     pub reasoning_id: String,
     /// Whether we've emitted the output_item.added for reasoning
     pub emitted_reasoning_added: bool,
+    /// Echo fields from request payload for response.completed
+    pub echo_fields: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Stream transformer that converts Bedrock event stream to OpenAI Responses API SSE format
@@ -546,7 +548,12 @@ pub struct BedrockToResponsesStream<S> {
 }
 
 impl<S> BedrockToResponsesStream<S> {
-    pub fn new(inner: S, model: String, streaming_buffer: &StreamingBufferConfig) -> Self {
+    pub fn new(
+        inner: S,
+        model: String,
+        streaming_buffer: &StreamingBufferConfig,
+        echo_fields: serde_json::Map<String, serde_json::Value>,
+    ) -> Self {
         let response_id = format!("resp_{}", uuid::Uuid::new_v4().simple());
         let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
         // Generate reasoning ID from response ID (similar to Anthropic pattern)
@@ -564,6 +571,7 @@ impl<S> BedrockToResponsesStream<S> {
                 model,
                 decoder: MessageFrameDecoder::new(),
                 buffer: bytes::BytesMut::new(),
+                echo_fields,
                 ..ResponsesStreamState::default()
             },
             output_buffer: Vec::new(),
@@ -580,6 +588,21 @@ impl<S> BedrockToResponsesStream<S> {
         let seq = self.state.sequence_number;
         self.state.sequence_number += 1;
         seq
+    }
+
+    fn build_response_json(
+        &self,
+        status: &str,
+        output: serde_json::Value,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        crate::api_types::responses::build_streaming_response_json(
+            &self.state.response_id,
+            &self.state.model,
+            Self::created_timestamp(),
+            status,
+            output,
+            &self.state.echo_fields,
+        )
     }
 
     /// Calculate the output index for message (accounting for reasoning if present)
@@ -659,33 +682,17 @@ impl<S> BedrockToResponsesStream<S> {
                     // Emit response.created
                     if !self.state.emitted_response_created {
                         self.state.emitted_response_created = true;
+                        let resp = self.build_response_json("in_progress", serde_json::json!([]));
                         self.emit_event(
                             "response.created",
-                            serde_json::json!({
-                                "response": {
-                                    "id": self.state.response_id,
-                                    "object": "response",
-                                    "created_at": Self::created_timestamp(),
-                                    "model": self.state.model,
-                                    "status": "in_progress",
-                                    "output": []
-                                }
-                            }),
+                            serde_json::json!({ "response": resp }),
                         );
 
                         // Emit response.in_progress
+                        let resp = self.build_response_json("in_progress", serde_json::json!([]));
                         self.emit_event(
                             "response.in_progress",
-                            serde_json::json!({
-                                "response": {
-                                    "id": self.state.response_id,
-                                    "object": "response",
-                                    "created_at": Self::created_timestamp(),
-                                    "model": self.state.model,
-                                    "status": "in_progress",
-                                    "output": []
-                                }
-                            }),
+                            serde_json::json!({ "response": resp }),
                         );
                     }
                 }
@@ -1068,26 +1075,27 @@ impl<S> BedrockToResponsesStream<S> {
                         _ => "completed",
                     };
 
+                    // Build response object with echo fields
+                    let mut response_obj =
+                        self.build_response_json(status, serde_json::json!(output));
+                    response_obj.insert("usage".into(), serde_json::json!({
+                        "input_tokens": self.state.input_tokens,
+                        "input_tokens_details": { "cached_tokens": self.state.cache_read_input_tokens },
+                        "output_tokens": self.state.output_tokens,
+                        "output_tokens_details": { "reasoning_tokens": 0 },
+                        "total_tokens": self.state.input_tokens + self.state.output_tokens
+                    }));
+                    if status == "completed" {
+                        response_obj.insert(
+                            "completed_at".into(),
+                            serde_json::json!(Self::created_timestamp()),
+                        );
+                    }
+
                     // Emit response.completed
                     self.emit_event(
                         "response.completed",
-                        serde_json::json!({
-                            "response": {
-                                "id": self.state.response_id,
-                                "object": "response",
-                                "created_at": Self::created_timestamp(),
-                                "model": self.state.model,
-                                "status": status,
-                                "output": output,
-                                "usage": {
-                                    "input_tokens": self.state.input_tokens,
-                                    "input_tokens_details": { "cached_tokens": self.state.cache_read_input_tokens },
-                                    "output_tokens": self.state.output_tokens,
-                                    "output_tokens_details": { "reasoning_tokens": 0 },
-                                    "total_tokens": self.state.input_tokens + self.state.output_tokens
-                                }
-                            }
-                        }),
+                        serde_json::json!({ "response": response_obj }),
                     );
 
                     // Emit [DONE] to signal end of stream
@@ -1727,6 +1735,7 @@ mod streaming_tests {
             empty_stream,
             "test-model".into(),
             &StreamingBufferConfig::default(),
+            serde_json::Map::new(),
         )
     }
 
@@ -1852,6 +1861,7 @@ mod streaming_tests {
             byte_stream,
             "test-model".into(),
             &StreamingBufferConfig::default(),
+            serde_json::Map::new(),
         );
 
         let mut outputs = Vec::new();
