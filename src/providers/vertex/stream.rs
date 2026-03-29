@@ -557,30 +557,19 @@ impl<S> VertexToResponsesStream<S> {
         seq
     }
 
-    /// Build a response JSON object with echo fields for streaming events.
     fn build_response_json(
         &self,
         status: &str,
         output: serde_json::Value,
     ) -> serde_json::Map<String, serde_json::Value> {
-        let mut obj = serde_json::Map::new();
-        obj.insert("id".into(), serde_json::json!(self.state.response_id));
-        obj.insert("object".into(), serde_json::json!("response"));
-        obj.insert(
-            "created_at".into(),
-            serde_json::json!(Self::created_timestamp()),
-        );
-        obj.insert("model".into(), serde_json::json!(self.state.model));
-        obj.insert("status".into(), serde_json::json!(status));
-        obj.insert("output".into(), output);
-        obj.insert("completed_at".into(), serde_json::Value::Null);
-        obj.insert("error".into(), serde_json::Value::Null);
-        obj.insert("incomplete_details".into(), serde_json::Value::Null);
-        obj.insert("usage".into(), serde_json::Value::Null);
-        for (k, v) in &self.state.echo_fields {
-            obj.insert(k.clone(), v.clone());
-        }
-        obj
+        crate::api_types::responses::build_streaming_response_json(
+            &self.state.response_id,
+            &self.state.model,
+            Self::created_timestamp(),
+            status,
+            output,
+            &self.state.echo_fields,
+        )
     }
 
     /// Parse a Vertex SSE line and generate Responses API SSE chunks

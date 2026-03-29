@@ -1498,6 +1498,34 @@ impl CreateResponsesResponse {
     }
 }
 
+/// Build a Responses API `response` JSON object for streaming events.
+///
+/// Shared by all provider stream transformers (Anthropic, Bedrock, Vertex).
+pub fn build_streaming_response_json(
+    id: &str,
+    model: &str,
+    created_at: f64,
+    status: &str,
+    output: serde_json::Value,
+    echo_fields: &serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut obj = serde_json::Map::new();
+    obj.insert("id".into(), serde_json::json!(id));
+    obj.insert("object".into(), serde_json::json!("response"));
+    obj.insert("created_at".into(), serde_json::json!(created_at));
+    obj.insert("model".into(), serde_json::json!(model));
+    obj.insert("status".into(), serde_json::json!(status));
+    obj.insert("output".into(), output);
+    obj.insert("completed_at".into(), serde_json::Value::Null);
+    obj.insert("error".into(), serde_json::Value::Null);
+    obj.insert("incomplete_details".into(), serde_json::Value::Null);
+    obj.insert("usage".into(), serde_json::Value::Null);
+    for (k, v) in echo_fields {
+        obj.insert(k.clone(), v.clone());
+    }
+    obj
+}
+
 impl CreateResponsesPayload {
     /// Produce a JSON map of echo fields for streaming response.completed events.
     pub fn echo_fields_json(&self) -> serde_json::Map<String, serde_json::Value> {
