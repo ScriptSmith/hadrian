@@ -281,10 +281,17 @@ export default function HomePage() {
             <div className="flex flex-wrap justify-center gap-4">
               <a
                 href="https://app.hadriangateway.com"
-                className="inline-flex items-center gap-2 rounded-lg bg-fd-primary px-6 py-3 font-medium text-fd-primary-foreground transition-colors hover:bg-fd-primary/90"
+                className="relative inline-flex items-center gap-2 rounded-lg bg-fd-primary px-6 py-3 font-medium text-fd-primary-foreground transition-colors hover:bg-fd-primary/90"
                 target="_blank"
                 rel="noopener noreferrer"
               >
+                <span className="absolute -right-1.5 -top-1.5 flex h-3.5 w-3.5">
+                  <span
+                    className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75"
+                    style={{ animationDuration: "2s" }}
+                  />
+                  <span className="relative inline-flex h-3.5 w-3.5 rounded-full bg-red-500" />
+                </span>
                 <Zap className="h-4 w-4" />
                 Try in Browser
               </a>
