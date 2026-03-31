@@ -279,22 +279,33 @@ export default function HomePage() {
               MIT and Apache-2.0 licensed. No proprietary code, no upgrade tiers, no restrictions.
             </p>
             <div className="flex flex-wrap justify-center gap-4">
-              <a
-                href="https://app.hadriangateway.com"
-                className="relative inline-flex items-center gap-2 rounded-lg bg-fd-primary px-6 py-3 font-medium text-fd-primary-foreground transition-colors hover:bg-fd-primary/90"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <span className="absolute -right-1.5 -top-1.5 flex h-3.5 w-3.5">
-                  <span
-                    className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75"
-                    style={{ animationDuration: "2s" }}
-                  />
-                  <span className="relative inline-flex h-3.5 w-3.5 rounded-full bg-red-500" />
+              <span className="group relative">
+                <a
+                  href="https://app.hadriangateway.com"
+                  className="relative inline-flex items-center gap-2 rounded-lg bg-fd-primary px-6 py-3 font-medium text-fd-primary-foreground transition-colors hover:bg-fd-primary/90 hover:[animation:jiggle_0.6s_ease-in-out] active:scale-95"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <span className="absolute -right-1.5 -top-1.5 flex h-3.5 w-3.5">
+                    <span
+                      className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75"
+                      style={{ animationDuration: "2s" }}
+                    />
+                    <span className="relative inline-flex h-3.5 w-3.5 rounded-full bg-red-500" />
+                  </span>
+                  <Zap className="h-4 w-4" />
+                  Try in Browser
+                </a>
+                <span className="pointer-events-none absolute left-1/2 top-full z-10 mt-2 -translate-x-1/2 -translate-y-2 scale-95 rounded-md bg-fd-popover px-3 py-1.5 text-center text-base text-fd-popover-foreground shadow-lg border border-fd-border opacity-0 transition-all duration-300 ease-out group-hover:translate-y-0 group-hover:scale-100 group-hover:opacity-100">
+                  <span className="whitespace-nowrap">
+                    Connect to <strong>Ollama</strong>, <strong>OpenRouter</strong>, and more!
+                  </span>
+                  <br />
+                  <span className="whitespace-nowrap">
+                    Running Hadrian entirely in your web browser.
+                  </span>
                 </span>
-                <Zap className="h-4 w-4" />
-                Try in Browser
-              </a>
+              </span>
               <Link
                 href="/docs/getting-started"
                 className="inline-flex items-center gap-2 rounded-lg border border-fd-border bg-fd-background px-6 py-3 font-medium transition-colors hover:bg-fd-muted"

@@ -2,3 +2,24 @@
 @import "fumadocs-ui/css/neutral.css";
 @import "fumadocs-ui/css/preset.css";
 @import "fumadocs-openapi/css/preset.css";
+
+@keyframes jiggle {
+  0% {
+    transform: scale(1) rotate(0deg);
+  }
+  20% {
+    transform: scale(1.04) rotate(-3deg);
+  }
+  40% {
+    transform: scale(1.04) rotate(3deg);
+  }
+  60% {
+    transform: scale(1.02) rotate(-2deg);
+  }
+  80% {
+    transform: scale(1.02) rotate(2deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
+}
