@@ -30,7 +30,7 @@
 //! replacements for `axum::routing::{get, post, ...}` that wrap handlers in
 //! [`crate::compat::WasmHandler`], asserting `Send` since wasm32 is single-threaded.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{
     Extension, Json, Router,
@@ -477,7 +477,27 @@ fn wasm_default_config() -> config::GatewayConfig {
             mode: config::AuthMode::None,
             ..Default::default()
         },
-        providers: config::ProvidersConfig::default(),
+        providers: config::ProvidersConfig {
+            default_provider: Some("test".to_string()),
+            providers: HashMap::from([(
+                "test".to_string(),
+                config::ProviderConfig::Test(config::TestProviderConfig {
+                    model_name: "test-model".to_string(),
+                    failure_mode: config::TestFailureMode::None,
+                    timeout_secs: 30,
+                    allowed_models: Vec::new(),
+                    model_aliases: HashMap::new(),
+                    models: HashMap::new(),
+                    retry: config::RetryConfig::default(),
+                    circuit_breaker: config::CircuitBreakerConfig::default(),
+                    fallback_providers: Vec::new(),
+                    model_fallbacks: HashMap::new(),
+                    health_check: config::ProviderHealthCheckConfig::default(),
+                    catalog_provider: None,
+                    sovereignty: None,
+                }),
+            )]),
+        },
         limits: config::LimitsConfig::default(),
         features: config::FeaturesConfig {
             static_models_cache: config::StaticModelsCacheConfig {
