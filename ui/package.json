@@ -125,7 +125,11 @@
       "@modelcontextprotocol/sdk>express-rate-limit": ">=8.2.2",
       "flatted": ">=3.4.2",
       "picomatch": ">=4.0.4",
-      "@rollup/pluginutils>picomatch": ">=2.3.2 <4.0.0 || >=4.0.4"
+      "@rollup/pluginutils>picomatch": ">=2.3.2 <4.0.0 || >=4.0.4",
+      "lodash": ">=4.18.1",
+      "lodash-es": ">=4.18.1",
+      "defu": ">=6.1.7",
+      "vite": ">=7.3.2 <8"
     }
   }
 }
