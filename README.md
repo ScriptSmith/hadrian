@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/67a65abe-fe8c-45f7-b4cd-eaf8c4bd0c42" />
+  <video width="100%" poster="https://github.com/user-attachments/assets/ab0768fd-859b-4cf7-8be7-c77cb20018d5" src="https://github.com/user-attachments/assets/6bb8d08b-17c2-484a-a2d2-c701564ad1e8" />
 </p>
 
 
