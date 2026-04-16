@@ -554,7 +554,10 @@ const ModelResponseCard = memo(function ModelResponseCard({
   const displayName = label && label !== modelDisplayName ? label : modelDisplayName;
   const showInstanceLabel = label && label !== modelDisplayName;
   const style = getModelStyle(model);
-  const isComplete = !response.isStreaming && response.content && !response.error;
+  const isComplete =
+    !response.isStreaming &&
+    (response.content || response.artifacts?.length || response.reasoningContent) &&
+    !response.error;
   const isAnyStreaming = useIsStreaming();
   const compactMode = useCompactMode();
   // Only query streaming store for actively-streaming responses — committed
@@ -1058,7 +1061,7 @@ const ModelResponseCard = memo(function ModelResponseCard({
               <CitationList citations={citations} className="mt-4 pt-4 border-t" compact={false} />
             )}
             {/* Standalone artifacts (not from tool execution) */}
-            {!compactMode && hasArtifacts && !hasToolExecutionRounds && (
+            {hasArtifacts && !hasToolExecutionRounds && (
               <ArtifactList artifacts={artifacts} className="mt-4 pt-4 border-t" />
             )}
           </>
