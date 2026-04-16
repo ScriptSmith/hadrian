@@ -1,8 +1,5 @@
 [advisories]
 ignore = [
-    "RUSTSEC-2023-0071",
-    # rustls-webpki 0.101.7 via aws-smithy-http-client legacy TLS; cannot upgrade until AWS SDK drops rustls 0.21
-    "RUSTSEC-2026-0049",
     # rand 0.8.5 unsoundness only triggers when a custom `log` implementation calls
     # `rand::rng()` during trace-level logging. Hadrian uses `tracing-subscriber`, not a
     # custom `log::Log` implementation, so the affected code path is unreachable. rand

@@ -330,8 +330,8 @@ web-sys = { version = "0.3", features = [
 augurs = { version = "0.10.1", features = ["ets", "mstl", "forecaster"], optional = true }
 aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
 aws-credential-types = { version = "1", features = ["hardcoded-credentials"], optional = true }
-aws-sdk-s3 = { version = "1.120.0", optional = true }
-aws-sdk-secretsmanager = { version = "1.97", optional = true }
+aws-sdk-s3 = { version = "1.120.0", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"], optional = true }
+aws-sdk-secretsmanager = { version = "1.97", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
 aws-sigv4 = { version = "1", optional = true }
 aws-smithy-eventstream = { version = "0.60.13", optional = true }
 aws-smithy-types = { version = "1.3.4", optional = true }
