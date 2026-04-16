@@ -170,7 +170,7 @@ function clearPendingFlow(state: string): void {
 
 /** Check if an OAuth token has expired (with 30s buffer) */
 export function isTokenExpired(tokens: OAuthTokens): boolean {
-  if (!tokens.expires_in) return false;
+  if (tokens.expires_in == null) return false;
   const expiresAt = tokens.obtained_at + tokens.expires_in * 1000;
   return Date.now() > expiresAt - 30_000;
 }

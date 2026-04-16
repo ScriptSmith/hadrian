@@ -239,10 +239,12 @@ function ServerCard({ server, onEdit, onDelete }: ServerCardProps) {
   const { connectServer, disconnectServer, setToolEnabled } = useMCPStore();
   const [isToggling, setIsToggling] = useState(false);
   const [isAuthorizing, setIsAuthorizing] = useState(false);
+  const [authError, setAuthError] = useState<string>();
   const oauthAuthorized = server.authType === "oauth" && hasValidTokens(server.url);
 
   const handleAuthorize = useCallback(async () => {
     setIsAuthorizing(true);
+    setAuthError(undefined);
     try {
       await startOAuthFlow(server.url, server.oauth);
       // Tokens obtained — now connect
@@ -252,7 +254,7 @@ function ServerCard({ server, onEdit, onDelete }: ServerCardProps) {
         // Connection error stored in server state
       }
     } catch (err) {
-      console.debug("OAuth flow failed:", err);
+      setAuthError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsAuthorizing(false);
     }
@@ -404,6 +406,12 @@ function ServerCard({ server, onEdit, onDelete }: ServerCardProps) {
             >
               {oauthAuthorized ? "Re-authorize" : "Authorize"}
             </Button>
+            {authError && (
+              <div className="flex items-start gap-1.5 text-xs text-destructive mt-1.5">
+                <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                <span>{authError}</span>
+              </div>
+            )}
           </div>
         )}
       </div>
