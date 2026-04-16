@@ -257,7 +257,7 @@ impl SamlAuthenticator {
         let url = if self.config.sign_requests {
             let private_key = self.load_private_key()?;
             authn_request
-                .signed_redirect(&relay_state, private_key)
+                .signed_redirect(&relay_state, &private_key)
                 .map_err(|e| AuthError::Internal(format!("Failed to sign AuthnRequest: {}", e)))?
                 .ok_or_else(|| AuthError::Internal("AuthnRequest has no destination".to_string()))?
         } else {
