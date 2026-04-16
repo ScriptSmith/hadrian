@@ -2191,10 +2191,7 @@ fn build_kreuzberg_config(config: &DocumentExtractionConfig) -> kreuzberg::Extra
         kreuzberg_config.ocr = Some(kreuzberg::OcrConfig {
             backend: "tesseract".to_string(),
             language: config.ocr_language.clone(),
-            tesseract_config: None,
-            output_format: None,
-            paddle_ocr_config: None,
-            element_config: None,
+            ..Default::default()
         });
         kreuzberg_config.force_ocr = config.force_ocr;
     }
@@ -2202,9 +2199,8 @@ fn build_kreuzberg_config(config: &DocumentExtractionConfig) -> kreuzberg::Extra
     // Configure PDF-specific options
     kreuzberg_config.pdf_options = Some(kreuzberg::PdfConfig {
         extract_images: config.pdf_extract_images,
-        passwords: None,
         extract_metadata: true,
-        hierarchy: None,
+        ..Default::default()
     });
 
     // Configure image extraction settings (includes DPI for OCR)
@@ -2216,6 +2212,7 @@ fn build_kreuzberg_config(config: &DocumentExtractionConfig) -> kreuzberg::Extra
             auto_adjust_dpi: true,
             min_dpi: 72,
             max_dpi: 600,
+            ..Default::default()
         });
     }
 
