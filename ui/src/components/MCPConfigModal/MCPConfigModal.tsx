@@ -544,8 +544,8 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
     setDetectionStatus("detecting");
     setDetectionMessage("");
 
+    let cancelled = false;
     const timer = setTimeout(() => {
-      let cancelled = false;
       detectServerAuth(watchedUrl).then((result) => {
         if (cancelled) return;
         setDetectionStatus("detected");
@@ -558,13 +558,12 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
           form.setValue("name", result.serverName);
         }
       });
-      // Store cancel function on the timer's cleanup
-      return () => {
-        cancelled = true;
-      };
     }, 600);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-run on URL change
   }, [watchedUrl, isNewServer, userOverrodeAuth]);
 

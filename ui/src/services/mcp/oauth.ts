@@ -195,6 +195,15 @@ async function fetchJson<T>(url: string): Promise<T | null> {
   }
 }
 
+/** Validate that a URL shares the same origin as the server (SSRF protection) */
+function isSameOrigin(targetUrl: string, serverUrl: string): boolean {
+  try {
+    return new URL(targetUrl).origin === new URL(serverUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Discover Protected Resource Metadata (RFC 9728).
  * Tries path-aware well-known URL first, then root.
@@ -215,10 +224,12 @@ async function discoverProtectedResourceMetadata(
     if (res.status === 401) {
       const wwwAuth = res.headers.get("WWW-Authenticate") ?? "";
       const resourceMetaUrl = wwwAuth.match(/resource_metadata="([^"]+)"/)?.[1];
-      if (resourceMetaUrl) {
+      if (resourceMetaUrl && isSameOrigin(resourceMetaUrl, serverUrl)) {
         fromWwwAuth = await fetchJson<ProtectedResourceMetadata>(resourceMetaUrl);
       }
-      // Also extract scope hint
+      // Extract scope hint from WWW-Authenticate as a fallback.
+      // Note: this is the scope required for this specific request, not
+      // necessarily all scopes the resource supports.
       if (!fromWwwAuth) {
         const scopeHint = wwwAuth.match(/scope="([^"]+)"/)?.[1];
         if (scopeHint) {
@@ -775,7 +786,7 @@ export async function detectServerAuth(serverUrl: string): Promise<AuthDetection
       const wwwAuth = res.headers.get("WWW-Authenticate") ?? "";
       const resourceMetaUrl = wwwAuth.match(/resource_metadata="([^"]+)"/)?.[1];
 
-      if (resourceMetaUrl) {
+      if (resourceMetaUrl && isSameOrigin(resourceMetaUrl, serverUrl)) {
         // Verify the resource metadata actually has OAuth servers
         try {
           const metaRes = await fetch(resourceMetaUrl);
