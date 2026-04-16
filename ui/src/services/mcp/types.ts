@@ -294,6 +294,34 @@ export interface MCPUIToolCallResult extends ToolCallResult {
 }
 
 // =============================================================================
+// OAuth Types
+// =============================================================================
+
+/** Authentication method for an MCP server */
+export type MCPAuthType = "none" | "bearer" | "oauth";
+
+/** OAuth token set returned by the authorization server */
+export interface OAuthTokens {
+  access_token: string;
+  token_type: string;
+  expires_in?: number;
+  refresh_token?: string;
+  scope?: string;
+  /** Timestamp (ms since epoch) when the token was obtained */
+  obtained_at: number;
+}
+
+/** User-provided OAuth configuration for an MCP server */
+export interface MCPOAuthConfig {
+  /** Client ID (takes priority over dynamic registration) */
+  clientId?: string;
+  /** Client secret (for confidential clients — rare in browser) */
+  clientSecret?: string;
+  /** Space-separated OAuth scopes to request */
+  scopes?: string;
+}
+
+// =============================================================================
 // Client-side Types
 // =============================================================================
 
@@ -314,6 +342,10 @@ export interface MCPServerConfig {
   headers?: Record<string, string>;
   /** Request timeout in ms (default: 300000) */
   timeout?: number;
+  /** Authentication type (default: "none") */
+  authType?: MCPAuthType;
+  /** OAuth configuration (when authType is "oauth") */
+  oauth?: MCPOAuthConfig;
 }
 
 /** MCP Server state (config + runtime state) */

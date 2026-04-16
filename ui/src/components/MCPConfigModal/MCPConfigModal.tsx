@@ -14,15 +14,18 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import {
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Eye,
   EyeOff,
+  KeyRound,
   Loader2,
   Pencil,
   Plug,
   Plus,
+  ShieldCheck,
   Trash2,
   Wifi,
   Wrench,
@@ -43,16 +46,35 @@ import {
 import { Switch } from "@/components/Switch/Switch";
 import { cn } from "@/utils/cn";
 import { useMCPStore, useMCPServers } from "@/stores/mcpStore";
-import { MCPClient, type MCPServerState, type MCPConnectionStatus } from "@/services/mcp";
+import {
+  MCPClient,
+  type MCPServerState,
+  type MCPConnectionStatus,
+  type MCPAuthType,
+  type MCPOAuthConfig,
+  startOAuthFlow,
+  getValidAccessToken,
+  hasValidTokens,
+  clearOAuthData,
+  detectServerAuth,
+} from "@/services/mcp";
 import type { MCPToolDefinition, JSONSchema } from "@/services/mcp";
 
 // =============================================================================
 // Types
 // =============================================================================
 
+/** Pre-fill data for adding a new server (e.g., from URL query params) */
+export interface MCPServerPrefill {
+  url: string;
+  name?: string;
+}
+
 export interface MCPConfigModalProps {
   open: boolean;
   onClose: () => void;
+  /** Pre-fill a new server (e.g., from ?mcp_server_url= query param) */
+  prefill?: MCPServerPrefill | null;
 }
 
 // =============================================================================
@@ -62,7 +84,10 @@ export interface MCPConfigModalProps {
 const serverFormSchema = z.object({
   name: z.string().min(1, "Name is required"),
   url: z.string().url("Must be a valid URL"),
+  authType: z.enum(["none", "bearer", "oauth"]),
   bearerToken: z.string(),
+  oauthClientId: z.string(),
+  oauthScopes: z.string(),
   headers: z.string(),
   timeout: z.number().int().min(1, "Must be at least 1 second"),
 });
@@ -213,6 +238,25 @@ function ServerCard({ server, onEdit, onDelete }: ServerCardProps) {
   const [expanded, setExpanded] = useState(false);
   const { connectServer, disconnectServer, setToolEnabled } = useMCPStore();
   const [isToggling, setIsToggling] = useState(false);
+  const [isAuthorizing, setIsAuthorizing] = useState(false);
+  const oauthAuthorized = server.authType === "oauth" && hasValidTokens(server.url);
+
+  const handleAuthorize = useCallback(async () => {
+    setIsAuthorizing(true);
+    try {
+      await startOAuthFlow(server.url, server.oauth);
+      // Tokens obtained — now connect
+      try {
+        await connectServer(server.id);
+      } catch {
+        // Connection error stored in server state
+      }
+    } catch (err) {
+      console.debug("OAuth flow failed:", err);
+    } finally {
+      setIsAuthorizing(false);
+    }
+  }, [server.url, server.oauth, server.id, connectServer]);
 
   // Unified toggle: switch ON = enable + connect, switch OFF = disconnect + disable
   const handleToggle = useCallback(async () => {
@@ -335,6 +379,33 @@ function ServerCard({ server, onEdit, onDelete }: ServerCardProps) {
             <span>{server.error}</span>
           </div>
         )}
+
+        {/* OAuth status & authorize button */}
+        {server.authType === "oauth" && (
+          <div className="mt-2 flex items-center gap-2">
+            {oauthAuthorized ? (
+              <span className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+                <ShieldCheck className="h-3.5 w-3.5" />
+                Authorized
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <KeyRound className="h-3.5 w-3.5" />
+                Not authorized
+              </span>
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleAuthorize}
+              disabled={isAuthorizing}
+              isLoading={isAuthorizing}
+            >
+              {oauthAuthorized ? "Re-authorize" : "Authorize"}
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Tools list (expandable) */}
@@ -370,12 +441,17 @@ interface ServerFormProps {
   editingServer?: MCPServerState | null;
   onSubmit: (values: ServerFormValues) => void;
   onCancel: () => void;
+  /** Pre-fill data (e.g., from URL query params) */
+  prefill?: MCPServerPrefill | null;
 }
 
 type TestStatus = "idle" | "testing" | "success" | "error";
 
-function ServerForm({ editingServer, onSubmit, onCancel }: ServerFormProps) {
+type OAuthStatus = "idle" | "authorizing" | "authorized" | "error";
+
+function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormProps) {
   const [showToken, setShowToken] = useState(false);
+  const isNewServer = !editingServer;
 
   // Extract bearer token from existing headers, pass the rest as extra headers
   const existingHeaders = editingServer?.headers ?? {};
@@ -387,12 +463,19 @@ function ServerForm({ editingServer, onSubmit, onCancel }: ServerFormProps) {
     Object.entries(existingHeaders).filter(([k]) => k.toLowerCase() !== "authorization")
   );
 
+  // Infer initial auth type from existing config
+  const initialAuthType: MCPAuthType =
+    editingServer?.authType ?? (existingBearer ? "bearer" : "none");
+
   const form = useForm<ServerFormValues>({
     resolver: zodResolver(serverFormSchema),
     defaultValues: {
-      name: editingServer?.name ?? "",
-      url: editingServer?.url ?? "",
+      name: editingServer?.name ?? prefill?.name ?? "",
+      url: editingServer?.url ?? prefill?.url ?? "",
+      authType: initialAuthType,
       bearerToken: existingBearer,
+      oauthClientId: editingServer?.oauth?.clientId ?? "",
+      oauthScopes: editingServer?.oauth?.scopes ?? "",
       headers: Object.keys(extraHeaders).length > 0 ? JSON.stringify(extraHeaders, null, 2) : "",
       timeout: Math.round((editingServer?.timeout ?? 300000) / 1000),
     },
@@ -402,9 +485,27 @@ function ServerForm({ editingServer, onSubmit, onCancel }: ServerFormProps) {
   const [testMessage, setTestMessage] = useState<string>();
   const [testLatency, setTestLatency] = useState<number>();
 
-  // Reset test results when URL or headers change
+  // OAuth state
+  const [oauthStatus, setOauthStatus] = useState<OAuthStatus>(() =>
+    initialAuthType === "oauth" && editingServer?.url && hasValidTokens(editingServer.url)
+      ? "authorized"
+      : "idle"
+  );
+  const [oauthError, setOauthError] = useState<string>();
+
+  // Auth detection state
+  type DetectionStatus = "idle" | "detecting" | "detected";
+  const [detectionStatus, setDetectionStatus] = useState<DetectionStatus>("idle");
+  const [detectionMessage, setDetectionMessage] = useState("");
+  // Track whether user manually changed auth type (disables auto-select)
+  const [userOverrodeAuth, setUserOverrodeAuth] = useState(false);
+
+  // Watched form values
   const watchedUrl = form.watch("url");
   const watchedHeaders = form.watch("headers");
+  const watchedAuthType = form.watch("authType") as MCPAuthType;
+
+  // Reset test results when URL or headers change
   useEffect(() => {
     if (testStatus !== "idle" && testStatus !== "testing") {
       setTestStatus("idle");
@@ -414,13 +515,89 @@ function ServerForm({ editingServer, onSubmit, onCancel }: ServerFormProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only reset on field changes
   }, [watchedUrl, watchedHeaders]);
 
+  // Reset OAuth status when auth type or URL changes
+  useEffect(() => {
+    if (watchedAuthType === "oauth" && watchedUrl) {
+      setOauthStatus(hasValidTokens(watchedUrl) ? "authorized" : "idle");
+      setOauthError(undefined);
+    } else {
+      setOauthStatus("idle");
+      setOauthError(undefined);
+    }
+  }, [watchedAuthType, watchedUrl]);
+
+  // Auto-detect auth requirements when URL changes (new servers only)
+  useEffect(() => {
+    if (!isNewServer || !watchedUrl || userOverrodeAuth) {
+      setDetectionStatus("idle");
+      setDetectionMessage("");
+      return;
+    }
+
+    // Validate URL before probing
+    if (!z.string().url().safeParse(watchedUrl).success) {
+      setDetectionStatus("idle");
+      setDetectionMessage("");
+      return;
+    }
+
+    setDetectionStatus("detecting");
+    setDetectionMessage("");
+
+    const timer = setTimeout(() => {
+      let cancelled = false;
+      detectServerAuth(watchedUrl).then((result) => {
+        if (cancelled) return;
+        setDetectionStatus("detected");
+        setDetectionMessage(result.message);
+        if (result.authType !== watchedAuthType) {
+          form.setValue("authType", result.authType);
+        }
+      });
+      // Store cancel function on the timer's cleanup
+      return () => {
+        cancelled = true;
+      };
+    }, 600);
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-run on URL change
+  }, [watchedUrl, isNewServer, userOverrodeAuth]);
+
+  const handleAuthorize = useCallback(async () => {
+    const valid = await form.trigger("url");
+    if (!valid) return;
+
+    const url = form.getValues("url");
+    const clientId = form.getValues("oauthClientId") || undefined;
+    const scopes = form.getValues("oauthScopes") || undefined;
+
+    setOauthStatus("authorizing");
+    setOauthError(undefined);
+
+    try {
+      await startOAuthFlow(url, { clientId, scopes });
+      setOauthStatus("authorized");
+    } catch (err) {
+      setOauthStatus("error");
+      setOauthError(err instanceof Error ? err.message : String(err));
+    }
+  }, [form]);
+
+  const handleRevoke = useCallback(() => {
+    const url = form.getValues("url");
+    if (url) clearOAuthData(url);
+    setOauthStatus("idle");
+  }, [form]);
+
   const handleTestConnection = useCallback(async () => {
     // Validate URL field first
     const valid = await form.trigger("url");
     if (!valid) return;
 
     const values = form.getValues();
-    let headers: Record<string, string> | undefined;
+
+    // Parse extra headers
     const extra: Record<string, string> = {};
     if (values.headers) {
       try {
@@ -431,18 +608,31 @@ function ServerForm({ editingServer, onSubmit, onCancel }: ServerFormProps) {
         return;
       }
     }
-    if (values.bearerToken || Object.keys(extra).length > 0) {
-      headers = { ...extra };
-      if (values.bearerToken) {
-        headers["Authorization"] = `Bearer ${values.bearerToken}`;
-      }
+
+    // Build client config based on auth type
+    const headers: Record<string, string> = { ...extra };
+    let getAccessTokenFn: (() => Promise<string | null>) | undefined;
+
+    if (values.authType === "bearer" && values.bearerToken) {
+      headers["Authorization"] = `Bearer ${values.bearerToken}`;
+    } else if (values.authType === "oauth") {
+      const oauthCfg: MCPOAuthConfig = {
+        clientId: values.oauthClientId || undefined,
+        scopes: values.oauthScopes || undefined,
+      };
+      getAccessTokenFn = () => getValidAccessToken(values.url, oauthCfg);
     }
 
     setTestStatus("testing");
     setTestMessage(undefined);
     setTestLatency(undefined);
 
-    const client = new MCPClient({ url: values.url, headers, timeout: 10000 });
+    const client = new MCPClient({
+      url: values.url,
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
+      timeout: 10000,
+      getAccessToken: getAccessTokenFn,
+    });
     const start = performance.now();
 
     try {
@@ -468,8 +658,22 @@ function ServerForm({ editingServer, onSubmit, onCancel }: ServerFormProps) {
     onSubmit(values);
   });
 
+  const authTypeOptions = [
+    { value: "none" as const, label: "None" },
+    { value: "bearer" as const, label: "Bearer Token" },
+    { value: "oauth" as const, label: "OAuth (PKCE)" },
+  ];
+
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      {/* Warning banner when pre-filled from a URL param */}
+      {prefill && (
+        <div className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-2.5 rounded-md">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <span>Server URL provided via link. Only add servers you trust.</span>
+        </div>
+      )}
+
       <FormField
         label="Server Name"
         htmlFor="server-name"
@@ -489,35 +693,141 @@ function ServerForm({ editingServer, onSubmit, onCancel }: ServerFormProps) {
         <Input id="server-url" {...form.register("url")} placeholder="https://mcp.example.com" />
       </FormField>
 
-      <FormField
-        label="Authorization"
-        htmlFor="server-bearer-token"
-        helpText="Bearer token for authenticating with the MCP server"
-        error={form.formState.errors.bearerToken?.message}
-      >
-        <div className="relative">
-          <Input
-            id="server-bearer-token"
-            type={showToken ? "text" : "password"}
-            {...form.register("bearerToken")}
-            placeholder="your-api-key"
-            className="pr-10 font-mono"
-          />
-          <button
-            type="button"
-            onClick={() => setShowToken(!showToken)}
-            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-muted text-muted-foreground"
-            aria-label={showToken ? "Hide token" : "Show token"}
-          >
-            {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-          </button>
+      {/* Auth detection indicator */}
+      {detectionStatus === "detecting" && (
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Checking authentication requirements...
+        </div>
+      )}
+      {detectionStatus === "detected" && detectionMessage && (
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <CheckCircle2 className="h-3 w-3" />
+          {detectionMessage}
+        </div>
+      )}
+
+      {/* Auth type selector */}
+      <FormField label="Authentication" htmlFor="server-auth-type">
+        <div className="flex gap-1.5" role="radiogroup" aria-label="Authentication type">
+          {authTypeOptions.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              role="radio"
+              aria-checked={watchedAuthType === opt.value}
+              onClick={() => {
+                form.setValue("authType", opt.value);
+                setUserOverrodeAuth(true);
+              }}
+              className={cn(
+                "px-3 py-1.5 rounded-md text-sm border transition-colors",
+                watchedAuthType === opt.value
+                  ? "border-primary bg-primary/10 text-primary font-medium"
+                  : "border-input text-muted-foreground hover:bg-muted"
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
       </FormField>
+
+      {/* Bearer Token fields */}
+      {watchedAuthType === "bearer" && (
+        <FormField
+          label="Bearer Token"
+          htmlFor="server-bearer-token"
+          helpText="Token for authenticating with the MCP server"
+          error={form.formState.errors.bearerToken?.message}
+        >
+          <div className="relative">
+            <Input
+              id="server-bearer-token"
+              type={showToken ? "text" : "password"}
+              {...form.register("bearerToken")}
+              placeholder="your-api-key"
+              className="pr-10 font-mono"
+            />
+            <button
+              type="button"
+              onClick={() => setShowToken(!showToken)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-muted text-muted-foreground"
+              aria-label={showToken ? "Hide token" : "Show token"}
+            >
+              {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </div>
+        </FormField>
+      )}
+
+      {/* OAuth fields */}
+      {watchedAuthType === "oauth" && (
+        <div className="space-y-3 rounded-md border border-input p-3">
+          <FormField
+            label="Client ID"
+            htmlFor="server-oauth-client-id"
+            helpText="Leave empty to use dynamic client registration"
+          >
+            <Input
+              id="server-oauth-client-id"
+              {...form.register("oauthClientId")}
+              placeholder="Optional — for pre-registered apps"
+              className="font-mono"
+            />
+          </FormField>
+
+          <FormField
+            label="Scopes"
+            htmlFor="server-oauth-scopes"
+            helpText="Space-separated OAuth scopes (auto-detected if empty)"
+          >
+            <Input
+              id="server-oauth-scopes"
+              {...form.register("oauthScopes")}
+              placeholder="Optional — e.g. read write"
+            />
+          </FormField>
+
+          {/* OAuth status & authorize button */}
+          <div className="flex items-center gap-3 pt-1">
+            {oauthStatus === "authorized" ? (
+              <>
+                <span className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  Authorized
+                </span>
+                <Button type="button" variant="ghost" size="sm" onClick={handleRevoke}>
+                  Revoke
+                </Button>
+              </>
+            ) : oauthStatus === "authorizing" ? (
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Waiting for authorization...
+              </span>
+            ) : (
+              <>
+                <Button type="button" variant="outline" size="sm" onClick={handleAuthorize}>
+                  <KeyRound className="h-4 w-4 mr-1.5" />
+                  Authorize
+                </Button>
+                {oauthStatus === "error" && oauthError && (
+                  <div className="flex items-start gap-1.5 text-xs text-destructive flex-1 min-w-0">
+                    <XCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                    <span className="break-words">{oauthError}</span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       <FormField
         label="Additional Headers (JSON)"
         htmlFor="server-headers"
-        helpText="Optional extra HTTP headers beyond authorization"
+        helpText="Optional extra HTTP headers"
         error={form.formState.errors.headers?.message}
       >
         <textarea
@@ -595,11 +905,19 @@ function ServerForm({ editingServer, onSubmit, onCancel }: ServerFormProps) {
 // Main Component
 // =============================================================================
 
-export function MCPConfigModal({ open, onClose }: MCPConfigModalProps) {
+export function MCPConfigModal({ open, onClose, prefill }: MCPConfigModalProps) {
   const servers = useMCPServers();
   const { addServer, updateServer, removeServer } = useMCPStore();
   const [showForm, setShowForm] = useState(false);
   const [editingServer, setEditingServer] = useState<MCPServerState | null>(null);
+
+  // Auto-show form when opened with a prefill
+  useEffect(() => {
+    if (open && prefill) {
+      setEditingServer(null);
+      setShowForm(true);
+    }
+  }, [open, prefill]);
 
   const handleAddClick = useCallback(() => {
     setEditingServer(null);
@@ -618,8 +936,7 @@ export function MCPConfigModal({ open, onClose }: MCPConfigModalProps) {
 
   const handleFormSubmit = useCallback(
     (values: ServerFormValues) => {
-      // Merge bearer token + extra headers
-      let headers: Record<string, string> | undefined;
+      // Parse extra headers
       const extra: Record<string, string> = {};
       if (values.headers) {
         try {
@@ -628,31 +945,49 @@ export function MCPConfigModal({ open, onClose }: MCPConfigModalProps) {
           // Invalid JSON - ignore extra headers
         }
       }
-      if (values.bearerToken || Object.keys(extra).length > 0) {
-        headers = { ...extra };
-        if (values.bearerToken) {
-          headers["Authorization"] = `Bearer ${values.bearerToken}`;
+
+      // Build headers — only add Authorization for bearer auth
+      let headers: Record<string, string> | undefined;
+      if (values.authType === "bearer") {
+        if (values.bearerToken || Object.keys(extra).length > 0) {
+          headers = { ...extra };
+          if (values.bearerToken) {
+            headers["Authorization"] = `Bearer ${values.bearerToken}`;
+          }
         }
+      } else if (Object.keys(extra).length > 0) {
+        headers = extra;
       }
+
+      // Build OAuth config
+      const oauth: MCPOAuthConfig | undefined =
+        values.authType === "oauth"
+          ? {
+              clientId: values.oauthClientId || undefined,
+              scopes: values.oauthScopes || undefined,
+            }
+          : undefined;
 
       const timeout = values.timeout * 1000;
 
       if (editingServer) {
-        // Update existing server
         updateServer(editingServer.id, {
           name: values.name,
           url: values.url,
+          authType: values.authType as MCPAuthType,
           headers,
           timeout,
+          oauth,
         });
       } else {
-        // Add new server
         addServer({
           name: values.name,
           url: values.url,
           enabled: true,
+          authType: values.authType as MCPAuthType,
           headers,
           timeout,
+          oauth,
         });
       }
 
@@ -690,6 +1025,7 @@ export function MCPConfigModal({ open, onClose }: MCPConfigModalProps) {
             editingServer={editingServer}
             onSubmit={handleFormSubmit}
             onCancel={handleFormCancel}
+            prefill={editingServer ? null : prefill}
           />
         ) : (
           <div className="space-y-4">

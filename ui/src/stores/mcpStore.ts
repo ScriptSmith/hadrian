@@ -41,6 +41,7 @@ import {
   type MCPConnectionStatus,
   type MCPToolDefinition,
   createServerState,
+  getValidAccessToken,
 } from "@/services/mcp";
 
 // =============================================================================
@@ -113,6 +114,10 @@ function getClient(server: MCPServerConfig): MCPClient {
       name: server.name,
       headers: server.headers,
       timeout: server.timeout,
+      getAccessToken:
+        server.authType === "oauth"
+          ? () => getValidAccessToken(server.url, server.oauth)
+          : undefined,
     });
     globalClients.set(server.id, client);
   }
@@ -129,6 +134,10 @@ function getConversationClient(server: MCPServerConfig, conversationId: string):
       name: server.name,
       headers: server.headers,
       timeout: server.timeout,
+      getAccessToken:
+        server.authType === "oauth"
+          ? () => getValidAccessToken(server.url, server.oauth)
+          : undefined,
     });
     conversationClients.set(key, client);
   }
@@ -282,9 +291,12 @@ export const useMCPStore = create<MCPStore>()(
       },
 
       updateServer: (serverId, updates) => {
-        // If URL or headers change, we need to recreate the client
+        // If connection-relevant fields change, we need to recreate the client
         const server = get().servers.find((s) => s.id === serverId);
-        if (server && (updates.url || updates.headers || updates.timeout)) {
+        if (
+          server &&
+          (updates.url || updates.headers || updates.timeout || updates.authType || updates.oauth)
+        ) {
           removeClient(serverId);
           removeAllConversationClientsForServer(serverId);
         }
@@ -307,6 +319,19 @@ export const useMCPStore = create<MCPStore>()(
         get()._setServerStatus(serverId, "connecting");
 
         try {
+          // For OAuth servers, ensure we have valid tokens before connecting
+          if (server.authType === "oauth") {
+            const token = await getValidAccessToken(server.url, server.oauth);
+            if (!token) {
+              get()._setServerStatus(
+                serverId,
+                "error",
+                "OAuth authorization required. Click Authorize to connect."
+              );
+              return;
+            }
+          }
+
           const client = getClient(server);
 
           // Set up status listener (tracked for cleanup)
@@ -521,6 +546,8 @@ export const useMCPStore = create<MCPStore>()(
           enabled: s.enabled,
           headers: s.headers,
           timeout: s.timeout,
+          authType: s.authType,
+          oauth: s.oauth,
           // Persist tool enable/disable preferences
           toolsEnabled: s.toolsEnabled,
         })),

@@ -4,7 +4,7 @@ import { ChatHeader } from "@/components/ChatHeader/ChatHeader";
 import { ChatInput } from "@/components/ChatInput/ChatInput";
 import { ChatMessageList } from "@/components/ChatMessageList/ChatMessageList";
 import { ConversationSettingsModal } from "@/components/ConversationSettingsModal/ConversationSettingsModal";
-import { MCPConfigModal } from "@/components/MCPConfigModal";
+import { MCPConfigModal, type MCPServerPrefill } from "@/components/MCPConfigModal";
 import type { ModelInfo } from "@/components/ModelSelector/ModelSelector";
 import {
   useChatUIStore,
@@ -30,7 +30,7 @@ import {
   useTotalUsage,
   useCurrentConversationForExport,
 } from "@/stores/conversationStore";
-import { useMemo, useCallback } from "react";
+import { useMemo, useCallback, useState, useEffect } from "react";
 
 export interface ChatFile {
   id: string;
@@ -115,6 +115,25 @@ export function ChatView({
   const widescreenMode = useWidescreenMode();
   const subAgentModel = useSubAgentModel();
   const mcpConfigModalOpen = useMCPConfigModalOpen();
+  const [mcpPrefill, setMcpPrefill] = useState<MCPServerPrefill | null>(null);
+
+  // Check for ?mcp_server_url= query param to auto-open the MCP config modal
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const serverUrl = params.get("mcp_server_url");
+    if (serverUrl) {
+      const serverName = params.get("mcp_server_name") ?? undefined;
+      setMcpPrefill({ url: serverUrl, name: serverName });
+      setMCPConfigModalOpen(true);
+      // Clean the URL to prevent re-triggering
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete("mcp_server_url");
+      cleanUrl.searchParams.delete("mcp_server_name");
+      window.history.replaceState({}, "", cleanUrl.toString());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only run on mount
+  }, []);
+
   const { setSelectedInstances, updateInstance } = useConversationStore();
   const {
     settingsModalOpen,
@@ -268,7 +287,14 @@ export function ChatView({
       />
 
       {/* MCP Config Modal */}
-      <MCPConfigModal open={mcpConfigModalOpen} onClose={() => setMCPConfigModalOpen(false)} />
+      <MCPConfigModal
+        open={mcpConfigModalOpen}
+        onClose={() => {
+          setMCPConfigModalOpen(false);
+          setMcpPrefill(null);
+        }}
+        prefill={mcpPrefill}
+      />
     </div>
   );
 }

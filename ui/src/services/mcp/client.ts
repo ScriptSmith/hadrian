@@ -56,6 +56,10 @@ export interface MCPClientConfig {
   headers?: Record<string, string>;
   /** Request timeout in ms (default: 300000) */
   timeout?: number;
+  /** Async callback to get a valid access token before each request (for OAuth).
+   *  If provided and returns a string, sets Authorization: Bearer <token>.
+   *  If returns null, no Authorization header is added. */
+  getAccessToken?: () => Promise<string | null>;
 }
 
 /** Status change callback */
@@ -234,13 +238,19 @@ export class MCPClient {
     // Send DELETE to terminate session if we have a session ID
     if (this.sessionId) {
       try {
-        await fetch(this.config.url, {
-          method: "DELETE",
-          headers: {
-            "Mcp-Session-Id": this.sessionId,
-            ...this.config.headers,
-          },
-        });
+        const headers: Record<string, string> = {
+          "Mcp-Session-Id": this.sessionId,
+          ...this.config.headers,
+        };
+        if (this.config.getAccessToken) {
+          try {
+            const token = await this.config.getAccessToken();
+            if (token) headers["Authorization"] = `Bearer ${token}`;
+          } catch {
+            // Best effort during disconnect
+          }
+        }
+        await fetch(this.config.url, { method: "DELETE", headers });
       } catch {
         // Ignore errors during disconnect
       }
@@ -405,6 +415,12 @@ export class MCPClient {
         ...this.config.headers,
       };
 
+      // Inject OAuth token if provider is configured
+      if (this.config.getAccessToken) {
+        const token = await this.config.getAccessToken();
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+      }
+
       // Include session ID if we have one
       if (this.sessionId) {
         headers["Mcp-Session-Id"] = this.sessionId;
@@ -539,6 +555,16 @@ export class MCPClient {
       Accept: "application/json,text/event-stream",
       ...this.config.headers,
     };
+
+    // Inject OAuth token if provider is configured
+    if (this.config.getAccessToken) {
+      try {
+        const token = await this.config.getAccessToken();
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+      } catch {
+        // Best effort for notifications
+      }
+    }
 
     if (this.sessionId) {
       headers["Mcp-Session-Id"] = this.sessionId;
