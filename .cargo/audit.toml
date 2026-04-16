@@ -5,4 +5,7 @@ ignore = [
     # custom `log::Log` implementation, so the affected code path is unreachable. rand
     # 0.8.5 is pulled in transitively via augurs, kreuzberg, and sqlx-postgres.
     "RUSTSEC-2026-0097",
+    # rsa 0.9.10 Marvin Attack (timing sidechannel). No fix available. Transitive
+    # dependency via sqlx-mysql — Hadrian doesn't use RSA keys for MySQL auth.
+    "RUSTSEC-2023-0071",
 ]
