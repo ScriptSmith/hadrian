@@ -553,6 +553,10 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
         if (result.authType !== watchedAuthType) {
           form.setValue("authType", result.authType);
         }
+        // Pre-fill server name from resource metadata if the field is still empty
+        if (result.serverName && !form.getValues("name")) {
+          form.setValue("name", result.serverName);
+        }
       });
       // Store cancel function on the timer's cleanup
       return () => {
@@ -675,15 +679,6 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
       )}
 
       <FormField
-        label="Server Name"
-        htmlFor="server-name"
-        required
-        error={form.formState.errors.name?.message}
-      >
-        <Input id="server-name" {...form.register("name")} placeholder="My MCP Server" />
-      </FormField>
-
-      <FormField
         label="Server URL"
         htmlFor="server-url"
         required
@@ -691,6 +686,15 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
         error={form.formState.errors.url?.message}
       >
         <Input id="server-url" {...form.register("url")} placeholder="https://mcp.example.com" />
+      </FormField>
+
+      <FormField
+        label="Server Name"
+        htmlFor="server-name"
+        required
+        error={form.formState.errors.name?.message}
+      >
+        <Input id="server-name" {...form.register("name")} placeholder="My MCP Server" />
       </FormField>
 
       {/* Auth detection indicator */}

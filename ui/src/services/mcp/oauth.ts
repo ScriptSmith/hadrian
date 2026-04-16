@@ -40,6 +40,7 @@ function generateState(): string {
 
 interface ProtectedResourceMetadata {
   resource: string;
+  resource_name?: string;
   authorization_servers?: string[];
   scopes_supported?: string[];
 }
@@ -700,6 +701,8 @@ export function handleMCPOAuthCallback(): boolean {
 export interface AuthDetectionResult {
   authType: MCPAuthType;
   message: string;
+  /** Server name discovered from resource_name in protected resource metadata */
+  serverName?: string;
 }
 
 /**
@@ -729,7 +732,11 @@ export async function detectServerAuth(serverUrl: string): Promise<AuthDetection
         if (res.ok) {
           const meta = (await res.json()) as ProtectedResourceMetadata;
           if (meta?.authorization_servers?.length) {
-            return { authType: "oauth", message: "OAuth authentication detected" };
+            return {
+              authType: "oauth",
+              message: "OAuth authentication detected",
+              serverName: meta.resource_name,
+            };
           }
         }
       } catch {
@@ -775,7 +782,11 @@ export async function detectServerAuth(serverUrl: string): Promise<AuthDetection
           if (metaRes.ok) {
             const meta = (await metaRes.json()) as ProtectedResourceMetadata;
             if (meta?.authorization_servers?.length) {
-              return { authType: "oauth", message: "OAuth authentication required" };
+              return {
+                authType: "oauth",
+                message: "OAuth authentication required",
+                serverName: meta.resource_name,
+              };
             }
           }
         } catch {
