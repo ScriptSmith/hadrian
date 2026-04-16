@@ -3561,9 +3561,9 @@ checksum = "9f4d0e94ddd48749f06bbe4e5389fb9799a0c45bcaf00495042076ef05e3241a"
 
 [[package]]
 name = "hayro-jbig2"
-version = "0.3.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69374b3668dd45aeb3d3145cda68f2c7b4f223aaa2511e67d076f1c7d741388d"
+checksum = "a23692ac727653ca0450420479a8b60a31fa3c35fa37fb74bb36e0c69e88833d"
 dependencies = [
  "hayro-ccitt",
 ]
@@ -4441,9 +4441,9 @@ dependencies = [
 
 [[package]]
 name = "kreuzberg"
-version = "4.8.5"
+version = "4.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57689a39ba90f34146ba650250601c39870528f10673d62b4929e231879df88b"
+checksum = "e8ae187b055d2df38bcf1caf76962b5071677bd356dca36fe22a9535fd1b58bb"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
@@ -4502,7 +4502,6 @@ dependencies = [
  "toml 1.1.2+spec-1.1.0",
  "tracing",
  "urlencoding",
- "v_htmlescape",
  "zip 8.5.1",
 ]
 
@@ -8750,12 +8749,6 @@ dependencies = [
  "num-traits",
  "wasm-bindgen",
 ]
-
-[[package]]
-name = "v_htmlescape"
-version = "0.15.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e8257fbc510f0a46eb602c10215901938b5c2a7d5e70fc11483b1d3c9b5b18c"
 
 [[package]]
 name = "validator"
