@@ -46,6 +46,7 @@ export function PieChart({
           ))}
         </Pie>
         <Tooltip
+          isAnimationActive={false}
           content={({ active, payload }) => {
             if (!active || !payload?.length) return null;
             const entry = payload[0];

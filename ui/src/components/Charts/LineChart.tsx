@@ -92,6 +92,7 @@ export function LineChart({
           width={60}
         />
         <Tooltip
+          isAnimationActive={false}
           content={
             (({ active, payload, label }: ChartTooltipProps) => (
               <ChartTooltip active={active} payload={payload} label={label} formatter={formatter} />

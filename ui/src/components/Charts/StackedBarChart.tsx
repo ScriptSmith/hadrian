@@ -114,6 +114,7 @@ export function StackedBarChart({
           width={60}
         />
         <Tooltip
+          isAnimationActive={false}
           content={
             (({ active, payload, label }: ChartTooltipProps) => (
               <ChartTooltip
