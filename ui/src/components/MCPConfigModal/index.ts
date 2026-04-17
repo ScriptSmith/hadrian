@@ -1,1 +1,1 @@
-export { MCPConfigModal, type MCPConfigModalProps } from "./MCPConfigModal";
+export { MCPConfigModal, type MCPConfigModalProps, type MCPServerPrefill } from "./MCPConfigModal";

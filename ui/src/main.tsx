@@ -2,6 +2,17 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App";
+import { handleMCPOAuthCallback } from "./services/mcp/oauth";
+
+// Intercept MCP OAuth popup callbacks before rendering the full app.
+// If this page is a popup returning from an OAuth authorization server,
+// forward the code+state to the opener window and close.
+if (handleMCPOAuthCallback()) {
+  document.getElementById("root")!.textContent =
+    "Authorization complete. You may close this window.";
+} else {
+  bootstrap();
+}
 
 async function bootstrap() {
   // In WASM mode, register the service worker and wait for it to control the
@@ -23,5 +34,3 @@ async function bootstrap() {
     </StrictMode>
   );
 }
-
-bootstrap();

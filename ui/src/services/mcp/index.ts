@@ -67,9 +67,25 @@ export {
   type MCPUIContentType,
   type MCPUIResource,
   type MCPUIToolCallResult,
+  // OAuth types
+  type MCPAuthType,
+  type OAuthTokens,
+  type MCPOAuthConfig,
   // Client-side types
   type MCPConnectionStatus,
   type MCPServerConfig,
   type MCPServerState,
   createServerState,
 } from "./types";
+
+export {
+  startOAuthFlow,
+  getValidAccessToken,
+  getStoredTokens,
+  hasValidTokens,
+  clearOAuthData,
+  isTokenExpired,
+  handleMCPOAuthCallback,
+  detectServerAuth,
+  type AuthDetectionResult,
+} from "./oauth";
