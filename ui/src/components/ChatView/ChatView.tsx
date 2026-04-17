@@ -30,6 +30,7 @@ import {
   useTotalUsage,
   useCurrentConversationForExport,
 } from "@/stores/conversationStore";
+import { useMCPStore } from "@/stores/mcpStore";
 import { useMemo, useCallback, useState, useEffect } from "react";
 
 export interface ChatFile {
@@ -117,14 +118,28 @@ export function ChatView({
   const mcpConfigModalOpen = useMCPConfigModalOpen();
   const [mcpPrefill, setMcpPrefill] = useState<MCPServerPrefill | null>(null);
 
-  // Check for ?mcp_server_url= query param to auto-open the MCP config modal
+  // Check for ?mcp_server_url= query param. If the server is already
+  // configured, just enable (and connect) it; otherwise open the config
+  // modal pre-filled with the URL.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const serverUrl = params.get("mcp_server_url");
     if (serverUrl) {
       const serverName = params.get("mcp_server_name") ?? undefined;
-      setMcpPrefill({ url: serverUrl, name: serverName });
-      setMCPConfigModalOpen(true);
+      const mcp = useMCPStore.getState();
+      const existing = mcp.servers.find((s) => s.url === serverUrl);
+      if (existing) {
+        if (!existing.enabled) {
+          mcp.toggleServerEnabled(existing.id);
+        } else if (existing.status !== "connected" && existing.status !== "connecting") {
+          mcp.connectServer(existing.id).catch((err) => {
+            console.debug("MCP connect from URL param failed:", err);
+          });
+        }
+      } else {
+        setMcpPrefill({ url: serverUrl, name: serverName });
+        setMCPConfigModalOpen(true);
+      }
       // Clean the URL to prevent re-triggering
       const cleanUrl = new URL(window.location.href);
       cleanUrl.searchParams.delete("mcp_server_url");
