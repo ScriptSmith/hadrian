@@ -292,6 +292,7 @@ function ServerCard({ server, onEdit, onDelete }: ServerCardProps) {
 
   const isConnectingStatus = server.status === "connecting" || isToggling;
   const hasTools = server.tools.length > 0;
+  const needsAuthorization = server.authType === "oauth" && !oauthAuthorized;
 
   return (
     <div className="border rounded-lg overflow-hidden">
@@ -345,7 +346,7 @@ function ServerCard({ server, onEdit, onDelete }: ServerCardProps) {
           <Switch
             checked={server.enabled}
             onChange={handleToggle}
-            disabled={isConnectingStatus}
+            disabled={isConnectingStatus || needsAuthorization}
             aria-label={server.enabled ? `Disconnect ${server.name}` : `Connect ${server.name}`}
             label=""
             className="shrink-0"
@@ -384,21 +385,28 @@ function ServerCard({ server, onEdit, onDelete }: ServerCardProps) {
 
         {/* OAuth status & authorize button */}
         {server.authType === "oauth" && (
-          <div className="mt-2 flex items-center gap-2">
+          <div
+            className={cn(
+              "mt-2 flex items-center gap-2 rounded-md p-2",
+              needsAuthorization
+                ? "bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800"
+                : ""
+            )}
+          >
             {oauthAuthorized ? (
               <span className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
                 <ShieldCheck className="h-3.5 w-3.5" />
                 Authorized
               </span>
             ) : (
-              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <KeyRound className="h-3.5 w-3.5" />
-                Not authorized
+              <span className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400 flex-1">
+                <KeyRound className="h-3.5 w-3.5 shrink-0" />
+                Authorization required to connect
               </span>
             )}
             <Button
               type="button"
-              variant="outline"
+              variant={needsAuthorization ? "primary" : "outline"}
               size="sm"
               onClick={handleAuthorize}
               disabled={isAuthorizing}
@@ -774,54 +782,48 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
 
       {/* OAuth fields */}
       {watchedAuthType === "oauth" && (
-        <div className="space-y-3 rounded-md border border-input p-3">
-          <FormField
-            label="Client ID"
-            htmlFor="server-oauth-client-id"
-            helpText="Leave empty to use dynamic client registration"
-          >
-            <Input
-              id="server-oauth-client-id"
-              {...form.register("oauthClientId")}
-              placeholder="Optional — for pre-registered apps"
-              className="font-mono"
-            />
-          </FormField>
-
-          <FormField
-            label="Scopes"
-            htmlFor="server-oauth-scopes"
-            helpText="Space-separated OAuth scopes (auto-detected if empty)"
-          >
-            <Input
-              id="server-oauth-scopes"
-              {...form.register("oauthScopes")}
-              placeholder="Optional — e.g. read write"
-            />
-          </FormField>
-
-          {/* OAuth status & authorize button */}
-          <div className="flex items-center gap-3 pt-1">
-            {oauthStatus === "authorized" ? (
-              <>
-                <span className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                  Authorized
-                </span>
-                <Button type="button" variant="ghost" size="sm" onClick={handleRevoke}>
-                  Revoke
-                </Button>
-              </>
-            ) : oauthStatus === "authorizing" ? (
-              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Waiting for authorization...
+        <div
+          className={cn(
+            "space-y-3 rounded-md p-3",
+            oauthStatus === "authorized"
+              ? "border border-input"
+              : "border border-amber-300 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/20"
+          )}
+        >
+          {/* Prominent authorize CTA */}
+          {oauthStatus === "authorized" ? (
+            <div className="flex items-center gap-3">
+              <span className="flex items-center gap-1.5 text-sm font-medium text-green-600 dark:text-green-400">
+                <ShieldCheck className="h-4 w-4" />
+                Authorized
               </span>
-            ) : (
-              <>
-                <Button type="button" variant="outline" size="sm" onClick={handleAuthorize}>
+              <Button type="button" variant="ghost" size="sm" onClick={handleRevoke}>
+                Revoke
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-start gap-2 text-sm text-amber-800 dark:text-amber-300">
+                <KeyRound className="h-4 w-4 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <div className="font-medium">Authorization required</div>
+                  <div className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">
+                    Click Authorize to sign in and grant access. You won&apos;t be able to test or
+                    add the server until this step is completed.
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  onClick={handleAuthorize}
+                  isLoading={oauthStatus === "authorizing"}
+                  disabled={oauthStatus === "authorizing"}
+                >
                   <KeyRound className="h-4 w-4 mr-1.5" />
-                  Authorize
+                  {oauthStatus === "authorizing" ? "Waiting for authorization..." : "Authorize"}
                 </Button>
                 {oauthStatus === "error" && oauthError && (
                   <div className="flex items-start gap-1.5 text-xs text-destructive flex-1 min-w-0">
@@ -829,9 +831,42 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
                     <span className="break-words">{oauthError}</span>
                   </div>
                 )}
-              </>
-            )}
-          </div>
+              </div>
+            </div>
+          )}
+
+          {/* Advanced OAuth fields */}
+          <details className="pt-1">
+            <summary className="text-xs text-muted-foreground cursor-pointer select-none hover:text-foreground">
+              Advanced options
+            </summary>
+            <div className="space-y-3 mt-3">
+              <FormField
+                label="Client ID"
+                htmlFor="server-oauth-client-id"
+                helpText="Leave empty to use dynamic client registration"
+              >
+                <Input
+                  id="server-oauth-client-id"
+                  {...form.register("oauthClientId")}
+                  placeholder="Optional — for pre-registered apps"
+                  className="font-mono"
+                />
+              </FormField>
+
+              <FormField
+                label="Scopes"
+                htmlFor="server-oauth-scopes"
+                helpText="Space-separated OAuth scopes (auto-detected if empty)"
+              >
+                <Input
+                  id="server-oauth-scopes"
+                  {...form.register("oauthScopes")}
+                  placeholder="Optional — e.g. read write"
+                />
+              </FormField>
+            </div>
+          </details>
         </div>
       )}
 
@@ -890,6 +925,14 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
         </div>
       )}
 
+      {/* Gating hint when OAuth is required but not authorized */}
+      {watchedAuthType === "oauth" && oauthStatus !== "authorized" && (
+        <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
+          <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+          <span>Authorize above to enable testing and saving this server.</span>
+        </div>
+      )}
+
       <div className="flex justify-between pt-2">
         <Button type="button" variant="ghost" onClick={onCancel}>
           Cancel
@@ -900,12 +943,20 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
             variant="outline"
             onClick={handleTestConnection}
             isLoading={testStatus === "testing"}
-            disabled={testStatus === "testing"}
+            disabled={
+              testStatus === "testing" ||
+              (watchedAuthType === "oauth" && oauthStatus !== "authorized")
+            }
           >
             <Wifi className="h-4 w-4 mr-1.5" />
             Test
           </Button>
-          <Button type="submit">{editingServer ? "Save" : "Add Server"}</Button>
+          <Button
+            type="submit"
+            disabled={watchedAuthType === "oauth" && oauthStatus !== "authorized"}
+          >
+            {editingServer ? "Save" : "Add Server"}
+          </Button>
         </div>
       </div>
     </form>
