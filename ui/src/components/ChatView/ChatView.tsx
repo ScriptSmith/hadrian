@@ -120,7 +120,8 @@ export function ChatView({
 
   // Check for ?mcp_server_url= query param. If the server is already
   // configured, just enable (and connect) it; otherwise open the config
-  // modal pre-filled with the URL.
+  // modal pre-filled with the URL. Either way, make sure the "mcp" tool
+  // category is switched on so the server's tools are actually sent.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const serverUrl = params.get("mcp_server_url");
@@ -136,9 +137,11 @@ export function ChatView({
             console.debug("MCP connect from URL param failed:", err);
           });
         }
+        useChatUIStore.getState().enableTool("mcp");
       } else {
         setMcpPrefill({ url: serverUrl, name: serverName });
         setMCPConfigModalOpen(true);
+        useChatUIStore.getState().enableTool("mcp");
       }
       // Clean the URL to prevent re-triggering
       const cleanUrl = new URL(window.location.href);
