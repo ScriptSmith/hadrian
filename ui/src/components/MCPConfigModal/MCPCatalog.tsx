@@ -242,7 +242,9 @@ export function MCPCatalog({ onPick, onAddManual, onCancel, favorites = [] }: MC
         return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      if (!ctrl?.signal.aborted) setLoadingMore(null);
+      // Always clear, even on abort — otherwise a new search cancelling an
+      // in-flight load-more would leave the button stuck in its loading state.
+      setLoadingMore(null);
     }
   };
 

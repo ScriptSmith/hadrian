@@ -148,7 +148,13 @@ function buildStdioCommand(pkg: MCPRegistryPackage): string | null {
   }
 }
 
-/** Default URL to connect to a supergateway-wrapped local server. */
+/**
+ * Default URL to connect to a supergateway-wrapped local server.
+ *
+ * Note: supergateway binds a fixed port, so only one stdio-wrapped server can
+ * run at a time with this default. Users who need multiple concurrent local
+ * servers must edit the generated command to pass a different `--port`.
+ */
 const SUPERGATEWAY_DEFAULT_URL = "http://localhost:8000/mcp";
 
 export interface InstallCommand {
