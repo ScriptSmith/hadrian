@@ -207,6 +207,10 @@ export function MCPCatalog({ onPick, onAddManual, onCancel, favorites = [] }: MC
 
   const handleLoadMore = async (kind: "remote" | "local") => {
     if (!cursor || loadingMore) return;
+    // Share the main search effect's abort controller so a new search mid-load
+    // cancels this loop — otherwise stale pages from the previous query would
+    // be appended on top of the fresh results.
+    const ctrl = abortRef.current;
     setLoadingMore(kind);
     let nextCursor: string | undefined = cursor;
     // The registry returns mixed remote/local entries under one cursor, and
@@ -215,11 +219,14 @@ export function MCPCatalog({ onPick, onAddManual, onCancel, favorites = [] }: MC
     const maxIterations = 10;
     try {
       for (let i = 0; i < maxIterations; i++) {
+        if (ctrl?.signal.aborted) return;
         const res = await searchRegistry({
           search: debouncedQuery || undefined,
           limit: PAGE_SIZE,
           cursor: nextCursor,
+          signal: ctrl?.signal,
         });
+        if (ctrl?.signal.aborted) return;
         setEntries((prev) => [...prev, ...res.servers]);
         nextCursor = res.metadata?.nextCursor;
 
@@ -229,11 +236,13 @@ export function MCPCatalog({ onPick, onAddManual, onCancel, favorites = [] }: MC
         });
         if (matched || !nextCursor) break;
       }
-      setCursor(nextCursor);
+      if (!ctrl?.signal.aborted) setCursor(nextCursor);
     } catch (err) {
+      if (ctrl?.signal.aborted || (err instanceof DOMException && err.name === "AbortError"))
+        return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoadingMore(null);
+      if (!ctrl?.signal.aborted) setLoadingMore(null);
     }
   };
 

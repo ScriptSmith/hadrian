@@ -176,8 +176,12 @@ export function buildInstallCommand(pkg: MCPRegistryPackage): InstallCommand | n
   if (pkg.transport?.type === "streamable-http" && pkg.transport.url) {
     return { command: raw, url: pkg.transport.url };
   }
+  // Single-quote wrap `raw` so registry-supplied strings can't break out of
+  // the --stdio argument. Any embedded `'` is escaped via the POSIX trick of
+  // closing the quote, inserting an escaped quote, and reopening: `'\''`.
+  const quoted = `'${raw.replace(/'/g, "'\\''")}'`;
   return {
-    command: `npx -y supergateway --cors "*" --outputTransport streamableHttp --stdio "${raw}"`,
+    command: `npx -y supergateway --cors "*" --outputTransport streamableHttp --stdio ${quoted}`,
     url: SUPERGATEWAY_DEFAULT_URL,
   };
 }
@@ -185,12 +189,18 @@ export function buildInstallCommand(pkg: MCPRegistryPackage): InstallCommand | n
 /**
  * Resolve templated header values (e.g. "Bearer {smithery_api_key}") into a
  * flat header map, leaving placeholders verbatim so the user sees what to
- * replace.
+ * replace. Required headers without a preset value get a `{header_name}`
+ * placeholder so the form surfaces them and the template-warning banner
+ * triggers — otherwise the user never sees that a required header is missing.
  */
 export function materializeHeaders(remote: MCPRegistryRemote): Record<string, string> {
   const out: Record<string, string> = {};
   for (const h of remote.headers ?? []) {
-    if (h.value != null) out[h.name] = h.value;
+    if (h.value != null) {
+      out[h.name] = h.value;
+    } else if (h.isRequired) {
+      out[h.name] = `{${h.name}}`;
+    }
   }
   return out;
 }
