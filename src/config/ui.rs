@@ -32,6 +32,10 @@ pub struct UiConfig {
     /// Per-page visibility configuration.
     #[serde(default)]
     pub pages: PagesConfig,
+
+    /// MCP (Model Context Protocol) UI configuration.
+    #[serde(default)]
+    pub mcp: McpUiConfig,
 }
 
 impl Default for UiConfig {
@@ -44,8 +48,69 @@ impl Default for UiConfig {
             admin: AdminConfig::default(),
             branding: BrandingConfig::default(),
             pages: PagesConfig::default(),
+            mcp: McpUiConfig::default(),
         }
     }
+}
+
+/// MCP (Model Context Protocol) UI configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct McpUiConfig {
+    /// Favorite MCP servers surfaced prominently in the catalog.
+    #[serde(default = "default_favorite_mcp_servers")]
+    pub favorites: Vec<FavoriteMcpServer>,
+}
+
+impl Default for McpUiConfig {
+    fn default() -> Self {
+        Self {
+            favorites: default_favorite_mcp_servers(),
+        }
+    }
+}
+
+/// A suggested MCP server shown in the catalog's "Favorites" section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct FavoriteMcpServer {
+    /// Display name.
+    pub name: String,
+    /// Either a direct remote URL (`https://…`) the UI connects to, or a
+    /// registry identifier (e.g. `io.github.ScriptSmith/platter`) the UI
+    /// resolves against the public MCP registry.
+    pub url: String,
+}
+
+fn default_favorite_mcp_servers() -> Vec<FavoriteMcpServer> {
+    vec![
+        FavoriteMcpServer {
+            name: "Platter".into(),
+            url: "io.github.ScriptSmith/platter".into(),
+        },
+        FavoriteMcpServer {
+            name: "Atlassian".into(),
+            url: "https://mcp.atlassian.com/v1/mcp".into(),
+        },
+        FavoriteMcpServer {
+            name: "Notion".into(),
+            url: "https://mcp.notion.com/mcp".into(),
+        },
+        FavoriteMcpServer {
+            name: "Hugging Face".into(),
+            url: "https://huggingface.co/mcp".into(),
+        },
+        FavoriteMcpServer {
+            name: "Miro".into(),
+            url: "https://mcp.miro.com/".into(),
+        },
+        FavoriteMcpServer {
+            name: "Vercel".into(),
+            url: "https://mcp.vercel.com".into(),
+        },
+    ]
 }
 
 fn default_true() -> bool {
