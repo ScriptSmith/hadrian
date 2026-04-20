@@ -66,6 +66,9 @@ export const defaultConfig: UiConfig = {
     custom_fields: [],
   },
   pages: defaultPagesConfig,
+  mcp: {
+    favorites: [],
+  },
 };
 
 export function getApiBaseUrl(): string {
