@@ -15,9 +15,11 @@ import { z } from "zod";
 import {
   AlertCircle,
   AlertTriangle,
+  ArrowLeft,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Copy,
   Eye,
   EyeOff,
   KeyRound,
@@ -26,6 +28,7 @@ import {
   Plug,
   Plus,
   ShieldCheck,
+  Terminal,
   Trash2,
   Wifi,
   Wrench,
@@ -45,6 +48,8 @@ import {
 } from "@/components/Modal/Modal";
 import { Switch } from "@/components/Switch/Switch";
 import { cn } from "@/utils/cn";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { useConfig } from "@/config/ConfigProvider";
 import { useMCPStore, useMCPServers } from "@/stores/mcpStore";
 import {
   MCPClient,
@@ -59,15 +64,30 @@ import {
   detectServerAuth,
 } from "@/services/mcp";
 import type { MCPToolDefinition, JSONSchema } from "@/services/mcp";
+import { MCPCatalog, type CatalogPrefill } from "./MCPCatalog";
 
 // =============================================================================
 // Types
 // =============================================================================
 
-/** Pre-fill data for adding a new server (e.g., from URL query params) */
+/** Pre-fill data for adding a new server (e.g., from URL query params or catalog). */
 export interface MCPServerPrefill {
   url: string;
   name?: string;
+  authType?: MCPAuthType;
+  bearerToken?: string;
+  /** Additional headers pre-filled into the form's JSON textarea. */
+  headers?: Record<string, string>;
+  /** If present, show an install banner for a locally-run stdio server. */
+  localInstall?: {
+    command: string;
+    envVars: Array<{
+      name: string;
+      description?: string;
+      isSecret?: boolean;
+      isRequired?: boolean;
+    }>;
+  };
 }
 
 export interface MCPConfigModalProps {
@@ -479,9 +499,18 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
     Object.entries(existingHeaders).filter(([k]) => k.toLowerCase() !== "authorization")
   );
 
-  // Infer initial auth type from existing config
+  // Infer initial auth type from existing config or prefill
   const initialAuthType: MCPAuthType =
-    editingServer?.authType ?? (existingBearer ? "bearer" : "none");
+    editingServer?.authType ?? prefill?.authType ?? (existingBearer ? "bearer" : "none");
+
+  // Merge extra headers from editingServer with prefill headers — prefill wins
+  // when keys collide (prefill is either catalog-supplied or user-confirmed
+  // via a query-param flow).
+  const prefillExtraHeaders = prefill?.headers ?? {};
+  const mergedExtraHeaders =
+    Object.keys(prefillExtraHeaders).length > 0
+      ? { ...extraHeaders, ...prefillExtraHeaders }
+      : extraHeaders;
 
   const form = useForm<ServerFormValues>({
     resolver: zodResolver(serverFormSchema),
@@ -489,10 +518,13 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
       name: editingServer?.name ?? prefill?.name ?? "",
       url: editingServer?.url ?? prefill?.url ?? "",
       authType: initialAuthType,
-      bearerToken: existingBearer,
+      bearerToken: prefill?.bearerToken ?? existingBearer,
       oauthClientId: editingServer?.oauth?.clientId ?? "",
       oauthScopes: editingServer?.oauth?.scopes ?? "",
-      headers: Object.keys(extraHeaders).length > 0 ? JSON.stringify(extraHeaders, null, 2) : "",
+      headers:
+        Object.keys(mergedExtraHeaders).length > 0
+          ? JSON.stringify(mergedExtraHeaders, null, 2)
+          : "",
       timeout: Math.round((editingServer?.timeout ?? 300000) / 1000),
     },
   });
@@ -520,6 +552,9 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
   const watchedUrl = form.watch("url");
   const watchedHeaders = form.watch("headers");
   const watchedAuthType = form.watch("authType") as MCPAuthType;
+  // Debounce URL so network-touching effects (auth probe, template checks) run
+  // only after the user stops typing.
+  const debouncedUrl = useDebouncedValue(watchedUrl, 500);
 
   // Reset test results when URL or headers change
   useEffect(() => {
@@ -542,16 +577,16 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
     }
   }, [watchedAuthType, watchedUrl]);
 
-  // Auto-detect auth requirements when URL changes (new servers only)
+  // Auto-detect auth requirements when the debounced URL changes (new servers only)
   useEffect(() => {
-    if (!isNewServer || !watchedUrl || userOverrodeAuth) {
+    if (!isNewServer || !debouncedUrl || userOverrodeAuth) {
       setDetectionStatus("idle");
       setDetectionMessage("");
       return;
     }
 
     // Validate URL before probing
-    if (!z.string().url().safeParse(watchedUrl).success) {
+    if (!z.string().url().safeParse(debouncedUrl).success) {
       setDetectionStatus("idle");
       setDetectionMessage("");
       return;
@@ -561,27 +596,24 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
     setDetectionMessage("");
 
     let cancelled = false;
-    const timer = setTimeout(() => {
-      detectServerAuth(watchedUrl).then((result) => {
-        if (cancelled) return;
-        setDetectionStatus("detected");
-        setDetectionMessage(result.message);
-        if (result.authType !== watchedAuthType) {
-          form.setValue("authType", result.authType);
-        }
-        // Pre-fill server name from resource metadata if the field is still empty
-        if (result.serverName && !form.getValues("name")) {
-          form.setValue("name", result.serverName);
-        }
-      });
-    }, 600);
+    detectServerAuth(debouncedUrl).then((result) => {
+      if (cancelled) return;
+      setDetectionStatus("detected");
+      setDetectionMessage(result.message);
+      if (result.authType !== watchedAuthType) {
+        form.setValue("authType", result.authType);
+      }
+      // Pre-fill server name from resource metadata if the field is still empty
+      if (result.serverName && !form.getValues("name")) {
+        form.setValue("name", result.serverName);
+      }
+    });
 
     return () => {
-      clearTimeout(timer);
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-run on URL change
-  }, [watchedUrl, isNewServer, userOverrodeAuth]);
+  }, [debouncedUrl, isNewServer, userOverrodeAuth]);
 
   const handleAuthorize = useCallback(async () => {
     const valid = await form.trigger("url");
@@ -683,10 +715,78 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
     { value: "oauth" as const, label: "OAuth (PKCE)" },
   ];
 
+  // Flag `{placeholder}` tokens in the bearer token or headers JSON — these
+  // come from catalog prefills with templated values the user must replace.
+  const watchedBearer = form.watch("bearerToken");
+  const hasTemplateTokens =
+    /\{[^}]+\}/.test(watchedHeaders ?? "") ||
+    (watchedAuthType === "bearer" && /\{[^}]+\}/.test(watchedBearer ?? ""));
+
+  const [copiedInstall, setCopiedInstall] = useState(false);
+  const handleCopyInstall = useCallback(async () => {
+    if (!prefill?.localInstall?.command) return;
+    try {
+      await navigator.clipboard.writeText(prefill.localInstall.command);
+      setCopiedInstall(true);
+      setTimeout(() => setCopiedInstall(false), 1500);
+    } catch {
+      // Clipboard may be unavailable (insecure context); ignore silently.
+    }
+  }, [prefill?.localInstall?.command]);
+
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      {/* Local-install banner: shown when the catalog picked a stdio server */}
+      {prefill?.localInstall && (
+        <div className="rounded-md border border-primary/30 bg-primary/5 p-3 space-y-2">
+          <div className="flex items-start gap-2">
+            <Terminal className="h-4 w-4 shrink-0 mt-0.5 text-primary" />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium">Local setup required</div>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Run the command below on your machine. Once it&apos;s up, the server is reachable at{" "}
+                <code className="font-mono">{prefill.url}</code>.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-start gap-2">
+            <pre className="flex-1 min-w-0 text-xs font-mono bg-muted rounded px-2 py-1.5 whitespace-pre-wrap break-all">
+              {prefill.localInstall.command}
+            </pre>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={handleCopyInstall}
+              className="shrink-0"
+            >
+              <Copy className="h-3.5 w-3.5" />
+              {copiedInstall ? "Copied" : "Copy"}
+            </Button>
+          </div>
+          {prefill.localInstall.envVars.length > 0 && (
+            <div className="text-xs space-y-1">
+              <div className="font-medium text-muted-foreground">Required environment:</div>
+              <ul className="space-y-0.5 pl-3">
+                {prefill.localInstall.envVars.map((v) => (
+                  <li key={v.name} className="flex items-baseline gap-2">
+                    <code className="font-mono text-foreground">{v.name}</code>
+                    {v.isRequired && (
+                      <span className="text-[10px] text-destructive font-semibold">required</span>
+                    )}
+                    {v.description && (
+                      <span className="text-muted-foreground">— {v.description}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Warning banner when pre-filled from a URL param */}
-      {prefill && (
+      {prefill && !prefill.localInstall && (
         <div className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-2.5 rounded-md">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
           <span>Server URL provided via link. Only add servers you trust.</span>
@@ -870,33 +970,44 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
         </div>
       )}
 
-      <FormField
-        label="Additional Headers (JSON)"
-        htmlFor="server-headers"
-        helpText="Optional extra HTTP headers"
-        error={form.formState.errors.headers?.message}
+      <details
+        className="group rounded-md border border-input bg-muted/20"
+        open={Object.keys(mergedExtraHeaders).length > 0}
       >
-        <textarea
-          id="server-headers"
-          {...form.register("headers")}
-          placeholder='{"X-Custom-Header": "value"}'
-          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono min-h-[80px]"
-        />
-      </FormField>
+        <summary className="cursor-pointer select-none list-none px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground flex items-center gap-1.5">
+          <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" />
+          Advanced
+        </summary>
+        <div className="p-3 pt-1 space-y-3 border-t">
+          <FormField
+            label="Additional Headers (JSON)"
+            htmlFor="server-headers"
+            helpText="Optional extra HTTP headers"
+            error={form.formState.errors.headers?.message}
+          >
+            <textarea
+              id="server-headers"
+              {...form.register("headers")}
+              placeholder='{"X-Custom-Header": "value"}'
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono min-h-[80px]"
+            />
+          </FormField>
 
-      <FormField
-        label="Request Timeout (seconds)"
-        htmlFor="server-timeout"
-        helpText="Maximum time to wait for MCP tool responses"
-        error={form.formState.errors.timeout?.message}
-      >
-        <Input
-          id="server-timeout"
-          type="number"
-          min={1}
-          {...form.register("timeout", { valueAsNumber: true })}
-        />
-      </FormField>
+          <FormField
+            label="Request Timeout (seconds)"
+            htmlFor="server-timeout"
+            helpText="Maximum time to wait for MCP tool responses"
+            error={form.formState.errors.timeout?.message}
+          >
+            <Input
+              id="server-timeout"
+              type="number"
+              min={1}
+              {...form.register("timeout", { valueAsNumber: true })}
+            />
+          </FormField>
+        </div>
+      </details>
 
       {/* Test connection result */}
       {testStatus !== "idle" && (
@@ -933,9 +1044,21 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
         </div>
       )}
 
+      {/* Gating hint when templated placeholders like {api_key} haven't been replaced */}
+      {hasTemplateTokens && (
+        <div className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+          <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+          <span>
+            Replace placeholder values like <code className="font-mono">{"{api_key}"}</code> with
+            your real credentials before saving.
+          </span>
+        </div>
+      )}
+
       <div className="flex justify-between pt-2">
         <Button type="button" variant="ghost" onClick={onCancel}>
-          Cancel
+          <ArrowLeft className="h-4 w-4 mr-1.5" />
+          Back
         </Button>
         <div className="flex gap-2">
           <Button
@@ -945,6 +1068,7 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
             isLoading={testStatus === "testing"}
             disabled={
               testStatus === "testing" ||
+              hasTemplateTokens ||
               (watchedAuthType === "oauth" && oauthStatus !== "authorized")
             }
           >
@@ -953,7 +1077,9 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
           </Button>
           <Button
             type="submit"
-            disabled={watchedAuthType === "oauth" && oauthStatus !== "authorized"}
+            disabled={
+              hasTemplateTokens || (watchedAuthType === "oauth" && oauthStatus !== "authorized")
+            }
           >
             {editingServer ? "Save" : "Add Server"}
           </Button>
@@ -970,31 +1096,63 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
 export function MCPConfigModal({ open, onClose, prefill }: MCPConfigModalProps) {
   const servers = useMCPServers();
   const { addServer, updateServer, removeServer } = useMCPStore();
-  const [showForm, setShowForm] = useState(false);
+  const { config } = useConfig();
+  const favorites = config.mcp.favorites;
+  const [view, setView] = useState<"list" | "catalog" | "form">("list");
   const [editingServer, setEditingServer] = useState<MCPServerState | null>(null);
+  // Catalog-selected prefill. Preserved separately from the incoming
+  // `prefill` prop so that cancelling the form returns the user to the list,
+  // not the original deep-linked state.
+  const [catalogPrefill, setCatalogPrefill] = useState<MCPServerPrefill | null>(null);
+  // Which view should the form's Back button return to?
+  const [formOrigin, setFormOrigin] = useState<"list" | "catalog">("list");
 
-  // Auto-show form when opened with a prefill
+  // Auto-show form when opened with an external prefill (e.g. ?mcp_server_url=)
   useEffect(() => {
     if (open && prefill) {
       setEditingServer(null);
-      setShowForm(true);
+      setCatalogPrefill(null);
+      setFormOrigin("list");
+      setView("form");
     }
   }, [open, prefill]);
 
   const handleAddClick = useCallback(() => {
     setEditingServer(null);
-    setShowForm(true);
+    setCatalogPrefill(null);
+    setView("catalog");
   }, []);
 
   const handleEditClick = useCallback((server: MCPServerState) => {
     setEditingServer(server);
-    setShowForm(true);
+    setCatalogPrefill(null);
+    setFormOrigin("list");
+    setView("form");
+  }, []);
+
+  const handleCatalogPick = useCallback((p: CatalogPrefill) => {
+    setEditingServer(null);
+    setCatalogPrefill(p);
+    setFormOrigin("catalog");
+    setView("form");
+  }, []);
+
+  const handleAddManual = useCallback(() => {
+    setEditingServer(null);
+    setCatalogPrefill(null);
+    setFormOrigin("catalog");
+    setView("form");
+  }, []);
+
+  const handleCatalogCancel = useCallback(() => {
+    setView("list");
   }, []);
 
   const handleFormCancel = useCallback(() => {
-    setShowForm(false);
+    setView(formOrigin);
     setEditingServer(null);
-  }, []);
+    setCatalogPrefill(null);
+  }, [formOrigin]);
 
   const handleFormSubmit = useCallback(
     (values: ServerFormValues) => {
@@ -1053,8 +1211,9 @@ export function MCPConfigModal({ open, onClose, prefill }: MCPConfigModalProps) 
         });
       }
 
-      setShowForm(false);
+      setView("list");
       setEditingServer(null);
+      setCatalogPrefill(null);
     },
     [editingServer, addServer, updateServer]
   );
@@ -1072,7 +1231,7 @@ export function MCPConfigModal({ open, onClose, prefill }: MCPConfigModalProps) 
     .reduce((sum, s) => sum + s.tools.length, 0);
 
   return (
-    <Modal open={open} onClose={onClose} className="max-w-2xl">
+    <Modal open={open} onClose={onClose} className={view === "catalog" ? "max-w-4xl" : "max-w-2xl"}>
       <ModalClose onClose={onClose} />
       <ModalHeader>
         <ModalTitle className="flex items-center gap-2">
@@ -1082,14 +1241,23 @@ export function MCPConfigModal({ open, onClose, prefill }: MCPConfigModalProps) 
       </ModalHeader>
 
       <ModalContent className="max-h-[60vh] overflow-y-auto">
-        {showForm ? (
+        {view === "form" && (
           <ServerForm
             editingServer={editingServer}
             onSubmit={handleFormSubmit}
             onCancel={handleFormCancel}
-            prefill={editingServer ? null : prefill}
+            prefill={editingServer ? null : (catalogPrefill ?? prefill)}
           />
-        ) : (
+        )}
+        {view === "catalog" && (
+          <MCPCatalog
+            onPick={handleCatalogPick}
+            onAddManual={handleAddManual}
+            onCancel={handleCatalogCancel}
+            favorites={favorites}
+          />
+        )}
+        {view === "list" && (
           <div className="space-y-4">
             {/* Summary stats */}
             <div className="flex items-center gap-4 text-sm text-muted-foreground">
@@ -1125,7 +1293,7 @@ export function MCPConfigModal({ open, onClose, prefill }: MCPConfigModalProps) 
         )}
       </ModalContent>
 
-      {!showForm && (
+      {view === "list" && (
         <ModalFooter>
           <Button variant="ghost" onClick={onClose}>
             Close

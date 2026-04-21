@@ -43,6 +43,21 @@ export interface UiConfig {
   auth: AuthConfig;
   sovereignty: SovereigntyUiConfig;
   pages: PagesConfig;
+  mcp: McpUiConfig;
+}
+
+export interface McpUiConfig {
+  favorites: FavoriteMcpServer[];
+}
+
+export interface FavoriteMcpServer {
+  name: string;
+  /**
+   * Either a direct remote URL (http(s)://...) the UI connects to, or a
+   * registry identifier (e.g. `io.github.ScriptSmith/platter`) that the UI
+   * resolves against the public MCP registry.
+   */
+  url: string;
 }
 
 export interface BrandingConfig {

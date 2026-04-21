@@ -5,7 +5,8 @@ use crate::{
     AppState,
     config::{
         AdminConfig, AdminPagesConfig, AuthMode, BrandingConfig, ChatConfig, ColorPalette,
-        CustomFont, FontsConfig, LoginConfig, PageConfig, PageStatus, PagesConfig, UiConfig,
+        CustomFont, FavoriteMcpServer, FontsConfig, LoginConfig, McpUiConfig, PageConfig,
+        PageStatus, PagesConfig, UiConfig,
     },
 };
 
@@ -18,6 +19,39 @@ pub struct UiConfigResponse {
     pub auth: AuthResponse,
     pub sovereignty: SovereigntyUiResponse,
     pub pages: PagesResponse,
+    pub mcp: McpUiResponse,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpUiResponse {
+    pub favorites: Vec<FavoriteMcpServerResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FavoriteMcpServerResponse {
+    pub name: String,
+    pub url: String,
+}
+
+impl From<&McpUiConfig> for McpUiResponse {
+    fn from(config: &McpUiConfig) -> Self {
+        Self {
+            favorites: config
+                .favorites
+                .iter()
+                .map(FavoriteMcpServerResponse::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<&FavoriteMcpServer> for FavoriteMcpServerResponse {
+    fn from(entry: &FavoriteMcpServer) -> Self {
+        Self {
+            name: entry.name.clone(),
+            url: entry.url.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -255,6 +289,7 @@ impl From<&UiConfig> for UiConfigResponse {
                 custom_fields: vec![],
             },
             pages: PagesResponse::from(&config.pages),
+            mcp: McpUiResponse::from(&config.mcp),
         }
     }
 }

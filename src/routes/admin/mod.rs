@@ -5779,6 +5779,54 @@ show_logo = false
         assert_eq!(body["branding"]["login"]["show_logo"], false);
     }
 
+    #[tokio::test]
+    async fn test_get_ui_config_mcp_favorites_default() {
+        let app = test_app().await;
+
+        let (status, body) = get_json(&app, "/admin/v1/ui/config").await;
+
+        assert_eq!(status, StatusCode::OK);
+        let favorites = body["mcp"]["favorites"]
+            .as_array()
+            .expect("favorites array");
+        let urls: Vec<&str> = favorites
+            .iter()
+            .map(|f| f["url"].as_str().unwrap())
+            .collect();
+        assert_eq!(urls.len(), 6);
+        assert!(urls.contains(&"io.github.ScriptSmith/platter"));
+        assert!(urls.contains(&"https://mcp.atlassian.com/v1/mcp"));
+        assert!(urls.contains(&"https://mcp.notion.com/mcp"));
+        assert!(urls.contains(&"https://huggingface.co/mcp"));
+        assert!(urls.contains(&"https://mcp.miro.com/"));
+        assert!(urls.contains(&"https://mcp.vercel.com"));
+    }
+
+    #[tokio::test]
+    async fn test_get_ui_config_mcp_favorites_custom() {
+        let config_str = format!(
+            r#"
+{}
+
+[[ui.mcp.favorites]]
+name = "Internal Wiki"
+url = "https://mcp.internal.example.com/mcp"
+"#,
+            unique_db_config()
+        );
+
+        let app = test_app_with_config(&config_str).await;
+        let (status, body) = get_json(&app, "/admin/v1/ui/config").await;
+
+        assert_eq!(status, StatusCode::OK);
+        let favorites = body["mcp"]["favorites"]
+            .as_array()
+            .expect("favorites array");
+        assert_eq!(favorites.len(), 1);
+        assert_eq!(favorites[0]["name"], "Internal Wiki");
+        assert_eq!(favorites[0]["url"], "https://mcp.internal.example.com/mcp");
+    }
+
     // ============================================================================
     // Me (Self-Service) Tests
     // ============================================================================

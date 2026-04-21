@@ -3,6 +3,7 @@ import React from "react";
 import { initialize, mswLoader } from "msw-storybook-addon";
 import "../src/index.css";
 import { PreferencesProvider } from "../src/preferences/PreferencesProvider";
+import { ConfigProvider } from "../src/config/ConfigProvider";
 import { defaultPreferences } from "../src/preferences/types";
 
 // Initialize MSW
@@ -55,7 +56,11 @@ const preview: Preview = {
           JSON.stringify({ ...defaultPreferences, theme })
         );
       }
-      return React.createElement(PreferencesProvider, null, React.createElement(Story));
+      return React.createElement(
+        ConfigProvider,
+        null,
+        React.createElement(PreferencesProvider, null, React.createElement(Story))
+      );
     },
   ],
   globalTypes: {

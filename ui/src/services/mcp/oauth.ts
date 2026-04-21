@@ -277,6 +277,8 @@ async function discoverAuthServerMetadata(issuerUrl: string): Promise<AuthServer
           `${url.origin}/.well-known/oauth-authorization-server${url.pathname}`,
           `${url.origin}/.well-known/openid-configuration${url.pathname}`,
           `${issuerUrl}/.well-known/openid-configuration`,
+          `${url.origin}/.well-known/oauth-authorization-server`,
+          `${url.origin}/.well-known/openid-configuration`,
         ]
       : [
           `${url.origin}/.well-known/oauth-authorization-server`,
@@ -403,20 +405,28 @@ export async function startOAuthFlow(
   serverUrl: string,
   oauthConfig?: MCPOAuthConfig
 ): Promise<OAuthTokens> {
-  // 1. Discover metadata
+  // 1. Discover metadata. Prefer RFC 9728 Protected Resource Metadata, but fall
+  // back to RFC 8414 Authorization Server Metadata served directly from the MCP
+  // origin for servers that skip RFC 9728.
   const prm = await discoverProtectedResourceMetadata(serverUrl);
-  if (!prm?.authorization_servers?.length) {
-    throw new Error(
-      "Could not discover OAuth metadata. The server may not support OAuth authorization."
-    );
-  }
+  let resource = prm?.resource || serverUrl;
+  let asm: AuthServerMetadata | null = null;
 
-  const resource = prm.resource || serverUrl;
-  const issuerUrl = prm.authorization_servers[0];
-
-  const asm = await discoverAuthServerMetadata(issuerUrl);
-  if (!asm) {
-    throw new Error(`Could not discover authorization server metadata at ${issuerUrl}`);
+  if (prm?.authorization_servers?.length) {
+    asm = await discoverAuthServerMetadata(prm.authorization_servers[0]);
+    if (!asm) {
+      throw new Error(
+        `Could not discover authorization server metadata at ${prm.authorization_servers[0]}`
+      );
+    }
+  } else {
+    asm = await discoverAuthServerMetadata(serverUrl);
+    if (!asm) {
+      throw new Error(
+        "Could not discover OAuth metadata. The server may not support OAuth authorization."
+      );
+    }
+    resource = serverUrl;
   }
 
   // Validate PKCE S256 support
@@ -483,7 +493,7 @@ export async function startOAuthFlow(
 
   // Determine scopes
   const scopes =
-    oauthConfig?.scopes || prm.scopes_supported?.join(" ") || asm.scopes_supported?.join(" ");
+    oauthConfig?.scopes || prm?.scopes_supported?.join(" ") || asm.scopes_supported?.join(" ");
   if (scopes) authParams.set("scope", scopes);
 
   const authUrl = `${asm.authorization_endpoint}?${authParams}`;
@@ -801,8 +811,15 @@ export async function detectServerAuth(serverUrl: string): Promise<AuthDetection
             }
           }
         } catch {
-          // Fall through to bearer
+          // Fall through to RFC 8414 / bearer
         }
+      }
+
+      // RFC 8414 fallback: some servers skip Protected Resource Metadata and
+      // serve Authorization Server Metadata directly from the MCP origin.
+      const asm = await discoverAuthServerMetadata(serverUrl);
+      if (asm?.authorization_endpoint && asm.token_endpoint) {
+        return { authType: "oauth", message: "OAuth authentication required" };
       }
 
       return { authType: "bearer", message: "Bearer token required" };
