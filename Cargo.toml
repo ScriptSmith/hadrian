@@ -355,10 +355,10 @@ metrics = { version = "0.24", optional = true }
 metrics-exporter-prometheus = { version = "0.16", optional = true }
 open = { version = "5.3.3", optional = true }
 openssl = { version = "0.10", optional = true }
-opentelemetry = { version = "0.30", optional = true }
-opentelemetry-otlp = { version = "0.30", features = ["trace", "logs", "grpc-tonic", "http-proto"], optional = true }
-opentelemetry-semantic-conventions = { version = "0.30", optional = true }
-opentelemetry_sdk = { version = "0.30", features = ["rt-tokio", "logs"], optional = true }
+opentelemetry = { version = "0.31", optional = true }
+opentelemetry-otlp = { version = "0.31", features = ["trace", "logs", "grpc-tonic", "http-proto"], optional = true }
+opentelemetry-semantic-conventions = { version = "0.31", optional = true }
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio", "logs"], optional = true }
 redis = { version = "0.32.7", features = ["aio", "tokio-comp", "cluster-async"], optional = true }
 rust-embed = { version = "8", features = ["mime-guess", "include-exclude"], optional = true }
 samael = { git = "https://github.com/njaremko/samael", rev = "b404c4e2", optional = true }
@@ -366,8 +366,8 @@ schemars = { version = "0.8", optional = true }
 sqlx = { version = "0.8", features = ["runtime-tokio", "uuid", "chrono", "rust_decimal", "migrate", "json"], optional = true }
 tiktoken-rs = { version = "0.9.1", optional = true }
 time = { version = "0.3.47", default-features = false, optional = true }
-tonic = { version = "0.13", optional = true }
-tracing-opentelemetry = { version = "0.31", optional = true }
+tonic = { version = "0.14", optional = true }
+tracing-opentelemetry = { version = "0.32", optional = true }
 utoipa = { version = "5", features = ["chrono", "uuid", "axum_extras"], optional = true }
 utoipa-scalar = { version = "0.3", features = ["axum"], optional = true }
 vaultrs = { version = "0.7.4", features = ["rustls"], optional = true }
