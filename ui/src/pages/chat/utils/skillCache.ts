@@ -9,7 +9,7 @@ import type { Skill } from "@/api/generated/types.gen";
  *    refetch on every tool call within the same conversation.
  *
  * Both live here as simple module-scoped maps. `useUserSkills` populates
- * `skillsByName` whenever its result changes (see `useSkillCacheSync`),
+ * `skillsByName` whenever its result changes (see `setSkillCatalog`),
  * and the executor populates `fullSkillsById` on first fetch.
  *
  * This is intentionally a vanilla JS singleton (not a Zustand store): tool
@@ -18,10 +18,32 @@ import type { Skill } from "@/api/generated/types.gen";
 const skillsByName: Map<string, Skill> = new Map();
 const fullSkillsById: Map<string, Skill> = new Map();
 
+/**
+ * Replace the in-memory catalog with a fresh listing.
+ *
+ * Also evicts any entries from `fullSkillsById` whose `updated_at` differs
+ * from the new catalog (or whose id no longer appears at all). Without this,
+ * a long-running session would keep serving stale SKILL.md content from the
+ * `Skill` tool executor after an admin updated the skill — `useUserSkills`
+ * has a 5-min stale time, so the catalog refreshes on its own; this just
+ * makes the by-id cache honor that signal too.
+ */
 export function setSkillCatalog(skills: Skill[]): void {
+  const seen = new Set<string>();
   skillsByName.clear();
   for (const s of skills) {
     skillsByName.set(s.name, s);
+    seen.add(s.id);
+
+    const cached = fullSkillsById.get(s.id);
+    if (cached && cached.updated_at !== s.updated_at) {
+      fullSkillsById.delete(s.id);
+    }
+  }
+
+  // Drop any cached full skills that have disappeared from the catalog.
+  for (const id of fullSkillsById.keys()) {
+    if (!seen.has(id)) fullSkillsById.delete(id);
   }
 }
 

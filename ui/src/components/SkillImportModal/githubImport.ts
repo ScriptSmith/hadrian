@@ -6,6 +6,18 @@ const FETCH_CONCURRENCY = 8;
 const TREE_CACHE_TTL_MS = 10 * 60 * 1000;
 const TREE_CACHE_MAX_BYTES = 2 * 1024 * 1024;
 
+const utf8Encoder = new TextEncoder();
+
+/**
+ * Byte length the server will see for `content`. The server enforces its
+ * size limit using Rust's `String::len()` which counts UTF-8 bytes;
+ * `String.prototype.length` in JS counts UTF-16 code units, so we'd
+ * misreport non-ASCII content (and surprise the user with a 400).
+ */
+function utf8ByteLength(content: string): number {
+  return utf8Encoder.encode(content).length;
+}
+
 /**
  * A skill discovered in a GitHub repository, ready to be sent to
  * `skillCreate`. Fields mirror the server's `CreateSkill` minus the owner
@@ -288,7 +300,7 @@ export async function walkGithubForSkills(
 
 function buildSkill(skillDir: string, files: { path: string; content: string }[]): DiscoveredSkill {
   const main = files.find((f) => f.path === "SKILL.md");
-  const total_bytes = files.reduce((sum, f) => sum + f.content.length, 0);
+  const total_bytes = files.reduce((sum, f) => sum + utf8ByteLength(f.content), 0);
 
   if (!main) {
     return {

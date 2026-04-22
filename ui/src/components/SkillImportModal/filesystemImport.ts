@@ -1,6 +1,18 @@
 import { parseSkillMd } from "./parseFrontmatter";
 import type { DiscoveredSkill } from "./githubImport";
 
+const utf8Encoder = new TextEncoder();
+
+/**
+ * Byte length the server will see for `content`. The server enforces its
+ * size limit using Rust's `String::len()` which counts UTF-8 bytes;
+ * `String.prototype.length` in JS counts UTF-16 code units, so we'd
+ * under- or over-report any non-ASCII content.
+ */
+function utf8ByteLength(content: string): number {
+  return utf8Encoder.encode(content).length;
+}
+
 /**
  * Group a `FileList` (typically from `<input webkitdirectory>` or a
  * directory drop event) by the directory that contains a `SKILL.md`, then
@@ -55,8 +67,9 @@ export async function walkFilesForSkills(files: File[]): Promise<DiscoveredSkill
         continue;
       }
 
-      // Reject binary-looking content (null byte or many replacement chars).
-      if (/\x00/.test(text)) {
+      // Reject binary-looking content. A null byte is the simplest reliable
+      // heuristic; we deliberately scan for the control char.
+      if (text.includes("\u0000")) {
         error = `Binary file not supported: ${sub}`;
         continue;
       }
@@ -66,7 +79,7 @@ export async function walkFilesForSkills(files: File[]): Promise<DiscoveredSkill
 
     const main = skillFiles.find((f) => f.path === "SKILL.md");
     const fallbackName = (dir.split("/").pop() || "skill").toLowerCase();
-    const total_bytes = skillFiles.reduce((sum, f) => sum + f.content.length, 0);
+    const total_bytes = skillFiles.reduce((sum, f) => sum + utf8ByteLength(f.content), 0);
 
     if (!main) {
       out.push({
