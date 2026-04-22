@@ -34,11 +34,19 @@ export interface ParsedSkillMd {
 
 function stripQuotes(raw: string): string {
   const trimmed = raw.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    // YAML double-quoted: unescape \" \\ \n \t (covers the common cases;
+    // we don't need full YAML escape semantics for skill frontmatter).
+    return trimmed
+      .slice(1, -1)
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t")
+      .replace(/\\\\/g, "\\");
+  }
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    // YAML single-quoted: only `''` is meaningful (escapes a single quote).
+    return trimmed.slice(1, -1).replace(/''/g, "'");
   }
   return trimmed;
 }

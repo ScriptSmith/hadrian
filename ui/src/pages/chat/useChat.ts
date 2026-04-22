@@ -789,9 +789,12 @@ export function useChat({
         // description; the model calls `Skill(command)` to load a skill,
         // or `Skill(command, file)` for bundled files. See
         // `buildSkillToolDescription` and `skillExecutor`.
-        const invocableSkills = enabledSkills.filter(
-          (s) => s.disable_model_invocation !== true && s.user_invocable !== false
-        );
+        //
+        // Only `disable_model_invocation` gates model access here.
+        // `user_invocable: false` is a UI-only flag that hides skills from
+        // the slash-command popover — model-only skills (false/false) must
+        // still appear in the tool description.
+        const invocableSkills = enabledSkills.filter((s) => s.disable_model_invocation !== true);
         if (invocableSkills.length > 0) {
           tools.push({
             type: "function",

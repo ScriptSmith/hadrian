@@ -143,6 +143,18 @@ export const skillExecutor: ToolExecutor = async (
     };
   }
 
+  // The tool description's enum is a soft hint to the model; enforce
+  // `disable_model_invocation` here as the hard boundary so a model that
+  // learns a skill name from prior context can't bypass an admin's flag.
+  if (summary.disable_model_invocation === true) {
+    const message = `Skill "${command}" cannot be invoked by the model.`;
+    return {
+      success: false,
+      error: message,
+      artifacts: [fileArtifact(toolId, 0, `Skill: ${command} (blocked)`, "text", message)],
+    };
+  }
+
   // Fetch the full skill on first use; subsequent calls hit the cache.
   let skill = getFullSkill(summary.id);
   if (!skill) {
