@@ -1,9 +1,20 @@
 import type { Meta, StoryObj } from "@storybook/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { expect, userEvent, within, fn } from "storybook/test";
 import { ChatInput } from "./ChatInput";
+import { ToastProvider } from "../Toast/Toast";
 import { TooltipProvider } from "../Tooltip/Tooltip";
+import { AuthProvider } from "@/auth";
 import { ConfigProvider } from "@/config/ConfigProvider";
 import { useChatUIStore } from "@/stores/chatUIStore";
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: false,
+    },
+  },
+});
 
 const meta: Meta<typeof ChatInput> = {
   title: "Chat/ChatInput",
@@ -14,13 +25,19 @@ const meta: Meta<typeof ChatInput> = {
 
   decorators: [
     (Story) => (
-      <ConfigProvider>
-        <TooltipProvider>
-          <div style={{ width: 600 }}>
-            <Story />
-          </div>
-        </TooltipProvider>
-      </ConfigProvider>
+      <QueryClientProvider client={queryClient}>
+        <ConfigProvider>
+          <AuthProvider>
+            <ToastProvider>
+              <TooltipProvider>
+                <div style={{ width: 600 }}>
+                  <Story />
+                </div>
+              </TooltipProvider>
+            </ToastProvider>
+          </AuthProvider>
+        </ConfigProvider>
+      </QueryClientProvider>
     ),
   ],
   args: {
@@ -331,16 +348,9 @@ export const WithHistoryModeToggle: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
 
-    // Find all icon buttons (buttons with SVG but not Send text)
-    const buttons = canvas.getAllByRole("button");
-    const iconButtons = buttons.filter((btn) => {
-      const svg = btn.querySelector("svg");
-      return svg && !btn.textContent?.includes("Send") && !btn.textContent?.includes("Stop");
-    });
-
-    // History mode toggle should be present (it's the only icon button when no settings)
-    await expect(iconButtons.length).toBeGreaterThan(0);
-    const toggleButton = iconButtons[0];
+    // History mode toggle has aria-label based on current mode ("all" -> switch to isolated)
+    const toggleButton = canvas.getByRole("button", { name: /switch to isolated history/i });
+    await expect(toggleButton).toBeInTheDocument();
 
     // Click to toggle
     await userEvent.click(toggleButton);
@@ -351,7 +361,7 @@ export const WithHistoryModeToggle: Story = {
 };
 
 /**
- * Test: History mode toggle shows Split icon when in "same-model" mode
+ * Test: History mode toggle shows active state when in "same-model" mode
  */
 export const WithHistoryModeSameModel: Story = {
   args: {
@@ -363,15 +373,8 @@ export const WithHistoryModeSameModel: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
 
-    // Find the toggle button (should have Split icon in same-model mode)
-    const buttons = canvas.getAllByRole("button");
-    const iconButtons = buttons.filter((btn) => {
-      const svg = btn.querySelector("svg");
-      return svg && !btn.textContent?.includes("Send") && !btn.textContent?.includes("Stop");
-    });
-
-    await expect(iconButtons.length).toBeGreaterThan(0);
-    const toggleButton = iconButtons[0];
+    // In "same-model" mode the aria-label flips to "Switch to shared history"
+    const toggleButton = canvas.getByRole("button", { name: /switch to shared history/i });
 
     // Verify the button has primary color (indicating active state)
     await expect(toggleButton).toHaveClass("text-primary");
@@ -446,13 +449,19 @@ export const WithQuotedText: Story = {
         text: "This is the quoted text from a previous message",
       });
       return (
-        <ConfigProvider>
-          <TooltipProvider>
-            <div style={{ width: 600 }}>
-              <Story />
-            </div>
-          </TooltipProvider>
-        </ConfigProvider>
+        <QueryClientProvider client={queryClient}>
+          <ConfigProvider>
+            <AuthProvider>
+              <ToastProvider>
+                <TooltipProvider>
+                  <div style={{ width: 600 }}>
+                    <Story />
+                  </div>
+                </TooltipProvider>
+              </ToastProvider>
+            </AuthProvider>
+          </ConfigProvider>
+        </QueryClientProvider>
       );
     },
   ],
@@ -483,13 +492,19 @@ export const WithMultiLineQuote: Story = {
         text: "Line one\nLine two\nLine three",
       });
       return (
-        <ConfigProvider>
-          <TooltipProvider>
-            <div style={{ width: 600 }}>
-              <Story />
-            </div>
-          </TooltipProvider>
-        </ConfigProvider>
+        <QueryClientProvider client={queryClient}>
+          <ConfigProvider>
+            <AuthProvider>
+              <ToastProvider>
+                <TooltipProvider>
+                  <div style={{ width: 600 }}>
+                    <Story />
+                  </div>
+                </TooltipProvider>
+              </ToastProvider>
+            </AuthProvider>
+          </ConfigProvider>
+        </QueryClientProvider>
       );
     },
   ],
