@@ -20,9 +20,6 @@ unmaintained = "none"
 yanked = "warn"
 # Known issues we're tracking but can't fix yet
 ignore = [
-    # rustls-webpki 0.101.7 via aws-smithy-http-client's hyper 0.14 compat layer.
-    # Cannot be upgraded until AWS SDK drops legacy rustls 0.21 support.
-    { id = "RUSTSEC-2026-0049", reason = "transitive via aws-smithy-http-client legacy TLS; low practical impact" },
     # rand 0.8.5 unsoundness requires a custom `log::Log` implementation that calls
     # `rand::rng()` during trace-level logging. Hadrian uses `tracing-subscriber`, so the
     # affected code path is unreachable. Pulled in transitively via augurs, kreuzberg, sqlx.
