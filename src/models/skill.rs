@@ -83,7 +83,7 @@ pub fn validate_skill_path(path: &str) -> Result<(), ValidationError> {
         return Err(ValidationError::new("skill_path_absolute"));
     }
     for seg in path.split(['/', '\\']) {
-        if seg.is_empty() || seg == ".." {
+        if seg.is_empty() || seg == ".." || seg == "." {
             return Err(ValidationError::new("skill_path_traversal"));
         }
     }
@@ -326,6 +326,8 @@ mod tests {
             "\\windows\\style.md",
             "../escape.md",
             "ok/../escape.md",
+            "./SKILL.md",
+            "scripts/./helper.py",
             "double//slash.md",
             &"x".repeat(256),
         ] {

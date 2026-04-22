@@ -218,6 +218,13 @@ async function fetchSkillFiles(
     for (let p = queue.shift(); p !== undefined; p = queue.shift()) {
       try {
         const content = await fetchRawFile(rawUrl(ref, resolvedRef, p));
+        // Null byte = binary. Mirror the guard in filesystemImport.ts so
+        // binary blobs (images, compiled artifacts) don't get decoded as
+        // garbled UTF-8 and rejected downstream with a confusing 400.
+        if (content.includes("\u0000")) {
+          console.debug(`[skill-import] skipped binary file ${p}`);
+          continue;
+        }
         const relative = skillDir === "" ? p : p.slice(skillDir.length + 1);
         results.push({ path: relative, content });
       } catch (err) {
