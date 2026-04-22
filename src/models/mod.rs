@@ -18,6 +18,7 @@ mod ranking_options;
 #[cfg(feature = "sso")]
 mod scim;
 mod service_account;
+mod skill;
 #[cfg(feature = "sso")]
 mod sso_group_mapping;
 mod team;
@@ -47,6 +48,7 @@ pub use ranking_options::*;
 #[cfg(feature = "sso")]
 pub use scim::*;
 pub use service_account::*;
+pub use skill::*;
 #[cfg(feature = "sso")]
 pub use sso_group_mapping::*;
 pub use team::*;

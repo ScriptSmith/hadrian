@@ -40,6 +40,7 @@ import { pyodideService } from "@/services/pyodide";
 import { quickjsService } from "@/services/quickjs";
 import { duckdbService } from "@/services/duckdb";
 import { callMCPTool } from "@/stores/mcpStore";
+import { skillExecutor } from "./skillExecutor";
 import type { ToolContent } from "@/services/mcp";
 
 /**
@@ -2531,6 +2532,7 @@ export const defaultToolExecutors: ToolExecutorRegistry = {
   sub_agent: subAgentExecutor,
   wikipedia: wikipediaExecutor,
   wikidata: wikidataExecutor,
+  Skill: skillExecutor,
 };
 
 /**

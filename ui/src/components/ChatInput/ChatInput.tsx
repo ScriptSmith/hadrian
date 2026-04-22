@@ -33,7 +33,12 @@ import { Button } from "@/components/Button/Button";
 import { Textarea } from "@/components/Textarea/Textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/Tooltip/Tooltip";
 import { TemplatesButton } from "@/components/PromptsButton";
+import { SkillsButton } from "@/components/SkillsButton/SkillsButton";
+import { SlashCommandPopover } from "@/components/ChatInput/SlashCommandPopover";
 import { ToolsBar } from "@/components/ToolsBar";
+import { useUserSkills } from "@/hooks/useUserSkills";
+import type { Skill } from "@/api/generated/types.gen";
+import { detectSlashQuery, matchSkills } from "@/pages/chat/utils/slashCommandMatcher";
 import type { ModelInfo } from "@/components/ModelPicker/ModelPicker";
 import { useConfig } from "@/config/ConfigProvider";
 import { fileToBase64 } from "@/utils/fileToBase64";
@@ -185,6 +190,20 @@ export function ChatInput({
   const { config } = useConfig();
   const isTouchDevice = useIsTouchDevice();
 
+  // Slash-command state. When the caret is inside a `/token` the popover
+  // shows skill suggestions; Enter invokes the picked skill by prefixing
+  // the submitted message with "Use the <name> skill for this request."
+  // and letting the `Skill` tool handle the actual load.
+  const { skills: userSkills } = useUserSkills();
+  const [slashQuery, setSlashQuery] = useState<{
+    query: string;
+    start: number;
+    end: number;
+  } | null>(null);
+  const [slashActiveIndex, setSlashActiveIndex] = useState(0);
+  const [slashMatchCount, setSlashMatchCount] = useState(0);
+  const [pendingSkill, setPendingSkill] = useState<Skill | null>(null);
+
   // Quote selection: insert quoted text as markdown blockquote
   const quotedText = useQuotedText();
   const clearQuotedText = useChatUIStore((s) => s.clearQuotedText);
@@ -248,13 +267,75 @@ export function ChatInput({
     const trimmedContent = content.trim();
     if (!trimmedContent && files.length === 0) return;
 
-    onSend(trimmedContent, files);
+    // If the user committed a slash-command for a skill, prepend a request
+    // that tells the model to use it. The `Skill` tool handles the load.
+    const finalContent = pendingSkill
+      ? `Use the ${pendingSkill.name} skill for this request.\n\n${trimmedContent}`
+      : trimmedContent;
+
+    onSend(finalContent, files);
     setContent("");
     setFiles([]);
-  }, [content, files, isStreaming, onSend, onStop]);
+    setPendingSkill(null);
+  }, [content, files, isStreaming, onSend, onStop, pendingSkill]);
+
+  const enableSkill = useChatUIStore((s) => s.enableSkill);
+
+  const commitSlashSkill = useCallback(
+    (skill: Skill) => {
+      setContent((prev) => {
+        if (!slashQuery) return prev;
+        // Strip the `/<query>` token; anything after the caret stays put.
+        return prev.slice(0, slashQuery.start) + prev.slice(slashQuery.end);
+      });
+      // Enable the picked skill for this session so the `Skill` tool sees it
+      // and the model can actually load it when asked.
+      enableSkill(skill.id);
+      setPendingSkill(skill);
+      setSlashQuery(null);
+      setSlashActiveIndex(0);
+    },
+    [slashQuery, enableSkill]
+  );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (slashQuery && slashMatchCount > 0) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSlashActiveIndex((i) => Math.min(i + 1, slashMatchCount - 1));
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setSlashActiveIndex((i) => Math.max(i - 1, 0));
+          return;
+        }
+        if (e.key === "Enter" && !e.shiftKey) {
+          const matches = matchSkills(userSkills, slashQuery.query);
+          const picked = matches[slashActiveIndex];
+          if (picked) {
+            e.preventDefault();
+            commitSlashSkill(picked);
+            return;
+          }
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setSlashQuery(null);
+          return;
+        }
+        if (e.key === "Tab") {
+          const matches = matchSkills(userSkills, slashQuery.query);
+          const picked = matches[slashActiveIndex];
+          if (picked) {
+            e.preventDefault();
+            commitSlashSkill(picked);
+            return;
+          }
+        }
+      }
+
       // On touch devices, let Enter add newlines naturally - users tap Send button
       // On desktop, Enter sends and Shift+Enter adds newline
       if (e.key === "Enter" && !e.shiftKey && !isTouchDevice) {
@@ -262,7 +343,33 @@ export function ChatInput({
         handleSubmit();
       }
     },
-    [handleSubmit, isTouchDevice]
+    [
+      handleSubmit,
+      isTouchDevice,
+      slashQuery,
+      slashMatchCount,
+      slashActiveIndex,
+      userSkills,
+      commitSlashSkill,
+    ]
+  );
+
+  const updateSlashState = useCallback(
+    (text: string, caret: number) => {
+      const detected = detectSlashQuery(text, caret);
+      if (!detected) {
+        if (slashQuery !== null) {
+          setSlashQuery(null);
+          setSlashActiveIndex(0);
+        }
+        return;
+      }
+      setSlashQuery(detected);
+      // Clamp activeIndex when the match set shrinks on each keystroke.
+      const matches = matchSkills(userSkills, detected.query);
+      setSlashActiveIndex((i) => Math.min(i, Math.max(matches.length - 1, 0)));
+    },
+    [slashQuery, userSkills]
   );
 
   const handleFileSelect = useCallback(
@@ -412,17 +519,52 @@ export function ChatInput({
         )}
 
         {/* Text input area */}
-        <Textarea
-          ref={textareaRef}
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={placeholder}
-          className="min-h-[56px] w-full resize-none border-0 bg-transparent px-4 pt-3 pb-1 text-base focus-visible:ring-0 focus-visible:ring-offset-0"
-          autoResize
-          maxHeight={200}
-          disabled={disabled || isStreaming}
-        />
+        <div className="relative">
+          {pendingSkill && (
+            <div className="mx-4 mt-2 inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-0.5 text-xs font-mono text-primary">
+              /{pendingSkill.name}
+              <button
+                type="button"
+                className="ml-1 text-primary/70 hover:text-primary"
+                aria-label="Clear pending skill"
+                onClick={() => setPendingSkill(null)}
+              >
+                ×
+              </button>
+            </div>
+          )}
+          <Textarea
+            ref={textareaRef}
+            value={content}
+            onChange={(e) => {
+              setContent(e.target.value);
+              updateSlashState(e.target.value, e.target.selectionStart ?? 0);
+            }}
+            onKeyUp={(e) => {
+              const target = e.currentTarget;
+              updateSlashState(target.value, target.selectionStart ?? 0);
+            }}
+            onClick={(e) => {
+              const target = e.currentTarget;
+              updateSlashState(target.value, target.selectionStart ?? 0);
+            }}
+            onKeyDown={handleKeyDown}
+            placeholder={placeholder}
+            className="min-h-[56px] w-full resize-none border-0 bg-transparent px-4 pt-3 pb-1 text-base focus-visible:ring-0 focus-visible:ring-offset-0"
+            autoResize
+            maxHeight={200}
+            disabled={disabled || isStreaming}
+          />
+          {slashQuery && (
+            <SlashCommandPopover
+              skills={userSkills}
+              query={slashQuery.query}
+              activeIndex={slashActiveIndex}
+              onSelect={commitSlashSkill}
+              onMatchesChange={(matches) => setSlashMatchCount(matches.length)}
+            />
+          )}
+        </div>
 
         {/* Bottom toolbar */}
         <div className="flex items-center justify-between gap-2 px-2 pb-2">
@@ -458,6 +600,9 @@ export function ChatInput({
             {onApplyPrompt && (
               <TemplatesButton onApplyTemplate={onApplyPrompt} disabled={disabled || isStreaming} />
             )}
+
+            {/* Skills */}
+            <SkillsButton disabled={disabled || isStreaming} />
 
             {/* History mode toggle - only show when multiple models */}
             {hasMultipleModels && onHistoryModeChange && (

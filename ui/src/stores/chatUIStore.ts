@@ -142,6 +142,13 @@ interface ChatUIState {
    */
   enabledTools: string[];
   /**
+   * IDs of skills the user has enabled for this session. Enabled skills are
+   * listed in the `Skill` tool's description so the model can auto-invoke
+   * them (agentskills.io). Skills with `disable_model_invocation: true` or
+   * `user_invocable: false` are further filtered in useChat.
+   */
+  enabledSkillIds: string[];
+  /**
    * Data files registered with DuckDB for SQL queries.
    * Files are registered in-memory and reset on page reload.
    */
@@ -269,6 +276,12 @@ interface ChatUIActions {
   toggleTool: (toolId: string) => void;
   /** Enable a specific tool */
   enableTool: (toolId: string) => void;
+  /** Toggle a skill's enabled state for this session. */
+  toggleSkill: (skillId: string) => void;
+  /** Enable a skill (no-op if already enabled). */
+  enableSkill: (skillId: string) => void;
+  /** Replace the full set of enabled skills. */
+  setEnabledSkillIds: (ids: string[]) => void;
   /** Disable a specific tool */
   disableTool: (toolId: string) => void;
   /** Add a data file */
@@ -382,6 +395,7 @@ const initialState: ChatUIState = {
   vectorStoreIds: [],
   clientSideRAG: false,
   enabledTools: [],
+  enabledSkillIds: [],
   dataFiles: [],
   maxToolIterations: 25,
   captureRawSSEEvents: false,
@@ -545,6 +559,22 @@ export const useChatUIStore = create<ChatUIStore>((set) => ({
     set((state) => ({
       enabledTools: state.enabledTools.filter((t) => t !== toolId),
     })),
+
+  toggleSkill: (skillId) =>
+    set((state) => ({
+      enabledSkillIds: state.enabledSkillIds.includes(skillId)
+        ? state.enabledSkillIds.filter((id) => id !== skillId)
+        : [...state.enabledSkillIds, skillId],
+    })),
+
+  enableSkill: (skillId) =>
+    set((state) => ({
+      enabledSkillIds: state.enabledSkillIds.includes(skillId)
+        ? state.enabledSkillIds
+        : [...state.enabledSkillIds, skillId],
+    })),
+
+  setEnabledSkillIds: (ids) => set({ enabledSkillIds: ids }),
 
   addDataFile: (file) =>
     set((state) => ({
@@ -738,6 +768,10 @@ export const useEnabledTools = () => useChatUIStore((state: ChatUIState) => stat
 /** Check if a specific tool is enabled */
 export const useIsToolEnabled = (toolId: string) =>
   useChatUIStore((state: ChatUIState) => state.enabledTools.includes(toolId));
+
+/** Get the list of skills enabled for this session. */
+export const useEnabledSkillIds = () =>
+  useChatUIStore((state: ChatUIState) => state.enabledSkillIds);
 
 /** Get data files registered with DuckDB */
 export const useDataFiles = () => useChatUIStore((state: ChatUIState) => state.dataFiles);

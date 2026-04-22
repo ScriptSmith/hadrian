@@ -971,3 +971,63 @@ CREATE INDEX IF NOT EXISTS idx_service_accounts_slug ON service_accounts(slug);
 -- Partial indexes for non-deleted service accounts (most queries filter by deleted_at IS NULL)
 CREATE INDEX IF NOT EXISTS idx_service_accounts_org_active ON service_accounts(org_id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_service_accounts_org_slug_active ON service_accounts(org_id, slug) WHERE deleted_at IS NULL;
+
+-- ======================================================================
+-- Skills
+-- ======================================================================
+
+-- Agent Skills (https://agentskills.io/specification.md). A skill is a
+-- packaged set of instructions (SKILL.md) plus optional bundled files
+-- (scripts, references, assets) that the model can auto-invoke or the
+-- user can invoke via slash-command / button.
+--
+-- Files are stored inline in skill_files with a per-skill total size cap
+-- enforced in the service layer (config: limits.resource_limits.max_skill_bytes).
+CREATE TABLE IF NOT EXISTS skills (
+    id TEXT PRIMARY KEY NOT NULL,
+    owner_type TEXT NOT NULL CHECK (owner_type IN ('organization', 'team', 'project', 'user')),
+    owner_id TEXT NOT NULL,
+    -- Per spec: 1..=64 chars, [a-z0-9-]+, no leading/trailing/consecutive hyphens
+    name TEXT NOT NULL,
+    -- Per spec: required, 1..=1024 chars
+    description TEXT NOT NULL,
+    -- Optional frontmatter fields (NULL = not set)
+    user_invocable INTEGER,                     -- bool (0/1); defaults to true in code
+    disable_model_invocation INTEGER,           -- bool (0/1); defaults to false in code
+    allowed_tools TEXT,                         -- JSON array of tool names
+    argument_hint TEXT,
+    source_url TEXT,                            -- origin URL (e.g. GitHub) if imported
+    source_ref TEXT,                            -- git ref if imported
+    frontmatter_extra TEXT,                     -- JSON object, unknown/forward-compat keys
+    -- Cached sum of skill_files.byte_size for fast limit checks
+    total_bytes INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    deleted_at TEXT,
+    UNIQUE(owner_type, owner_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_skills_owner ON skills(owner_type, owner_id);
+-- Partial index for non-deleted skills (most queries filter by deleted_at IS NULL)
+CREATE INDEX IF NOT EXISTS idx_skills_owner_active ON skills(owner_type, owner_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name);
+
+-- Files bundled into a skill. Every skill must have exactly one row with
+-- path = 'SKILL.md' (enforced in service layer). Additional rows hold
+-- bundled scripts/references/assets referenced from SKILL.md.
+CREATE TABLE IF NOT EXISTS skill_files (
+    skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    -- Relative path inside the skill directory (e.g. 'SKILL.md', 'scripts/extract.py')
+    path TEXT NOT NULL,
+    content TEXT NOT NULL,
+    -- Cached byte length of content for fast total-size aggregation
+    byte_size INTEGER NOT NULL,
+    -- MIME type; defaults to 'text/markdown' for SKILL.md, sniffed from
+    -- extension for others
+    content_type TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY(skill_id, path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_skill_files_skill ON skill_files(skill_id);

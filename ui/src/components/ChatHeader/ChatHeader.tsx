@@ -75,6 +75,8 @@ interface ChatHeaderProps {
   onPendingProjectChange?: (projectId: string | null, projectName?: string) => void;
   /** Display name for the pending project selection (before conversation exists) */
   pendingProjectName?: string;
+  /** ID of the pending project selection (before conversation exists). `null` = Personal. */
+  pendingProjectId?: string | null;
   /** Attached vector store IDs for RAG/file_search */
   vectorStoreIds?: string[];
   /** Owner type for vector store lookup */
@@ -102,6 +104,7 @@ export function ChatHeader({
   onProjectChange,
   onPendingProjectChange,
   pendingProjectName,
+  pendingProjectId,
   vectorStoreIds = [],
   vectorStoreOwnerType,
   vectorStoreOwnerId,
@@ -425,7 +428,13 @@ export function ChatHeader({
             {(() => {
               // Show project picker for existing conversations or pre-conversation selection
               const projectChangeHandler = conversation ? onProjectChange : onPendingProjectChange;
-              const currentProjectId = conversation?.projectId ?? null;
+              // Before a conversation exists we read the pending selection so
+              // the tick reflects what the user just clicked, not "Personal"
+              // by default. Once the conversation is created, the persisted
+              // projectId becomes authoritative.
+              const currentProjectId = conversation
+                ? (conversation.projectId ?? null)
+                : (pendingProjectId ?? null);
               const currentProjectName = conversation
                 ? conversation.projectName
                 : pendingProjectName;

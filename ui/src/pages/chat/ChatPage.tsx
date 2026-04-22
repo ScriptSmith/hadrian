@@ -23,11 +23,14 @@ import {
   useVectorStoreIds,
   useClientSideRAG,
   useEnabledTools,
+  useEnabledSkillIds,
   useDataFiles,
   useMaxToolIterations,
   useCaptureRawSSEEvents,
   useSubAgentModel,
 } from "@/stores/chatUIStore";
+import { useUserSkills } from "@/hooks/useUserSkills";
+import { setSkillCatalog } from "./utils/skillCache";
 
 import type { ModelSettings } from "./types";
 import { useChat } from "./useChat";
@@ -56,6 +59,8 @@ export default function ChatPage() {
   const vectorStoreIds = useVectorStoreIds();
   const clientSideRAG = useClientSideRAG();
   const enabledTools = useEnabledTools();
+  const enabledSkillIds = useEnabledSkillIds();
+  const { skills: userSkills } = useUserSkills();
   const dataFiles = useDataFiles();
   const maxToolIterations = useMaxToolIterations();
   const captureRawSSEEvents = useCaptureRawSSEEvents();
@@ -79,6 +84,19 @@ export default function ChatPage() {
       systemPrompt: systemPrompt || undefined,
     }),
     [systemPrompt]
+  );
+
+  // Keep the tool-side skill cache in sync with what the user can see.
+  // The `Skill` tool executor looks up skills from this cache at call time.
+  useEffect(() => {
+    setSkillCatalog(userSkills);
+  }, [userSkills]);
+
+  // Resolve enabled skill IDs to full objects for the tools-array builder in
+  // useChat. Only model-invocable + user-invocable skills go to the model.
+  const enabledSkills = useMemo(
+    () => userSkills.filter((s) => enabledSkillIds.includes(s.id)),
+    [userSkills, enabledSkillIds]
   );
 
   // Set default models from preferences when models load (only once on initial load)
@@ -109,6 +127,7 @@ export default function ChatPage() {
   // 13. web_fetch is enabled (backend-proxied tool)
   const clientSideToolExecution =
     clientSideRAG ||
+    enabledSkillIds.length > 0 ||
     enabledTools.includes("file_search") ||
     enabledTools.includes("code_interpreter") ||
     enabledTools.includes("js_code_interpreter") ||
@@ -165,6 +184,7 @@ export default function ChatPage() {
     vectorStoreIds: vectorStoreIds.length > 0 ? vectorStoreIds : undefined,
     clientSideToolExecution,
     enabledTools,
+    enabledSkills,
     dataFiles: registeredDataFiles.length > 0 ? registeredDataFiles : undefined,
     maxToolIterations,
     captureRawSSEEvents,
@@ -280,6 +300,7 @@ export default function ChatPage() {
         onProjectChange={handleProjectChange}
         onPendingProjectChange={!currentConversation ? handlePendingProjectChange : undefined}
         pendingProjectName={pendingProject.name}
+        pendingProjectId={pendingProject.id}
         onEditAndRerun={editAndRerun}
       />
       {currentConversation && (

@@ -45,6 +45,8 @@ import {
   createMCPToolName,
   type ToolExecutorContext,
 } from "./utils/toolExecutors";
+import { buildSkillToolDescription } from "./utils/skillDirectory";
+import type { Skill } from "@/api/generated/types.gen";
 import { getToolStatusLabel } from "@/components/ToolIcons";
 import { useMCPStore } from "@/stores/mcpStore";
 import {
@@ -108,6 +110,13 @@ interface UseChatOptions {
    * Each tool may have additional requirements (e.g., file_search needs vectorStoreIds).
    */
   enabledTools?: string[];
+  /**
+   * Skills enabled for this session. Each skill's name + description is
+   * listed in the `Skill` tool's description so the model can match user
+   * intent against them. Full SKILL.md bodies are loaded on demand via
+   * the frontend `Skill` tool executor (see `skillExecutor.ts`).
+   */
+  enabledSkills?: Skill[];
   /**
    * Data files registered with DuckDB for SQL queries.
    * Used to build dynamic tool description with schema information.
@@ -252,6 +261,7 @@ export function useChat({
   vectorStoreIds,
   clientSideToolExecution = false,
   enabledTools = [],
+  enabledSkills = [],
   dataFiles = [],
   maxToolIterations = DEFAULT_maxToolIterations,
   captureRawSSEEvents = false,
@@ -770,6 +780,38 @@ export function useChat({
                 },
               },
               required: ["url"],
+            },
+          });
+        }
+
+        // Register the Skill tool when any skills are enabled. A single
+        // function whose description lists every available skill's name +
+        // description; the model calls `Skill(command)` to load a skill,
+        // or `Skill(command, file)` for bundled files. See
+        // `buildSkillToolDescription` and `skillExecutor`.
+        const invocableSkills = enabledSkills.filter(
+          (s) => s.disable_model_invocation !== true && s.user_invocable !== false
+        );
+        if (invocableSkills.length > 0) {
+          tools.push({
+            type: "function",
+            name: "Skill",
+            description: buildSkillToolDescription(invocableSkills),
+            parameters: {
+              type: "object",
+              properties: {
+                command: {
+                  type: "string",
+                  description: "Name of the skill to invoke.",
+                  enum: invocableSkills.map((s) => s.name),
+                },
+                file: {
+                  type: "string",
+                  description:
+                    'Optional: relative path of a bundled file to read from the skill (e.g. "scripts/helper.py"). Omit on the first call to receive SKILL.md and the file manifest.',
+                },
+              },
+              required: ["command"],
             },
           });
         }

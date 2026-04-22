@@ -1,0 +1,166 @@
+---
+title: Skills
+description: Package instructions and bundled files that the model can auto-invoke or users can trigger with a slash command.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Skills extend what the model can do by packaging reusable instructions as
+portable units. Each skill is a `SKILL.md` file plus optional bundled
+scripts, references, and assets. Hadrian implements the
+[Agent Skills](https://agentskills.io) open specification so skills you
+author for Hadrian also work with other compliant agents and vice versa.
+
+## What a skill looks like
+
+Every skill is a directory with at minimum a `SKILL.md` file containing YAML
+frontmatter and Markdown instructions:
+
+```markdown
+---
+name: pdf-processing
+description: Extract PDF text, fill forms, merge files. Use when handling PDFs.
+allowed-tools: Bash(python:*) Read
+---
+
+# PDF Processing
+
+## When to use this skill
+
+Use this skill when the user needs to work with PDF files.
+
+## How to extract text
+
+1. Run `scripts/extract.py <input.pdf>`
+2. Parse the output into a structured summary.
+```
+
+Optional bundled files (kept alongside the SKILL.md) become available to the
+model on demand:
+
+```text
+pdf-processing/
+├── SKILL.md            # Required: instructions + metadata
+├── scripts/            # Optional: executable code
+│   └── extract.py
+├── references/         # Optional: docs
+│   └── REFERENCE.md
+└── assets/             # Optional: templates, data files
+    └── template.md
+```
+
+## Frontmatter fields
+
+| Field                      | Required | Description                                                                                                            |
+| -------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `name`                     | Yes      | Unique per owner. 1–64 lowercase ASCII alphanumerics or hyphens, no leading/trailing/consecutive hyphens.              |
+| `description`              | Yes      | 1–1024 chars. Drives model invocation — front-load trigger phrases ("Use when…", "when the user mentions…").           |
+| `user_invocable`           | No       | Default `true`. Set to `false` to hide from the `/` menu; useful for background-knowledge skills the model auto-loads. |
+| `disable_model_invocation` | No       | Default `false`. Set to `true` for skills that should only run when the user explicitly picks them.                    |
+| `allowed_tools`            | No       | Space-separated list (or YAML array) of tool patterns the skill may use.                                               |
+| `argument_hint`            | No       | Shown during `/` autocomplete, e.g. `[issue-number]`.                                                                  |
+| `metadata`                 | No       | Arbitrary key/value pairs preserved verbatim.                                                                          |
+
+Any additional keys are preserved in `frontmatter_extra` so unknown
+spec-adjacent fields (for third-party agents) round-trip cleanly.
+
+## How the model invokes a skill
+
+Hadrian registers a single `Skill` function tool with the model whenever one
+or more skills are enabled for the current session. The tool's description
+lists each enabled skill by name and description — the model matches user
+intent against those entries and calls `Skill({command: "<name>"})` to load
+the full instructions.
+
+The executor runs in the browser:
+
+1. **First call** — `Skill({command: "<name>"})` returns the skill's
+   `SKILL.md` body plus a manifest of bundled files.
+2. **Follow-up calls** — `Skill({command: "<name>", file: "<path>"})`
+   returns the contents of a specific bundled file referenced in the
+   SKILL.md.
+
+This matches Claude Code's progressive-disclosure model: the main
+instructions enter context once; reference files load only when needed.
+
+<Callout type="info">
+  Skills are not injected into the system prompt. The directory lives in the
+  `Skill` tool's description, so unused skills don't pollute every request.
+</Callout>
+
+## Ownership & sharing
+
+Like prompt templates, skills belong to one of four owners:
+
+| Owner          | Visible to                                                           |
+| -------------- | -------------------------------------------------------------------- |
+| `user`         | Only the owning user.                                                |
+| `project`      | All members of the project.                                          |
+| `team`         | All members of the team.                                             |
+| `organization` | All organization members, subject to RBAC rules on `skill:list/read`. |
+
+Chat surfaces all skills the current user can reach. In the admin UI,
+manage project skills from **Project → Skills**.
+
+## Invoking a skill as a user
+
+Two equivalent ways:
+
+- **Slash command.** Type `/<skill-name>` in the chat composer. A popover
+  lists matching skills; press Enter or Tab to commit. The composer prefixes
+  your message with a request to use that skill.
+- **Skills button.** Click the Skills icon in the chat toolbar to open the
+  popover. Check a skill to enable it for the session — the model may then
+  auto-invoke it when relevant.
+
+## Importing skills
+
+Use the Skills button's `+` menu to import.
+
+### From GitHub
+
+Paste a GitHub URL (e.g. `https://github.com/anthropics/skills`) or
+`owner/repo`. Hadrian walks the tree via the public GitHub Contents API,
+finds every directory containing a `SKILL.md`, and bundles the adjacent
+files. Preview the discovered skills and pick which to import.
+
+<Callout type="warn">
+  The unauthenticated GitHub API allows 60 requests/hour. Hadrian caches
+  directory listings in `sessionStorage` for 10 minutes to soften this, and
+  surfaces the remaining quota in the import modal.
+</Callout>
+
+### From the filesystem
+
+Choose a folder via the file picker (browsers supporting
+`<input webkitdirectory>` — Chromium-based and Safari). Hadrian reads every
+file under directories containing a `SKILL.md`.
+
+Binary files are rejected in v1 — skill contents are stored as UTF-8 text.
+
+## Configuration
+
+Per-skill size and per-owner limits live under `[limits.resource_limits]` in
+`hadrian.toml`:
+
+```toml
+[limits.resource_limits]
+# Maximum skills per owner (org/team/project/user). Default: 5000.
+max_skills_per_owner = 5000
+
+# Maximum total size of a skill's files in bytes (SKILL.md + bundled).
+# Default: 512000 (500 KiB). Set to 0 for unlimited.
+max_skill_bytes = 512_000
+```
+
+## v1 limitations
+
+- **Text-only files.** Binary assets (images, PDFs) are rejected at the API
+  boundary. Future work: base64 encoding or object-storage offload.
+- **Scripts are read-only.** The agent can *read* `scripts/` files through
+  the `Skill` tool but cannot execute them — there is no client-side
+  sandbox in the Hadrian chat UI. Skills that require script execution
+  won't work end-to-end.
+- **Model-invocation is frontend-only.** The gateway server does not
+  inspect skills. Custom clients that hit `/v1/responses` directly must
+  build the `Skill` tool themselves.

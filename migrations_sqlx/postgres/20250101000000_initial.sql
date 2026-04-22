@@ -1194,3 +1194,80 @@ DO $$ BEGIN
     CREATE TRIGGER update_service_accounts_updated_at BEFORE UPDATE ON service_accounts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
+
+-- ======================================================================
+-- Skills
+-- ======================================================================
+
+-- Agent Skills (https://agentskills.io/specification.md). A skill is a
+-- packaged set of instructions (SKILL.md) plus optional bundled files
+-- (scripts, references, assets) that the model can auto-invoke or the
+-- user can invoke via slash-command / button.
+--
+-- Files are stored inline in skill_files with a per-skill total size cap
+-- enforced in the service layer (config: limits.resource_limits.max_skill_bytes).
+
+DO $$ BEGIN
+    CREATE TYPE skill_owner_type AS ENUM ('organization', 'team', 'project', 'user');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+CREATE TABLE IF NOT EXISTS skills (
+    id UUID PRIMARY KEY NOT NULL,
+    owner_type skill_owner_type NOT NULL,
+    owner_id UUID NOT NULL,
+    -- Per spec: 1..=64 chars, [a-z0-9-]+, no leading/trailing/consecutive hyphens
+    name VARCHAR(64) NOT NULL,
+    -- Per spec: required, 1..=1024 chars
+    description VARCHAR(1024) NOT NULL,
+    -- Optional frontmatter fields (NULL = not set)
+    user_invocable BOOLEAN,                     -- defaults to true in code
+    disable_model_invocation BOOLEAN,           -- defaults to false in code
+    allowed_tools JSONB,                        -- array of tool names
+    argument_hint VARCHAR(255),
+    source_url VARCHAR(2048),                   -- origin URL (e.g. GitHub) if imported
+    source_ref VARCHAR(255),                    -- git ref if imported
+    frontmatter_extra JSONB,                    -- unknown/forward-compat keys
+    -- Cached sum of skill_files.byte_size for fast limit checks
+    total_bytes BIGINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ,
+    UNIQUE(owner_type, owner_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_skills_owner ON skills(owner_type, owner_id);
+-- Partial index for non-deleted skills (most queries filter by deleted_at IS NULL)
+CREATE INDEX IF NOT EXISTS idx_skills_owner_active ON skills(owner_type, owner_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name);
+
+DO $$ BEGIN
+    CREATE TRIGGER update_skills_updated_at BEFORE UPDATE ON skills FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+
+-- Files bundled into a skill. Every skill must have exactly one row with
+-- path = 'SKILL.md' (enforced in service layer). Additional rows hold
+-- bundled scripts/references/assets referenced from SKILL.md.
+CREATE TABLE IF NOT EXISTS skill_files (
+    skill_id UUID NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    -- Relative path inside the skill directory (e.g. 'SKILL.md', 'scripts/extract.py')
+    path VARCHAR(255) NOT NULL,
+    content TEXT NOT NULL,
+    -- Cached byte length of content for fast total-size aggregation
+    byte_size BIGINT NOT NULL,
+    -- MIME type; defaults to 'text/markdown' for SKILL.md, sniffed from
+    -- extension for others
+    content_type VARCHAR(127) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY(skill_id, path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_skill_files_skill ON skill_files(skill_id);
+
+DO $$ BEGIN
+    CREATE TRIGGER update_skill_files_updated_at BEFORE UPDATE ON skill_files FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;

@@ -10,6 +10,7 @@ import {
   BarChart3,
   Pencil,
   ClipboardPenLine,
+  Brain,
 } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
@@ -35,9 +36,10 @@ import { ApiKeysTab } from "./ApiKeysTab";
 import { ProvidersTab } from "./ProvidersTab";
 import { PricingTab } from "./PricingTab";
 import { TemplatesTab } from "./TemplatesTab";
+import { SkillsTab } from "./SkillsTab";
 import { UsageTab } from "./UsageTab";
 
-type TabId = "members" | "api-keys" | "providers" | "pricing" | "templates" | "usage";
+type TabId = "members" | "api-keys" | "providers" | "pricing" | "templates" | "skills" | "usage";
 
 const tabs: Tab<TabId>[] = [
   { id: "members", label: "Members", icon: <Users className="h-4 w-4" /> },
@@ -45,6 +47,7 @@ const tabs: Tab<TabId>[] = [
   { id: "providers", label: "Providers", icon: <Server className="h-4 w-4" /> },
   { id: "pricing", label: "Pricing", icon: <DollarSign className="h-4 w-4" /> },
   { id: "templates", label: "Templates", icon: <ClipboardPenLine className="h-4 w-4" /> },
+  { id: "skills", label: "Skills", icon: <Brain className="h-4 w-4" /> },
   { id: "usage", label: "Usage", icon: <BarChart3 className="h-4 w-4" /> },
 ];
 
@@ -179,6 +182,9 @@ export default function ProjectDetailPage() {
       {activeTab === "pricing" && <PricingTab orgSlug={orgSlug!} projectSlug={projectSlug!} />}
       {activeTab === "templates" && (
         <TemplatesTab orgSlug={orgSlug!} projectSlug={projectSlug!} projectId={project.id} />
+      )}
+      {activeTab === "skills" && (
+        <SkillsTab orgSlug={orgSlug!} projectSlug={projectSlug!} projectId={project.id} />
       )}
       {activeTab === "usage" && (
         <UsageTab orgSlug={orgSlug!} projectSlug={projectSlug!} projectId={project.id} />

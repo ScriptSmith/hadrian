@@ -54,6 +54,7 @@ struct CachedRepos {
     files: Arc<dyn FilesRepo>,
     teams: Arc<dyn TeamRepo>,
     templates: Arc<dyn TemplateRepo>,
+    skills: Arc<dyn SkillRepo>,
     #[cfg(feature = "sso")]
     sso_group_mappings: Arc<dyn SsoGroupMappingRepo>,
     #[cfg(feature = "sso")]
@@ -132,6 +133,7 @@ impl DbPool {
             files: Arc::new(sqlite::SqliteFilesRepo::new(pool.clone())),
             teams: Arc::new(sqlite::SqliteTeamRepo::new(pool.clone())),
             templates: Arc::new(sqlite::SqliteTemplateRepo::new(pool.clone())),
+            skills: Arc::new(sqlite::SqliteSkillRepo::new(pool.clone())),
             #[cfg(feature = "sso")]
             sso_group_mappings: Arc::new(sqlite::SqliteSsoGroupMappingRepo::new(pool.clone())),
             #[cfg(feature = "sso")]
@@ -170,6 +172,7 @@ impl DbPool {
             files: Arc::new(sqlite::SqliteFilesRepo::new(pool.clone())),
             teams: Arc::new(sqlite::SqliteTeamRepo::new(pool.clone())),
             templates: Arc::new(sqlite::SqliteTemplateRepo::new(pool.clone())),
+            skills: Arc::new(sqlite::SqliteSkillRepo::new(pool.clone())),
             #[cfg(feature = "sso")]
             sso_group_mappings: unreachable!("SSO not supported in WASM builds"),
             #[cfg(feature = "sso")]
@@ -245,6 +248,10 @@ impl DbPool {
                 read_pool.clone(),
             )),
             templates: Arc::new(postgres::PostgresTemplateRepo::new(
+                write_pool.clone(),
+                read_pool.clone(),
+            )),
+            skills: Arc::new(postgres::PostgresSkillRepo::new(
                 write_pool.clone(),
                 read_pool.clone(),
             )),
@@ -331,6 +338,7 @@ impl DbPool {
                     files: Arc::new(sqlite::SqliteFilesRepo::new(pool.clone())),
                     teams: Arc::new(sqlite::SqliteTeamRepo::new(pool.clone())),
                     templates: Arc::new(sqlite::SqliteTemplateRepo::new(pool.clone())),
+                    skills: Arc::new(sqlite::SqliteSkillRepo::new(pool.clone())),
                     #[cfg(feature = "sso")]
                     sso_group_mappings: Arc::new(sqlite::SqliteSsoGroupMappingRepo::new(
                         pool.clone(),
@@ -431,6 +439,10 @@ impl DbPool {
                         read_pool.clone(),
                     )),
                     templates: Arc::new(postgres::PostgresTemplateRepo::new(
+                        write_pool.clone(),
+                        read_pool.clone(),
+                    )),
+                    skills: Arc::new(postgres::PostgresSkillRepo::new(
                         write_pool.clone(),
                         read_pool.clone(),
                     )),
@@ -584,6 +596,11 @@ impl DbPool {
     /// Get template repository
     pub fn templates(&self) -> Arc<dyn TemplateRepo> {
         Arc::clone(&self.repos.templates)
+    }
+
+    /// Get skill repository
+    pub fn skills(&self) -> Arc<dyn SkillRepo> {
+        Arc::clone(&self.repos.skills)
     }
 
     /// Get SSO group mapping repository

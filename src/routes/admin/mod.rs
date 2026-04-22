@@ -32,6 +32,7 @@ pub mod sessions;
 pub mod sso_connections;
 #[cfg(feature = "sso")]
 pub mod sso_group_mappings;
+pub mod skills;
 pub mod teams;
 pub mod templates;
 pub mod ui_config;
@@ -610,6 +611,27 @@ pub(crate) fn admin_v1_routes() -> Router<AppState> {
             get(templates::list_by_project),
         )
         .route("/users/{user_id}/templates", get(templates::list_by_user))
+        // Skills
+        .route("/skills", post(skills::create))
+        .route(
+            "/skills/{id}",
+            get(skills::get)
+                .merge(patch(skills::update))
+                .merge(delete(skills::delete)),
+        )
+        .route(
+            "/organizations/{org_slug}/skills",
+            get(skills::list_by_org),
+        )
+        .route(
+            "/organizations/{org_slug}/teams/{team_slug}/skills",
+            get(skills::list_by_team),
+        )
+        .route(
+            "/organizations/{org_slug}/projects/{project_slug}/skills",
+            get(skills::list_by_project),
+        )
+        .route("/users/{user_id}/skills", get(skills::list_by_user))
         // Provider management
         .route(
             "/providers/circuit-breakers",
