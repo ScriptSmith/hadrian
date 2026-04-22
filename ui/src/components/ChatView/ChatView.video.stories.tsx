@@ -13,6 +13,7 @@ import type { ModelInfo } from "@/components/ModelSelector/ModelSelector";
 import { AuthProvider } from "@/auth";
 import { ConfigProvider } from "@/config/ConfigProvider";
 import { PreferencesProvider } from "@/preferences/PreferencesProvider";
+import { ConfirmDialogProvider } from "@/components/ConfirmDialog/ConfirmDialog";
 import { ToastProvider } from "@/components/Toast/Toast";
 import { TooltipProvider } from "@/components/Tooltip/Tooltip";
 import { useConversationStore } from "@/stores/conversationStore";
@@ -235,13 +236,15 @@ const meta: Meta<typeof ChatView> = {
         <ConfigProvider>
           <AuthProvider>
             <PreferencesProvider>
-              <ToastProvider>
-                <TooltipProvider>
-                  <div className="h-screen">
-                    <Story />
-                  </div>
-                </TooltipProvider>
-              </ToastProvider>
+              <ConfirmDialogProvider>
+                <ToastProvider>
+                  <TooltipProvider>
+                    <div className="h-screen">
+                      <Story />
+                    </div>
+                  </TooltipProvider>
+                </ToastProvider>
+              </ConfirmDialogProvider>
             </PreferencesProvider>
           </AuthProvider>
         </ConfigProvider>

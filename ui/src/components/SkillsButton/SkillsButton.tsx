@@ -23,6 +23,7 @@ import {
 } from "@/components/Dropdown/Dropdown";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/Popover/Popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/Tooltip/Tooltip";
+import { useConfirm } from "@/components/ConfirmDialog/ConfirmDialog";
 import { useToast } from "@/components/Toast/Toast";
 import { useUserSkills } from "@/hooks/useUserSkills";
 import { useAuth } from "@/auth";
@@ -49,6 +50,7 @@ export function SkillsButton({ disabled = false }: SkillsButtonProps) {
   const toggleSkill = useChatUIStore((s) => s.toggleSkill);
   const setEnabledSkillIds = useChatUIStore((s) => s.setEnabledSkillIds);
   const { toast } = useToast();
+  const confirm = useConfirm();
   const queryClient = useQueryClient();
 
   const [search, setSearch] = useState("");
@@ -94,9 +96,17 @@ export function SkillsButton({ disabled = false }: SkillsButtonProps) {
     },
   });
 
-  const handleDelete = (e: React.MouseEvent, skill: Skill) => {
+  const handleDelete = async (e: React.MouseEvent, skill: Skill) => {
     e.stopPropagation();
-    deleteMutation.mutate(skill.id);
+    const confirmed = await confirm({
+      title: "Delete Skill",
+      message: `Are you sure you want to delete "${skill.name}"? This action cannot be undone.`,
+      confirmLabel: "Delete",
+      variant: "destructive",
+    });
+    if (confirmed) {
+      deleteMutation.mutate(skill.id);
+    }
   };
 
   const handleRowClick = (skill: Skill) => {

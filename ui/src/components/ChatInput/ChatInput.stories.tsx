@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { expect, userEvent, within, fn } from "storybook/test";
 import { ChatInput } from "./ChatInput";
+import { ConfirmDialogProvider } from "../ConfirmDialog/ConfirmDialog";
 import { ToastProvider } from "../Toast/Toast";
 import { TooltipProvider } from "../Tooltip/Tooltip";
 import { AuthProvider } from "@/auth";
@@ -28,13 +29,15 @@ const meta: Meta<typeof ChatInput> = {
       <QueryClientProvider client={queryClient}>
         <ConfigProvider>
           <AuthProvider>
-            <ToastProvider>
-              <TooltipProvider>
-                <div style={{ width: 600 }}>
-                  <Story />
-                </div>
-              </TooltipProvider>
-            </ToastProvider>
+            <ConfirmDialogProvider>
+              <ToastProvider>
+                <TooltipProvider>
+                  <div style={{ width: 600 }}>
+                    <Story />
+                  </div>
+                </TooltipProvider>
+              </ToastProvider>
+            </ConfirmDialogProvider>
           </AuthProvider>
         </ConfigProvider>
       </QueryClientProvider>
@@ -452,13 +455,15 @@ export const WithQuotedText: Story = {
         <QueryClientProvider client={queryClient}>
           <ConfigProvider>
             <AuthProvider>
-              <ToastProvider>
-                <TooltipProvider>
-                  <div style={{ width: 600 }}>
-                    <Story />
-                  </div>
-                </TooltipProvider>
-              </ToastProvider>
+              <ConfirmDialogProvider>
+                <ToastProvider>
+                  <TooltipProvider>
+                    <div style={{ width: 600 }}>
+                      <Story />
+                    </div>
+                  </TooltipProvider>
+                </ToastProvider>
+              </ConfirmDialogProvider>
             </AuthProvider>
           </ConfigProvider>
         </QueryClientProvider>
@@ -495,13 +500,15 @@ export const WithMultiLineQuote: Story = {
         <QueryClientProvider client={queryClient}>
           <ConfigProvider>
             <AuthProvider>
-              <ToastProvider>
-                <TooltipProvider>
-                  <div style={{ width: 600 }}>
-                    <Story />
-                  </div>
-                </TooltipProvider>
-              </ToastProvider>
+              <ConfirmDialogProvider>
+                <ToastProvider>
+                  <TooltipProvider>
+                    <div style={{ width: 600 }}>
+                      <Story />
+                    </div>
+                  </TooltipProvider>
+                </ToastProvider>
+              </ConfirmDialogProvider>
             </AuthProvider>
           </ConfigProvider>
         </QueryClientProvider>
