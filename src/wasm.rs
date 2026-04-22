@@ -90,7 +90,7 @@ impl HadrianGateway {
         let db = Arc::new(db::DbPool::from_wasm_sqlite(pool));
         let file_storage: Arc<dyn services::FileStorage> =
             Arc::new(services::DatabaseFileStorage::new(db.clone()));
-        let svc = services::Services::new(db.clone(), file_storage, 1024);
+        let svc = services::Services::new(db.clone(), file_storage, 1024, 512_000);
 
         // Bootstrap default user and org (auth=none)
         let default_user_id = match crate::app::AppState::ensure_default_user(&svc).await {

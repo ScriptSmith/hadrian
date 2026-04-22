@@ -18,6 +18,7 @@ mod scim_group_mappings;
 #[cfg(feature = "sso")]
 mod scim_user_mappings;
 mod service_accounts;
+mod skills;
 #[cfg(feature = "sso")]
 mod sso_group_mappings;
 mod teams;
@@ -46,6 +47,7 @@ pub use scim_group_mappings::PostgresScimGroupMappingRepo;
 #[cfg(feature = "sso")]
 pub use scim_user_mappings::PostgresScimUserMappingRepo;
 pub use service_accounts::PostgresServiceAccountRepo;
+pub use skills::PostgresSkillRepo;
 #[cfg(feature = "sso")]
 pub use sso_group_mappings::PostgresSsoGroupMappingRepo;
 pub use teams::PostgresTeamRepo;

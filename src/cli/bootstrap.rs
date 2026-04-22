@@ -85,7 +85,8 @@ pub(crate) async fn run_bootstrap(explicit_config_path: Option<&str>, dry_run: b
     let file_storage: std::sync::Arc<dyn services::FileStorage> =
         std::sync::Arc::new(services::DatabaseFileStorage::new(db.clone()));
     let max_cel = config.auth.rbac.max_expression_length;
-    let services = services::Services::new(db.clone(), file_storage, max_cel);
+    let max_skill_bytes = config.limits.resource_limits.max_skill_bytes;
+    let services = services::Services::new(db.clone(), file_storage, max_cel, max_skill_bytes);
 
     let api_key_prefix = config.auth.api_key_config().generation_prefix();
     let mut summary = Vec::new();

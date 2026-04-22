@@ -273,9 +273,22 @@ Tool execution produces artifacts displayed inline:
 | `Escape`      | Cancel streaming    |
 | `Ctrl+N`      | New conversation    |
 
+## Skills
+
+The Skills button in the chat toolbar lets users enable packaged
+instructions (following the [Agent Skills](https://agentskills.io) spec)
+for the current session. Enabled skills are surfaced to the model as a
+single `Skill` tool whose description lists every available skill — the
+model picks the right one by description. Users can also invoke a skill
+directly by typing `/<skill-name>` in the composer for a typeahead picker.
+
+Import from a GitHub repo or a local folder via the Skills button's
+`+` menu. See [Skills](/docs/features/skills) for the full workflow.
+
 ## Related Features
 
 <Cards>
+  <Card title="Skills" href="/docs/features/skills" />
   <Card title="Chat Modes" href="/docs/features/chat-modes" />
   <Card title="Frontend Tools" href="/docs/features/frontend-tools" />
   <Card title="MCP Integration" href="/docs/features/mcp" />

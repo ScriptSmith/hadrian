@@ -22,6 +22,7 @@
     "guardrails",
     "mcp",
     "mcp-agents",
+    "skills",
     "caching"
   ]
 }

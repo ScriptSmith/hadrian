@@ -95,6 +95,7 @@ pub(crate) async fn run_worker(
         db.clone(),
         file_storage,
         config.auth.rbac.max_expression_length,
+        config.limits.resource_limits.max_skill_bytes,
     );
     let vector_stores_service = Arc::new(services.vector_stores.clone());
 

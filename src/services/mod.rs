@@ -33,6 +33,7 @@ mod scim_configs;
 #[cfg(feature = "sso")]
 mod scim_provisioning;
 mod service_accounts;
+mod skills;
 #[cfg(feature = "sso")]
 mod sso_group_mappings;
 mod teams;
@@ -99,6 +100,7 @@ pub use scim_configs::{OrgScimConfigError, OrgScimConfigService};
 #[cfg(feature = "sso")]
 pub use scim_provisioning::ScimProvisioningService;
 pub use service_accounts::ServiceAccountService;
+pub use skills::SkillService;
 #[cfg(feature = "sso")]
 pub use sso_group_mappings::SsoGroupMappingService;
 pub use teams::TeamService;
@@ -129,6 +131,7 @@ pub struct Services {
     pub model_pricing: ModelPricingService,
     pub conversations: ConversationService,
     pub templates: TemplateService,
+    pub skills: SkillService,
     pub audit_logs: AuditLogService,
     pub access_reviews: AccessReviewService,
     pub vector_stores: VectorStoresService,
@@ -152,6 +155,7 @@ impl Services {
         db: Arc<DbPool>,
         file_storage: Arc<dyn FileStorage>,
         max_expression_length: usize,
+        max_skill_bytes: u32,
     ) -> Self {
         Self {
             organizations: OrganizationService::new(db.clone()),
@@ -164,6 +168,7 @@ impl Services {
             model_pricing: ModelPricingService::new(db.clone()),
             conversations: ConversationService::new(db.clone()),
             templates: TemplateService::new(db.clone()),
+            skills: SkillService::new(db.clone(), max_skill_bytes),
             audit_logs: AuditLogService::new(db.clone()),
             access_reviews: AccessReviewService::new(db.clone()),
             vector_stores: VectorStoresService::new(db.clone()),
@@ -189,6 +194,7 @@ impl Services {
         file_storage: Arc<dyn FileStorage>,
         event_bus: Arc<EventBus>,
         max_expression_length: usize,
+        max_skill_bytes: u32,
     ) -> Self {
         Self {
             organizations: OrganizationService::new(db.clone()),
@@ -201,6 +207,7 @@ impl Services {
             model_pricing: ModelPricingService::new(db.clone()),
             conversations: ConversationService::new(db.clone()),
             templates: TemplateService::new(db.clone()),
+            skills: SkillService::new(db.clone(), max_skill_bytes),
             audit_logs: AuditLogService::with_event_bus(db.clone(), event_bus),
             access_reviews: AccessReviewService::new(db.clone()),
             vector_stores: VectorStoresService::new(db.clone()),

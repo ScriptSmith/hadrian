@@ -429,11 +429,13 @@ impl AppState {
                 );
 
                 let max_expr_len = config.auth.rbac.max_expression_length;
+                let max_skill_bytes = config.limits.resource_limits.max_skill_bytes;
                 let services = services::Services::with_event_bus(
                     db.clone(),
                     file_storage,
                     event_bus.clone(),
                     max_expr_len,
+                    max_skill_bytes,
                 );
                 (Some(db), Some(services))
             }

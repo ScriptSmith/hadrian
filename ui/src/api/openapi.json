@@ -206,21 +206,21 @@
                   "value": {
                     "name": "Production API Key",
                     "owner": {
-                      "org_id": "550e8400-e29b-41d4-a716-446655440000",
-                      "type": "organization"
+                      "type": "organization",
+                      "org_id": "550e8400-e29b-41d4-a716-446655440000"
                     }
                   }
                 },
                 "Project key with budget": {
                   "summary": "Create a project-scoped key with budget limits",
                   "value": {
-                    "budget_limit_cents": 10000,
-                    "budget_period": "monthly",
                     "name": "Dev Team Key",
                     "owner": {
-                      "project_id": "123e4567-e89b-12d3-a456-426614174000",
-                      "type": "project"
-                    }
+                      "type": "project",
+                      "project_id": "123e4567-e89b-12d3-a456-426614174000"
+                    },
+                    "budget_limit_cents": 10000,
+                    "budget_period": "monthly"
                   }
                 },
                 "Service account key": {
@@ -228,20 +228,20 @@
                   "value": {
                     "name": "CI/CD Pipeline Key",
                     "owner": {
-                      "service_account_id": "8d0e7891-3456-78ef-9012-345678901234",
-                      "type": "service_account"
+                      "type": "service_account",
+                      "service_account_id": "8d0e7891-3456-78ef-9012-345678901234"
                     }
                   }
                 },
                 "User key with expiration": {
                   "summary": "Create a user-scoped key with expiration",
                   "value": {
-                    "expires_at": "2025-12-31T23:59:59Z",
                     "name": "Personal Key",
                     "owner": {
                       "type": "user",
                       "user_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7"
-                    }
+                    },
+                    "expires_at": "2025-12-31T23:59:59Z"
                   }
                 }
               }
@@ -259,17 +259,17 @@
                 },
                 "example": {
                   "api_key": {
+                    "id": "550e8400-e29b-41d4-a716-446655440001",
+                    "name": "Production API Key",
+                    "key_prefix": "gw_live_abc",
+                    "owner": {
+                      "type": "organization",
+                      "org_id": "550e8400-e29b-41d4-a716-446655440000"
+                    },
                     "budget_limit": null,
                     "budget_period": null,
                     "created_at": "2025-01-15T10:30:00Z",
                     "expires_at": null,
-                    "id": "550e8400-e29b-41d4-a716-446655440001",
-                    "key_prefix": "gw_live_abc",
-                    "name": "Production API Key",
-                    "owner": {
-                      "org_id": "550e8400-e29b-41d4-a716-446655440000",
-                      "type": "organization"
-                    },
                     "revoked_at": null
                   },
                   "key": "gw_live_abc123def456ghi789jkl012mno345pqr678"
@@ -384,15 +384,15 @@
                 },
                 "example": {
                   "api_key": {
-                    "created_at": "2025-01-15T10:30:00Z",
                     "id": "550e8400-e29b-41d4-a716-446655440002",
-                    "key_prefix": "gw_live_xyz",
                     "name": "Production API Key (rotated)",
+                    "key_prefix": "gw_live_xyz",
                     "owner": {
-                      "org_id": "550e8400-e29b-41d4-a716-446655440000",
-                      "type": "organization"
+                      "type": "organization",
+                      "org_id": "550e8400-e29b-41d4-a716-446655440000"
                     },
-                    "rotated_from_key_id": "550e8400-e29b-41d4-a716-446655440001"
+                    "rotated_from_key_id": "550e8400-e29b-41d4-a716-446655440001",
+                    "created_at": "2025-01-15T10:30:00Z"
                   },
                   "key": "gw_live_xyz123abc456def789ghi012jkl345mno678"
                 }
@@ -6012,6 +6012,116 @@
         }
       }
     },
+    "/admin/v1/organizations/{org_slug}/projects/{project_slug}/skills": {
+      "get": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "List skills by project.",
+        "operationId": "skill_list_by_project",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "Organization slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "Project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of results to return",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor for keyset pagination. Encoded as base64 string.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Pagination direction: \"forward\" (default) or \"backward\".",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "description": "Include soft-deleted records in results",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of skills",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor or direction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Organization or project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/v1/organizations/{org_slug}/projects/{project_slug}/templates": {
       "get": {
         "tags": [
@@ -8341,6 +8451,107 @@
         }
       }
     },
+    "/admin/v1/organizations/{org_slug}/skills": {
+      "get": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "List skills by organization.",
+        "operationId": "skill_list_by_org",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "Organization slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of results to return",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor for keyset pagination. Encoded as base64 string.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Pagination direction: \"forward\" (default) or \"backward\".",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "description": "Include soft-deleted records in results",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of skills",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor or direction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Organization not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/v1/organizations/{org_slug}/sso-config": {
       "get": {
         "tags": [
@@ -10338,6 +10549,116 @@
           },
           "404": {
             "description": "Organization, team, or membership not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/organizations/{org_slug}/teams/{team_slug}/skills": {
+      "get": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "List skills by team.",
+        "operationId": "skill_list_by_team",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "Organization slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "team_slug",
+            "in": "path",
+            "description": "Team slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of results to return",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor for keyset pagination. Encoded as base64 string.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Pagination direction: \"forward\" (default) or \"backward\".",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "description": "Include soft-deleted records in results",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of skills",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor or direction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Organization or team not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -13235,6 +13556,216 @@
         }
       }
     },
+    "/admin/v1/skills": {
+      "post": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "Create a skill.",
+        "operationId": "skill_create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSkill"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Skill created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Skill"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid skill (missing SKILL.md, duplicate path, or size limit exceeded)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Owner not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Skill with this name already exists for this owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/skills/{id}": {
+      "get": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "Get a skill by ID (with full file contents).",
+        "operationId": "skill_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Skill ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Skill found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Skill"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Skill not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "Soft-delete a skill.",
+        "operationId": "skill_delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Skill ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Skill deleted"
+          },
+          "404": {
+            "description": "Skill not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "Update a skill.",
+        "description": "When `files` is provided, the full file set is replaced.",
+        "operationId": "skill_update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Skill ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSkill"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Skill updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Skill"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid skill (missing SKILL.md, duplicate path, or size limit exceeded)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Skill not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Skill with this name already exists for this owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/v1/sso-connections": {
       "get": {
         "tags": [
@@ -15713,6 +16244,98 @@
         }
       }
     },
+    "/admin/v1/users/{user_id}/skills": {
+      "get": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "List skills by user.",
+        "operationId": "skill_list_by_user",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of results to return",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor for keyset pagination. Encoded as base64 string.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Pagination direction: \"forward\" (default) or \"backward\".",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "description": "Include soft-deleted records in results",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of skills",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor or direction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/v1/users/{user_id}/templates": {
       "get": {
         "tags": [
@@ -16535,78 +17158,78 @@
                 "Simple": {
                   "summary": "Simple text completion",
                   "value": {
+                    "model": "openai/gpt-4o",
                     "messages": [
                       {
-                        "content": "Hello, how are you?",
-                        "role": "user"
+                        "role": "user",
+                        "content": "Hello, how are you?"
                       }
-                    ],
-                    "model": "openai/gpt-4o"
+                    ]
                   }
                 },
                 "Streaming": {
                   "summary": "Streaming completion",
                   "value": {
+                    "model": "openai/gpt-4o",
                     "messages": [
                       {
-                        "content": "Write a short poem about coding.",
-                        "role": "user"
+                        "role": "user",
+                        "content": "Write a short poem about coding."
                       }
                     ],
-                    "model": "openai/gpt-4o",
                     "stream": true
                   }
                 },
                 "With system prompt": {
                   "summary": "Completion with system prompt and parameters",
                   "value": {
-                    "max_tokens": 500,
+                    "model": "anthropic/claude-sonnet-4-20250514",
                     "messages": [
                       {
-                        "content": "You are a helpful assistant.",
-                        "role": "system"
+                        "role": "system",
+                        "content": "You are a helpful assistant."
                       },
                       {
-                        "content": "Explain quantum computing in simple terms.",
-                        "role": "user"
+                        "role": "user",
+                        "content": "Explain quantum computing in simple terms."
                       }
                     ],
-                    "model": "anthropic/claude-sonnet-4-20250514",
+                    "max_tokens": 500,
                     "temperature": 0.7
                   }
                 },
                 "With tools": {
                   "summary": "Completion with function calling",
                   "value": {
+                    "model": "openai/gpt-4o",
                     "messages": [
                       {
-                        "content": "What's the weather in San Francisco?",
-                        "role": "user"
+                        "role": "user",
+                        "content": "What's the weather in San Francisco?"
                       }
                     ],
-                    "model": "openai/gpt-4o",
-                    "tool_choice": "auto",
                     "tools": [
                       {
+                        "type": "function",
                         "function": {
-                          "description": "Get the current weather for a location",
                           "name": "get_weather",
+                          "description": "Get the current weather for a location",
                           "parameters": {
+                            "type": "object",
                             "properties": {
                               "location": {
-                                "description": "City name",
-                                "type": "string"
+                                "type": "string",
+                                "description": "City name"
                               }
                             },
                             "required": [
                               "location"
-                            ],
-                            "type": "object"
+                            ]
                           }
-                        },
-                        "type": "function"
+                        }
                       }
-                    ]
+                    ],
+                    "tool_choice": "auto"
                   }
                 }
               }
@@ -16660,12 +17283,12 @@
                 "example": {
                   "error": {
                     "code": "rate_limit_exceeded",
+                    "message": "Rate limit exceeded: 100 requests per minute",
                     "details": {
                       "limit": 100,
-                      "retry_after_secs": 30,
-                      "window": "minute"
-                    },
-                    "message": "Rate limit exceeded: 100 requests per minute"
+                      "window": "minute",
+                      "retry_after_secs": 30
+                    }
                   }
                 }
               }
@@ -16763,20 +17386,20 @@
                 "Multiple texts": {
                   "summary": "Embed multiple texts in one request",
                   "value": {
-                    "dimensions": 1024,
+                    "model": "openai/text-embedding-3-large",
                     "input": [
                       "First document to embed",
                       "Second document to embed",
                       "Third document to embed"
                     ],
-                    "model": "openai/text-embedding-3-large"
+                    "dimensions": 1024
                   }
                 },
                 "Single text": {
                   "summary": "Embed a single text string",
                   "value": {
-                    "input": "Hello world",
-                    "model": "openai/text-embedding-3-small"
+                    "model": "openai/text-embedding-3-small",
+                    "input": "Hello world"
                   }
                 }
               }
@@ -21992,6 +22615,82 @@
           "slug": {
             "type": "string",
             "description": "URL-friendly identifier (lowercase alphanumeric with hyphens)"
+          }
+        }
+      },
+      "CreateSkill": {
+        "type": "object",
+        "description": "Request to create a new skill. `files` must contain exactly one entry\nwith `path == \"SKILL.md\"`; the service layer rejects otherwise.",
+        "required": [
+          "owner",
+          "name",
+          "description",
+          "files"
+        ],
+        "properties": {
+          "allowed_tools": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "argument_hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "disable_model_invocation": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillFileInput"
+            }
+          },
+          "frontmatter_extra": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/SkillOwner"
+          },
+          "source_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_invocable": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         }
       },
@@ -28274,6 +28973,319 @@
           }
         }
       },
+      "Skill": {
+        "type": "object",
+        "description": "A packaged Agent Skill.",
+        "required": [
+          "id",
+          "owner_type",
+          "owner_id",
+          "name",
+          "description",
+          "total_bytes",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "allowed_tools": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Tools the skill is allowed to use. Informational; the chat UI may\nuse this to pre-approve tools while the skill is active."
+          },
+          "argument_hint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Hint shown during autocomplete to describe expected arguments."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description. Used by the model to decide when to\ninvoke the skill."
+          },
+          "disable_model_invocation": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "If `true`, the model cannot auto-invoke this skill. `None` = unset\n(defaults to `false`)."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillFile"
+            },
+            "description": "Full file contents. Populated by get-by-id endpoints."
+          },
+          "files_manifest": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillFileManifest"
+            },
+            "description": "File summary (no contents). Populated by list endpoints."
+          },
+          "frontmatter_extra": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Unknown / forward-compat frontmatter keys preserved verbatim.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "Skill name (unique per owner). See [`validate_skill_name`]."
+          },
+          "owner_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "owner_type": {
+            "$ref": "#/components/schemas/SkillOwnerType"
+          },
+          "source_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Git ref if imported."
+          },
+          "source_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Origin URL if imported (e.g. a GitHub tree URL)."
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cached total size across all files (bytes)."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "user_invocable": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "If `false`, the skill is hidden from the user-visible slash-command\nlist. `None` = unset (defaults to `true`)."
+          }
+        }
+      },
+      "SkillFile": {
+        "type": "object",
+        "description": "A file bundled with a skill. Returned in full detail by get-by-id; list\nendpoints populate [`SkillFileManifest`] instead.",
+        "required": [
+          "path",
+          "content",
+          "byte_size",
+          "content_type",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "byte_size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Byte length of `content`."
+          },
+          "content": {
+            "type": "string",
+            "description": "File contents. Text-only in v1 (binary assets unsupported)."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "MIME type, e.g. \"text/markdown\"."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "path": {
+            "type": "string",
+            "description": "Relative path inside the skill, e.g. \"SKILL.md\" or \"scripts/extract.py\"."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SkillFileInput": {
+        "type": "object",
+        "description": "A single file in a create/update request.",
+        "required": [
+          "path",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional MIME type. If omitted, the service sniffs it from the path\nextension."
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "SkillFileManifest": {
+        "type": "object",
+        "description": "Lightweight file entry returned by list endpoints — contents omitted.",
+        "required": [
+          "path",
+          "byte_size",
+          "content_type"
+        ],
+        "properties": {
+          "byte_size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "SkillListResponse": {
+        "type": "object",
+        "description": "Paginated list of skills.",
+        "required": [
+          "data",
+          "pagination"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Skill"
+            },
+            "description": "List of skills (file contents omitted; see `files_manifest` on each)."
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta",
+            "description": "Pagination metadata."
+          }
+        }
+      },
+      "SkillOwner": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "organization_id",
+              "type"
+            ],
+            "properties": {
+              "organization_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "organization"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "team_id",
+              "type"
+            ],
+            "properties": {
+              "team_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "team"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "project_id",
+              "type"
+            ],
+            "properties": {
+              "project_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "project"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "user_id",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "user"
+                ]
+              },
+              "user_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ],
+        "description": "Owner specification for creating a skill."
+      },
+      "SkillOwnerType": {
+        "type": "string",
+        "description": "Owner type for skills (organization, team, project, or user).",
+        "enum": [
+          "organization",
+          "team",
+          "project",
+          "user"
+        ]
+      },
       "SortOrder": {
         "type": "string",
         "description": "Sort order for list queries.\n\nOpenAI-compatible sort order parameter for paginated list endpoints.",
@@ -30937,6 +31949,82 @@
           }
         }
       },
+      "UpdateSkill": {
+        "type": "object",
+        "description": "Request to update a skill. Any field that is `Some(_)` replaces the\nstored value. When `files` is `Some(_)`, the entire file set is\nreplaced.",
+        "properties": {
+          "allowed_tools": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "argument_hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "disable_model_invocation": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "files": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SkillFileInput"
+            }
+          },
+          "frontmatter_extra": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_invocable": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
       "UpdateSsoGroupMapping": {
         "type": "object",
         "description": "Request to update an existing SSO group mapping.\n\nAll fields are optional - only provided fields will be updated.",
@@ -32860,6 +33948,10 @@
     {
       "name": "templates",
       "description": "Manage reusable prompt templates. Templates can be owned by organizations, teams, projects, or users and include metadata for configuration."
+    },
+    {
+      "name": "skills",
+      "description": "Manage Agent Skills (https://agentskills.io). A skill packages a SKILL.md instruction file plus optional bundled scripts, references, and assets. Skills can be user-invoked via slash command or auto-invoked by the model via the frontend Skill tool."
     },
     {
       "name": "audit-logs",

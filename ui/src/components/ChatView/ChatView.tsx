@@ -71,6 +71,8 @@ export interface ChatViewProps {
   onPendingProjectChange?: (projectId: string | null, projectName?: string) => void;
   /** Display name for the pending project selection */
   pendingProjectName?: string;
+  /** ID of the pending project selection. `null` = Personal. */
+  pendingProjectId?: string | null;
   /** Callback to edit a message and re-run from that point */
   onEditAndRerun?: (messageId: string, newContent: string) => void;
   /** Owner type for vector store filtering (e.g., "user", "organization") */
@@ -94,6 +96,7 @@ export function ChatView({
   onProjectChange,
   onPendingProjectChange,
   pendingProjectName,
+  pendingProjectId,
   onEditAndRerun,
   vectorStoreOwnerType,
   vectorStoreOwnerId,
@@ -231,6 +234,7 @@ export function ChatView({
           onProjectChange={onProjectChange}
           onPendingProjectChange={onPendingProjectChange}
           pendingProjectName={pendingProjectName}
+          pendingProjectId={pendingProjectId}
           vectorStoreIds={vectorStoreIds}
           vectorStoreOwnerType={vectorStoreOwnerType}
           vectorStoreOwnerId={vectorStoreOwnerId}
