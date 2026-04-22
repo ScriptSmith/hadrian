@@ -70,9 +70,7 @@ impl SqliteSkillRepo {
         let frontmatter_extra: Option<HashMap<String, serde_json::Value>> = frontmatter_extra
             .map(|s| serde_json::from_str(&s))
             .transpose()
-            .map_err(|e| {
-                DbError::Internal(format!("Failed to parse frontmatter_extra: {}", e))
-            })?;
+            .map_err(|e| DbError::Internal(format!("Failed to parse frontmatter_extra: {}", e)))?;
 
         let user_invocable: Option<i64> = row.col("user_invocable");
         let disable_model_invocation: Option<i64> = row.col("disable_model_invocation");
@@ -425,7 +423,14 @@ impl SkillRepo for SqliteSkillRepo {
 
         if let Some(ref cursor) = params.cursor {
             return self
-                .list_by_owner_with_cursor(owner_type, owner_id, &params, cursor, fetch_limit, limit)
+                .list_by_owner_with_cursor(
+                    owner_type,
+                    owner_id,
+                    &params,
+                    cursor,
+                    fetch_limit,
+                    limit,
+                )
                 .await;
         }
 
@@ -465,11 +470,7 @@ impl SkillRepo for SqliteSkillRepo {
         Ok(ListResult::new(items, has_more, cursors))
     }
 
-    async fn list_by_org(
-        &self,
-        org_id: Uuid,
-        params: ListParams,
-    ) -> DbResult<ListResult<Skill>> {
+    async fn list_by_org(&self, org_id: Uuid, params: ListParams) -> DbResult<ListResult<Skill>> {
         let limit = params.limit.unwrap_or(100);
         let fetch_limit = limit + 1;
         let org_str = org_id.to_string();
@@ -613,18 +614,19 @@ impl SkillRepo for SqliteSkillRepo {
 
         let now = truncate_to_millis(chrono::Utc::now());
 
-        let files_with_size: Option<Vec<(SkillFileInput, i64, String)>> = files.as_ref().map(|fs| {
-            fs.iter()
-                .map(|f| {
-                    let size = f.content.len() as i64;
-                    let ct = f
-                        .content_type
-                        .clone()
-                        .unwrap_or_else(|| Self::sniff_content_type(&f.path).to_string());
-                    (f.clone(), size, ct)
-                })
-                .collect()
-        });
+        let files_with_size: Option<Vec<(SkillFileInput, i64, String)>> =
+            files.as_ref().map(|fs| {
+                fs.iter()
+                    .map(|f| {
+                        let size = f.content.len() as i64;
+                        let ct = f
+                            .content_type
+                            .clone()
+                            .unwrap_or_else(|| Self::sniff_content_type(&f.path).to_string());
+                        (f.clone(), size, ct)
+                    })
+                    .collect()
+            });
         let new_total_bytes: Option<i64> = files_with_size
             .as_ref()
             .map(|v| v.iter().map(|(_, s, _)| *s).sum());
@@ -714,12 +716,9 @@ impl SkillRepo for SqliteSkillRepo {
         }
         q = q.bind(id.to_string());
 
-        let result = q
-            .execute(&mut *tx)
-            .await
-            .map_err(map_unique_violation(
-                "Skill with this name already exists for this owner",
-            ))?;
+        let result = q.execute(&mut *tx).await.map_err(map_unique_violation(
+            "Skill with this name already exists for this owner",
+        ))?;
 
         if result.rows_affected() == 0 {
             return Err(DbError::NotFound);
@@ -922,9 +921,8 @@ mod tests {
             frontmatter_extra: None,
         };
 
-        let expected_total = ("Use scripts/extract.py.".len()
-            + "print('ok')".len()
-            + "# Reference".len()) as i64;
+        let expected_total =
+            ("Use scripts/extract.py.".len() + "print('ok')".len() + "# Reference".len()) as i64;
 
         let skill = repo.create(input).await.expect("create should succeed");
         assert_eq!(skill.files.len(), 3);
@@ -943,7 +941,10 @@ mod tests {
         // Frontmatter fields round-tripped.
         assert_eq!(skill.user_invocable, Some(true));
         assert_eq!(skill.disable_model_invocation, Some(false));
-        assert_eq!(skill.allowed_tools.as_deref(), Some(&["Bash(python:*)".to_string()][..]));
+        assert_eq!(
+            skill.allowed_tools.as_deref(),
+            Some(&["Bash(python:*)".to_string()][..])
+        );
         assert_eq!(skill.argument_hint.as_deref(), Some("[file]"));
     }
 
@@ -957,9 +958,7 @@ mod tests {
             .await
             .expect("first create succeeds");
 
-        let result = repo
-            .create(create_skill_input("dup", "b", user_id))
-            .await;
+        let result = repo.create(create_skill_input("dup", "b", user_id)).await;
         assert!(matches!(result, Err(DbError::Conflict(_))));
     }
 
@@ -1037,9 +1036,16 @@ mod tests {
 
         assert_eq!(result.items.len(), 1);
         let skill = &result.items[0];
-        assert!(skill.files.is_empty(), "list should not include file contents");
+        assert!(
+            skill.files.is_empty(),
+            "list should not include file contents"
+        );
         assert_eq!(skill.files_manifest.len(), 2);
-        let paths: Vec<&str> = skill.files_manifest.iter().map(|m| m.path.as_str()).collect();
+        let paths: Vec<&str> = skill
+            .files_manifest
+            .iter()
+            .map(|m| m.path.as_str())
+            .collect();
         assert_eq!(paths, vec!["SKILL.md", "notes.txt"]);
     }
 
@@ -1221,7 +1227,12 @@ mod tests {
         let user_id = Uuid::new_v4();
 
         for (name, owner) in [
-            ("org-skill", SkillOwner::Organization { organization_id: org_id }),
+            (
+                "org-skill",
+                SkillOwner::Organization {
+                    organization_id: org_id,
+                },
+            ),
             ("team-skill", SkillOwner::Team { team_id }),
             ("project-skill", SkillOwner::Project { project_id }),
             ("user-skill", SkillOwner::User { user_id }),

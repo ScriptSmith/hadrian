@@ -7,9 +7,7 @@ use uuid::Uuid;
 use crate::{
     db::{
         error::{DbError, DbResult},
-        repos::{
-            CursorDirection, ListParams, ListResult, PageCursors, SkillRepo, cursor_from_row,
-        },
+        repos::{CursorDirection, ListParams, ListResult, PageCursors, SkillRepo, cursor_from_row},
     },
     models::{
         CreateSkill, Skill, SkillFile, SkillFileInput, SkillFileManifest, SkillOwnerType,
@@ -73,9 +71,7 @@ impl PostgresSkillRepo {
         let frontmatter_extra: Option<HashMap<String, serde_json::Value>> = frontmatter_extra
             .map(serde_json::from_value)
             .transpose()
-            .map_err(|e| {
-                DbError::Internal(format!("Failed to parse frontmatter_extra: {}", e))
-            })?;
+            .map_err(|e| DbError::Internal(format!("Failed to parse frontmatter_extra: {}", e)))?;
 
         Ok(Skill {
             id: row.get("id"),
@@ -252,9 +248,12 @@ impl SkillRepo for PostgresSkillRepo {
         .execute(&mut *tx)
         .await
         .map_err(|e| match e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => DbError::Conflict(
-                format!("Skill with name '{}' already exists for this owner", input.name),
-            ),
+            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                DbError::Conflict(format!(
+                    "Skill with name '{}' already exists for this owner",
+                    input.name
+                ))
+            }
             _ => DbError::from(e),
         })?;
 
@@ -421,11 +420,7 @@ impl SkillRepo for PostgresSkillRepo {
         Ok(ListResult::new(items, has_more, cursors))
     }
 
-    async fn list_by_org(
-        &self,
-        org_id: Uuid,
-        params: ListParams,
-    ) -> DbResult<ListResult<Skill>> {
+    async fn list_by_org(&self, org_id: Uuid, params: ListParams) -> DbResult<ListResult<Skill>> {
         let limit = params.limit.unwrap_or(100);
         let fetch_limit = limit + 1;
 
@@ -555,18 +550,19 @@ impl SkillRepo for PostgresSkillRepo {
             return self.get_by_id(id).await?.ok_or(DbError::NotFound);
         }
 
-        let files_with_size: Option<Vec<(SkillFileInput, i64, String)>> = files.as_ref().map(|fs| {
-            fs.iter()
-                .map(|f| {
-                    let size = f.content.len() as i64;
-                    let ct = f
-                        .content_type
-                        .clone()
-                        .unwrap_or_else(|| Self::sniff_content_type(&f.path).to_string());
-                    (f.clone(), size, ct)
-                })
-                .collect()
-        });
+        let files_with_size: Option<Vec<(SkillFileInput, i64, String)>> =
+            files.as_ref().map(|fs| {
+                fs.iter()
+                    .map(|f| {
+                        let size = f.content.len() as i64;
+                        let ct = f
+                            .content_type
+                            .clone()
+                            .unwrap_or_else(|| Self::sniff_content_type(&f.path).to_string());
+                        (f.clone(), size, ct)
+                    })
+                    .collect()
+            });
         let new_total_bytes: Option<i64> = files_with_size
             .as_ref()
             .map(|v| v.iter().map(|(_, s, _)| *s).sum());
@@ -663,15 +659,12 @@ impl SkillRepo for PostgresSkillRepo {
         }
         q = q.bind(id);
 
-        let result = q
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| match e {
-                sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                    DbError::Conflict("Skill with this name already exists for this owner".into())
-                }
-                _ => DbError::from(e),
-            })?;
+        let result = q.execute(&mut *tx).await.map_err(|e| match e {
+            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                DbError::Conflict("Skill with this name already exists for this owner".into())
+            }
+            _ => DbError::from(e),
+        })?;
 
         if result.rows_affected() == 0 {
             return Err(DbError::NotFound);

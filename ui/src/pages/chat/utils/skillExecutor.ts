@@ -2,7 +2,7 @@ import { skillGet } from "@/api/generated/sdk.gen";
 
 import { getFullSkill, getSkillByName, setFullSkill } from "./skillCache";
 import type { ParsedToolCall } from "./toolCallParser";
-import type { ToolExecutionResult, ToolExecutor } from "./toolExecutors";
+import type { Artifact, ToolExecutionResult, ToolExecutor } from "./toolExecutors";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -23,6 +23,48 @@ function manifestText(skill: { files: { path: string; byte_size: number }[] }): 
   return lines.join("\n");
 }
 
+/**
+ * Pick a syntax-highlighting language tag from a skill file path. Falls back
+ * to "text" so the artifact still renders as a code block.
+ */
+function languageForPath(path: string): string {
+  const lower = path.toLowerCase();
+  const ext = lower.includes(".") ? lower.slice(lower.lastIndexOf(".") + 1) : "";
+  switch (ext) {
+    case "md":
+    case "markdown":
+      return "markdown";
+    case "py":
+      return "python";
+    case "js":
+    case "mjs":
+    case "cjs":
+      return "javascript";
+    case "ts":
+    case "tsx":
+      return "typescript";
+    case "sh":
+    case "bash":
+      return "bash";
+    case "json":
+      return "json";
+    case "yaml":
+    case "yml":
+      return "yaml";
+    case "toml":
+      return "toml";
+    case "html":
+    case "htm":
+      return "html";
+    case "css":
+      return "css";
+    case "rs":
+      return "rust";
+    default:
+      return "text";
+  }
+}
+
 interface SkillToolArgs {
   command?: string;
   file?: string | null;
@@ -41,6 +83,24 @@ function parseArgs(raw: unknown): SkillToolArgs {
   return raw as SkillToolArgs;
 }
 
+/** Build a single output artifact for a loaded skill file. */
+function fileArtifact(
+  toolCallId: string,
+  index: number,
+  title: string,
+  language: string,
+  code: string
+): Artifact {
+  return {
+    id: `skill-${toolCallId}-${index}`,
+    type: "code",
+    title,
+    role: "output",
+    toolCallId,
+    data: { language, code },
+  };
+}
+
 /**
  * Executes the `Skill` function tool registered with the LLM. Two modes:
  *
@@ -54,13 +114,18 @@ function parseArgs(raw: unknown): SkillToolArgs {
  *
  * Matches Claude Code's progressive-disclosure architecture: the first call
  * pulls the main instructions into context; file calls load referenced
- * resources on demand, not eagerly.
+ * resources on demand, not eagerly. The loaded content is also returned as
+ * a UI artifact so users can see what the model actually received.
  */
 export const skillExecutor: ToolExecutor = async (
   toolCall: ParsedToolCall
 ): Promise<ToolExecutionResult> => {
   const args = parseArgs(toolCall.arguments);
   const command = args.command?.trim();
+  // Generate a stable artifact prefix even when the provider drops the
+  // tool-call id (mirrors the codeInterpreterExecutor pattern).
+  const toolId = toolCall.id || `skill-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
   if (!command) {
     return {
       success: false,
@@ -70,9 +135,11 @@ export const skillExecutor: ToolExecutor = async (
 
   const summary = getSkillByName(command);
   if (!summary) {
+    const message = `Skill "${command}" is not available. Check the Available skills list for exact names.`;
     return {
       success: true,
-      output: `Skill "${command}" is not available. Check the Available skills list for exact names.`,
+      output: message,
+      artifacts: [fileArtifact(toolId, 0, `Skill: ${command}`, "text", message)],
     };
   }
 
@@ -106,14 +173,28 @@ export const skillExecutor: ToolExecutor = async (
         .filter((f) => f.path !== "SKILL.md")
         .map((f) => `  - ${f.path}`)
         .join("\n");
+      const message =
+        `File "${filePath}" not found in skill "${command}".` +
+        (available ? `\n\nAvailable files:\n${available}` : "");
       return {
         success: true,
-        output:
-          `File "${filePath}" not found in skill "${command}".` +
-          (available ? `\n\nAvailable files:\n${available}` : ""),
+        output: message,
+        artifacts: [fileArtifact(toolId, 0, `${command} · ${filePath} (missing)`, "text", message)],
       };
     }
-    return { success: true, output: file.content };
+    return {
+      success: true,
+      output: file.content,
+      artifacts: [
+        fileArtifact(
+          toolId,
+          0,
+          `${command} · ${file.path}`,
+          languageForPath(file.path),
+          file.content
+        ),
+      ],
+    };
   }
 
   const main = skill.files?.find((f) => f.path === "SKILL.md");
@@ -125,5 +206,18 @@ export const skillExecutor: ToolExecutor = async (
   }
 
   const manifest = skill.files ? manifestText({ files: skill.files }) : "";
-  return { success: true, output: main.content + manifest };
+  const fullOutput = main.content + manifest;
+
+  // Render the SKILL.md as the primary output artifact, with the manifest
+  // (if any) as a smaller secondary artifact so the file list is glanceable.
+  const artifacts: Artifact[] = [
+    fileArtifact(toolId, 0, `${command} · SKILL.md`, "markdown", main.content),
+  ];
+  if (manifest) {
+    artifacts.push(
+      fileArtifact(toolId, 1, `${command} · bundled files`, "markdown", manifest.trim())
+    );
+  }
+
+  return { success: true, output: fullOutput, artifacts };
 };

@@ -84,19 +84,19 @@ This matches Claude Code's progressive-disclosure model: the main
 instructions enter context once; reference files load only when needed.
 
 <Callout type="info">
-  Skills are not injected into the system prompt. The directory lives in the
-  `Skill` tool's description, so unused skills don't pollute every request.
+  Skills are not injected into the system prompt. The directory lives in the `Skill` tool's
+  description, so unused skills don't pollute every request.
 </Callout>
 
 ## Ownership & sharing
 
 Like prompt templates, skills belong to one of four owners:
 
-| Owner          | Visible to                                                           |
-| -------------- | -------------------------------------------------------------------- |
-| `user`         | Only the owning user.                                                |
-| `project`      | All members of the project.                                          |
-| `team`         | All members of the team.                                             |
+| Owner          | Visible to                                                            |
+| -------------- | --------------------------------------------------------------------- |
+| `user`         | Only the owning user.                                                 |
+| `project`      | All members of the project.                                           |
+| `team`         | All members of the team.                                              |
 | `organization` | All organization members, subject to RBAC rules on `skill:list/read`. |
 
 Chat surfaces all skills the current user can reach. In the admin UI,
@@ -125,9 +125,9 @@ finds every directory containing a `SKILL.md`, and bundles the adjacent
 files. Preview the discovered skills and pick which to import.
 
 <Callout type="warn">
-  The unauthenticated GitHub API allows 60 requests/hour. Hadrian caches
-  directory listings in `sessionStorage` for 10 minutes to soften this, and
-  surfaces the remaining quota in the import modal.
+  The unauthenticated GitHub API allows 60 requests/hour. Hadrian caches directory listings in
+  `sessionStorage` for 10 minutes to soften this, and surfaces the remaining quota in the import
+  modal.
 </Callout>
 
 ### From the filesystem
@@ -157,7 +157,7 @@ max_skill_bytes = 512_000
 
 - **Text-only files.** Binary assets (images, PDFs) are rejected at the API
   boundary. Future work: base64 encoding or object-storage offload.
-- **Scripts are read-only.** The agent can *read* `scripts/` files through
+- **Scripts are read-only.** The agent can _read_ `scripts/` files through
   the `Skill` tool but cannot execute them — there is no client-side
   sandbox in the Hadrian chat UI. Skills that require script execution
   won't work end-to-end.

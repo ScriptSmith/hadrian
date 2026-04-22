@@ -1223,7 +1223,15 @@ export function useChat({
         return null;
       }
     },
-    [token, streamingStore, perModelSettings, vectorStoreIds, enabledTools, dataFiles]
+    [
+      token,
+      streamingStore,
+      perModelSettings,
+      vectorStoreIds,
+      enabledTools,
+      enabledSkills,
+      dataFiles,
+    ]
   );
 
   /**

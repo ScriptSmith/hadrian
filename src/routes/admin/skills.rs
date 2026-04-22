@@ -307,14 +307,7 @@ pub async fn list_by_org(
         .await?
         .ok_or_else(|| AdminError::NotFound(format!("Organization '{}' not found", org_slug)))?;
 
-    authz.require(
-        "skill",
-        "list",
-        None,
-        Some(&org.id.to_string()),
-        None,
-        None,
-    )?;
+    authz.require("skill", "list", None, Some(&org.id.to_string()), None, None)?;
 
     let limit = query.limit.unwrap_or(100);
     let params = query.try_into_with_cursor()?;

@@ -28,11 +28,11 @@ pub mod service_accounts;
 pub mod session_info;
 #[cfg(feature = "sso")]
 pub mod sessions;
+pub mod skills;
 #[cfg(feature = "sso")]
 pub mod sso_connections;
 #[cfg(feature = "sso")]
 pub mod sso_group_mappings;
-pub mod skills;
 pub mod teams;
 pub mod templates;
 pub mod ui_config;
@@ -619,10 +619,7 @@ pub(crate) fn admin_v1_routes() -> Router<AppState> {
                 .merge(patch(skills::update))
                 .merge(delete(skills::delete)),
         )
-        .route(
-            "/organizations/{org_slug}/skills",
-            get(skills::list_by_org),
-        )
+        .route("/organizations/{org_slug}/skills", get(skills::list_by_org))
         .route(
             "/organizations/{org_slug}/teams/{team_slug}/skills",
             get(skills::list_by_team),
