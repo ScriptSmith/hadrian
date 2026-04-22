@@ -82,7 +82,7 @@ pub fn validate_skill_path(path: &str) -> Result<(), ValidationError> {
     if path.starts_with('/') || path.starts_with('\\') {
         return Err(ValidationError::new("skill_path_absolute"));
     }
-    for seg in path.split(|c: char| c == '/' || c == '\\') {
+    for seg in path.split(['/', '\\']) {
         if seg.is_empty() || seg == ".." {
             return Err(ValidationError::new("skill_path_traversal"));
         }
@@ -269,8 +269,17 @@ mod tests {
 
     #[test]
     fn skill_name_accepts_valid_examples() {
-        for name in ["pdf-processing", "data-analysis", "code-review", "a", "abc123"] {
-            assert!(validate_skill_name(name).is_ok(), "expected {name:?} to be valid");
+        for name in [
+            "pdf-processing",
+            "data-analysis",
+            "code-review",
+            "a",
+            "abc123",
+        ] {
+            assert!(
+                validate_skill_name(name).is_ok(),
+                "expected {name:?} to be valid"
+            );
         }
     }
 
@@ -302,7 +311,10 @@ mod tests {
             "assets/template.txt",
             "a/b/c/d.txt",
         ] {
-            assert!(validate_skill_path(path).is_ok(), "expected {path:?} to be valid");
+            assert!(
+                validate_skill_path(path).is_ok(),
+                "expected {path:?} to be valid"
+            );
         }
     }
 
@@ -339,7 +351,9 @@ mod tests {
     #[test]
     fn skill_owner_extracts_type_and_id() {
         let org = Uuid::new_v4();
-        let owner = SkillOwner::Organization { organization_id: org };
+        let owner = SkillOwner::Organization {
+            organization_id: org,
+        };
         assert_eq!(owner.owner_type(), SkillOwnerType::Organization);
         assert_eq!(owner.owner_id(), org);
     }
