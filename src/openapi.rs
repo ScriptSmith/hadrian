@@ -406,6 +406,7 @@ requests_per_minute = 120
         admin::me_api_keys::rotate,
         // OAuth-style PKCE flow
         admin::oauth::authorize,
+        admin::oauth::preflight,
         crate::routes::oauth_public::token,
         crate::routes::oauth_public::authorization_server_metadata,
         // Self-service endpoints - Sessions
@@ -836,6 +837,7 @@ requests_per_minute = 120
         models::ExchangeCodeForKey,
         models::OAuthKeyOptions,
         models::PkceCodeChallengeMethod,
+        admin::oauth::PreflightResponse,
         crate::routes::oauth_public::OAuthTokenResponse,
         crate::routes::oauth_public::AuthorizationServerMetadata,
         // Admin models - Dynamic Provider

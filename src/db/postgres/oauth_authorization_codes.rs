@@ -91,6 +91,29 @@ impl OAuthAuthorizationCodeRepo for PostgresOAuthAuthorizationCodeRepo {
         })
     }
 
+    async fn lookup_active(&self, code: &str) -> DbResult<Option<OAuthAuthorizationCode>> {
+        let now = truncate_to_millis(Utc::now());
+        let result = sqlx::query(
+            r#"
+            SELECT id, code, code_challenge,
+                   code_challenge_method::text AS code_challenge_method,
+                   callback_url, user_id, app_name, key_options,
+                   expires_at, used_at, created_at
+            FROM oauth_authorization_codes
+            WHERE code = $1 AND used_at IS NULL AND expires_at > $2
+            "#,
+        )
+        .bind(code)
+        .bind(now)
+        .fetch_optional(&self.write_pool)
+        .await?;
+
+        match result {
+            Some(row) => Ok(Some(row_to_code(&row)?)),
+            None => Ok(None),
+        }
+    }
+
     async fn consume(&self, code: &str) -> DbResult<Option<OAuthAuthorizationCode>> {
         let now = truncate_to_millis(Utc::now());
 

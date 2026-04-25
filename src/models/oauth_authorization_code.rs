@@ -138,12 +138,17 @@ pub struct AuthorizationCodeResponse {
 }
 
 /// Request body for the public `POST /oauth/token` endpoint.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Validate)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct ExchangeCodeForKey {
-    /// The authorization code received via the callback URL.
+    /// The authorization code received via the callback URL. We generate
+    /// 256-bit codes, so anything shorter than ~32 chars is definitely not
+    /// one of ours; the upper bound just defends the deserializer.
+    #[validate(length(min = 16, max = 128))]
     pub code: String,
-    /// The original PKCE verifier the external app generated.
+    /// The original PKCE verifier the external app generated. Length range
+    /// matches RFC 7636 §4.1, which mandates 43–128 URL-safe characters.
+    #[validate(length(min = 43, max = 128))]
     pub code_verifier: String,
     /// Method used to derive the challenge from the verifier. Defaults to `S256`.
     #[serde(default = "default_method")]

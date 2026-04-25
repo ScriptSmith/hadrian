@@ -71,19 +71,28 @@ impl OAuthPkceService {
             .await
     }
 
-    /// Atomically consume an authorization code and verify the supplied
-    /// `code_verifier` matches the stored challenge. Returns the row on
-    /// success so the caller can issue an API key under the bound user.
+    /// Verify the supplied `code_verifier` against a stored authorization
+    /// code, and consume the code only if verification passes. Returns the
+    /// stored row on success so the caller can issue an API key under the
+    /// bound user.
+    ///
+    /// Order of operations matters: we look the code up *without* mutating
+    /// it, run PKCE verification, and only then atomically claim it. If the
+    /// verifier is wrong, the code stays usable so the legitimate caller
+    /// can retry — otherwise an attacker who intercepted the code in
+    /// transit could permanently burn it by submitting any wrong verifier.
+    /// The consume step is still atomic, so concurrent honest redemptions
+    /// can't both succeed.
     pub async fn redeem_code(
         &self,
         code: &str,
         code_verifier: &str,
         code_challenge_method: PkceCodeChallengeMethod,
     ) -> Result<OAuthAuthorizationCode, OAuthPkceError> {
-        let stored = self
-            .db
-            .oauth_authorization_codes()
-            .consume(code)
+        let repo = self.db.oauth_authorization_codes();
+
+        let stored = repo
+            .lookup_active(code)
             .await?
             .ok_or(OAuthPkceError::InvalidCode)?;
 
@@ -101,7 +110,10 @@ impl OAuthPkceService {
             return Err(OAuthPkceError::PkceMismatch);
         }
 
-        Ok(stored)
+        // PKCE verified — now atomically claim the code. If a concurrent
+        // redemption already won, treat the code as gone (InvalidCode)
+        // rather than handing out a second key.
+        repo.consume(code).await?.ok_or(OAuthPkceError::InvalidCode)
     }
 }
 

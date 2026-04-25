@@ -4358,6 +4358,68 @@
         }
       }
     },
+    "/admin/v1/oauth/preflight": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Validate a `callback_url` against the deployment's OAuth PKCE policy\nwithout issuing a code. The consent UI calls this on mount and refuses\nto render if the URL is rejected — closing the gap where a \"Deny\"\nclick could otherwise redirect to a host the operator denied.",
+        "operationId": "oauth_preflight",
+        "parameters": [
+          {
+            "name": "callback_url",
+            "in": "query",
+            "description": "The callback URL the external app intends to use.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Callback URL passes policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreflightResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid URL or scheme",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Callback host denied by policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OAuth PKCE flow disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/v1/organizations": {
       "get": {
         "tags": [
@@ -24873,7 +24935,7 @@
         "properties": {
           "code": {
             "type": "string",
-            "description": "The authorization code received via the callback URL."
+            "description": "The authorization code received via the callback URL. We generate\n256-bit codes, so anything shorter than ~32 chars is definitely not\none of ours; the upper bound just defends the deserializer."
           },
           "code_challenge_method": {
             "$ref": "#/components/schemas/PkceCodeChallengeMethod",
@@ -24881,7 +24943,7 @@
           },
           "code_verifier": {
             "type": "string",
-            "description": "The original PKCE verifier the external app generated."
+            "description": "The original PKCE verifier the external app generated. Length range\nmatches RFC 7636 §4.1, which mandates 43–128 URL-safe characters."
           }
         }
       },
@@ -27840,6 +27902,19 @@
           "system",
           "organization"
         ]
+      },
+      "PreflightResponse": {
+        "type": "object",
+        "description": "Result of the preflight check.",
+        "required": [
+          "callback_host"
+        ],
+        "properties": {
+          "callback_host": {
+            "type": "string",
+            "description": "The validated host (lowercased) — useful for surfacing in the UI."
+          }
+        }
       },
       "PricingOwner": {
         "oneOf": [

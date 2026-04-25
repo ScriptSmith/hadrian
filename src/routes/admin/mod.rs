@@ -119,6 +119,7 @@ pub(crate) fn admin_v1_routes() -> Router<AppState> {
         .route("/me/api-keys/{key_id}/rotate", post(me_api_keys::rotate))
         // OAuth-style PKCE flow for issuing user-scoped keys to external apps
         .route("/oauth/authorize", post(oauth::authorize))
+        .route("/oauth/preflight", get(oauth::preflight))
         // Organizations
         .route(
             "/organizations",

@@ -9,6 +9,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use axum_valid::Valid;
 use serde::Serialize;
 
 use crate::{
@@ -83,7 +84,7 @@ pub struct OAuthTokenResponse {
 ))]
 pub async fn token(
     State(state): State<AppState>,
-    Json(input): Json<ExchangeCodeForKey>,
+    Valid(Json(input)): Valid<Json<ExchangeCodeForKey>>,
 ) -> Result<Json<OAuthTokenResponse>, OAuthTokenError> {
     let pkce_config = &state.config.auth.oauth_pkce;
     if !pkce_config.enabled {

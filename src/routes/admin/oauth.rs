@@ -7,8 +7,13 @@
 //! - The public counterpart `POST /oauth/token` lives in
 //!   [`crate::routes::oauth_public`] and exchanges the code for an API key.
 
-use axum::{Extension, Json, extract::State, http::StatusCode};
+use axum::{
+    Extension, Json,
+    extract::{Query, State},
+    http::StatusCode,
+};
 use axum_valid::Valid;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::{
@@ -18,6 +23,7 @@ use super::{
 };
 use crate::{
     AppState,
+    config::OAuthPkceConfig,
     middleware::{AdminAuth, AuthzContext, ClientInfo},
     models::{
         ApiKeyOwner, AuthorizationCodeResponse, CreateAuditLog, CreateAuthorizationCode,
@@ -30,28 +36,95 @@ fn get_services(state: &AppState) -> Result<&Services, AdminError> {
     state.services.as_ref().ok_or(AdminError::ServicesRequired)
 }
 
-/// Append `?code=...` (or `&code=...`) to a callback URL. Validates that the
-/// callback URL has an HTTPS scheme (or HTTP for loopback) and a recognised
-/// host before returning, so we never redirect users to malformed targets.
-fn build_redirect_url(callback_url: &str, code: &str) -> Result<(String, String), AdminError> {
+/// Validate a `callback_url` against scheme rules and the operator's
+/// allow/deny lists. Returns the lowercase host on success. Used by both
+/// the authorize endpoint (allow leg) and the preflight endpoint that
+/// gates the consent UI (so the deny leg can't bypass denied_domains by
+/// just redirecting client-side).
+fn validate_callback_url(callback_url: &str, pkce: &OAuthPkceConfig) -> Result<String, AdminError> {
     let parsed = url::Url::parse(callback_url)
         .map_err(|_| AdminError::Validation("callback_url must be a valid URL".to_string()))?;
 
     let scheme = parsed.scheme();
     let host = parsed
         .host_str()
-        .ok_or_else(|| AdminError::Validation("callback_url must include a host".to_string()))?;
+        .ok_or_else(|| AdminError::Validation("callback_url must include a host".to_string()))?
+        .to_ascii_lowercase();
 
-    let is_loopback = matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1");
+    let is_loopback = matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]" | "::1");
     if scheme != "https" && !(scheme == "http" && is_loopback) {
         return Err(AdminError::Validation(
             "callback_url must use https (http is allowed only for loopback hosts)".to_string(),
         ));
     }
 
-    let mut redirect = parsed.clone();
+    if !pkce.is_callback_host_allowed(&host) {
+        return Err(AdminError::Forbidden(format!(
+            "callback host '{host}' is not permitted by server policy"
+        )));
+    }
+
+    Ok(host)
+}
+
+/// Append `?code=...` (or `&code=...`) to a callback URL. The URL is
+/// assumed to have already been through [`validate_callback_url`].
+fn build_redirect_url(callback_url: &str, code: &str) -> Result<String, AdminError> {
+    let mut redirect = url::Url::parse(callback_url)
+        .map_err(|_| AdminError::Validation("callback_url must be a valid URL".to_string()))?;
     redirect.query_pairs_mut().append_pair("code", code);
-    Ok((redirect.to_string(), host.to_ascii_lowercase()))
+    Ok(redirect.to_string())
+}
+
+/// Query parameters for the preflight endpoint.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::IntoParams))]
+pub struct PreflightQuery {
+    /// The callback URL the external app intends to use.
+    pub callback_url: String,
+}
+
+/// Result of the preflight check.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct PreflightResponse {
+    /// The validated host (lowercased) — useful for surfacing in the UI.
+    pub callback_host: String,
+}
+
+/// Validate a `callback_url` against the deployment's OAuth PKCE policy
+/// without issuing a code. The consent UI calls this on mount and refuses
+/// to render if the URL is rejected — closing the gap where a "Deny"
+/// click could otherwise redirect to a host the operator denied.
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    get,
+    path = "/admin/v1/oauth/preflight",
+    tag = "oauth",
+    operation_id = "oauth_preflight",
+    params(PreflightQuery),
+    responses(
+        (status = 200, description = "Callback URL passes policy", body = PreflightResponse),
+        (status = 400, description = "Invalid URL or scheme", body = crate::openapi::ErrorResponse),
+        (status = 403, description = "Callback host denied by policy", body = crate::openapi::ErrorResponse),
+        (status = 404, description = "OAuth PKCE flow disabled", body = crate::openapi::ErrorResponse),
+    )
+))]
+pub async fn preflight(
+    State(state): State<AppState>,
+    Extension(authz): Extension<AuthzContext>,
+    Query(query): Query<PreflightQuery>,
+) -> Result<Json<PreflightResponse>, AdminError> {
+    let pkce = &state.config.auth.oauth_pkce;
+    if !pkce.enabled {
+        return Err(AdminError::NotFound(
+            "OAuth PKCE flow is disabled".to_string(),
+        ));
+    }
+    // Same authz scope the authorize endpoint uses — only authenticated
+    // users with self-service key permission can probe the policy.
+    authz.require("api_key", "self_create", None, None, None, None)?;
+    let callback_host = validate_callback_url(&query.callback_url, pkce)?;
+    Ok(Json(PreflightResponse { callback_host }))
 }
 
 /// Issue an authorization code after explicit user consent.
@@ -138,15 +211,7 @@ pub async fn authorize(
         ));
     }
 
-    let (redirect_url, callback_host) = build_redirect_url(&input.callback_url, "placeholder")?;
-    if !pkce.is_callback_host_allowed(&callback_host) {
-        return Err(AdminError::Forbidden(format!(
-            "callback host '{callback_host}' is not permitted by server policy"
-        )));
-    }
-    // We computed redirect_url with a placeholder so the URL parser ran. We
-    // always rebuild it below with the real code, so drop the placeholder.
-    drop(redirect_url);
+    let callback_host = validate_callback_url(&input.callback_url, pkce)?;
 
     // Reuse the same validation rules the self-service "Create API Key"
     // endpoint applies, so the consent page can't smuggle in invalid scopes,
@@ -190,7 +255,7 @@ pub async fn authorize(
         })
         .await?;
 
-    let (redirect_url, _) = build_redirect_url(&input.callback_url, &stored.code)?;
+    let redirect_url = build_redirect_url(&input.callback_url, &stored.code)?;
 
     // Audit log (fire-and-forget)
     let _ = services

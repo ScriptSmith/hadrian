@@ -28,6 +28,10 @@ const authedContext: AuthContextValue = {
   setApiKey: () => {},
 };
 
+const preflightOkHandler = http.get("*/admin/v1/oauth/preflight", () =>
+  HttpResponse.json({ callback_host: "app.example.com" })
+);
+
 const eligibleOwnersHandler = http.get("*/admin/v1/me/eligible-owners", () =>
   HttpResponse.json({
     user: {
@@ -114,6 +118,7 @@ export const Default: Story = {
   parameters: {
     msw: {
       handlers: [
+        preflightOkHandler,
         eligibleOwnersHandler,
         http.post("*/admin/v1/oauth/authorize", () =>
           HttpResponse.json({
@@ -130,14 +135,14 @@ export const Default: Story = {
 
 export const PersonalOnly: Story = {
   parameters: {
-    msw: { handlers: [noOwnersHandler] },
+    msw: { handlers: [preflightOkHandler, noOwnersHandler] },
   },
   render: () => renderAt(baseUrl),
 };
 
 export const WithoutScopes: Story = {
   parameters: {
-    msw: { handlers: [eligibleOwnersHandler] },
+    msw: { handlers: [preflightOkHandler, eligibleOwnersHandler] },
   },
   render: () =>
     renderAt(

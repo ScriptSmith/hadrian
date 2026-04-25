@@ -7,7 +7,10 @@ import { useQuery } from "@tanstack/react-query";
 import { ShieldCheck, ExternalLink, Check, X } from "lucide-react";
 
 import { oauthAuthorize } from "@/api/generated/sdk.gen";
-import { meEligibleOwnersOptions } from "@/api/generated/@tanstack/react-query.gen";
+import {
+  meEligibleOwnersOptions,
+  oauthPreflightOptions,
+} from "@/api/generated/@tanstack/react-query.gen";
 import type { ApiKeyOwner, PkceCodeChallengeMethod } from "@/api/generated/types.gen";
 import { useAuth } from "@/auth";
 import { FormField } from "@/components/FormField/FormField";
@@ -190,6 +193,18 @@ export default function OAuthAuthorizePage() {
     enabled: isAuthenticated && !authLoading,
   });
 
+  // Server-side preflight: ask the backend whether `callback_url` passes
+  // the deployment's allow/deny lists *before* we render the consent UI.
+  // Without this, a user clicking "Deny" would still get redirected to a
+  // host that the operator denied, since handleDeny is purely client-side.
+  const preflightQuery = useQuery({
+    ...oauthPreflightOptions({
+      query: { callback_url: params?.callbackUrl ?? "" },
+    }),
+    enabled: isAuthenticated && !authLoading && !!params?.callbackUrl,
+    retry: false,
+  });
+
   // Default the label to whatever the app suggested, falling back to its
   // display name. The user can edit it before clicking Authorize.
   const defaultName = useMemo(() => {
@@ -238,7 +253,6 @@ export default function OAuthAuthorizePage() {
       return;
     }
     const returnTo = `${location.pathname}${location.search}`;
-    sessionStorage.setItem("hadrian-oauth-return", returnTo);
     window.location.href = `/login?return_to=${encodeURIComponent(returnTo)}`;
   }, [authLoading, isAuthenticated, location.pathname, location.search]);
 
@@ -260,6 +274,36 @@ export default function OAuthAuthorizePage() {
           </CardHeader>
           <CardContent>
             <p className="text-sm text-destructive">{parseError ?? "Unknown error"}</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Wait for the server-side preflight before rendering the consent UI.
+  // This is what makes the deny button safe — if the URL is denied, we
+  // never give the user a button to redirect to it.
+  if (preflightQuery.isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Spinner size="lg" />
+      </div>
+    );
+  }
+  if (preflightQuery.isError) {
+    const err = preflightQuery.error as { message?: unknown } | undefined;
+    const message =
+      (typeof err?.message === "string" && err.message) ||
+      "This callback URL is not permitted by the server's OAuth policy.";
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background p-4">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>Authorization request rejected</CardTitle>
+            <CardDescription>The callback URL is not allowed.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-destructive">{message}</p>
           </CardContent>
         </Card>
       </div>
