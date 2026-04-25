@@ -334,6 +334,10 @@ pub async fn create(
             crate::validation::validate_base_url_opts(discovery_url, url_opts)
                 .map_err(|e| AdminError::Validation(format!("Invalid discovery URL: {e}")))?;
         }
+        if let Some(ref redirect_uri) = input.redirect_uri {
+            crate::validation::validate_base_url_opts(redirect_uri, url_opts)
+                .map_err(|e| AdminError::Validation(format!("Invalid redirect URI: {e}")))?;
+        }
     }
 
     // Create the SSO config
@@ -549,6 +553,10 @@ pub async fn update(
         if let Some(Some(ref discovery_url)) = input.discovery_url {
             crate::validation::validate_base_url_opts(discovery_url, url_opts)
                 .map_err(|e| AdminError::Validation(format!("Invalid discovery URL: {e}")))?;
+        }
+        if let Some(Some(ref redirect_uri)) = input.redirect_uri {
+            crate::validation::validate_base_url_opts(redirect_uri, url_opts)
+                .map_err(|e| AdminError::Validation(format!("Invalid redirect URI: {e}")))?;
         }
     }
 
