@@ -53,6 +53,13 @@ impl FilesService {
         self.storage.backend_name()
     }
 
+    /// Get a clone of the underlying storage backend handle. Used by background
+    /// jobs (e.g. vector store cleanup) that need to delete the on-disk/object
+    /// payload alongside the DB row.
+    pub fn storage(&self) -> Arc<dyn FileStorage> {
+        self.storage.clone()
+    }
+
     /// Count files by owner.
     pub async fn count_by_owner(
         &self,

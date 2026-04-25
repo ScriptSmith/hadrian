@@ -237,9 +237,11 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
             .file_search_service
             .as_ref()
             .map(|fs| fs.vector_store());
+        let file_storage = state.services.as_ref().map(|s| s.files.storage());
 
         tokio::spawn(async move {
-            jobs::start_vector_store_cleanup_worker(db, vector_store, cleanup_config).await;
+            jobs::start_vector_store_cleanup_worker(db, vector_store, file_storage, cleanup_config)
+                .await;
         });
     }
 
