@@ -287,7 +287,6 @@ pub async fn retry(
     Extension(authz): Extension<AuthzContext>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<DlqRetryResponse>, AdminError> {
-    authz.require("dlq", "update", None, None, None, None)?;
     let dlq = get_dlq(&state)?;
     let db = state
         .db
@@ -302,7 +301,13 @@ pub async fn retry(
 
     let entry = match entry {
         Some(e) => e,
-        None => return Err(AdminError::NotFound("DLQ entry".to_string())),
+        None => {
+            // Don't disclose existence to callers without DLQ access. Returning
+            // 404 here is fine because the per-entry scope check below would
+            // also yield a 4xx; we want a consistent response either way.
+            authz.require("dlq", "update", None, None, None, None)?;
+            return Err(AdminError::NotFound("DLQ entry".to_string()));
+        }
     };
 
     // Process based on entry type
@@ -311,6 +316,22 @@ pub async fn retry(
             // Parse the usage log entry
             let usage_entry: UsageLogEntry = serde_json::from_str(&entry.payload)
                 .map_err(|e| AdminError::BadRequest(format!("Invalid usage_log payload: {}", e)))?;
+
+            // Authorize against the entry's actual tenant scope so a tenant
+            // admin can't retry another tenant's queued work; platform admins
+            // (no scope) are also satisfied by this call.
+            let org_id = usage_entry.org_id.map(|id| id.to_string());
+            let team_id = usage_entry.team_id.map(|id| id.to_string());
+            let project_id = usage_entry.project_id.map(|id| id.to_string());
+            let user_id = usage_entry.user_id.map(|id| id.to_string());
+            authz.require(
+                "dlq",
+                "update",
+                org_id.as_deref(),
+                team_id.as_deref(),
+                project_id.as_deref(),
+                user_id.as_deref(),
+            )?;
 
             // Try to write to database
             match db.usage().log(usage_entry).await {
@@ -339,6 +360,9 @@ pub async fn retry(
             }
         }
         _ => {
+            // Unknown entry type: gate behind platform-level dlq:update so we
+            // don't expose payload type to callers without any DLQ access.
+            authz.require("dlq", "update", None, None, None, None)?;
             return Err(AdminError::BadRequest(format!(
                 "Unsupported entry type for manual retry: {}",
                 entry.entry_type
