@@ -16,6 +16,37 @@
     }
   ],
   "paths": {
+    "/.well-known/oauth-authorization-server": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Serve the OAuth 2.0 Authorization Server Metadata document.",
+        "operationId": "oauth_authorization_server_metadata",
+        "responses": {
+          "200": {
+            "description": "Authorization server metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationServerMetadata"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OAuth PKCE flow disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/v1/access-reviews/inventory": {
       "get": {
         "tags": [
@@ -2565,6 +2596,38 @@
         }
       }
     },
+    "/admin/v1/me/eligible-owners": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "List the owners the current user can plausibly issue an API key for.",
+        "description": "This is a hint for the OAuth consent UI; the actual create-permission\ncheck still runs server-side at consent time, so an owner appearing\nhere doesn't guarantee the create will succeed if RBAC denies it.",
+        "operationId": "me_eligible_owners",
+        "responses": {
+          "200": {
+            "description": "Owners the user can pick from",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EligibleOwnersResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "User not identified from session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/v1/me/export": {
       "get": {
         "tags": [
@@ -4222,6 +4285,68 @@
           },
           "404": {
             "description": "Model pricing not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/oauth/authorize": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Issue an authorization code after explicit user consent.",
+        "description": "The browser calls this endpoint from the consent page when the user clicks\n\"Allow\". The endpoint:\n\n1. Validates the requested scopes and key name shape (mirroring the\n   self-service API key endpoint), so we reject obvious mistakes before\n   issuing the code.\n2. Validates the callback URL scheme and host against\n   `auth.oauth_pkce.allowed_domains` / `denied_domains`.\n3. Persists a single-use authorization code bound to the current user\n   and the supplied PKCE challenge.\n4. Returns the redirect URL the page should send the browser to.",
+        "operationId": "oauth_authorize",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAuthorizationCode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Authorization code issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationCodeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid PKCE request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Callback domain not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OAuth PKCE flow disabled",
             "content": {
               "application/json": {
                 "schema": {
@@ -19195,6 +19320,57 @@
           }
         }
       }
+    },
+    "/oauth/token": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Exchange a PKCE authorization code for a user-scoped API key.",
+        "operationId": "oauth_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExchangeCodeForKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "API key issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthTokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Authorization code is invalid, expired, or already used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OAuth PKCE flow is disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -19960,6 +20136,100 @@
             ],
             "format": "date-time",
             "description": "End of time range (exclusive)"
+          }
+        }
+      },
+      "AuthorizationCodeResponse": {
+        "type": "object",
+        "description": "Response from `POST /admin/v1/oauth/authorize` after consent.",
+        "required": [
+          "code",
+          "redirect_url",
+          "expires_at"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Authorization code to forward to the external app via `callback_url?code=...`."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the code expires; the exchange must complete before this time."
+          },
+          "redirect_url": {
+            "type": "string",
+            "description": "Fully-formed redirect URL (callback_url with the `code` query parameter)."
+          }
+        }
+      },
+      "AuthorizationServerMetadata": {
+        "type": "object",
+        "description": "Authorization Server Metadata document per\n[RFC 8414](https://www.rfc-editor.org/rfc/rfc8414). Lets PKCE clients\ndiscover Hadrian's authorize/token endpoints, supported challenge\nmethods, and supported scopes without hard-coding URLs.\n\nHadrian implements only the subset of OAuth 2.0 needed for the PKCE\nauthorization-code flow: there is no dynamic client registration, no\nrefresh tokens, and no client credentials grant. Fields the spec marks\nas required but that are not meaningful for our flow are emitted with\nthe closest accurate value (e.g. `token_endpoint_auth_methods_supported`\nis `[\"none\"]` because clients authenticate via PKCE proof, not a secret).",
+        "required": [
+          "issuer",
+          "authorization_endpoint",
+          "token_endpoint",
+          "code_challenge_methods_supported",
+          "response_types_supported",
+          "grant_types_supported",
+          "token_endpoint_auth_methods_supported",
+          "scopes_supported"
+        ],
+        "properties": {
+          "authorization_endpoint": {
+            "type": "string",
+            "description": "URL of the authorization (consent) endpoint."
+          },
+          "code_challenge_methods_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "PKCE challenge methods supported by this server."
+          },
+          "grant_types_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "OAuth 2.0 grant types supported. Always `[\"authorization_code\"]`."
+          },
+          "issuer": {
+            "type": "string",
+            "description": "Issuer identifier — the deployment's base URL."
+          },
+          "response_types_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "OAuth 2.0 response types supported. Always `[\"code\"]`."
+          },
+          "scopes_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API-key scopes that may appear in `scopes` on the authorize request."
+          },
+          "service_documentation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Whether the server provides a metadata document (always true here —\nincluded for clients that probe the field)."
+          },
+          "token_endpoint": {
+            "type": "string",
+            "description": "URL of the token (code-exchange) endpoint."
+          },
+          "token_endpoint_auth_methods_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Token endpoint client-authentication methods. Always `[\"none\"]` —\nPKCE is the authentication mechanism."
           }
         }
       },
@@ -20894,6 +21164,40 @@
                 "description": "Sovereignty requirements for model access"
               }
             ]
+          }
+        }
+      },
+      "CreateAuthorizationCode": {
+        "type": "object",
+        "description": "Request body for `POST /admin/v1/oauth/authorize` — issued by the\nauthenticated user from the consent page after they click \"Allow\".",
+        "required": [
+          "callback_url",
+          "code_challenge",
+          "code_challenge_method"
+        ],
+        "properties": {
+          "app_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional human-readable name of the requesting app, shown on the consent screen."
+          },
+          "callback_url": {
+            "type": "string",
+            "description": "Where the external app expects the user to land after consent.\nThe exchange endpoint requires this exact same value when redeeming."
+          },
+          "code_challenge": {
+            "type": "string",
+            "description": "PKCE challenge supplied by the external app."
+          },
+          "code_challenge_method": {
+            "$ref": "#/components/schemas/PkceCodeChallengeMethod",
+            "description": "Method used to derive the challenge. `S256` unless `auth.oauth_pkce.allow_plain_method` is set."
+          },
+          "key_options": {
+            "$ref": "#/components/schemas/OAuthKeyOptions",
+            "description": "User's choices for the API key that will be issued on exchange.\nMirrors the fields shown in the self-service \"Create API Key\" modal."
           }
         }
       },
@@ -24374,6 +24678,89 @@
           }
         }
       },
+      "EligibleOwner": {
+        "type": "object",
+        "description": "One owner the current user could pick on the OAuth consent page.",
+        "required": [
+          "id",
+          "slug",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Owner ID (uuid)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name shown in the picker."
+          },
+          "org_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Parent organization id, if applicable. `None` for orgs themselves\nand the user's own identity."
+          },
+          "org_slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Parent organization slug, if applicable."
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "User's role in the owner (member, admin, etc.). `None` for the user\nentry, where role is implicit."
+          },
+          "slug": {
+            "type": "string",
+            "description": "Slug the user sees in URLs."
+          }
+        }
+      },
+      "EligibleOwnersResponse": {
+        "type": "object",
+        "description": "Response from `GET /admin/v1/me/eligible-owners`.",
+        "required": [
+          "user",
+          "organizations",
+          "teams",
+          "projects"
+        ],
+        "properties": {
+          "organizations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EligibleOwner"
+            },
+            "description": "Organizations the user belongs to."
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EligibleOwner"
+            },
+            "description": "Projects the user belongs to."
+          },
+          "teams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EligibleOwner"
+            },
+            "description": "Teams the user belongs to."
+          },
+          "user": {
+            "$ref": "#/components/schemas/EligibleOwner",
+            "description": "The current user as an owner choice — always present."
+          }
+        }
+      },
       "EmbeddingInput": {
         "oneOf": [
           {
@@ -24473,6 +24860,28 @@
           "error": {
             "$ref": "#/components/schemas/ErrorInfo",
             "description": "Error information"
+          }
+        }
+      },
+      "ExchangeCodeForKey": {
+        "type": "object",
+        "description": "Request body for the public `POST /oauth/token` endpoint.",
+        "required": [
+          "code",
+          "code_verifier"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The authorization code received via the callback URL."
+          },
+          "code_challenge_method": {
+            "$ref": "#/components/schemas/PkceCodeChallengeMethod",
+            "description": "Method used to derive the challenge from the verifier. Defaults to `S256`."
+          },
+          "code_verifier": {
+            "type": "string",
+            "description": "The original PKCE verifier the external app generated."
           }
         }
       },
@@ -26070,6 +26479,138 @@
           }
         }
       },
+      "OAuthKeyOptions": {
+        "type": "object",
+        "description": "User-chosen options for the API key that will be issued when the external\napp redeems the code. Mirrors the fields the self-service \"Create API\nKey\" modal exposes; `owner` is implied from the consenting user.\n\nAll fields are optional — the consent page populates whichever ones the\nuser filled in, and the token endpoint applies them to the issued key.",
+        "properties": {
+          "allowed_models": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Allowed model patterns. `None` = all models."
+          },
+          "budget_limit_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Spending cap in cents. `None` or `0` means unlimited."
+          },
+          "budget_period": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BudgetPeriod",
+                "description": "Period the budget resets over. Required when `budget_limit_cents` is set."
+              }
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Optional expiration timestamp for the issued API key."
+          },
+          "ip_allowlist": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "IP/CIDR allowlist. `None` = all IPs."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Friendly label for the issued key. Falls back to `app_name` then\n`\"OAuth app\"` when empty."
+          },
+          "owner": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiKeyOwner",
+                "description": "Owner the issued key should belong to. Defaults to the consenting\nuser. The authorize endpoint validates that the user has permission\nto create keys for the chosen owner using the same RBAC rules as the\nadmin \"Create API Key\" endpoint."
+              }
+            ]
+          },
+          "rate_limit_rpm": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Per-key requests-per-minute override."
+          },
+          "rate_limit_tpm": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Per-key tokens-per-minute override."
+          },
+          "scopes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Permission scopes (e.g. `chat`, `embeddings`). `None` = full access."
+          },
+          "sovereignty_requirements": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SovereigntyRequirements",
+                "description": "Sovereignty requirements for model access."
+              }
+            ]
+          }
+        }
+      },
+      "OAuthTokenResponse": {
+        "type": "object",
+        "description": "Response from `POST /oauth/token`. Mirrors OpenRouter's shape so that\nexisting client libraries written against their PKCE flow drop in.",
+        "required": [
+          "key",
+          "key_prefix",
+          "key_id"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The newly-issued API key. Only returned once — store it securely."
+          },
+          "key_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "ID of the API key record, for revocation via the admin API."
+          },
+          "key_prefix": {
+            "type": "string",
+            "description": "User-facing prefix of the key (e.g. `gw_abc...`). Useful for display."
+          }
+        }
+      },
       "OrgAccessEntry": {
         "type": "object",
         "description": "Organization access entry for access reviews",
@@ -27213,6 +27754,14 @@
             "description": "Number of partial images to generate during streaming"
           }
         }
+      },
+      "PkceCodeChallengeMethod": {
+        "type": "string",
+        "description": "PKCE code challenge method supplied by the external app.",
+        "enum": [
+          "S256",
+          "plain"
+        ]
       },
       "PolicyEvaluationResult": {
         "type": "object",
@@ -33904,6 +34453,10 @@
     {
       "name": "me",
       "description": "Self-service endpoints for authenticated users. Export personal data for GDPR compliance."
+    },
+    {
+      "name": "oauth",
+      "description": "OAuth-style PKCE flow for issuing user-scoped API keys to external apps. The user grants consent in the Hadrian UI; the external app exchanges the resulting code at `/oauth/token` for an API key bound to that user."
     },
     {
       "name": "Images",

@@ -351,6 +351,7 @@ requests_per_minute = 120
         (name = "embeddings", description = "Generate vector embeddings for text input. Use for semantic search, clustering, and similarity comparisons. OpenAI-compatible."),
         (name = "models", description = "List all available models from configured providers. Model IDs are prefixed with provider name."),
         (name = "me", description = "Self-service endpoints for authenticated users. Export personal data for GDPR compliance."),
+        (name = "oauth", description = "OAuth-style PKCE flow for issuing user-scoped API keys to external apps. The user grants consent in the Hadrian UI; the external app exchanges the resulting code at `/oauth/token` for an API key bound to that user."),
         (name = "Images", description = "Generate, edit, and create variations of images using DALL-E models. OpenAI-compatible."),
         (name = "Audio", description = "Text-to-speech, speech-to-text transcription, and audio translation using TTS and Whisper models. OpenAI-compatible."),
         // Admin API tags
@@ -388,6 +389,7 @@ requests_per_minute = 120
         // Self-service endpoints (current user)
         admin::me::export,
         admin::me::delete,
+        admin::me::eligible_owners,
         admin::me_providers::list,
         admin::me_providers::create,
         admin::me_providers::get,
@@ -402,6 +404,10 @@ requests_per_minute = 120
         admin::me_api_keys::create,
         admin::me_api_keys::revoke,
         admin::me_api_keys::rotate,
+        // OAuth-style PKCE flow
+        admin::oauth::authorize,
+        crate::routes::oauth_public::token,
+        crate::routes::oauth_public::authorization_server_metadata,
         // Self-service endpoints - Sessions
         admin::me_sessions::list,
         admin::me_sessions::delete_one,
@@ -813,6 +819,9 @@ requests_per_minute = 120
         models::UserProjectMembership,
         models::ExportedApiKey,
         models::ExportedUsageSummary,
+        // Self-service eligible owners (OAuth owner picker)
+        admin::me::EligibleOwner,
+        admin::me::EligibleOwnersResponse,
         // Admin models - API Key
         models::ApiKey,
         models::ApiKeyScope,
@@ -821,6 +830,14 @@ requests_per_minute = 120
         models::ApiKeyOwner,
         models::BudgetPeriod,
         admin::api_keys::RotateApiKeyRequest,
+        // OAuth PKCE flow
+        models::CreateAuthorizationCode,
+        models::AuthorizationCodeResponse,
+        models::ExchangeCodeForKey,
+        models::OAuthKeyOptions,
+        models::PkceCodeChallengeMethod,
+        crate::routes::oauth_public::OAuthTokenResponse,
+        crate::routes::oauth_public::AuthorizationServerMetadata,
         // Admin models - Dynamic Provider
         models::DynamicProvider,
         models::DynamicProviderResponse,

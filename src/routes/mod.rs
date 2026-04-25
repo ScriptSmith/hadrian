@@ -4,6 +4,7 @@ pub mod api;
 pub mod auth;
 pub mod execution;
 pub mod health;
+pub mod oauth_public;
 #[cfg(feature = "sso")]
 pub mod scim;
 #[cfg(feature = "server")]

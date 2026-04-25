@@ -107,6 +107,167 @@ pub(super) fn validate_api_key_input(
     Ok(())
 }
 
+/// Run the owner-scoped RBAC check that gates API key creation.
+///
+/// Each owner type maps to a different scope: org keys check the org, team
+/// keys check org+team, project keys check org+project, user keys check the
+/// global "self" scope, and service-account keys inherit from the parent
+/// org. Used by both the admin `POST /admin/v1/api-keys` endpoint and the
+/// OAuth PKCE consent endpoint.
+pub(super) async fn check_owner_create_authz(
+    services: &crate::services::Services,
+    authz: &crate::middleware::AuthzContext,
+    owner: &crate::models::ApiKeyOwner,
+) -> Result<(), AdminError> {
+    match owner {
+        crate::models::ApiKeyOwner::Organization { org_id } => {
+            authz.require(
+                "api_key",
+                "create",
+                None,
+                Some(&org_id.to_string()),
+                None,
+                None,
+            )?;
+        }
+        crate::models::ApiKeyOwner::Team { team_id } => {
+            let team = services
+                .teams
+                .get_by_id(*team_id)
+                .await?
+                .ok_or_else(|| AdminError::NotFound(format!("Team '{}' not found", team_id)))?;
+            authz.require(
+                "api_key",
+                "create",
+                None,
+                Some(&team.org_id.to_string()),
+                Some(&team_id.to_string()),
+                None,
+            )?;
+        }
+        crate::models::ApiKeyOwner::Project { project_id } => {
+            let project = services
+                .projects
+                .get_by_id(*project_id)
+                .await?
+                .ok_or_else(|| {
+                    AdminError::NotFound(format!("Project '{}' not found", project_id))
+                })?;
+            authz.require(
+                "api_key",
+                "create",
+                None,
+                Some(&project.org_id.to_string()),
+                None,
+                Some(&project_id.to_string()),
+            )?;
+        }
+        crate::models::ApiKeyOwner::User { .. } => {
+            authz.require("api_key", "create", None, None, None, None)?;
+        }
+        crate::models::ApiKeyOwner::ServiceAccount { service_account_id } => {
+            let sa = services
+                .service_accounts
+                .get_by_id(*service_account_id)
+                .await?
+                .ok_or_else(|| {
+                    AdminError::NotFound(format!(
+                        "Service account '{}' not found",
+                        service_account_id
+                    ))
+                })?;
+            authz.require(
+                "api_key",
+                "create",
+                None,
+                Some(&sa.org_id.to_string()),
+                None,
+                None,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Enforce the per-scope `max_api_keys_per_*` limits before creating a key.
+pub(super) async fn check_owner_create_limits(
+    services: &crate::services::Services,
+    owner: &crate::models::ApiKeyOwner,
+    limits: &crate::config::ResourceLimits,
+) -> Result<(), AdminError> {
+    match owner {
+        crate::models::ApiKeyOwner::Organization { org_id } => {
+            let max = limits.max_api_keys_per_org;
+            if max > 0 {
+                let count = services.api_keys.count_by_org(*org_id, false).await?;
+                if count >= max as i64 {
+                    return Err(AdminError::Conflict(format!(
+                        "Organization has reached the maximum number of API keys ({max})"
+                    )));
+                }
+            }
+        }
+        crate::models::ApiKeyOwner::Team { team_id } => {
+            let max = limits.max_api_keys_per_team;
+            if max > 0 {
+                let count = services.api_keys.count_by_team(*team_id, false).await?;
+                if count >= max as i64 {
+                    return Err(AdminError::Conflict(format!(
+                        "Team has reached the maximum number of API keys ({max})"
+                    )));
+                }
+            }
+        }
+        crate::models::ApiKeyOwner::Project { project_id } => {
+            let max = limits.max_api_keys_per_project;
+            if max > 0 {
+                let count = services
+                    .api_keys
+                    .count_by_project(*project_id, false)
+                    .await?;
+                if count >= max as i64 {
+                    return Err(AdminError::Conflict(format!(
+                        "Project has reached the maximum number of API keys ({max})"
+                    )));
+                }
+            }
+        }
+        crate::models::ApiKeyOwner::User { user_id } => {
+            let max = limits.max_api_keys_per_user;
+            if max > 0 {
+                let count = services.api_keys.count_by_user(*user_id, false).await?;
+                if count >= max as i64 {
+                    return Err(AdminError::Conflict(format!(
+                        "User has reached the maximum number of API keys ({max})"
+                    )));
+                }
+            }
+        }
+        crate::models::ApiKeyOwner::ServiceAccount { service_account_id } => {
+            let sa = services
+                .service_accounts
+                .get_by_id(*service_account_id)
+                .await?
+                .ok_or_else(|| {
+                    AdminError::NotFound(format!(
+                        "Service account '{}' not found",
+                        service_account_id
+                    ))
+                })?;
+            let max = limits.max_api_keys_per_org;
+            if max > 0 {
+                let count = services.api_keys.count_by_org(sa.org_id, false).await?;
+                if count >= max as i64 {
+                    return Err(AdminError::Conflict(format!(
+                        "Organization has reached the maximum number of API keys ({max})"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Invalidate all cache entries for an API key.
 /// Shared by revoke and rotate endpoints (both admin and self-service).
 pub(super) async fn invalidate_api_key_cache(cache: &dyn crate::cache::Cache, key_id: uuid::Uuid) {
@@ -251,147 +412,8 @@ pub async fn create(
         &state.config.limits.rate_limits,
     )?;
 
-    // Authorization check for API key creation.
-    // Each owner type requires permission scoped to the appropriate org/team/project.
-    match &input.owner {
-        crate::models::ApiKeyOwner::Organization { org_id } => {
-            let org_id_str = org_id.to_string();
-            authz.require("api_key", "create", None, Some(&org_id_str), None, None)?;
-        }
-        crate::models::ApiKeyOwner::Team { team_id } => {
-            let team = services
-                .teams
-                .get_by_id(*team_id)
-                .await?
-                .ok_or_else(|| AdminError::NotFound(format!("Team '{}' not found", team_id)))?;
-            let org_id_str = team.org_id.to_string();
-            let team_id_str = team_id.to_string();
-            authz.require(
-                "api_key",
-                "create",
-                None,
-                Some(&org_id_str),
-                Some(&team_id_str),
-                None,
-            )?;
-        }
-        crate::models::ApiKeyOwner::Project { project_id } => {
-            let project = services
-                .projects
-                .get_by_id(*project_id)
-                .await?
-                .ok_or_else(|| {
-                    AdminError::NotFound(format!("Project '{}' not found", project_id))
-                })?;
-            let org_id_str = project.org_id.to_string();
-            let project_id_str = project_id.to_string();
-            authz.require(
-                "api_key",
-                "create",
-                None,
-                Some(&org_id_str),
-                None,
-                Some(&project_id_str),
-            )?;
-        }
-        crate::models::ApiKeyOwner::User { .. } => {
-            authz.require("api_key", "create", None, None, None, None)?;
-        }
-        crate::models::ApiKeyOwner::ServiceAccount { service_account_id } => {
-            let sa = services
-                .service_accounts
-                .get_by_id(*service_account_id)
-                .await?
-                .ok_or_else(|| {
-                    AdminError::NotFound(format!(
-                        "Service account '{}' not found",
-                        service_account_id
-                    ))
-                })?;
-            authz.require(
-                "api_key",
-                "create",
-                None,
-                Some(&sa.org_id.to_string()),
-                None,
-                None,
-            )?;
-        }
-    }
-
-    // Check per-scope API key limits
-    let limits = &state.config.limits.resource_limits;
-    match &input.owner {
-        crate::models::ApiKeyOwner::Organization { org_id } => {
-            let max = limits.max_api_keys_per_org;
-            if max > 0 {
-                let count = services.api_keys.count_by_org(*org_id, false).await?;
-                if count >= max as i64 {
-                    return Err(AdminError::Conflict(format!(
-                        "Organization has reached the maximum number of API keys ({max})"
-                    )));
-                }
-            }
-        }
-        crate::models::ApiKeyOwner::Team { team_id } => {
-            let max = limits.max_api_keys_per_team;
-            if max > 0 {
-                let count = services.api_keys.count_by_team(*team_id, false).await?;
-                if count >= max as i64 {
-                    return Err(AdminError::Conflict(format!(
-                        "Team has reached the maximum number of API keys ({max})"
-                    )));
-                }
-            }
-        }
-        crate::models::ApiKeyOwner::Project { project_id } => {
-            let max = limits.max_api_keys_per_project;
-            if max > 0 {
-                let count = services
-                    .api_keys
-                    .count_by_project(*project_id, false)
-                    .await?;
-                if count >= max as i64 {
-                    return Err(AdminError::Conflict(format!(
-                        "Project has reached the maximum number of API keys ({max})"
-                    )));
-                }
-            }
-        }
-        crate::models::ApiKeyOwner::User { user_id } => {
-            let max = limits.max_api_keys_per_user;
-            if max > 0 {
-                let count = services.api_keys.count_by_user(*user_id, false).await?;
-                if count >= max as i64 {
-                    return Err(AdminError::Conflict(format!(
-                        "User has reached the maximum number of API keys ({max})"
-                    )));
-                }
-            }
-        }
-        crate::models::ApiKeyOwner::ServiceAccount { service_account_id } => {
-            // Service accounts belong to an org — apply the org-level limit
-            let sa = services
-                .service_accounts
-                .get_by_id(*service_account_id)
-                .await?
-                .ok_or_else(|| {
-                    AdminError::NotFound(format!(
-                        "Service account '{}' not found",
-                        service_account_id
-                    ))
-                })?;
-            let max = limits.max_api_keys_per_org;
-            if max > 0 {
-                let count = services.api_keys.count_by_org(sa.org_id, false).await?;
-                if count >= max as i64 {
-                    return Err(AdminError::Conflict(format!(
-                        "Organization has reached the maximum number of API keys ({max})"
-                    )));
-                }
-            }
-        }
-    }
+    check_owner_create_authz(services, &authz, &input.owner).await?;
+    check_owner_create_limits(services, &input.owner, &state.config.limits.resource_limits).await?;
 
     // Get the key generation prefix from config
     let prefix = state.config.auth.api_key_config().generation_prefix();

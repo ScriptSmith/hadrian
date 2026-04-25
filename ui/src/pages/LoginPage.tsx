@@ -59,7 +59,15 @@ export default function LoginPage() {
     defaultValues: { email: "" },
   });
 
-  const from = location.state?.from?.pathname || "/";
+  // Prefer an explicit `?return_to=` query param so flows that need to preserve
+  // a full URL (path + search, e.g. /oauth/authorize?callback_url=...) survive
+  // the round-trip through login. Falls back to the in-app `state.from` set by
+  // RequireAuth.
+  const returnToParam = new URLSearchParams(location.search).get("return_to");
+  const from =
+    returnToParam && returnToParam.startsWith("/")
+      ? returnToParam
+      : location.state?.from?.pathname || "/";
 
   if (configLoading || authLoading) {
     return (

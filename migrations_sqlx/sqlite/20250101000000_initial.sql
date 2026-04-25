@@ -1031,3 +1031,41 @@ CREATE TABLE IF NOT EXISTS skill_files (
 );
 
 CREATE INDEX IF NOT EXISTS idx_skill_files_skill ON skill_files(skill_id);
+
+-- ======================================================================
+-- OAuth PKCE Authorization Codes
+-- ======================================================================
+
+-- Short-lived, single-use codes issued when a user grants consent on the
+-- /oauth/authorize page. The external app exchanges the code (plus its
+-- code_verifier) at /oauth/token to receive a user-scoped API key.
+--
+-- Codes are bound to a single user, callback URL, and PKCE challenge. The
+-- `used_at` column is set atomically on exchange to prevent replay.
+CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+    id TEXT PRIMARY KEY NOT NULL,
+    -- Random opaque code returned to the external app via the callback URL
+    code TEXT NOT NULL UNIQUE,
+    -- PKCE challenge supplied by the external app
+    code_challenge TEXT NOT NULL,
+    code_challenge_method TEXT NOT NULL CHECK (code_challenge_method IN ('S256', 'plain')),
+    -- Where the user is sent after granting consent; the external app must use
+    -- the exact same callback URL when redeeming the code
+    callback_url TEXT NOT NULL,
+    -- The user who granted consent
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    -- Optional human-readable identifier displayed on the consent screen
+    app_name TEXT,
+    -- The user's choices on the consent page (label, budget, scopes, model
+    -- restrictions, etc.) — applied to the issued key on exchange. Stored
+    -- as JSON so we can extend the option set without a migration.
+    key_options TEXT NOT NULL DEFAULT '{}',
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_code ON oauth_authorization_codes(code);
+CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_user ON oauth_authorization_codes(user_id);
+-- Used by the periodic cleanup query to find expired/consumed codes
+CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_expires ON oauth_authorization_codes(expires_at);

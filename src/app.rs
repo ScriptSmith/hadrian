@@ -2028,6 +2028,26 @@ pub fn build_app(config: &config::GatewayConfig, state: AppState) -> Router {
         }
     }
 
+    // OAuth-style PKCE token exchange. Public endpoint (PKCE proof is the
+    // authentication). Available whenever a database is configured AND the
+    // flow is enabled in config; route handler also re-checks `enabled` to
+    // avoid serving 500s when the flag is flipped without a restart.
+    if !config.database.is_none() && config.auth.oauth_pkce.enabled {
+        let oauth_token_route = post(routes::oauth_public::token).route_layer(
+            axum::middleware::from_fn_with_state(state.clone(), middleware::rate_limit_middleware),
+        );
+        let oauth_metadata_route = get(routes::oauth_public::authorization_server_metadata)
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                middleware::rate_limit_middleware,
+            ));
+        app = app.route("/oauth/token", oauth_token_route).route(
+            // RFC 8414 Authorization Server Metadata
+            "/.well-known/oauth-authorization-server",
+            oauth_metadata_route,
+        );
+    }
+
     // Add SAML routes if database is configured (SAML uses per-org SSO configs from database)
     // These routes are separate from OIDC since they use HTTP-POST binding and different flows
     #[cfg(feature = "saml")]

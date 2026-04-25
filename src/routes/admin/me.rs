@@ -1,5 +1,7 @@
 use axum::{Extension, Json, extract::State};
+use serde::Serialize;
 use serde_json::json;
+use uuid::Uuid;
 
 use super::{AuditActor, error::AdminError};
 use crate::{
@@ -156,5 +158,154 @@ pub async fn delete(
         conversations_deleted: result.conversations_deleted,
         dynamic_providers_deleted: result.dynamic_providers_deleted,
         usage_records_deleted: result.usage_records_deleted,
+    }))
+}
+
+/// One owner the current user could pick on the OAuth consent page.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct EligibleOwner {
+    /// Owner ID (uuid).
+    pub id: Uuid,
+    /// Slug the user sees in URLs.
+    pub slug: String,
+    /// Display name shown in the picker.
+    pub name: String,
+    /// Parent organization id, if applicable. `None` for orgs themselves
+    /// and the user's own identity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub org_id: Option<Uuid>,
+    /// Parent organization slug, if applicable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub org_slug: Option<String>,
+    /// User's role in the owner (member, admin, etc.). `None` for the user
+    /// entry, where role is implicit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+}
+
+/// Response from `GET /admin/v1/me/eligible-owners`.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct EligibleOwnersResponse {
+    /// The current user as an owner choice — always present.
+    pub user: EligibleOwner,
+    /// Organizations the user belongs to.
+    pub organizations: Vec<EligibleOwner>,
+    /// Teams the user belongs to.
+    pub teams: Vec<EligibleOwner>,
+    /// Projects the user belongs to.
+    pub projects: Vec<EligibleOwner>,
+}
+
+/// List the owners the current user can plausibly issue an API key for.
+///
+/// This is a hint for the OAuth consent UI; the actual create-permission
+/// check still runs server-side at consent time, so an owner appearing
+/// here doesn't guarantee the create will succeed if RBAC denies it.
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    get,
+    path = "/admin/v1/me/eligible-owners",
+    tag = "me",
+    operation_id = "me_eligible_owners",
+    responses(
+        (status = 200, description = "Owners the user can pick from", body = EligibleOwnersResponse),
+        (status = 401, description = "User not identified from session", body = crate::openapi::ErrorResponse),
+    )
+))]
+pub async fn eligible_owners(
+    State(state): State<AppState>,
+    Extension(admin_auth): Extension<AdminAuth>,
+    Extension(authz): Extension<AuthzContext>,
+) -> Result<Json<EligibleOwnersResponse>, AdminError> {
+    authz.require("me", "read", None, None, None, None)?;
+
+    let user_id = admin_auth
+        .identity
+        .user_id
+        .ok_or_else(|| AdminError::Forbidden("User account required".to_string()))?;
+
+    let services = get_services(&state)?;
+
+    let user_record = services
+        .users
+        .get_by_id(user_id)
+        .await?
+        .ok_or_else(|| AdminError::NotFound(format!("User '{}' not found", user_id)))?;
+
+    let users_repo = state
+        .db
+        .as_ref()
+        .ok_or(AdminError::DatabaseRequired)?
+        .users();
+
+    let org_memberships = users_repo.get_org_memberships_for_user(user_id).await?;
+    let team_memberships = users_repo.get_team_memberships_for_user(user_id).await?;
+    let project_memberships = users_repo.get_project_memberships_for_user(user_id).await?;
+
+    // Project memberships only include the org_id, not slug. Pre-fetch the
+    // user's orgs once so we can look up org slugs without N+1 queries.
+    let org_slug_by_id: std::collections::HashMap<Uuid, String> = org_memberships
+        .iter()
+        .map(|m| (m.org_id, m.org_slug.clone()))
+        .collect();
+
+    let user = EligibleOwner {
+        id: user_id,
+        slug: user_record
+            .email
+            .clone()
+            .unwrap_or_else(|| user_record.external_id.clone()),
+        name: user_record
+            .name
+            .clone()
+            .or_else(|| user_record.email.clone())
+            .unwrap_or_else(|| "You".to_string()),
+        org_id: None,
+        org_slug: None,
+        role: None,
+    };
+
+    let organizations = org_memberships
+        .iter()
+        .map(|m| EligibleOwner {
+            id: m.org_id,
+            slug: m.org_slug.clone(),
+            name: m.org_name.clone(),
+            org_id: None,
+            org_slug: None,
+            role: Some(m.role.clone()),
+        })
+        .collect();
+
+    let teams = team_memberships
+        .iter()
+        .map(|m| EligibleOwner {
+            id: m.team_id,
+            slug: m.team_slug.clone(),
+            name: m.team_name.clone(),
+            org_id: Some(m.org_id),
+            org_slug: org_slug_by_id.get(&m.org_id).cloned(),
+            role: Some(m.role.clone()),
+        })
+        .collect();
+
+    let projects = project_memberships
+        .iter()
+        .map(|m| EligibleOwner {
+            id: m.project_id,
+            slug: m.project_slug.clone(),
+            name: m.project_name.clone(),
+            org_id: Some(m.org_id),
+            org_slug: org_slug_by_id.get(&m.org_id).cloned(),
+            role: Some(m.role.clone()),
+        })
+        .collect();
+
+    Ok(Json(EligibleOwnersResponse {
+        user,
+        organizations,
+        teams,
+        projects,
     }))
 }

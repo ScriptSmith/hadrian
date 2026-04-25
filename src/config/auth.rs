@@ -41,6 +41,12 @@ pub struct AuthConfig {
     /// Provides break-glass admin access when SSO is unavailable.
     #[serde(default)]
     pub emergency: Option<EmergencyAccessConfig>,
+
+    /// OAuth-style PKCE flow for issuing user-scoped API keys to external apps.
+    /// Disabled by setting `enabled = false`; otherwise allowed by default for any
+    /// callback domain, with optional allow/deny lists.
+    #[serde(default)]
+    pub oauth_pkce: OAuthPkceConfig,
 }
 
 impl AuthConfig {
@@ -60,6 +66,7 @@ impl AuthConfig {
         if let Some(emergency) = &self.emergency {
             emergency.validate()?;
         }
+        self.oauth_pkce.validate()?;
         Ok(())
     }
 
@@ -1935,4 +1942,172 @@ mod tests {
         assert_eq!(api_key.key_prefix, "gw_");
         assert_eq!(api_key.header_name, "X-API-Key");
     }
+
+    #[test]
+    fn test_oauth_pkce_default_open() {
+        let config = OAuthPkceConfig::default();
+        assert!(config.enabled);
+        assert!(config.allowed_domains.is_empty());
+        assert!(config.denied_domains.is_empty());
+        assert_eq!(config.code_ttl_seconds, 600);
+        assert!(!config.allow_plain_method);
+    }
+
+    #[test]
+    fn test_oauth_pkce_callback_default_open() {
+        let config = OAuthPkceConfig::default();
+        assert!(config.is_callback_host_allowed("app.example.com"));
+        assert!(config.is_callback_host_allowed("anything.test"));
+    }
+
+    #[test]
+    fn test_oauth_pkce_allowlist() {
+        let config = OAuthPkceConfig {
+            allowed_domains: vec!["example.com".into(), "trusted.dev".into()],
+            ..OAuthPkceConfig::default()
+        };
+        assert!(config.is_callback_host_allowed("example.com"));
+        assert!(config.is_callback_host_allowed("app.example.com"));
+        assert!(!config.is_callback_host_allowed("evil.com"));
+        assert!(!config.is_callback_host_allowed("notexample.com"));
+    }
+
+    #[test]
+    fn test_oauth_pkce_denylist() {
+        let config = OAuthPkceConfig {
+            denied_domains: vec!["evil.com".into()],
+            ..OAuthPkceConfig::default()
+        };
+        assert!(config.is_callback_host_allowed("example.com"));
+        assert!(!config.is_callback_host_allowed("evil.com"));
+        assert!(!config.is_callback_host_allowed("foo.evil.com"));
+    }
+
+    #[test]
+    fn test_oauth_pkce_deny_overrides_allow() {
+        let config = OAuthPkceConfig {
+            allowed_domains: vec!["example.com".into()],
+            denied_domains: vec!["bad.example.com".into()],
+            ..OAuthPkceConfig::default()
+        };
+        assert!(config.is_callback_host_allowed("good.example.com"));
+        assert!(!config.is_callback_host_allowed("bad.example.com"));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OAuth PKCE Configuration
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// OAuth-style PKCE flow for letting external apps obtain user-scoped API keys
+/// after the user grants consent in Hadrian's UI.
+///
+/// The flow follows OpenRouter's PKCE pattern: an external app generates a
+/// `code_verifier`/`code_challenge` pair, redirects the user to Hadrian's
+/// consent page, and exchanges the resulting code for an API key on the
+/// `/oauth/token` endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct OAuthPkceConfig {
+    /// Whether the OAuth PKCE flow is available. When false, both the
+    /// authorize and token endpoints return 404 and the consent page is
+    /// not advertised in the UI config.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// If non-empty, only callback URLs whose host equals one of these
+    /// domains (or is a subdomain of one) are accepted. An empty list
+    /// means any host passes the allowlist check.
+    #[serde(default)]
+    pub allowed_domains: Vec<String>,
+
+    /// Callback URLs whose host equals one of these domains (or is a
+    /// subdomain of one) are rejected. Denylist entries always win over
+    /// allowlist entries.
+    #[serde(default)]
+    pub denied_domains: Vec<String>,
+
+    /// Lifetime of an authorization code before it expires, in seconds.
+    /// Codes are also single-use and consumed atomically on exchange.
+    #[serde(default = "default_oauth_code_ttl")]
+    pub code_ttl_seconds: u64,
+
+    /// Allow `code_challenge_method = "plain"`. By default only `S256`
+    /// is accepted, which is the only method any modern client should use.
+    #[serde(default)]
+    pub allow_plain_method: bool,
+}
+
+impl Default for OAuthPkceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            allowed_domains: Vec::new(),
+            denied_domains: Vec::new(),
+            code_ttl_seconds: default_oauth_code_ttl(),
+            allow_plain_method: false,
+        }
+    }
+}
+
+fn default_oauth_code_ttl() -> u64 {
+    600
+}
+
+impl OAuthPkceConfig {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.code_ttl_seconds == 0 {
+            return Err(ConfigError::Validation(
+                "auth.oauth_pkce.code_ttl_seconds must be greater than 0".into(),
+            ));
+        }
+        if self.code_ttl_seconds > 3600 {
+            return Err(ConfigError::Validation(
+                "auth.oauth_pkce.code_ttl_seconds must not exceed 3600 (1 hour)".into(),
+            ));
+        }
+        for domain in self
+            .allowed_domains
+            .iter()
+            .chain(self.denied_domains.iter())
+        {
+            if domain.trim().is_empty() {
+                return Err(ConfigError::Validation(
+                    "auth.oauth_pkce domain entries must not be empty".into(),
+                ));
+            }
+            if domain.contains('/') || domain.contains(' ') {
+                return Err(ConfigError::Validation(format!(
+                    "auth.oauth_pkce domain '{domain}' must be a hostname, not a URL or path"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns true if the given callback host is permitted under the configured
+    /// allow/deny lists. Comparison is case-insensitive and matches both exact
+    /// hosts and subdomains (e.g. `app.example.com` matches `example.com`).
+    pub fn is_callback_host_allowed(&self, host: &str) -> bool {
+        let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+        if host.is_empty() {
+            return false;
+        }
+        if self.denied_domains.iter().any(|d| host_matches(&host, d)) {
+            return false;
+        }
+        if self.allowed_domains.is_empty() {
+            return true;
+        }
+        self.allowed_domains.iter().any(|d| host_matches(&host, d))
+    }
+}
+
+fn host_matches(host: &str, pattern: &str) -> bool {
+    let pattern = pattern.trim().trim_end_matches('.').to_ascii_lowercase();
+    if pattern.is_empty() {
+        return false;
+    }
+    host == pattern || host.ends_with(&format!(".{pattern}"))
 }

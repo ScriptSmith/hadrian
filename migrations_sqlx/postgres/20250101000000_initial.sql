@@ -1271,3 +1271,48 @@ DO $$ BEGIN
     CREATE TRIGGER update_skill_files_updated_at BEFORE UPDATE ON skill_files FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
+
+-- ======================================================================
+-- OAuth PKCE Authorization Codes
+-- ======================================================================
+
+-- Short-lived, single-use codes issued when a user grants consent on the
+-- /oauth/authorize page. The external app exchanges the code (plus its
+-- code_verifier) at /oauth/token to receive a user-scoped API key.
+--
+-- Codes are bound to a single user, callback URL, and PKCE challenge. The
+-- `used_at` column is set atomically on exchange to prevent replay.
+
+DO $$ BEGIN
+    CREATE TYPE oauth_pkce_method AS ENUM ('S256', 'plain');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+    id UUID PRIMARY KEY NOT NULL,
+    -- Random opaque code returned to the external app via the callback URL
+    code VARCHAR(128) NOT NULL UNIQUE,
+    -- PKCE challenge supplied by the external app
+    code_challenge VARCHAR(255) NOT NULL,
+    code_challenge_method oauth_pkce_method NOT NULL,
+    -- Where the user is sent after granting consent; the external app must use
+    -- the exact same callback URL when redeeming the code
+    callback_url VARCHAR(2048) NOT NULL,
+    -- The user who granted consent
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    -- Optional human-readable identifier displayed on the consent screen
+    app_name VARCHAR(255),
+    -- The user's choices on the consent page (label, budget, scopes, model
+    -- restrictions, etc.) — applied to the issued key on exchange. Stored
+    -- as JSONB so we can extend the option set without a migration.
+    key_options JSONB NOT NULL DEFAULT '{}'::jsonb,
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_code ON oauth_authorization_codes(code);
+CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_user ON oauth_authorization_codes(user_id);
+-- Used by the periodic cleanup query to find expired/consumed codes
+CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_expires ON oauth_authorization_codes(expires_at);

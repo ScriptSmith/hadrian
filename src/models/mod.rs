@@ -8,6 +8,7 @@ mod conversation;
 mod domain_verification;
 mod dynamic_provider;
 mod model_pricing;
+mod oauth_authorization_code;
 mod org_rbac_policy;
 #[cfg(feature = "sso")]
 mod org_sso_config;
@@ -38,6 +39,7 @@ pub use conversation::*;
 pub use domain_verification::*;
 pub use dynamic_provider::*;
 pub use model_pricing::*;
+pub use oauth_authorization_code::*;
 pub use org_rbac_policy::*;
 #[cfg(feature = "sso")]
 pub use org_sso_config::*;
