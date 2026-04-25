@@ -797,16 +797,24 @@ pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Respo
                 .map(|(_, s)| s)
                 .unwrap_or(crate::pricing::CostPricingSource::None);
 
-            // Inject cost (in dollars) into the usage object in the response body
+            // Inject cost (in dollars) into the usage object in the response body.
+            // Only re-serialize when we actually mutate the JSON; otherwise we'd
+            // change the body length (whitespace, key order) and have to strip
+            // Content-Length unnecessarily.
+            let mut body_modified = false;
             if let Some(cost) = cost_microcents {
                 let cost_dollars = crate::pricing::microcents_to_dollars(cost);
                 if let Some(usage_obj) = json.get_mut("usage").and_then(|u| u.as_object_mut()) {
                     usage_obj.insert("cost".to_string(), serde_json::Value::from(cost_dollars));
+                    body_modified = true;
                 }
             }
 
-            // Re-serialize the (possibly modified) JSON
-            let body_bytes = serde_json::to_vec(&json).unwrap_or_else(|_| bytes.to_vec());
+            let body_bytes = if body_modified {
+                serde_json::to_vec(&json).unwrap_or_else(|_| bytes.to_vec())
+            } else {
+                bytes.to_vec()
+            };
 
             (
                 Some(input),
@@ -817,6 +825,7 @@ pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Respo
                 finish_reason,
                 body_bytes,
                 pricing_source,
+                body_modified,
             )
         }
         Err(_) => (
@@ -828,6 +837,7 @@ pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Respo
             None,
             bytes.to_vec(),
             crate::pricing::CostPricingSource::None,
+            false,
         ),
     };
 
@@ -840,6 +850,7 @@ pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Respo
         finish_reason,
         body_bytes,
         pricing_source,
+        body_modified,
     ) = extracted;
 
     // Rebuild response with headers
@@ -880,8 +891,11 @@ pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Respo
         new_parts.headers.insert("X-Pricing-Source", value);
     }
 
-    // Remove Content-Length since body size may have changed after cost injection
-    new_parts.headers.remove(CONTENT_LENGTH);
+    // Only strip Content-Length when we re-serialized the body. If the body is
+    // passed through untouched, the upstream length is still authoritative.
+    if body_modified {
+        new_parts.headers.remove(CONTENT_LENGTH);
+    }
 
     Response::from_parts(new_parts, Body::from(body_bytes))
 }
