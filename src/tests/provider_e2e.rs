@@ -589,7 +589,12 @@ impl E2ETestHarness {
             save_debug_response(self.spec.name, name, status, &body_str);
         }
 
-        let json: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|e| {
+            panic!(
+                "Failed to parse response as JSON: {e}\nstatus: {status}\nbody: {}",
+                String::from_utf8_lossy(&body_bytes)
+            )
+        });
         (status, json)
     }
 
@@ -639,7 +644,12 @@ impl E2ETestHarness {
         let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let json: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|e| {
+            panic!(
+                "Failed to parse response as JSON: {e}\nstatus: {status}\nbody: {}",
+                String::from_utf8_lossy(&body_bytes)
+            )
+        });
         (status, json)
     }
 
@@ -663,7 +673,12 @@ impl E2ETestHarness {
         let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let json: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|e| {
+            panic!(
+                "Failed to parse response as JSON: {e}\nstatus: {status}\nbody: {}",
+                String::from_utf8_lossy(&body_bytes)
+            )
+        });
         (status, headers, json)
     }
 
@@ -2431,7 +2446,12 @@ impl ResilienceTestHarness {
         let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let json: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|e| {
+            panic!(
+                "Failed to parse response as JSON: {e}\nstatus: {status}\nbody: {}",
+                String::from_utf8_lossy(&body_bytes)
+            )
+        });
         (status, json)
     }
 }
