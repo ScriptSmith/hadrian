@@ -218,6 +218,17 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         });
     }
 
+    // Start OAuth PKCE authorization code cleanup worker. Always runs when
+    // the database is available — codes are short-lived housekeeping data,
+    // not subject to retention policy.
+    if let Some(db) = state.db.clone()
+        && config.auth.oauth_pkce.enabled
+    {
+        tokio::spawn(async move {
+            jobs::start_oauth_code_cleanup_worker(db).await;
+        });
+    }
+
     // Start vector store cleanup worker if configured and database is available
     if let Some(db) = state.db.clone() {
         let cleanup_config = config.features.vector_store_cleanup.clone();

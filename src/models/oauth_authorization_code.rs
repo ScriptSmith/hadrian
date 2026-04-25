@@ -111,8 +111,10 @@ pub struct CreateAuthorizationCode {
     /// The exchange endpoint requires this exact same value when redeeming.
     #[validate(length(min = 1, max = 2048))]
     pub callback_url: String,
-    /// PKCE challenge supplied by the external app.
-    #[validate(length(min = 32, max = 255))]
+    /// PKCE challenge supplied by the external app. RFC 7636 §4.1 mandates
+    /// 43–128 characters for both the verifier and (by extension) the
+    /// `S256` / `plain` challenges.
+    #[validate(length(min = 43, max = 128))]
     pub code_challenge: String,
     /// Method used to derive the challenge. `S256` unless `auth.oauth_pkce.allow_plain_method` is set.
     pub code_challenge_method: PkceCodeChallengeMethod,
@@ -138,6 +140,11 @@ pub struct AuthorizationCodeResponse {
 }
 
 /// Request body for the public `POST /oauth/token` endpoint.
+///
+/// Per RFC 7636 §4.5, the server already knows `code_challenge_method` from
+/// the authorization request, so the client does not need to re-submit it.
+/// We keep it accepted-but-optional purely for sanity-checking — the
+/// stored method is what's actually used during verification.
 #[derive(Debug, Clone, Deserialize, Validate)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct ExchangeCodeForKey {
@@ -150,11 +157,10 @@ pub struct ExchangeCodeForKey {
     /// matches RFC 7636 §4.1, which mandates 43–128 URL-safe characters.
     #[validate(length(min = 43, max = 128))]
     pub code_verifier: String,
-    /// Method used to derive the challenge from the verifier. Defaults to `S256`.
-    #[serde(default = "default_method")]
-    pub code_challenge_method: PkceCodeChallengeMethod,
-}
-
-fn default_method() -> PkceCodeChallengeMethod {
-    PkceCodeChallengeMethod::S256
+    /// Optional client-side hint of the method used to derive the
+    /// challenge. If supplied and it doesn't match the method recorded at
+    /// authorize time, the request is rejected; if omitted, the stored
+    /// method is used.
+    #[serde(default)]
+    pub code_challenge_method: Option<PkceCodeChallengeMethod>,
 }

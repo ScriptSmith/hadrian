@@ -21251,7 +21251,7 @@
           },
           "code_challenge": {
             "type": "string",
-            "description": "PKCE challenge supplied by the external app."
+            "description": "PKCE challenge supplied by the external app. RFC 7636 §4.1 mandates\n43–128 characters for both the verifier and (by extension) the\n`S256` / `plain` challenges."
           },
           "code_challenge_method": {
             "$ref": "#/components/schemas/PkceCodeChallengeMethod",
@@ -24927,7 +24927,7 @@
       },
       "ExchangeCodeForKey": {
         "type": "object",
-        "description": "Request body for the public `POST /oauth/token` endpoint.",
+        "description": "Request body for the public `POST /oauth/token` endpoint.\n\nPer RFC 7636 §4.5, the server already knows `code_challenge_method` from\nthe authorization request, so the client does not need to re-submit it.\nWe keep it accepted-but-optional purely for sanity-checking — the\nstored method is what's actually used during verification.",
         "required": [
           "code",
           "code_verifier"
@@ -24938,8 +24938,15 @@
             "description": "The authorization code received via the callback URL. We generate\n256-bit codes, so anything shorter than ~32 chars is definitely not\none of ours; the upper bound just defends the deserializer."
           },
           "code_challenge_method": {
-            "$ref": "#/components/schemas/PkceCodeChallengeMethod",
-            "description": "Method used to derive the challenge from the verifier. Defaults to `S256`."
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PkceCodeChallengeMethod",
+                "description": "Optional client-side hint of the method used to derive the\nchallenge. If supplied and it doesn't match the method recorded at\nauthorize time, the request is rejected; if omitted, the stored\nmethod is used."
+              }
+            ]
           },
           "code_verifier": {
             "type": "string",

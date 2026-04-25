@@ -219,15 +219,16 @@ const verifier = sessionStorage.getItem("hadrian-verifier");
 const response = await fetch("https://hadrian.example.com/oauth/token", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    code,
-    code_verifier: verifier,
-    code_challenge_method: "S256",
-  }),
+  body: JSON.stringify({ code, code_verifier: verifier }),
 });
 
 const { key, key_prefix, key_id } = await response.json();
 ```
+
+`code_challenge_method` does not need to be re-sent at token exchange —
+per RFC 7636 §4.5, the server already knows the method from the
+authorization request. If you do send it, it must match what was used at
+authorize time or the request is rejected.
 
 The `key` field is the raw API key. Store it securely — it cannot be
 retrieved again.

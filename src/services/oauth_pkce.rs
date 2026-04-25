@@ -76,6 +76,10 @@ impl OAuthPkceService {
     /// stored row on success so the caller can issue an API key under the
     /// bound user.
     ///
+    /// Per RFC 7636 §4.5, the server already knows the challenge method
+    /// from the authorization request — `client_method` is an optional
+    /// client-side hint we sanity-check but otherwise ignore.
+    ///
     /// Order of operations matters: we look the code up *without* mutating
     /// it, run PKCE verification, and only then atomically claim it. If the
     /// verifier is wrong, the code stays usable so the legitimate caller
@@ -87,7 +91,7 @@ impl OAuthPkceService {
         &self,
         code: &str,
         code_verifier: &str,
-        code_challenge_method: PkceCodeChallengeMethod,
+        client_method: Option<PkceCodeChallengeMethod>,
     ) -> Result<OAuthAuthorizationCode, OAuthPkceError> {
         let repo = self.db.oauth_authorization_codes();
 
@@ -96,11 +100,15 @@ impl OAuthPkceService {
             .await?
             .ok_or(OAuthPkceError::InvalidCode)?;
 
-        if stored.code_challenge_method != code_challenge_method {
+        // If the client supplied a method, it must match what we stored.
+        // RFC 7636 doesn't require resubmission, so a missing value is fine.
+        if let Some(client_method) = client_method
+            && client_method != stored.code_challenge_method
+        {
             return Err(OAuthPkceError::PkceMismatch);
         }
 
-        let derived = derive_challenge(code_verifier, code_challenge_method);
+        let derived = derive_challenge(code_verifier, stored.code_challenge_method);
         if derived
             .as_bytes()
             .ct_eq(stored.code_challenge.as_bytes())
