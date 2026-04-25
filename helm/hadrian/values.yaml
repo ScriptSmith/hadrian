@@ -37,6 +37,11 @@ podAnnotations: {}
 # -- Pod labels
 podLabels: {}
 
+# -- Pod termination grace period in seconds. Must exceed the gateway's
+#    `[server.shutdown]` drain budget (default 35s) so in-flight requests
+#    finish and the OTLP/usage buffers flush before SIGKILL.
+terminationGracePeriodSeconds: 60
+
 # -- Pod security context
 podSecurityContext:
   fsGroup: 1000
