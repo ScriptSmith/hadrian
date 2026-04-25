@@ -400,11 +400,17 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
     #[cfg(not(feature = "wizard"))]
     let _ = no_browser;
 
-    // Graceful shutdown: wait for SIGINT/SIGTERM, then wait for all background tasks
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(task_tracker, usage_buffer_handle))
-        .await
-        .unwrap();
+    // Graceful shutdown: wait for SIGINT/SIGTERM, then wait for all background tasks.
+    // `into_make_service_with_connect_info` is required so middleware can read the
+    // connecting peer address via `ConnectInfo<SocketAddr>` for IP-based rate limits,
+    // API-key IP allowlists, and audit logging.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal(task_tracker, usage_buffer_handle))
+    .await
+    .unwrap();
 }
 
 async fn shutdown_signal(
