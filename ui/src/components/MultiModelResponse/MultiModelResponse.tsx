@@ -808,7 +808,7 @@ const ModelResponseCard = memo(function ModelResponseCard({
         }
       }
       if (mergedIds.length === 0) return null;
-      return { artifactIds: mergedIds, layout: layout ?? "inline" };
+      return { artifactIds: [...new Set(mergedIds)], layout: layout ?? "inline" };
     },
     []
   );

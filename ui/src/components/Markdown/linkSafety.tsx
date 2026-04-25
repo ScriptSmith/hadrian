@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Copy, ExternalLink } from "lucide-react";
 import { Modal, ModalClose } from "@/components/Modal/Modal";
 import { Button } from "@/components/Button/Button";
@@ -15,8 +15,11 @@ const TRUSTED_DOMAINS_KEY = "hadrian:trusted-link-domains";
 
 function getDomain(url: string): string | null {
   try {
-    const host = new URL(url).hostname;
-    return host || null;
+    const parsed = new URL(url);
+    // Reject userinfo URLs (`https://anything@trusted.com/`) so a crafted link
+    // can't pose as a trusted domain and bypass the confirmation modal.
+    if (parsed.username || parsed.password) return null;
+    return parsed.hostname || null;
   } catch {
     return null;
   }
@@ -54,6 +57,7 @@ function isTrustedUrl(url: string): boolean {
 function LinkSafetyModal({ isOpen, onClose, onConfirm, url }: LinkSafetyModalProps) {
   const [copied, setCopied] = useState(false);
   const [alwaysAllow, setAlwaysAllow] = useState(false);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const domain = getDomain(url);
 
   // Reset the checkbox each time a new modal opens.
@@ -61,11 +65,21 @@ function LinkSafetyModal({ isOpen, onClose, onConfirm, url }: LinkSafetyModalPro
     if (isOpen) setAlwaysAllow(false);
   }, [isOpen, url]);
 
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
+
   const handleCopy = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(url);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => {
+        setCopied(false);
+        copyTimerRef.current = null;
+      }, 2000);
     } catch {
       // Clipboard write can fail without focus or permission; ignore.
     }

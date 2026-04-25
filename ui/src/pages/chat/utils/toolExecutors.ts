@@ -42,6 +42,7 @@ import { duckdbService } from "@/services/duckdb";
 import { callMCPTool } from "@/stores/mcpStore";
 import { skillExecutor } from "./skillExecutor";
 import type { ToolContent } from "@/services/mcp";
+import safeRegex from "safe-regex";
 
 /**
  * Context provided to tool executors
@@ -181,6 +182,12 @@ export interface DisplayDirective {
   layout?: "inline" | "gallery" | "stacked";
 }
 
+// Bounds for the LLM-supplied `match` regex used by `if_output_matches`.
+// Keep these in sync with the schema description below so the model knows
+// the limits up front.
+const MAX_DISPLAY_MATCH_PATTERN_LEN = 256;
+const MAX_DISPLAY_MATCH_INPUT_LEN = 16_384;
+
 /**
  * JSON Schema fragment for the `display` parameter. Inject this as a property
  * on any tool that can produce artifacts (both built-in and MCP).
@@ -202,7 +209,13 @@ export const DISPLAY_PARAMETER_SCHEMA = {
     },
     match: {
       type: "string",
-      description: "Regex tested against the tool output (required when when='if_output_matches').",
+      maxLength: MAX_DISPLAY_MATCH_PATTERN_LEN,
+      description:
+        `Regex tested against the tool output (required when when='if_output_matches'). ` +
+        `Maximum ${MAX_DISPLAY_MATCH_PATTERN_LEN} characters. Patterns prone to catastrophic ` +
+        `backtracking (e.g. nested quantifiers like \`(a+)+\`) are rejected. The output is ` +
+        `truncated to ${MAX_DISPLAY_MATCH_INPUT_LEN} characters before matching, so anchor ` +
+        `near the start or use a non-anchored pattern.`,
     },
     layout: {
       type: "string",
@@ -225,8 +238,22 @@ function shouldApplyDisplay(directive: DisplayDirective, result: ToolExecutionRe
       return result.success === false;
     case "if_output_matches": {
       if (!directive.match) return false;
+      // The pattern comes from LLM tool-call arguments, so it's untrusted.
+      // Cap pattern + input length and screen out catastrophic-backtracking
+      // patterns with safe-regex before running them.
+      if (directive.match.length > MAX_DISPLAY_MATCH_PATTERN_LEN) {
+        console.warn(
+          `display.match pattern exceeds ${MAX_DISPLAY_MATCH_PATTERN_LEN} chars; skipping`
+        );
+        return false;
+      }
+      if (!safeRegex(directive.match)) {
+        console.warn(`display.match pattern rejected as ReDoS-prone: ${directive.match}`);
+        return false;
+      }
       try {
-        return new RegExp(directive.match).test(result.output ?? "");
+        const input = (result.output ?? "").slice(0, MAX_DISPLAY_MATCH_INPUT_LEN);
+        return new RegExp(directive.match).test(input);
       } catch (err) {
         console.warn(`Invalid regex in display.match (${directive.match}):`, err);
         return false;
