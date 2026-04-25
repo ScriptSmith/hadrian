@@ -257,6 +257,12 @@ impl FilesService {
     /// - The file is owned by the user directly
     /// - The file is owned by an organization the user belongs to
     /// - The file is owned by a project the user belongs to
+    ///
+    /// Each membership check is bounded by the user's own membership count
+    /// (typically a handful of orgs/teams/projects) instead of paging through
+    /// every member of the resource — the previous default-`ListParams` calls
+    /// silently denied access whenever an org/team/project had more members
+    /// than the page cap.
     pub async fn user_has_access(&self, user_id: Uuid, file_id: Uuid) -> DbResult<bool> {
         let file = match self.db.files().get_file(file_id).await? {
             Some(f) => f,
@@ -264,36 +270,30 @@ impl FilesService {
         };
 
         match file.owner_type {
-            VectorStoreOwnerType::User => {
-                // Direct ownership
-                Ok(file.owner_id == user_id)
-            }
+            VectorStoreOwnerType::User => Ok(file.owner_id == user_id),
             VectorStoreOwnerType::Organization => {
-                // Check if user is a member of the organization
-                let members = self
+                let memberships = self
                     .db
                     .users()
-                    .list_org_members(file.owner_id, ListParams::default())
+                    .get_org_memberships_for_user(user_id)
                     .await?;
-                Ok(members.items.iter().any(|u| u.id == user_id))
+                Ok(memberships.iter().any(|m| m.org_id == file.owner_id))
             }
             VectorStoreOwnerType::Team => {
-                // Check if user is a member of the team
-                let members = self
-                    .db
-                    .teams()
-                    .list_members(file.owner_id, ListParams::default())
-                    .await?;
-                Ok(members.items.iter().any(|m| m.user_id == user_id))
-            }
-            VectorStoreOwnerType::Project => {
-                // Check if user is a member of the project
-                let members = self
+                let memberships = self
                     .db
                     .users()
-                    .list_project_members(file.owner_id, ListParams::default())
+                    .get_team_memberships_for_user(user_id)
                     .await?;
-                Ok(members.items.iter().any(|u| u.id == user_id))
+                Ok(memberships.iter().any(|m| m.team_id == file.owner_id))
+            }
+            VectorStoreOwnerType::Project => {
+                let memberships = self
+                    .db
+                    .users()
+                    .get_project_memberships_for_user(user_id)
+                    .await?;
+                Ok(memberships.iter().any(|m| m.project_id == file.owner_id))
             }
         }
     }
