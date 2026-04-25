@@ -45,13 +45,13 @@ pub struct IdleTimeoutError(Duration);
 /// The timeout resets after each successful chunk, so long-running streams
 /// that are actively producing data will not timeout.
 pub struct IdleTimeoutStream<S> {
-    inner: S,
+    /// `None` once the stream has terminated, dropping the inner stream so any
+    /// upstream resources (sockets, channels) are released immediately.
+    inner: Option<S>,
     timeout: Duration,
     /// Sleep future for the current timeout period.
     /// Pinned because Sleep requires pinning.
     sleep: Pin<Box<Sleep>>,
-    /// Whether the stream has already timed out or ended
-    terminated: bool,
 }
 
 impl<S> IdleTimeoutStream<S>
@@ -63,10 +63,9 @@ where
     /// If `timeout` is zero, the wrapper is effectively a no-op pass-through.
     pub fn new(inner: S, timeout: Duration) -> Self {
         Self {
-            inner,
+            inner: Some(inner),
             timeout,
             sleep: Box::pin(tokio::time::sleep(timeout)),
-            terminated: false,
         }
     }
 
@@ -84,17 +83,18 @@ where
     type Item = Result<T, E>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.terminated {
+        if self.inner.is_none() {
             return Poll::Ready(None);
         }
 
         // If timeout is disabled (zero), just pass through
         if !self.timeout_enabled() {
-            return Pin::new(&mut self.inner).poll_next(cx);
+            return Pin::new(self.inner.as_mut().expect("checked above")).poll_next(cx);
         }
 
         // Poll the inner stream first
-        match Pin::new(&mut self.inner).poll_next(cx) {
+        let inner = self.inner.as_mut().expect("checked above");
+        match Pin::new(inner).poll_next(cx) {
             Poll::Ready(Some(Ok(item))) => {
                 // Got a chunk - reset the timeout
                 let new_deadline = tokio::time::Instant::now() + self.timeout;
@@ -102,20 +102,20 @@ where
                 Poll::Ready(Some(Ok(item)))
             }
             Poll::Ready(Some(Err(e))) => {
-                self.terminated = true;
+                self.inner = None;
                 Poll::Ready(Some(Err(e)))
             }
             Poll::Ready(None) => {
-                // Stream ended normally
-                self.terminated = true;
+                self.inner = None;
                 Poll::Ready(None)
             }
             Poll::Pending => {
                 // Stream is waiting for data - check if we've timed out
                 match self.sleep.as_mut().poll(cx) {
                     Poll::Ready(()) => {
-                        // Timeout elapsed!
-                        self.terminated = true;
+                        // Timeout elapsed - drop the inner stream so its
+                        // socket/connection releases instead of lingering.
+                        self.inner = None;
                         tracing::warn!(
                             timeout_secs = self.timeout.as_secs(),
                             "Streaming response idle timeout - terminating stalled stream"
