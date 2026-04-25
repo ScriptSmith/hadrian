@@ -6,7 +6,7 @@
 use axum::{
     Json,
     extract::State,
-    http::{HeaderMap, StatusCode, header},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use axum_valid::Valid;
@@ -14,8 +14,10 @@ use serde::Serialize;
 
 use crate::{
     AppState,
+    config::ServerConfig,
     models::{ApiKeyOwner, ApiKeyScope, CreateApiKey, ExchangeCodeForKey},
     openapi::ErrorResponse,
+    routes::admin::api_keys::{check_owner_create_limits, check_owner_membership_for_user},
     services::{OAuthPkceError, Services},
 };
 
@@ -53,6 +55,24 @@ impl IntoResponse for OAuthTokenError {
             ),
         };
         (status, Json(ErrorResponse::new(code, message.to_string()))).into_response()
+    }
+}
+
+/// Map an admin-side validation error from the redemption-time re-checks
+/// into the public token endpoint's vocabulary. Lost-permission and
+/// limit-reached failures look like an unusable grant from the client's
+/// perspective; everything else is an internal failure.
+fn map_revalidation_error(err: crate::routes::admin::AdminError) -> OAuthTokenError {
+    use crate::routes::admin::AdminError;
+    match err {
+        AdminError::Forbidden(_)
+        | AdminError::Conflict(_)
+        | AdminError::Validation(_)
+        | AdminError::NotFound(_) => OAuthTokenError::InvalidGrant,
+        other => {
+            tracing::error!(error = ?other, "Internal error revalidating OAuth token request");
+            OAuthTokenError::Internal
+        }
     }
 }
 
@@ -136,6 +156,19 @@ pub async fn token(
         user_id: stored.user_id,
     });
 
+    // Re-validate at exchange time, not just at consent time. Membership
+    // and per-scope key-count caps can change in the consent → exchange
+    // window; without re-checking, an attacker who held a valid code could
+    // get a key issued for a scope the user no longer belongs to, or
+    // squeeze past the owner's `max_api_keys_per_*` limit.
+    let db = state.db.as_ref().ok_or(OAuthTokenError::Internal)?;
+    check_owner_membership_for_user(services, db, stored.user_id, &owner)
+        .await
+        .map_err(map_revalidation_error)?;
+    check_owner_create_limits(services, &owner, &state.config.limits.resource_limits)
+        .await
+        .map_err(map_revalidation_error)?;
+
     let create_input = CreateApiKey {
         name: key_name,
         owner,
@@ -202,37 +235,38 @@ pub struct AuthorizationServerMetadata {
     pub service_documentation: Option<String>,
 }
 
-/// Derive the issuer base URL (scheme + host, no trailing slash) from
-/// request headers. Honours `X-Forwarded-Proto` and `X-Forwarded-Host` when
-/// the deployment is behind a reverse proxy; otherwise falls back to the
-/// `Host` header and infers the scheme from the TLS config.
-fn derive_issuer(headers: &HeaderMap, tls_configured: bool) -> Option<String> {
-    let header_str = |name: &header::HeaderName| {
-        headers
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+/// Derive the issuer base URL (scheme://host[:port], no trailing slash).
+///
+/// Order of precedence:
+///
+/// 1. `auth.oauth_pkce.public_url` — the operator's externally-visible URL.
+///    This is the only setting that's safe behind a reverse proxy.
+/// 2. Otherwise build from `server.host`, `server.port`, and `server.tls`.
+///
+/// We deliberately do NOT consume `X-Forwarded-Host` / `X-Forwarded-Proto`
+/// here. The `/.well-known/oauth-authorization-server` endpoint is
+/// unauthenticated by RFC 8414, and trusting unverified forwarded headers
+/// would let any anonymous caller poison the discovery document into
+/// advertising attacker-controlled authorize/token URLs.
+fn derive_issuer(server: &ServerConfig, public_url: Option<&str>) -> String {
+    if let Some(url) = public_url
+        && !url.is_empty()
+    {
+        return url.trim_end_matches('/').to_string();
+    }
+    let scheme = if server.tls.is_some() {
+        "https"
+    } else {
+        "http"
     };
-
-    let scheme = header_str(&header::HeaderName::from_static("x-forwarded-proto"))
-        .map(|s| {
-            // Some proxies send a comma-separated chain; the first entry is
-            // the original scheme.
-            s.split(',').next().unwrap_or("").trim().to_string()
-        })
-        .filter(|s| s == "http" || s == "https")
-        .unwrap_or_else(|| {
-            if tls_configured {
-                "https".into()
-            } else {
-                "http".into()
-            }
-        });
-
-    let host = header_str(&header::HeaderName::from_static("x-forwarded-host"))
-        .or_else(|| header_str(&header::HOST))?;
-    Some(format!("{scheme}://{host}"))
+    // Include the port unless it's the well-known default for the scheme.
+    let omit_port =
+        (scheme == "https" && server.port == 443) || (scheme == "http" && server.port == 80);
+    if omit_port {
+        format!("{}://{}", scheme, server.host)
+    } else {
+        format!("{}://{}:{}", scheme, server.host, server.port)
+    }
 }
 
 /// Serve the OAuth 2.0 Authorization Server Metadata document.
@@ -248,17 +282,13 @@ fn derive_issuer(headers: &HeaderMap, tls_configured: bool) -> Option<String> {
 ))]
 pub async fn authorization_server_metadata(
     State(state): State<AppState>,
-    headers: HeaderMap,
 ) -> Result<Json<AuthorizationServerMetadata>, OAuthTokenError> {
     let pkce = &state.config.auth.oauth_pkce;
     if !pkce.enabled {
         return Err(OAuthTokenError::NotFound);
     }
 
-    let issuer = derive_issuer(&headers, state.config.server.tls.is_some()).ok_or_else(|| {
-        tracing::warn!("Cannot derive issuer URL for /.well-known/oauth-authorization-server");
-        OAuthTokenError::Internal
-    })?;
+    let issuer = derive_issuer(&state.config.server, pkce.public_url.as_deref());
 
     let mut methods: Vec<&'static str> = vec!["S256"];
     if pkce.allow_plain_method {
@@ -282,51 +312,69 @@ pub async fn authorization_server_metadata(
 mod tests {
     use super::*;
 
-    fn hm(pairs: &[(&str, &str)]) -> HeaderMap {
-        let mut h = HeaderMap::new();
-        for (k, v) in pairs {
-            h.insert(
-                header::HeaderName::from_bytes(k.as_bytes()).unwrap(),
-                v.parse().unwrap(),
-            );
+    fn server(host: &str, port: u16, tls: bool) -> ServerConfig {
+        let tls = tls.then(|| crate::config::TlsConfig {
+            cert_path: String::new(),
+            key_path: String::new(),
+        });
+        ServerConfig {
+            host: host.parse().unwrap(),
+            port,
+            tls,
+            ..ServerConfig::default()
         }
-        h
     }
 
     #[test]
-    fn issuer_uses_x_forwarded_chain_when_present() {
-        let headers = hm(&[
-            ("host", "internal:8080"),
-            ("x-forwarded-host", "hadrian.example.com"),
-            ("x-forwarded-proto", "https"),
-        ]);
+    fn issuer_prefers_public_url_when_set() {
+        let s = server("127.0.0.1", 8080, false);
         assert_eq!(
-            derive_issuer(&headers, false).unwrap(),
+            derive_issuer(&s, Some("https://hadrian.example.com")),
             "https://hadrian.example.com"
         );
     }
 
     #[test]
-    fn issuer_falls_back_to_host_and_tls_config() {
-        let headers = hm(&[("host", "hadrian.example.com")]);
+    fn issuer_strips_trailing_slash_from_public_url() {
+        let s = server("127.0.0.1", 8080, false);
         assert_eq!(
-            derive_issuer(&headers, true).unwrap(),
+            derive_issuer(&s, Some("https://hadrian.example.com/")),
             "https://hadrian.example.com"
         );
+    }
+
+    #[test]
+    fn issuer_falls_back_to_server_config() {
         assert_eq!(
-            derive_issuer(&headers, false).unwrap(),
-            "http://hadrian.example.com"
+            derive_issuer(&server("0.0.0.0", 8080, false), None),
+            "http://0.0.0.0:8080"
+        );
+        assert_eq!(
+            derive_issuer(&server("0.0.0.0", 8080, true), None),
+            "https://0.0.0.0:8080"
         );
     }
 
     #[test]
-    fn issuer_returns_none_without_host() {
-        assert!(derive_issuer(&HeaderMap::new(), false).is_none());
+    fn issuer_omits_default_ports() {
+        // server.host is an IpAddr — hostname deployments rely on the
+        // public_url override. Use the standard ports here to exercise
+        // the omit-port branch in the IP-based fallback.
+        assert_eq!(
+            derive_issuer(&server("10.0.0.1", 443, true), None),
+            "https://10.0.0.1"
+        );
+        assert_eq!(
+            derive_issuer(&server("10.0.0.1", 80, false), None),
+            "http://10.0.0.1"
+        );
     }
 
     #[test]
-    fn issuer_picks_first_proto_in_chain() {
-        let headers = hm(&[("host", "h:8080"), ("x-forwarded-proto", "https, http")]);
-        assert_eq!(derive_issuer(&headers, false).unwrap(), "https://h:8080");
+    fn issuer_ignores_empty_public_url() {
+        assert_eq!(
+            derive_issuer(&server("0.0.0.0", 8080, true), Some("")),
+            "https://0.0.0.0:8080"
+        );
     }
 }

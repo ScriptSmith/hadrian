@@ -80,8 +80,20 @@ returns:
 }
 ```
 
-The issuer and endpoint URLs honour `X-Forwarded-Proto` / `X-Forwarded-Host`
-when Hadrian is deployed behind a reverse proxy.
+The discovery document is unauthenticated by RFC 8414, so Hadrian
+deliberately does **not** consume `X-Forwarded-*` headers when building
+it — those are trivially spoofable and would let an attacker poison the
+document into advertising attacker-controlled endpoints. Operators behind
+a reverse proxy (or anywhere the externally-visible URL differs from the
+bind address) must set `auth.oauth_pkce.public_url`:
+
+```toml
+[auth.oauth_pkce]
+public_url = "https://hadrian.example.com"
+```
+
+When `public_url` is unset, the document falls back to building URLs from
+`server.host`, `server.port`, and `server.tls`.
 
 ## Flow
 
@@ -249,6 +261,13 @@ allow_plain_method = false
 # Leave allowed_domains empty to allow any host. denied_domains always wins.
 allowed_domains = []
 denied_domains = []
+
+# Externally-visible base URL of this deployment, used as the issuer in
+# /.well-known/oauth-authorization-server. Required when Hadrian is reached
+# via a different host than `server.host:server.port` (e.g. behind a reverse
+# proxy). Forwarded headers are NOT trusted on the unauthenticated discovery
+# endpoint, so this must be set explicitly.
+# public_url = "https://hadrian.example.com"
 ```
 
 ### Restricting which apps can use the flow

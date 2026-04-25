@@ -190,7 +190,7 @@ pub(super) async fn check_owner_create_authz(
 }
 
 /// Enforce the per-scope `max_api_keys_per_*` limits before creating a key.
-pub(super) async fn check_owner_create_limits(
+pub(crate) async fn check_owner_create_limits(
     services: &crate::services::Services,
     owner: &crate::models::ApiKeyOwner,
     limits: &crate::config::ResourceLimits,
@@ -262,6 +262,83 @@ pub(super) async fn check_owner_create_limits(
                         "Organization has reached the maximum number of API keys ({max})"
                     )));
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Re-verify (without an `AuthzContext`) that `user_id` is still entitled
+/// to act on `owner` — used by the unauthenticated OAuth token endpoint
+/// to close the consent → exchange TOCTOU window.
+///
+/// The full RBAC check (`check_owner_create_authz`) requires a request
+/// principal we don't have at /oauth/token, so this falls back to the
+/// pragmatic minimum: confirm the user is still a member of the chosen
+/// org/team/project. A user who's been demoted (still a member, lower role)
+/// could still slip a key through this gate — the issued key remains
+/// subject to RBAC at *use* time so the blast radius is bounded.
+pub(crate) async fn check_owner_membership_for_user(
+    services: &crate::services::Services,
+    db: &crate::db::DbPool,
+    user_id: uuid::Uuid,
+    owner: &crate::models::ApiKeyOwner,
+) -> Result<(), AdminError> {
+    let users_repo = db.users();
+
+    match owner {
+        crate::models::ApiKeyOwner::User { user_id: owner_uid } => {
+            // Personal keys: the owner *is* the consenting user. Anything
+            // else means the request is trying to issue a key for a
+            // different user, which we don't allow.
+            if *owner_uid != user_id {
+                return Err(AdminError::Forbidden(
+                    "OAuth-issued user keys must be owned by the consenting user".to_string(),
+                ));
+            }
+        }
+        crate::models::ApiKeyOwner::Organization { org_id } => {
+            let memberships = users_repo.get_org_memberships_for_user(user_id).await?;
+            if !memberships.iter().any(|m| m.org_id == *org_id) {
+                return Err(AdminError::Forbidden(
+                    "User is no longer a member of the organization that owns this key".to_string(),
+                ));
+            }
+        }
+        crate::models::ApiKeyOwner::Team { team_id } => {
+            let memberships = users_repo.get_team_memberships_for_user(user_id).await?;
+            if !memberships.iter().any(|m| m.team_id == *team_id) {
+                return Err(AdminError::Forbidden(
+                    "User is no longer a member of the team that owns this key".to_string(),
+                ));
+            }
+        }
+        crate::models::ApiKeyOwner::Project { project_id } => {
+            let memberships = users_repo.get_project_memberships_for_user(user_id).await?;
+            if !memberships.iter().any(|m| m.project_id == *project_id) {
+                return Err(AdminError::Forbidden(
+                    "User is no longer a member of the project that owns this key".to_string(),
+                ));
+            }
+        }
+        crate::models::ApiKeyOwner::ServiceAccount { service_account_id } => {
+            // Service accounts belong to an org. Verify the user still
+            // belongs to that org.
+            let sa = services
+                .service_accounts
+                .get_by_id(*service_account_id)
+                .await?
+                .ok_or_else(|| {
+                    AdminError::NotFound(format!(
+                        "Service account '{}' not found",
+                        service_account_id
+                    ))
+                })?;
+            let memberships = users_repo.get_org_memberships_for_user(user_id).await?;
+            if !memberships.iter().any(|m| m.org_id == sa.org_id) {
+                return Err(AdminError::Forbidden(
+                    "User is no longer a member of the service account's organization".to_string(),
+                ));
             }
         }
     }

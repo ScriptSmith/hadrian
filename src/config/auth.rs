@@ -2037,6 +2037,23 @@ pub struct OAuthPkceConfig {
     /// is accepted, which is the only method any modern client should use.
     #[serde(default)]
     pub allow_plain_method: bool,
+
+    /// Externally-visible base URL of this Hadrian deployment (e.g.
+    /// `"https://hadrian.example.com"`). When set, used verbatim as the
+    /// `issuer` and the prefix for `authorization_endpoint` /
+    /// `token_endpoint` in the RFC 8414 discovery document.
+    ///
+    /// When unset, the discovery document falls back to building URLs from
+    /// `config.server.host`, `port`, and `tls`. We deliberately do NOT
+    /// honour `X-Forwarded-*` headers from anonymous callers — those are
+    /// trivially spoofable on the unauthenticated discovery endpoint and
+    /// would let an attacker poison the document to advertise their own
+    /// authorize/token URLs to OAuth clients.
+    ///
+    /// Operators behind a reverse proxy that exposes Hadrian on a different
+    /// host must set this to that external URL.
+    #[serde(default)]
+    pub public_url: Option<String>,
 }
 
 impl Default for OAuthPkceConfig {
@@ -2047,6 +2064,7 @@ impl Default for OAuthPkceConfig {
             denied_domains: Vec::new(),
             code_ttl_seconds: default_oauth_code_ttl(),
             allow_plain_method: false,
+            public_url: None,
         }
     }
 }
@@ -2081,6 +2099,23 @@ impl OAuthPkceConfig {
                 return Err(ConfigError::Validation(format!(
                     "auth.oauth_pkce domain '{domain}' must be a hostname, not a URL or path"
                 )));
+            }
+        }
+        if let Some(url) = &self.public_url {
+            let parsed = url::Url::parse(url.trim_end_matches('/')).map_err(|_| {
+                ConfigError::Validation(format!(
+                    "auth.oauth_pkce.public_url is not a valid URL: '{url}'"
+                ))
+            })?;
+            if !matches!(parsed.scheme(), "http" | "https") {
+                return Err(ConfigError::Validation(
+                    "auth.oauth_pkce.public_url must use http or https".into(),
+                ));
+            }
+            if parsed.host_str().is_none() {
+                return Err(ConfigError::Validation(
+                    "auth.oauth_pkce.public_url must include a host".into(),
+                ));
             }
         }
         Ok(())
