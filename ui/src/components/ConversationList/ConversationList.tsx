@@ -9,9 +9,10 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { memo, useCallback, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 
 import { Button } from "@/components/Button/Button";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import {
   Dropdown,
   DropdownContent,
@@ -244,13 +245,19 @@ export function ConversationList({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
 
-  const filteredConversations = searchQuery
-    ? conversations.filter(
-        (c) =>
-          c.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          c.messages.some((m) => m.content.toLowerCase().includes(searchQuery.toLowerCase()))
-      )
-    : conversations;
+  // Debounce + memoise the filter. Without this every keystroke walks every
+  // message body lowercased — O(N×M) on each character. With many long
+  // conversations this is a measurable hitch.
+  const debouncedQuery = useDebouncedValue(searchQuery, 150);
+  const filteredConversations = useMemo(() => {
+    if (!debouncedQuery) return conversations;
+    const needle = debouncedQuery.toLowerCase();
+    return conversations.filter(
+      (c) =>
+        c.title.toLowerCase().includes(needle) ||
+        c.messages.some((m) => m.content.toLowerCase().includes(needle))
+    );
+  }, [conversations, debouncedQuery]);
 
   const groups = groupConversations(filteredConversations);
 
