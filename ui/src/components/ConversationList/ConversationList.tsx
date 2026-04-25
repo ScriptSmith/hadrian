@@ -151,6 +151,7 @@ const ConversationItem = memo(
             type="button"
             className="flex min-w-0 flex-1 items-center gap-2 text-left"
             onClick={() => onSelect(conv.id)}
+            aria-current={isSelected ? "page" : undefined}
           >
             <MessageSquare
               className={cn(
