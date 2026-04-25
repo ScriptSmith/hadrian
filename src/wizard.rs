@@ -1068,7 +1068,10 @@ fn generate_config(mode: DeploymentMode, wizard_config: &WizardConfig) -> String
             ));
             config.push('\n');
             config.push_str("[auth.session]\n");
-            config.push_str("secret = \"${SESSION_SECRET}\"\n");
+            config.push_str("# Sessions are signed with this 256-bit secret. Override via the\n");
+            config.push_str("# SESSION_SECRET env var in multi-replica setups so every node\n");
+            config.push_str("# accepts the others' cookies.\n");
+            config.push_str(&format!("secret = \"{}\"\n", generate_session_secret()));
             config.push('\n');
         }
     }
@@ -1147,6 +1150,17 @@ fn generate_config(mode: DeploymentMode, wizard_config: &WizardConfig) -> String
 /// Escape a string for TOML output.
 fn escape_toml_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Generate a fresh 256-bit URL-safe base64 session-signing secret. Called
+/// from the wizard so a freshly-installed deployment has a stable secret
+/// without the operator having to remember to set `SESSION_SECRET`.
+fn generate_session_secret() -> String {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 #[cfg(test)]
