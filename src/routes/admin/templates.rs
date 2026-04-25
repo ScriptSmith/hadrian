@@ -55,7 +55,26 @@ pub async fn create(
     let services = get_services(&state)?;
     let actor = AuditActor::from(&admin_auth);
 
-    authz.require("template", "create", None, None, None, None)?;
+    // Pass the requested owner scope into authz so the policy can reject
+    // creating a template for a team / project / user the caller does not own.
+    let (owner_org, owner_team, owner_project) = match &input.owner {
+        crate::models::TemplateOwner::Organization { organization_id } => {
+            (Some(organization_id.to_string()), None, None)
+        }
+        crate::models::TemplateOwner::Team { team_id } => (None, Some(team_id.to_string()), None),
+        crate::models::TemplateOwner::Project { project_id } => {
+            (None, None, Some(project_id.to_string()))
+        }
+        crate::models::TemplateOwner::User { .. } => (None, None, None),
+    };
+    authz.require(
+        "template",
+        "create",
+        None,
+        owner_org.as_deref(),
+        owner_team.as_deref(),
+        owner_project.as_deref(),
+    )?;
 
     // Check template limit
     let max = state.config.limits.resource_limits.max_templates_per_owner;
