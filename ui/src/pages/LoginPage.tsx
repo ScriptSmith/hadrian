@@ -63,11 +63,20 @@ export default function LoginPage() {
   // a full URL (path + search, e.g. /oauth/authorize?callback_url=...) survive
   // the round-trip through login. Falls back to the in-app `state.from` set by
   // RequireAuth.
+  //
+  // `startsWith("/")` alone is not enough: `//evil.com/...` and `/\evil.com`
+  // are treated as same-origin by `Navigate`/`startsWith` but resolve to a
+  // cross-origin URL in the browser. Reject anything whose second character
+  // makes it protocol-relative or backslash-prefixed.
+  const isSafeReturnTo = (value: string | null): value is string =>
+    !!value &&
+    value.startsWith("/") &&
+    !value.startsWith("//") &&
+    !value.startsWith("/\\");
   const returnToParam = new URLSearchParams(location.search).get("return_to");
-  const from =
-    returnToParam && returnToParam.startsWith("/")
-      ? returnToParam
-      : location.state?.from?.pathname || "/";
+  const from = isSafeReturnTo(returnToParam)
+    ? returnToParam
+    : location.state?.from?.pathname || "/";
 
   if (configLoading || authLoading) {
     return (
