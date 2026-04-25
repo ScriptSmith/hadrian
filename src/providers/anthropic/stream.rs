@@ -246,7 +246,7 @@ pub struct AnthropicToOpenAIStream<S> {
     inner: S,
     state: StreamState,
     /// Output buffer for generated SSE chunks
-    output_buffer: Vec<Bytes>,
+    output_buffer: std::collections::VecDeque<Bytes>,
     /// Maximum input buffer size in bytes
     max_input_buffer_bytes: usize,
     /// Maximum output buffer chunks
@@ -258,7 +258,7 @@ impl<S> AnthropicToOpenAIStream<S> {
         Self {
             inner,
             state: StreamState::default(),
-            output_buffer: Vec::new(),
+            output_buffer: std::collections::VecDeque::new(),
             max_input_buffer_bytes: streaming_buffer.max_input_buffer_bytes,
             max_output_buffer_chunks: streaming_buffer.max_output_buffer_chunks,
         }
@@ -541,7 +541,7 @@ impl<S> AnthropicToOpenAIStream<S> {
                 self.emit_chunk(&chunk);
 
                 // Emit [DONE]
-                self.output_buffer.push(Bytes::from("data: [DONE]\n\n"));
+                self.output_buffer.push_back(Bytes::from("data: [DONE]\n\n"));
             }
 
             AnthropicStreamEvent::Ping => {
@@ -562,7 +562,7 @@ impl<S> AnthropicToOpenAIStream<S> {
     fn emit_chunk(&mut self, chunk: &OpenAIStreamChunk) {
         if let Ok(json) = serde_json::to_string(chunk) {
             let sse = format!("data: {}\n\n", json);
-            self.output_buffer.push(Bytes::from(sse));
+            self.output_buffer.push_back(Bytes::from(sse));
         }
     }
 
@@ -632,7 +632,10 @@ where
 
         // First, return any buffered output
         if !self.output_buffer.is_empty() {
-            return Poll::Ready(Some(Ok(self.output_buffer.remove(0))));
+            return Poll::Ready(Some(Ok(self
+                .output_buffer
+                .pop_front()
+                .expect("non-empty checked above"))));
         }
 
         // Poll the inner stream
@@ -652,7 +655,10 @@ where
 
                 // Return first buffered output if any
                 if !self.output_buffer.is_empty() {
-                    Poll::Ready(Some(Ok(self.output_buffer.remove(0))))
+                    Poll::Ready(Some(Ok(self
+                        .output_buffer
+                        .pop_front()
+                        .expect("non-empty checked above"))))
                 } else {
                     // No output yet, need to poll again
                     cx.waker().wake_by_ref();
@@ -663,7 +669,10 @@ where
             Poll::Ready(None) => {
                 // Stream ended - flush any remaining buffer
                 if !self.output_buffer.is_empty() {
-                    Poll::Ready(Some(Ok(self.output_buffer.remove(0))))
+                    Poll::Ready(Some(Ok(self
+                        .output_buffer
+                        .pop_front()
+                        .expect("non-empty checked above"))))
                 } else {
                     Poll::Ready(None)
                 }
@@ -724,7 +733,7 @@ pub struct AnthropicToResponsesStream<S> {
     inner: S,
     state: ResponsesStreamState,
     /// Output buffer for generated SSE chunks
-    output_buffer: Vec<Bytes>,
+    output_buffer: std::collections::VecDeque<Bytes>,
     /// Maximum input buffer size in bytes
     max_input_buffer_bytes: usize,
     /// Maximum output buffer chunks
@@ -743,7 +752,7 @@ impl<S> AnthropicToResponsesStream<S> {
                 echo_fields,
                 ..ResponsesStreamState::default()
             },
-            output_buffer: Vec::new(),
+            output_buffer: std::collections::VecDeque::new(),
             max_input_buffer_bytes: streaming_buffer.max_input_buffer_bytes,
             max_output_buffer_chunks: streaming_buffer.max_output_buffer_chunks,
         }
@@ -1256,7 +1265,7 @@ impl<S> AnthropicToResponsesStream<S> {
                 );
 
                 // Emit [DONE] to signal end of stream (OpenAI Responses API convention)
-                self.output_buffer.push(Bytes::from("data: [DONE]\n\n"));
+                self.output_buffer.push_back(Bytes::from("data: [DONE]\n\n"));
             }
 
             AnthropicStreamEvent::Ping => {
@@ -1302,7 +1311,7 @@ impl<S> AnthropicToResponsesStream<S> {
         }
         if let Ok(json) = serde_json::to_string(&serde_json::Value::Object(event_obj)) {
             let sse = format!("data: {}\n\n", json);
-            self.output_buffer.push(Bytes::from(sse));
+            self.output_buffer.push_back(Bytes::from(sse));
         }
     }
 
@@ -1369,7 +1378,10 @@ where
 
         // First, return any buffered output
         if !self.output_buffer.is_empty() {
-            return Poll::Ready(Some(Ok(self.output_buffer.remove(0))));
+            return Poll::Ready(Some(Ok(self
+                .output_buffer
+                .pop_front()
+                .expect("non-empty checked above"))));
         }
 
         // Poll the inner stream
@@ -1389,7 +1401,10 @@ where
 
                 // Return buffered output or wake for more
                 if !self.output_buffer.is_empty() {
-                    Poll::Ready(Some(Ok(self.output_buffer.remove(0))))
+                    Poll::Ready(Some(Ok(self
+                        .output_buffer
+                        .pop_front()
+                        .expect("non-empty checked above"))))
                 } else {
                     cx.waker().wake_by_ref();
                     Poll::Pending
@@ -1399,7 +1414,10 @@ where
             Poll::Ready(None) => {
                 // Stream ended - flush any remaining buffer
                 if !self.output_buffer.is_empty() {
-                    Poll::Ready(Some(Ok(self.output_buffer.remove(0))))
+                    Poll::Ready(Some(Ok(self
+                        .output_buffer
+                        .pop_front()
+                        .expect("non-empty checked above"))))
                 } else {
                     Poll::Ready(None)
                 }
