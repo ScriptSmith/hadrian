@@ -86,10 +86,13 @@ else
     FAILED=1
 fi
 
-# Security audit (non-blocking)
+# Security audit
 step "Security audit"
 if command -v cargo-audit &> /dev/null; then
-    cargo audit || echo -e "${YELLOW}!${NC} Audit warnings (non-blocking)"
+    if ! cargo audit; then
+        echo -e "${RED}✗${NC} Security audit failed"
+        FAILED=1
+    fi
 else
     echo "  cargo-audit not installed, skipping"
 fi
