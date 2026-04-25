@@ -61,6 +61,14 @@ pub async fn list(
         )));
     }
 
+    // Cap unbounded scans: when no time range is supplied, default to the last
+    // 7 days. The audit log is append-only and grows fast; an unfiltered list
+    // hits the entire table with `ORDER BY ts DESC` which can DoS the gateway.
+    let mut query = query;
+    if query.from.is_none() && query.to.is_none() {
+        query.from = Some(chrono::Utc::now() - chrono::Duration::days(7));
+    }
+
     let result = services.audit_logs.list(query).await?;
 
     let pagination = PaginationMeta::with_cursors(
