@@ -15,6 +15,19 @@ use crate::models::{
     UserAccessInventoryEntry, UserAccessSummaryResponse,
 };
 
+/// Defang any cell whose first character would be interpreted as a formula by
+/// Excel/Sheets/Numbers (`= + - @ \t \r`). The auditor-friendly format means
+/// a malicious user-controlled email or org name should never become a live
+/// formula or `HYPERLINK()` exfiltration vector.
+fn sanitize_csv_cell(value: String) -> String {
+    match value.chars().next() {
+        Some('=') | Some('+') | Some('-') | Some('@') | Some('\t') | Some('\r') => {
+            format!("'{}", value)
+        }
+        _ => value,
+    }
+}
+
 /// Error type for CSV export operations
 #[derive(Debug)]
 pub struct CsvExportError(String);
@@ -98,9 +111,9 @@ pub fn export_access_inventory_csv(
             for org in &user.organizations {
                 let mut row = base_row.clone();
                 row.org_id = org.org_id.to_string();
-                row.org_slug = org.org_slug.clone();
-                row.org_name = org.org_name.clone();
-                row.org_role = org.role.clone();
+                row.org_slug = sanitize_csv_cell(org.org_slug.clone());
+                row.org_name = sanitize_csv_cell(org.org_name.clone());
+                row.org_role = sanitize_csv_cell(org.role.clone());
                 row.org_granted_at = org.granted_at.to_rfc3339();
                 wtr.serialize(&row)
                     .map_err(|e| CsvExportError(e.to_string()))?;
@@ -110,10 +123,10 @@ pub fn export_access_inventory_csv(
             for project in &user.projects {
                 let mut row = base_row.clone();
                 row.project_id = project.project_id.to_string();
-                row.project_slug = project.project_slug.clone();
-                row.project_name = project.project_name.clone();
+                row.project_slug = sanitize_csv_cell(project.project_slug.clone());
+                row.project_name = sanitize_csv_cell(project.project_name.clone());
                 row.project_org_id = project.org_id.to_string();
-                row.project_role = project.role.clone();
+                row.project_role = sanitize_csv_cell(project.role.clone());
                 row.project_granted_at = project.granted_at.to_rfc3339();
                 wtr.serialize(&row)
                     .map_err(|e| CsvExportError(e.to_string()))?;
@@ -127,9 +140,9 @@ pub fn export_access_inventory_csv(
 fn create_base_inventory_row(user: &UserAccessInventoryEntry) -> AccessInventoryRow {
     AccessInventoryRow {
         user_id: user.user_id.to_string(),
-        external_id: user.external_id.clone(),
-        email: user.email.clone().unwrap_or_default(),
-        name: user.name.clone().unwrap_or_default(),
+        external_id: sanitize_csv_cell(user.external_id.clone()),
+        email: sanitize_csv_cell(user.email.clone().unwrap_or_default()),
+        name: sanitize_csv_cell(user.name.clone().unwrap_or_default()),
         created_at: user.created_at.to_rfc3339(),
         org_id: String::new(),
         org_slug: String::new(),
@@ -181,10 +194,10 @@ pub fn export_org_access_report_csv(
     for member in &response.members {
         let base_row = OrgAccessReportRow {
             user_id: member.user_id.to_string(),
-            external_id: member.external_id.clone(),
-            email: member.email.clone().unwrap_or_default(),
-            name: member.name.clone().unwrap_or_default(),
-            org_role: member.role.clone(),
+            external_id: sanitize_csv_cell(member.external_id.clone()),
+            email: sanitize_csv_cell(member.email.clone().unwrap_or_default()),
+            name: sanitize_csv_cell(member.name.clone().unwrap_or_default()),
+            org_role: sanitize_csv_cell(member.role.clone()),
             org_granted_at: member.granted_at.to_rfc3339(),
             project_id: String::new(),
             project_slug: String::new(),
@@ -207,9 +220,9 @@ pub fn export_org_access_report_csv(
             for project in &member.project_access {
                 let mut row = base_row.clone();
                 row.project_id = project.project_id.to_string();
-                row.project_slug = project.project_slug.clone();
-                row.project_name = project.project_name.clone();
-                row.project_role = project.role.clone();
+                row.project_slug = sanitize_csv_cell(project.project_slug.clone());
+                row.project_name = sanitize_csv_cell(project.project_name.clone());
+                row.project_role = sanitize_csv_cell(project.role.clone());
                 row.project_granted_at = project.granted_at.to_rfc3339();
                 wtr.serialize(&row)
                     .map_err(|e| CsvExportError(e.to_string()))?;
@@ -247,9 +260,9 @@ pub fn export_user_access_summary_csv(
 
     let base = |resource_type: &str| UserAccessSummaryRow {
         user_id: response.user_id.to_string(),
-        external_id: response.external_id.clone(),
-        email: response.email.clone().unwrap_or_default(),
-        name: response.name.clone().unwrap_or_default(),
+        external_id: sanitize_csv_cell(response.external_id.clone()),
+        email: sanitize_csv_cell(response.email.clone().unwrap_or_default()),
+        name: sanitize_csv_cell(response.name.clone().unwrap_or_default()),
         created_at: response.created_at.to_rfc3339(),
         resource_type: resource_type.to_string(),
         resource_id: String::new(),
@@ -269,9 +282,9 @@ pub fn export_user_access_summary_csv(
     for org in &response.organizations {
         let mut row = base("organization");
         row.resource_id = org.org_id.to_string();
-        row.resource_slug = org.org_slug.clone();
-        row.resource_name = org.org_name.clone();
-        row.role = org.role.clone();
+        row.resource_slug = sanitize_csv_cell(org.org_slug.clone());
+        row.resource_name = sanitize_csv_cell(org.org_name.clone());
+        row.role = sanitize_csv_cell(org.role.clone());
         row.granted_at = org.granted_at.to_rfc3339();
         row.last_activity_at = org
             .last_activity_at
@@ -285,9 +298,9 @@ pub fn export_user_access_summary_csv(
     for project in &response.projects {
         let mut row = base("project");
         row.resource_id = project.project_id.to_string();
-        row.resource_slug = project.project_slug.clone();
-        row.resource_name = project.project_name.clone();
-        row.role = project.role.clone();
+        row.resource_slug = sanitize_csv_cell(project.project_slug.clone());
+        row.resource_name = sanitize_csv_cell(project.project_name.clone());
+        row.role = sanitize_csv_cell(project.role.clone());
         row.granted_at = project.granted_at.to_rfc3339();
         row.last_activity_at = project
             .last_activity_at
@@ -301,7 +314,7 @@ pub fn export_user_access_summary_csv(
     for api_key in &response.api_keys {
         let mut row = base("api_key");
         row.resource_id = api_key.key_id.to_string();
-        row.resource_name = api_key.name.clone();
+        row.resource_name = sanitize_csv_cell(api_key.name.clone());
         row.is_active = api_key.is_active.to_string();
         row.granted_at = api_key.created_at.to_rfc3339();
         row.last_used_at = api_key
@@ -356,9 +369,9 @@ pub fn export_stale_access_csv(response: &StaleAccessResponse) -> Result<Vec<u8>
         let row = StaleAccessRow {
             category: "stale_user".to_string(),
             user_id: user.user_id.to_string(),
-            external_id: user.external_id.clone(),
-            email: user.email.clone().unwrap_or_default(),
-            name: user.name.clone().unwrap_or_default(),
+            external_id: sanitize_csv_cell(user.external_id.clone()),
+            email: sanitize_csv_cell(user.email.clone().unwrap_or_default()),
+            name: sanitize_csv_cell(user.name.clone().unwrap_or_default()),
             created_at: user.created_at.to_rfc3339(),
             last_activity_at: user
                 .last_activity_at
@@ -384,9 +397,9 @@ pub fn export_stale_access_csv(response: &StaleAccessResponse) -> Result<Vec<u8>
         let row = StaleAccessRow {
             category: "never_active_user".to_string(),
             user_id: user.user_id.to_string(),
-            external_id: user.external_id.clone(),
-            email: user.email.clone().unwrap_or_default(),
-            name: user.name.clone().unwrap_or_default(),
+            external_id: sanitize_csv_cell(user.external_id.clone()),
+            email: sanitize_csv_cell(user.email.clone().unwrap_or_default()),
+            name: sanitize_csv_cell(user.name.clone().unwrap_or_default()),
             created_at: user.created_at.to_rfc3339(),
             last_activity_at: String::new(),
             days_inactive: user.days_since_creation,
@@ -419,9 +432,9 @@ pub fn export_stale_access_csv(response: &StaleAccessResponse) -> Result<Vec<u8>
             project_count: 0,
             active_api_keys: 0,
             key_id: key.key_id.to_string(),
-            key_name: key.name.clone(),
-            key_prefix: key.key_prefix.clone(),
-            owner_type: key.owner_type.clone(),
+            key_name: sanitize_csv_cell(key.name.clone()),
+            key_prefix: sanitize_csv_cell(key.key_prefix.clone()),
+            owner_type: sanitize_csv_cell(key.owner_type.clone()),
             owner_id: key.owner_id.to_string(),
             never_used: key.never_used.to_string(),
         };
