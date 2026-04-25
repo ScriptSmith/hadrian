@@ -43,6 +43,7 @@ import {
   executeToolCalls,
   buildToolResultInputItems,
   createMCPToolName,
+  DISPLAY_PARAMETER_SCHEMA,
   type ToolExecutorContext,
 } from "./utils/toolExecutors";
 import { buildSkillToolDescription } from "./utils/skillDirectory";
@@ -437,6 +438,7 @@ export function useChat({
                   type: "string",
                   description: "The Python code to execute",
                 },
+                display: DISPLAY_PARAMETER_SCHEMA,
               },
               required: ["code"],
             },
@@ -460,6 +462,7 @@ export function useChat({
                   type: "string",
                   description: "The JavaScript code to execute",
                 },
+                display: DISPLAY_PARAMETER_SCHEMA,
               },
               required: ["code"],
             },
@@ -508,6 +511,7 @@ export function useChat({
                   type: "string",
                   description: "The SQL query to execute",
                 },
+                display: DISPLAY_PARAMETER_SCHEMA,
               },
               required: ["sql"],
             },
@@ -542,6 +546,7 @@ export function useChat({
                   type: "string",
                   description: "Optional title for the chart (overrides spec.title if provided)",
                 },
+                display: DISPLAY_PARAMETER_SCHEMA,
               },
               required: ["spec"],
             },
@@ -572,6 +577,7 @@ export function useChat({
                   type: "string",
                   description: "Optional title for the preview",
                 },
+                display: DISPLAY_PARAMETER_SCHEMA,
               },
               required: ["html"],
             },
@@ -649,6 +655,7 @@ export function useChat({
                     "A clear, detailed description of what to investigate or analyze. " +
                     "Include all necessary context since the sub-agent cannot see the conversation history.",
                 },
+                display: DISPLAY_PARAMETER_SCHEMA,
               },
               required: ["task"],
             },
@@ -835,15 +842,29 @@ export function useChat({
               // Create namespaced tool name to avoid collisions
               const mcpToolName = createMCPToolName(server.id, tool.name);
 
+              // Inject the `display` directive into the schema we show the model.
+              // The MCP executor strips it from the arguments before forwarding to the server.
+              const baseSchema = tool.inputSchema ?? { type: "object", properties: {} };
+              const baseProperties =
+                typeof baseSchema === "object" &&
+                baseSchema !== null &&
+                "properties" in baseSchema &&
+                typeof (baseSchema as { properties?: unknown }).properties === "object" &&
+                (baseSchema as { properties?: unknown }).properties !== null
+                  ? (baseSchema as { properties: Record<string, unknown> }).properties
+                  : {};
+              const parameters = {
+                ...baseSchema,
+                type: "object",
+                properties: { ...baseProperties, display: DISPLAY_PARAMETER_SCHEMA },
+              };
+
               tools.push({
                 type: "function",
                 name: mcpToolName,
                 description:
                   `[MCP: ${server.name}] ` + (tool.description || `Execute ${tool.name}`),
-                parameters: tool.inputSchema || {
-                  type: "object",
-                  properties: {},
-                },
+                parameters,
               });
             }
           }

@@ -8,6 +8,7 @@ import { memo } from "react";
 
 import { cn } from "@/utils/cn";
 import { usePreferences } from "@/preferences/PreferencesProvider";
+import { linkSafety } from "@/components/Markdown/linkSafety";
 
 const lightCode = createCodePlugin({
   themes: ["github-light-high-contrast", "github-light-high-contrast"],
@@ -90,6 +91,7 @@ function StreamingMarkdownComponent({ content, isStreaming, className }: Streami
         mode={isStreaming ? "streaming" : "static"}
         isAnimating={isStreaming}
         parseIncompleteMarkdown={isStreaming}
+        linkSafety={linkSafety}
         animated
       >
         {content}

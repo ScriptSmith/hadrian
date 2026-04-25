@@ -438,6 +438,43 @@ export const WithAllActionButtons: Story = {
 };
 
 /**
+ * Test: A code block with a very long unbreakable line stays within the
+ * message bubble and scrolls horizontally instead of pushing the bubble
+ * off-screen. Regression test for the flexbox min-width issue where the
+ * `max-w-[85%]` cap was bypassed because the flex item's default
+ * `min-width: auto` allowed it to grow to the code line's intrinsic width.
+ */
+export const WithLongCodeLine: Story = {
+  args: {
+    message: {
+      id: "long-code",
+      role: "assistant",
+      content: `Here is a long line that should scroll within the code block:
+
+\`\`\`bash
+curl -X POST https://api.example.com/v1/some/very/long/path?param1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&param2=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&param3=cccccccccccccccccccccccccccccccccc -H "Authorization: Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+\`\`\``,
+      model: "claude-3",
+      timestamp: new Date(),
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const article = canvasElement.querySelector('article[aria-label="Assistant message"]');
+    await expect(article).toBeInTheDocument();
+
+    const pre = canvasElement.querySelector("pre");
+    await expect(pre).toBeInTheDocument();
+
+    // The pre's rendered width must not exceed its parent bubble's width —
+    // otherwise the bubble has been pushed beyond its `max-w-[85%]` cap.
+    const preRect = pre!.getBoundingClientRect();
+    const bubble = pre!.closest("article")!.getBoundingClientRect();
+    await expect(preRect.right).toBeLessThanOrEqual(bubble.right + 1);
+    await expect(preRect.left).toBeGreaterThanOrEqual(bubble.left - 1);
+  },
+};
+
+/**
  * Test: User message with markdown content renders correctly
  */
 export const UserMessageWithMarkdown: Story = {

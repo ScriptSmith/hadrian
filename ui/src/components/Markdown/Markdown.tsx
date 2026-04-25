@@ -7,6 +7,7 @@ import "katex/dist/katex.min.css";
 
 import { cn } from "@/utils/cn";
 import { usePreferences } from "@/preferences/PreferencesProvider";
+import { linkSafety } from "./linkSafety";
 
 const lightCode = createCodePlugin({
   themes: ["github-light-high-contrast", "github-light-high-contrast"],
@@ -53,7 +54,11 @@ export function Markdown({ content, className }: MarkdownProps) {
         className
       )}
     >
-      <Streamdown plugins={{ code, math, mermaid }} mermaid={mermaidOptions}>
+      <Streamdown
+        plugins={{ code, math, mermaid }}
+        mermaid={mermaidOptions}
+        linkSafety={linkSafety}
+      >
         {content}
       </Streamdown>
     </div>

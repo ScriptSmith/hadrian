@@ -206,11 +206,14 @@ function ChatMessageComponent({
       </Avatar>
 
       <div
-        className={cn("flex max-w-[85%] flex-col gap-1.5", isUser ? "items-end" : "items-start")}
+        className={cn(
+          "flex min-w-0 max-w-[85%] flex-col gap-1.5",
+          isUser ? "items-end" : "items-start"
+        )}
       >
         {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- onMouseUp for text selection quoting, not an interactive action */}
         <div
-          className="rounded-2xl px-4 py-3 shadow-sm transition-shadow hover:shadow-md bg-card border"
+          className="min-w-0 max-w-full rounded-2xl px-4 py-3 shadow-sm transition-shadow hover:shadow-md bg-card border"
           onMouseUp={handleContentMouseUp}
         >
           {message.files && message.files.length > 0 && (
