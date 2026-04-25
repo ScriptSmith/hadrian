@@ -1415,6 +1415,10 @@ run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
 
+[server]
+allow_loopback_urls = true
+allow_private_urls = true
+
 [auth.mode]
 type = "idp"
 
@@ -2131,6 +2135,10 @@ create_if_missing = true
 run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
+
+[server]
+allow_loopback_urls = true
+allow_private_urls = true
 
 [auth.mode]
 type = "idp"

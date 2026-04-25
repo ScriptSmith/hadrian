@@ -692,12 +692,18 @@ impl AppState {
             // No default redirect URI - per-org SSO configs must specify their own
             let default_redirect_uri: Option<String> = None;
 
+            let url_validation_opts = crate::validation::UrlValidationOptions {
+                allow_loopback: config.server.allow_loopback_urls,
+                allow_private: config.server.allow_private_urls,
+            };
+
             match auth::OidcAuthenticatorRegistry::initialize_from_db(
                 &svc.org_sso_configs,
                 secrets.as_ref(),
                 session_store.clone(),
                 default_session_config.clone(),
                 default_redirect_uri.clone(),
+                url_validation_opts,
             )
             .await
             {
@@ -723,6 +729,7 @@ impl AppState {
                         session_store,
                         default_session_config,
                         default_redirect_uri,
+                        url_validation_opts,
                     );
                     Some(Arc::new(empty_registry))
                 }

@@ -28,7 +28,10 @@ use super::{
         enforce_session_limit, validate_and_refresh_session,
     },
 };
-use crate::config::OidcAuthConfig;
+use crate::{
+    config::OidcAuthConfig,
+    validation::{UrlValidationOptions, validate_base_url_opts},
+};
 
 /// OIDC discovery document.
 #[derive(Debug, Clone, Deserialize)]
@@ -118,6 +121,7 @@ pub struct OidcAuthenticator {
     discovery_cache: RwLock<Option<CachedDiscovery>>,
     jwt_validator: RwLock<Option<Arc<JwtValidator>>>,
     session_store: SharedSessionStore,
+    url_validation_opts: UrlValidationOptions,
 }
 
 impl OidcAuthenticator {
@@ -125,13 +129,18 @@ impl OidcAuthenticator {
     ///
     /// For multi-node deployments, pass a `CacheSessionStore` backed by Redis.
     /// For single-node deployments, a `MemorySessionStore` can be used.
-    pub fn new(config: OidcAuthConfig, session_store: SharedSessionStore) -> Self {
+    pub fn new(
+        config: OidcAuthConfig,
+        session_store: SharedSessionStore,
+        url_validation_opts: UrlValidationOptions,
+    ) -> Self {
         Self {
             config,
             http_client: reqwest::Client::new(),
             discovery_cache: RwLock::new(None),
             jwt_validator: RwLock::new(None),
             session_store,
+            url_validation_opts,
         }
     }
 
@@ -144,7 +153,11 @@ impl OidcAuthenticator {
             "Creating OidcAuthenticator with in-memory session store. \
              Sessions will not be shared across nodes."
         );
-        Self::new(config, Arc::new(MemorySessionStore::new()))
+        Self::new(
+            config,
+            Arc::new(MemorySessionStore::new()),
+            UrlValidationOptions::default(),
+        )
     }
 
     /// Create a new OIDC authenticator with a custom HTTP client.
@@ -152,6 +165,7 @@ impl OidcAuthenticator {
         config: OidcAuthConfig,
         http_client: reqwest::Client,
         session_store: SharedSessionStore,
+        url_validation_opts: UrlValidationOptions,
     ) -> Self {
         Self {
             config,
@@ -159,6 +173,7 @@ impl OidcAuthenticator {
             discovery_cache: RwLock::new(None),
             jwt_validator: RwLock::new(None),
             session_store,
+            url_validation_opts,
         }
     }
 
@@ -187,6 +202,12 @@ impl OidcAuthenticator {
             self.config.discovery_base_url().trim_end_matches('/')
         );
 
+        // SSRF-validate the discovery URL before fetching
+        validate_base_url_opts(&discovery_url, self.url_validation_opts).map_err(|e| {
+            tracing::error!(error = %e, "OIDC discovery URL failed SSRF validation");
+            AuthError::Internal(format!("OIDC discovery URL failed SSRF validation: {e}"))
+        })?;
+
         tracing::debug!(url = %discovery_url, "Fetching OIDC discovery document");
 
         let response = self
@@ -212,6 +233,41 @@ impl OidcAuthenticator {
             tracing::error!(error = %e, "Failed to parse OIDC discovery");
             AuthError::Internal(format!("Failed to parse OIDC discovery: {}", e))
         })?;
+
+        // Pin the discovery's issuer to the configured issuer to prevent IdP substitution.
+        // OIDC spec (section 4.3) requires the discovery doc's issuer to match exactly.
+        if discovery.issuer != self.config.issuer {
+            tracing::error!(
+                expected = %self.config.issuer,
+                actual = %discovery.issuer,
+                "OIDC discovery issuer mismatch"
+            );
+            return Err(AuthError::Internal(
+                "OIDC discovery issuer mismatch".to_string(),
+            ));
+        }
+
+        // SSRF-validate the endpoints we will subsequently call.
+        for (label, url) in [
+            ("authorization_endpoint", &discovery.authorization_endpoint),
+            ("token_endpoint", &discovery.token_endpoint),
+            ("jwks_uri", &discovery.jwks_uri),
+        ] {
+            validate_base_url_opts(url, self.url_validation_opts).map_err(|e| {
+                tracing::error!(error = %e, endpoint = label, "OIDC endpoint failed SSRF validation");
+                AuthError::Internal(format!(
+                    "OIDC {label} failed SSRF validation: {e}"
+                ))
+            })?;
+        }
+        if let Some(ref userinfo) = discovery.userinfo_endpoint {
+            validate_base_url_opts(userinfo, self.url_validation_opts).map_err(|e| {
+                tracing::error!(error = %e, "OIDC userinfo_endpoint failed SSRF validation");
+                AuthError::Internal(format!(
+                    "OIDC userinfo_endpoint failed SSRF validation: {e}"
+                ))
+            })?;
+        }
 
         // Update cache
         {
@@ -606,7 +662,78 @@ pub async fn fetch_jwks_uri(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
+
     use super::*;
+    use crate::config::SessionConfig;
+
+    fn test_oidc_config(issuer: String) -> OidcAuthConfig {
+        OidcAuthConfig {
+            issuer,
+            discovery_url: None,
+            client_id: "test-client".to_string(),
+            client_secret: "test-secret".to_string(),
+            redirect_uri: "http://callback.example".to_string(),
+            scopes: vec!["openid".to_string()],
+            identity_claim: "sub".to_string(),
+            org_claim: None,
+            groups_claim: None,
+            session: SessionConfig::default(),
+            provisioning: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_discovery_rejects_issuer_mismatch() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "issuer": "https://attacker.example",
+                "authorization_endpoint": format!("{}/authorize", mock_server.uri()),
+                "token_endpoint": format!("{}/token", mock_server.uri()),
+                "jwks_uri": format!("{}/jwks", mock_server.uri()),
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let config = test_oidc_config(mock_server.uri());
+        let auth = OidcAuthenticator::new(
+            config,
+            Arc::new(super::super::session_store::MemorySessionStore::new()),
+            UrlValidationOptions {
+                allow_loopback: true,
+                allow_private: true,
+            },
+        );
+
+        let err = auth.get_discovery().await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("issuer"),
+            "expected issuer-mismatch error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_discovery_rejects_blocked_loopback() {
+        // Default UrlValidationOptions disallow loopback; using a 127.x discovery URL
+        // (without an actual server) should fail validation before any network call.
+        let config = test_oidc_config("http://127.0.0.1:1".to_string());
+        let auth = OidcAuthenticator::new(
+            config,
+            Arc::new(super::super::session_store::MemorySessionStore::new()),
+            UrlValidationOptions::default(),
+        );
+
+        let err = auth.get_discovery().await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("SSRF"), "expected SSRF rejection, got: {msg}");
+    }
 
     #[test]
     fn test_pkce_challenge() {
