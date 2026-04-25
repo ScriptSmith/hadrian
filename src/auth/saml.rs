@@ -329,9 +329,10 @@ impl SamlAuthenticator {
             .map_err(|e| AuthError::Internal(format!("Failed to retrieve auth state: {}", e)))?
             .ok_or(AuthError::InvalidToken)?;
 
-        // Check if state is too old (10 minute limit)
+        // Reject states older than the configured TTL.
+        let ttl = chrono::Duration::seconds(self.config.session.auth_state_ttl_secs as i64);
         let age = Utc::now() - auth_state.created_at;
-        if age > chrono::Duration::minutes(10) {
+        if age > ttl {
             return Err(AuthError::ExpiredToken);
         }
 

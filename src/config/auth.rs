@@ -1097,6 +1097,12 @@ pub struct SessionConfig {
     #[serde(default = "default_session_duration")]
     pub duration_secs: u64,
 
+    /// How long an in-flight authorization request (PKCE state, SAML
+    /// `relay_state`) remains valid, in seconds. Once exceeded, the user must
+    /// restart the login. Defaults to 10 minutes.
+    #[serde(default = "default_auth_state_ttl")]
+    pub auth_state_ttl_secs: u64,
+
     /// Secure cookie (HTTPS only).
     #[serde(default = "default_true")]
     pub secure: bool,
@@ -1167,6 +1173,7 @@ impl std::fmt::Debug for SessionConfig {
         f.debug_struct("SessionConfig")
             .field("cookie_name", &self.cookie_name)
             .field("duration_secs", &self.duration_secs)
+            .field("auth_state_ttl_secs", &self.auth_state_ttl_secs)
             .field("secure", &self.secure)
             .field("same_site", &self.same_site)
             .field("secret", &self.secret.as_ref().map(|_| "****"))
@@ -1181,6 +1188,7 @@ impl Default for SessionConfig {
         Self {
             cookie_name: default_session_cookie(),
             duration_secs: default_session_duration(),
+            auth_state_ttl_secs: default_auth_state_ttl(),
             secure: true,
             same_site: SameSite::default(),
             secret: None,
@@ -1203,6 +1211,11 @@ impl SessionConfig {
                 "Session duration cannot be zero".into(),
             ));
         }
+        if self.auth_state_ttl_secs == 0 {
+            return Err(ConfigError::Validation(
+                "Session auth_state_ttl_secs cannot be zero".into(),
+            ));
+        }
         // Browsers require the Secure attribute when SameSite=None; otherwise
         // the cookie is silently rejected in cross-site contexts.
         if matches!(self.same_site, SameSite::None) && !self.secure {
@@ -1222,6 +1235,11 @@ fn default_session_cookie() -> String {
 #[cfg(feature = "sso")]
 fn default_session_duration() -> u64 {
     86400 * 7 // 7 days
+}
+
+#[cfg(feature = "sso")]
+fn default_auth_state_ttl() -> u64 {
+    600 // 10 minutes
 }
 
 #[cfg(feature = "sso")]
@@ -1752,6 +1770,7 @@ mod tests {
         let config = SessionConfig {
             cookie_name: "__gw_session".to_string(),
             duration_secs: 86400,
+            auth_state_ttl_secs: 600,
             secure: true,
             same_site: SameSite::Lax,
             secret: Some("my-super-secret-session-key".to_string()),
@@ -1780,6 +1799,7 @@ mod tests {
         let config = SessionConfig {
             cookie_name: "__gw_session".to_string(),
             duration_secs: 86400,
+            auth_state_ttl_secs: 600,
             secure: false,
             same_site: SameSite::None,
             secret: None,
@@ -1799,6 +1819,7 @@ mod tests {
         let config = SessionConfig {
             cookie_name: "__gw_session".to_string(),
             duration_secs: 86400,
+            auth_state_ttl_secs: 600,
             secure: false,
             same_site: SameSite::Lax,
             secret: None,
@@ -1814,6 +1835,7 @@ mod tests {
         let config = SessionConfig {
             cookie_name: "__gw_session".to_string(),
             duration_secs: 86400,
+            auth_state_ttl_secs: 600,
             secure: true,
             same_site: SameSite::Lax,
             secret: None,
