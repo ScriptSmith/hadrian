@@ -169,6 +169,126 @@ export interface DisplaySelectionData {
 }
 
 /**
+ * Inline display directive — emitted by the model as a top-level `display` field
+ * on any artifact-producing tool call. Saves a round-trip versus calling
+ * `display_artifacts` separately after each tool completes.
+ */
+export interface DisplayDirective {
+  when: "always" | "on_success" | "on_error" | "if_output_matches" | "never";
+  /** Regex tested against `result.output` when `when === "if_output_matches"`. */
+  match?: string;
+  /** Layout for the auto-selected artifacts. Defaults to "inline". */
+  layout?: "inline" | "gallery" | "stacked";
+}
+
+/**
+ * JSON Schema fragment for the `display` parameter. Inject this as a property
+ * on any tool that can produce artifacts (both built-in and MCP).
+ */
+export const DISPLAY_PARAMETER_SCHEMA = {
+  type: "object",
+  description:
+    "Optional. Auto-display this tool's output artifacts inline when the condition is met, " +
+    "skipping the need for a follow-up display_artifacts call. Omit to keep artifacts in " +
+    "the collapsed 'more outputs' section unless you call display_artifacts explicitly.",
+  properties: {
+    when: {
+      type: "string",
+      enum: ["always", "on_success", "on_error", "if_output_matches", "never"],
+      description:
+        "'always': display regardless of outcome. 'on_success': only when the tool succeeds. " +
+        "'on_error': only on failure. 'if_output_matches': test `match` regex against output. " +
+        "'never': suppress inline display.",
+    },
+    match: {
+      type: "string",
+      description: "Regex tested against the tool output (required when when='if_output_matches').",
+    },
+    layout: {
+      type: "string",
+      enum: ["inline", "gallery", "stacked"],
+      description: "Layout for auto-displayed artifacts. Defaults to 'inline'.",
+    },
+  },
+  required: ["when"],
+} as const;
+
+function shouldApplyDisplay(directive: DisplayDirective, result: ToolExecutionResult): boolean {
+  switch (directive.when) {
+    case "always":
+      return true;
+    case "never":
+      return false;
+    case "on_success":
+      return result.success === true;
+    case "on_error":
+      return result.success === false;
+    case "if_output_matches": {
+      if (!directive.match) return false;
+      try {
+        return new RegExp(directive.match).test(result.output ?? "");
+      } catch (err) {
+        console.warn(`Invalid regex in display.match (${directive.match}):`, err);
+        return false;
+      }
+    }
+    default:
+      return false;
+  }
+}
+
+/**
+ * If the tool call carries a `display` directive and it evaluates to true,
+ * synthesise a display_selection artifact pointing at every non-meta artifact
+ * the tool produced. Returns the result unchanged otherwise.
+ */
+export function applyInlineDisplay(
+  toolCall: ParsedToolCall,
+  result: ToolExecutionResult
+): ToolExecutionResult {
+  const args = toolCall.arguments as Record<string, unknown> | undefined;
+  const raw = args?.display;
+  if (!raw || typeof raw !== "object") return result;
+  const directive = raw as DisplayDirective;
+  if (!shouldApplyDisplay(directive, result)) return result;
+
+  const displayableIds = (result.artifacts ?? [])
+    .filter((a) => a.type !== "display_selection")
+    .map((a) => a.id);
+  if (displayableIds.length === 0) return result;
+
+  const toolId = toolCall.id || `display-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const selectionArtifact: Artifact = {
+    id: `display-selection-${toolId}`,
+    type: "display_selection",
+    title: "Display Selection",
+    role: "output",
+    toolCallId: toolId,
+    data: {
+      artifactIds: displayableIds,
+      layout: directive.layout ?? "inline",
+    } satisfies DisplaySelectionData,
+  };
+
+  return {
+    ...result,
+    artifacts: [...(result.artifacts ?? []), selectionArtifact],
+  };
+}
+
+/**
+ * Remove the `display` field from tool arguments. Used before forwarding
+ * arguments to external servers (MCP) so they never see the UI-only field.
+ */
+export function stripDisplayArg(
+  args: Record<string, unknown> | undefined
+): Record<string, unknown> | undefined {
+  if (!args || !("display" in args)) return args;
+  const { display: _discard, ...rest } = args;
+  return rest;
+}
+
+/**
  * Agent artifact data - displays sub-agent task, internal reasoning, and curated output
  */
 export interface AgentArtifactData {
@@ -2416,7 +2536,9 @@ const mcpToolExecutor: ToolExecutor = async (toolCall, context) => {
   }
 
   const { serverId, toolName } = parsed;
-  const args = toolCall.arguments as Record<string, unknown> | undefined;
+  // Strip the gateway-injected `display` directive before forwarding to the MCP server.
+  // The directive is handled downstream by applyInlineDisplay.
+  const args = stripDisplayArg(toolCall.arguments as Record<string, unknown> | undefined);
   const toolId = toolCall.id;
 
   // Report status
@@ -2708,17 +2830,18 @@ export async function executeToolCalls(
 
     try {
       const result = await executor(toolCall, context);
-      results.set(toolCall.id, result);
+      results.set(toolCall.id, applyInlineDisplay(toolCall, result));
     } catch (error) {
       // Handle executor errors gracefully
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      results.set(toolCall.id, {
+      const errorResult: ToolExecutionResult = {
         success: false,
         error: errorMessage,
         output: JSON.stringify({
           error: `Tool execution failed: ${errorMessage}`,
         }),
-      });
+      };
+      results.set(toolCall.id, applyInlineDisplay(toolCall, errorResult));
     }
   });
 

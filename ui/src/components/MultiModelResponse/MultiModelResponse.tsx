@@ -792,16 +792,23 @@ const ModelResponseCard = memo(function ModelResponseCard({
     return result;
   }, [completedRoundsWithLiveTools]);
 
-  // Extract display selection for a specific tool execution round
+  // Extract display selection for a specific tool execution round.
+  // Merges selections from all executions in the round — both explicit
+  // `display_artifacts` calls and inline `display` directives on artifact-producing tools.
   const getDisplaySelectionForRound = useCallback(
     (round: ToolExecutionRound): DisplaySelectionData | null => {
+      const mergedIds: string[] = [];
+      let layout: DisplaySelectionData["layout"] | null = null;
       for (const execution of round.executions) {
-        if (execution.toolName === "display_artifacts") {
-          const sel = execution.outputArtifacts.find((a) => a.type === "display_selection");
-          if (sel) return sel.data as DisplaySelectionData;
+        for (const artifact of execution.outputArtifacts) {
+          if (artifact.type !== "display_selection") continue;
+          const data = artifact.data as DisplaySelectionData;
+          mergedIds.push(...data.artifactIds);
+          if (!layout) layout = data.layout;
         }
       }
-      return null;
+      if (mergedIds.length === 0) return null;
+      return { artifactIds: mergedIds, layout: layout ?? "inline" };
     },
     []
   );
