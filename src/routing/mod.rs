@@ -345,28 +345,30 @@ pub fn route_models_extended<'a>(
     models: Option<&'a [String]>,
     providers: &'a ProvidersConfig,
 ) -> Result<RoutedProvider<'a>, RoutingError> {
-    let mut last_error = None;
+    // Surface the *first* error if every candidate fails. The primary model's
+    // failure is the most actionable for the caller — fallback errors are a
+    // secondary signal.
+    let mut first_error: Option<RoutingError> = None;
 
-    // First, try the primary model
     if let Some(m) = model {
         match route_model_extended(Some(m), providers) {
             Ok(routed) => return Ok(routed),
-            Err(e) => last_error = Some(e),
-        }
+            Err(e) => first_error.get_or_insert(e),
+        };
     }
 
-    // Then try fallback models
     if let Some(model_list) = models {
         for m in model_list {
             match route_model_extended(Some(m.as_str()), providers) {
                 Ok(routed) => return Ok(routed),
-                Err(e) => last_error = Some(e),
+                Err(e) => {
+                    first_error.get_or_insert(e);
+                }
             }
         }
     }
 
-    // Return the last error, or NoModel if no models were tried
-    Err(last_error.unwrap_or(RoutingError::NoModel))
+    Err(first_error.unwrap_or(RoutingError::NoModel))
 }
 
 #[cfg(test)]
