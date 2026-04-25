@@ -964,6 +964,13 @@ const ModelResponseCard = memo(function ModelResponseCard({
         </div>
       </div>
 
+      {/* Streaming status announcement for screen readers. Per-token
+          updates would flood; a hidden status region announces
+          start/finish only. */}
+      <div role="status" aria-live="polite" className="sr-only">
+        {response.isStreaming ? `${response.model ?? "Model"} is responding` : ""}
+      </div>
+
       {/* Content */}
       {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/no-noninteractive-tabindex -- onMouseUp for text selection quoting; tabIndex for scrollable region keyboard access (axe: scrollable-region-focusable) */}
       <div className="flex-1 p-4 overflow-auto" tabIndex={0} onMouseUp={handleContentMouseUp}>
