@@ -901,10 +901,15 @@ CREATE TABLE IF NOT EXISTS vector_store_files (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     -- Soft delete timestamp (NULL = not deleted)
-    deleted_at TEXT,
-    -- A file can only be in a vector store once (among non-deleted entries)
-    UNIQUE(vector_store_id, file_id)
+    deleted_at TEXT
 );
+
+-- A file can only be in a vector store once among *live* entries. Using a
+-- partial unique index instead of a plain UNIQUE constraint lets a soft-deleted
+-- row coexist with a fresh re-add of the same file.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vector_store_files_unique_live
+    ON vector_store_files(vector_store_id, file_id)
+    WHERE deleted_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_vector_store_files_vector_store ON vector_store_files(vector_store_id);
 CREATE INDEX IF NOT EXISTS idx_vector_store_files_file ON vector_store_files(file_id);
