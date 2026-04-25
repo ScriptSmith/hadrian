@@ -105,6 +105,15 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         );
     }
 
+    if config.server.tls.is_some() {
+        tracing::error!(
+            "[server.tls] is set but the gateway does not yet terminate TLS \
+             itself; the gateway will continue to listen on plain HTTP. \
+             Terminate TLS upstream (reverse proxy / load balancer) and \
+             remove the [server.tls] section, or wait for native TLS support."
+        );
+    }
+
     let state = match AppState::new(config.clone()).await {
         Ok(state) => state,
         Err(e) => {
