@@ -181,6 +181,16 @@ pub const BOOTSTRAP_ROLE: &str = "_system_bootstrap";
 /// Roles starting with `_` are reserved for internal use and cannot be assigned by IdPs.
 pub const EMERGENCY_ADMIN_ROLE: &str = "_emergency_admin";
 
+/// Drop any role with the reserved `_` prefix from a list. IdPs and proxy
+/// headers must never be able to claim these roles, since the gateway grants
+/// extra trust to them (bootstrap / emergency break-glass).
+pub(crate) fn strip_reserved_roles(roles: Vec<String>) -> Vec<String> {
+    roles
+        .into_iter()
+        .filter(|r| !r.starts_with('_'))
+        .collect()
+}
+
 /// Try to authenticate via bootstrap API key.
 ///
 /// Bootstrap authentication is only valid when:
@@ -860,8 +870,9 @@ async fn try_bearer_token_auth(
         (None, Vec::new(), Vec::new(), Vec::new())
     };
 
-    // Extract roles from token
-    let roles = claims.roles.clone().unwrap_or_default();
+    // Extract roles from token, stripping any `_`-prefixed reserved roles
+    // (bootstrap/emergency) — IdPs must never be able to claim these.
+    let roles = strip_reserved_roles(claims.roles.clone().unwrap_or_default());
 
     tracing::debug!(
         sub = %claims.sub,
@@ -1144,18 +1155,23 @@ async fn try_proxy_auth_auth(
         None
     };
 
-    // Extract roles from groups header if configured
-    let roles = config
-        .groups_header
-        .as_ref()
-        .and_then(|h| headers.get(h))
-        .and_then(|v| v.to_str().ok())
-        .map(|v| {
-            // Try JSON array first, then comma-separated
-            serde_json::from_str::<Vec<String>>(v)
-                .unwrap_or_else(|_| v.split(',').map(|s| s.trim().to_string()).collect())
-        })
-        .unwrap_or_default();
+    // Extract roles from groups header if configured. Strip any `_`-prefixed
+    // reserved roles — proxy headers can be spoofed if `trusted_proxies` is
+    // misconfigured, so even with that gate we never want to honour a claim
+    // for `_emergency_admin`/`_system_bootstrap`.
+    let roles = strip_reserved_roles(
+        config
+            .groups_header
+            .as_ref()
+            .and_then(|h| headers.get(h))
+            .and_then(|v| v.to_str().ok())
+            .map(|v| {
+                // Try JSON array first, then comma-separated
+                serde_json::from_str::<Vec<String>>(v)
+                    .unwrap_or_else(|_| v.split(',').map(|s| s.trim().to_string()).collect())
+            })
+            .unwrap_or_default(),
+    );
 
     // For proxy auth, the groups header contains both roles and raw groups
     // Store them in both fields for backwards compatibility and debugging
