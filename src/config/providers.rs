@@ -770,6 +770,19 @@ pub struct AnthropicProviderConfig {
     /// Sovereignty and compliance metadata for this provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sovereignty: Option<SovereigntyMetadata>,
+
+    /// Models for which the `interleaved-thinking-2025-05-14` beta header
+    /// should be sent when thinking is enabled. Each entry is matched against
+    /// the model name as a substring (e.g. `"opus-4-6"` matches
+    /// `"claude-opus-4-6-20250101"`). Some Anthropic models reject this
+    /// header, so override the default list when adding or removing support.
+    /// Set to an empty list to disable the beta header entirely.
+    #[serde(default = "default_interleaved_thinking_models")]
+    pub interleaved_thinking_models: Vec<String>,
+}
+
+pub fn default_interleaved_thinking_models() -> Vec<String> {
+    vec!["opus-4-6".to_string(), "opus-4.6".to_string()]
 }
 
 impl AnthropicProviderConfig {
@@ -2868,6 +2881,7 @@ mod tests {
             health_check: ProviderHealthCheckConfig::default(),
             catalog_provider: None,
             sovereignty: None,
+            interleaved_thinking_models: default_interleaved_thinking_models(),
         };
 
         let debug_output = format!("{:?}", config);
