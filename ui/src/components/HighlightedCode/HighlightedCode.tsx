@@ -31,6 +31,33 @@ function getHighlighter(): Promise<Highlighter> {
   return highlighterPromise;
 }
 
+// Bounded LRU-ish cache so toggling themes back and forth on the same blocks
+// doesn't trigger a re-highlight every time. Keyed on (theme, lang, code).
+const HIGHLIGHT_CACHE_LIMIT = 256;
+const highlightCache = new Map<string, string>();
+
+function cacheKey(theme: string, lang: string, code: string): string {
+  return `${theme}|${lang}|${code}`;
+}
+
+function readHighlightCache(key: string): string | undefined {
+  const cached = highlightCache.get(key);
+  if (cached !== undefined) {
+    // Move to most-recent slot
+    highlightCache.delete(key);
+    highlightCache.set(key, cached);
+  }
+  return cached;
+}
+
+function writeHighlightCache(key: string, value: string): void {
+  if (highlightCache.size >= HIGHLIGHT_CACHE_LIMIT) {
+    const oldest = highlightCache.keys().next().value;
+    if (oldest !== undefined) highlightCache.delete(oldest);
+  }
+  highlightCache.set(key, value);
+}
+
 export interface HighlightedCodeProps {
   code: string;
   language?: string;
@@ -64,10 +91,17 @@ function HighlightedCodeComponent({
   useEffect(() => {
     let cancelled = false;
 
+    const lang = (language?.toLowerCase() ?? "text") || "text";
+    const key = cacheKey(theme, lang, code);
+    const cached = readHighlightCache(key);
+    if (cached !== undefined) {
+      setHtml(cached);
+      return;
+    }
+
     getHighlighter().then((highlighter) => {
       if (cancelled) return;
 
-      const lang = language?.toLowerCase() ?? "text";
       const loadedLangs = highlighter.getLoadedLanguages();
 
       // Use plain text for unknown languages
@@ -77,6 +111,7 @@ function HighlightedCodeComponent({
         lang: effectiveLang,
         theme,
       });
+      writeHighlightCache(key, result);
       setHtml(result);
     });
 
