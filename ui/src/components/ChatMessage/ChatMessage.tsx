@@ -141,9 +141,13 @@ function ChatMessageComponent({
   );
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(message.content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.debug("Clipboard write failed", err);
+    }
   };
 
   // Quote selection state
