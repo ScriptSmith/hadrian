@@ -483,8 +483,16 @@ pub static OLLAMA_SPEC: ProviderTestSpec = ProviderTestSpec {
 // =============================================================================
 
 /// Check if debug output is enabled via HADRIAN_TEST_DEBUG env var.
+/// Only `1`/`true` (case-insensitive) count — `HADRIAN_TEST_DEBUG=0` should
+/// not turn debug on.
 fn is_debug_enabled() -> bool {
-    std::env::var("HADRIAN_TEST_DEBUG").is_ok()
+    matches!(
+        std::env::var("HADRIAN_TEST_DEBUG")
+            .ok()
+            .as_deref()
+            .map(|v| v.trim().to_ascii_lowercase()),
+        Some(ref s) if s == "1" || s == "true"
+    )
 }
 
 /// Save a debug response to the debug output directory.
