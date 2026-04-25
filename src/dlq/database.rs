@@ -565,32 +565,38 @@ impl DatabaseDlq {
     }
 
     async fn enforce_max_entries(&self) -> DlqResult<()> {
-        let count = self.len().await?;
-
-        if count > self.max_entries {
-            let to_delete = count - self.max_entries;
-
-            match self.pool.pool() {
-                #[cfg(feature = "database-sqlite")]
-                DbPoolRef::Sqlite(pool) => {
-                    sqlx::query(&format!(
-                        "DELETE FROM {} WHERE id IN (SELECT id FROM {} ORDER BY created_at ASC LIMIT ?)",
-                        self.table_name, self.table_name
-                    ))
-                    .bind(to_delete as i64)
-                    .execute(pool)
-                    .await?;
-                }
-                #[cfg(feature = "database-postgres")]
-                DbPoolRef::Postgres(pools) => {
-                    sqlx::query(&format!(
-                        "DELETE FROM {} WHERE id IN (SELECT id FROM {} ORDER BY created_at ASC LIMIT $1)",
-                        self.table_name, self.table_name
-                    ))
-                    .bind(to_delete as i64)
-                    .execute(pools.write_pool())
-                    .await?;
-                }
+        // Combine the count and delete in a single statement so a concurrent
+        // insert between SELECT COUNT(*) and DELETE can't make us drop the
+        // wrong number of rows. The subquery returns "every row except the
+        // most-recent `max_entries`" ordered oldest-first, which is exactly
+        // the set we need to evict.
+        let max_entries = self.max_entries as i64;
+        match self.pool.pool() {
+            #[cfg(feature = "database-sqlite")]
+            DbPoolRef::Sqlite(pool) => {
+                // SQLite quirk: LIMIT -1 means "no limit", which lets us pair
+                // it with OFFSET to skip the newest `max_entries` rows.
+                sqlx::query(&format!(
+                    "DELETE FROM {table} WHERE id IN (\
+                         SELECT id FROM {table} ORDER BY created_at DESC LIMIT -1 OFFSET ?\
+                     )",
+                    table = self.table_name
+                ))
+                .bind(max_entries)
+                .execute(pool)
+                .await?;
+            }
+            #[cfg(feature = "database-postgres")]
+            DbPoolRef::Postgres(pools) => {
+                sqlx::query(&format!(
+                    "DELETE FROM {table} WHERE id IN (\
+                         SELECT id FROM {table} ORDER BY created_at DESC OFFSET $1\
+                     )",
+                    table = self.table_name
+                ))
+                .bind(max_entries)
+                .execute(pools.write_pool())
+                .await?;
             }
         }
 
