@@ -101,7 +101,7 @@ fn validate_model_string(model: &str) -> Result<(), RoutingError> {
     }
     if !model
         .chars()
-        .all(|c| c.is_alphanumeric() || "-._/:@ ".contains(c))
+        .all(|c| c.is_alphanumeric() || "-._/:@".contains(c))
     {
         return Err(RoutingError::InvalidModelFormat(
             "Model string contains invalid characters".to_string(),
