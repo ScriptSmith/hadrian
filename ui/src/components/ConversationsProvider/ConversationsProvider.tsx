@@ -121,15 +121,25 @@ function localToApiMessage(m: StoredConversation["messages"][0]): Message {
   };
 }
 
+// djb2 string hash. Plenty for content-change detection: collisions are
+// vanishingly rare in practice and we don't need cryptographic guarantees.
+function hashContent(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = (((h << 5) + h) ^ s.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0).toString(36);
+}
+
 // Compute a sync hash that includes actual content changes
 function computeSyncHash(conversations: StoredConversation[]): string {
   return JSON.stringify(
     conversations.map((c) => ({
       id: c.id,
       title: c.title,
-      // Include message content hash for detecting content changes
+      // Hash full content so edits past character 50 still invalidate the hash.
       msgHash: c.messages
-        .map((m) => `${m.role}:${m.content.length}:${m.content.slice(0, 50)}`)
+        .map((m) => `${m.role}:${m.content.length}:${hashContent(m.content)}`)
         .join("|"),
       models: c.models.join(","),
       updatedAt: c.updatedAt,
