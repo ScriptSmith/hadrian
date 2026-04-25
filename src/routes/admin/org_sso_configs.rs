@@ -759,6 +759,12 @@ pub async fn parse_saml_metadata(
     crate::validation::require_https(&input.metadata_url)
         .map_err(|e| AdminError::Validation(format!("SAML metadata URL must use HTTPS: {e}")))?;
 
+    // Block private/loopback/cloud-metadata addresses with DNS rebinding
+    // protection — the same gate that `SamlAuthenticator::get_metadata` uses.
+    crate::validation::validate_base_url(&input.metadata_url, false).map_err(|e| {
+        AdminError::Validation(format!("SAML metadata URL is not permitted: {e}"))
+    })?;
+
     // Fetch and parse the metadata
     let client = reqwest::Client::new();
     tracing::debug!(url = %input.metadata_url, "Fetching SAML IdP metadata");
