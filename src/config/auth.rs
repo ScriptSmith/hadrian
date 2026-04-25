@@ -1203,6 +1203,13 @@ impl SessionConfig {
                 "Session duration cannot be zero".into(),
             ));
         }
+        // Browsers require the Secure attribute when SameSite=None; otherwise
+        // the cookie is silently rejected in cross-site contexts.
+        if matches!(self.same_site, SameSite::None) && !self.secure {
+            return Err(ConfigError::Validation(
+                "Session cookie with same_site = \"none\" requires secure = true".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -1765,6 +1772,39 @@ mod tests {
             debug_output.contains("__gw_session"),
             "Cookie name should be visible"
         );
+    }
+
+    #[cfg(feature = "sso")]
+    #[test]
+    fn test_session_config_rejects_insecure_samesite_none() {
+        let config = SessionConfig {
+            cookie_name: "__gw_session".to_string(),
+            duration_secs: 86400,
+            secure: false,
+            same_site: SameSite::None,
+            secret: None,
+            enhanced: EnhancedSessionConfig::default(),
+        };
+        let err = config.validate().expect_err("must reject insecure None");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("same_site") && msg.contains("secure"),
+            "error must mention same_site/secure: {msg}"
+        );
+    }
+
+    #[cfg(feature = "sso")]
+    #[test]
+    fn test_session_config_allows_insecure_lax() {
+        let config = SessionConfig {
+            cookie_name: "__gw_session".to_string(),
+            duration_secs: 86400,
+            secure: false,
+            same_site: SameSite::Lax,
+            secret: None,
+            enhanced: EnhancedSessionConfig::default(),
+        };
+        config.validate().expect("Lax + insecure must validate");
     }
 
     #[cfg(feature = "sso")]
