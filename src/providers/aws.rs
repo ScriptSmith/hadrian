@@ -22,6 +22,13 @@ use crate::config::AwsCredentials;
 /// preventing request failures during the refresh window.
 const CREDENTIAL_REFRESH_BUFFER_SECS: u64 = 300;
 
+/// Maximum time a waiting task will block on `refresh_notify` before
+/// re-checking the cache. `Notify::notify_waiters` only signals tasks that are
+/// already in `notified()` at the moment of the call, so a task that loses
+/// the refresh race but reaches `notified()` after the refresher finishes
+/// would otherwise wait indefinitely. The timeout bounds that worst case.
+const REFRESH_NOTIFY_TIMEOUT_SECS: u64 = 10;
+
 /// Error type for AWS credential operations.
 #[derive(Debug, thiserror::Error)]
 pub enum AwsError {
@@ -114,7 +121,14 @@ impl AwsCredentialCache {
             }
 
             // Another task is refreshing. Wait for notification then retry.
-            self.refresh_notify.notified().await;
+            // Apply a timeout so a task that reaches this point after the
+            // refresher already called `notify_waiters` doesn't deadlock —
+            // it will simply re-check the cache on the next loop iteration.
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(REFRESH_NOTIFY_TIMEOUT_SECS),
+                self.refresh_notify.notified(),
+            )
+            .await;
         }
     }
 
