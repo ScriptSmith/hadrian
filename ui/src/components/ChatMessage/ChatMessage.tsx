@@ -289,9 +289,14 @@ function ChatMessageComponent({
             </div>
           )}
 
+          {/* Streaming status announcement. Marking the whole content div as
+              `aria-live="polite"` floods screen readers with every token —
+              this hidden status region instead announces start/finish only. */}
+          <div role="status" aria-live="polite" className="sr-only">
+            {isStreaming ? "Assistant is responding" : ""}
+          </div>
           <div
             className="break-words text-sm leading-relaxed"
-            aria-live={isStreaming ? "polite" : undefined}
             aria-busy={isStreaming}
           >
             {isUser ? (
