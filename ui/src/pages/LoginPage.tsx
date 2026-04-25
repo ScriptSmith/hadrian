@@ -32,7 +32,6 @@ export default function LoginPage() {
   const discoverSso = useDiscoverSso();
 
   const [error, setError] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [discoveredOrg, setDiscoveredOrg] = useState<DiscoveryResult | null>(null);
   const [discoveryEmail, setDiscoveryEmail] = useState<string>("");
 
@@ -98,16 +97,14 @@ export default function LoginPage() {
 
   const onApiKeySubmit = async (data: LoginForm) => {
     setError(null);
-    setIsSubmitting(true);
-
     try {
       await login("api_key", { apiKey: data.apiKey });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed");
-    } finally {
-      setIsSubmitting(false);
     }
   };
+
+  const isSubmitting = apiKeyForm.formState.isSubmitting;
 
   const handleOidcLogin = (orgId?: string) => {
     login("oidc", orgId ? { orgId } : undefined);
