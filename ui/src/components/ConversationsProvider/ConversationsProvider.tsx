@@ -382,8 +382,12 @@ export function ConversationsProvider({ children }: ConversationsProviderProps) 
         }
       }
 
-      // Apply all updates atomically via React state
+      // Apply all updates atomically via React state, and broadcast the
+      // *post-update* snapshot so other tabs see the new remoteId/syncedAt.
+      // Reading the closed-over `storedConversations` here would broadcast
+      // the pre-update state, leaving other tabs out of sync.
       if (updates.length > 0) {
+        let merged: StoredConversation[] = storedConversationsRef.current;
         setStoredConversations((prev) => {
           const updated = [...prev];
           for (const update of updates) {
@@ -396,13 +400,13 @@ export function ConversationsProvider({ children }: ConversationsProviderProps) 
               };
             }
           }
+          merged = updated;
           return updated;
         });
 
-        // Broadcast to other tabs
         broadcastChannelRef.current?.postMessage({
           type: "sync",
-          conversations: storedConversations,
+          conversations: merged,
         } satisfies SyncMessage);
       }
     } finally {
