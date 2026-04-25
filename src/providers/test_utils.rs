@@ -643,11 +643,20 @@ pub mod validators {
     pub fn assert_error(body: &Value) {
         let error = &body["error"];
         assert!(error.is_object(), "Response should have 'error' object");
+        let message = error["message"]
+            .as_str()
+            .expect("error should have 'message' string field");
         assert!(
-            error["message"].is_string(),
-            "error should have 'message' field"
+            !message.is_empty(),
+            "error.message must be non-empty so clients can surface a reason"
         );
-        assert!(error["type"].is_string(), "error should have 'type' field");
+        let ty = error["type"]
+            .as_str()
+            .expect("error should have 'type' string field");
+        assert!(
+            !ty.is_empty(),
+            "error.type must be non-empty so clients can branch on the error class"
+        );
     }
 
     /// Parse SSE streaming response and return validated chunks.
