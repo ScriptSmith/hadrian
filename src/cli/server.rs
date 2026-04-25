@@ -366,6 +366,12 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
     }
 
     let task_tracker = state.task_tracker.clone();
+    let static_cache_enabled = state.config.features.static_models_cache.enabled();
+    let warm_state = if static_cache_enabled {
+        Some(state.clone())
+    } else {
+        None
+    };
     let app = build_app(&config, state);
 
     let bind_addr = format!("{}:{}", config.server.host, config.server.port);
@@ -374,6 +380,17 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         .expect("Failed to bind to address");
 
     tracing::info!("Server listening on http://{}", bind_addr);
+
+    // Warm the static models cache on a background task. With many providers
+    // (including slow/dead ones holding open connections until they time out)
+    // the warm can take tens of seconds; doing it inline would delay the
+    // listener bind, the readiness probe, and any rolling deploy gated on
+    // `/health/ready`.
+    if let Some(warm_state) = warm_state {
+        task_tracker.spawn(async move {
+            warm_state.warm_static_models_cache().await;
+        });
+    }
 
     if config.server.allow_loopback_urls || config.server.allow_private_urls {
         tracing::info!(

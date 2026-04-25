@@ -1107,13 +1107,10 @@ impl AppState {
             )),
         });
 
-        // Warm the static models cache so /v1/models is fast from the first request
-        if let Ok(ref state) = result
-            && state.config.features.static_models_cache.enabled()
-        {
-            state.warm_static_models_cache().await;
-        }
-
+        // Note: the static models cache is no longer warmed inside
+        // `AppState::new`. The CLI server entrypoint spawns the warm on a
+        // background task after the listener is bound so a slow/dead
+        // provider can't delay startup or the readiness probe.
         result
     }
 
