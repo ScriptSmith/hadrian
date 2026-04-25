@@ -127,15 +127,22 @@ pub async fn delete_one(
 
     let session_store = get_session_store(&state)?;
 
-    // Verify session belongs to the current user
+    // Verify session belongs to the current user. Both "session does not exist"
+    // and "session belongs to a different user" return 200 with
+    // `sessions_revoked: 0` so an attacker can't probe arbitrary session IDs to
+    // confirm they exist. The mismatch is logged at warn for forensics.
     let session_existed = match session_store.get_session(session_id).await {
         Ok(Some(session)) => {
             if session.external_id != *external_id {
-                return Err(AdminError::BadRequest(
-                    "Session does not belong to current user".to_string(),
-                ));
+                tracing::warn!(
+                    session_id = %session_id,
+                    actor_external_id = %external_id,
+                    "Attempt to revoke a session that belongs to a different user"
+                );
+                false
+            } else {
+                true
             }
-            true
         }
         Ok(None) => false,
         Err(e) => {
