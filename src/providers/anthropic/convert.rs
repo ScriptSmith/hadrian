@@ -954,7 +954,10 @@ pub fn convert_anthropic_to_responses_response(
             type_: ResponsesReasoningType::Reasoning,
             id: format!(
                 "rs_{}",
-                &anthropic.id[4..].chars().take(24).collect::<String>()
+                crate::providers::anthropic::stream::strip_anthropic_prefix(
+                    &anthropic.id,
+                    "msg_"
+                )
             ),
             content: None,   // Anthropic doesn't provide structured reasoning content
             summary: vec![], // Would need to generate summary
@@ -996,7 +999,10 @@ pub fn convert_anthropic_to_responses_response(
             ResponsesOutputItem::Message(OutputMessage {
                 id: format!(
                     "msg_{}",
-                    &anthropic.id[4..].chars().take(24).collect::<String>()
+                    crate::providers::anthropic::stream::strip_anthropic_prefix(
+                        &anthropic.id,
+                        "msg_"
+                    )
                 ),
                 type_: MessageType::Message,
                 role: "assistant".to_string(),

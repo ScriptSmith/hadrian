@@ -14,6 +14,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::StreamingBufferConfig;
 
+/// Strip a known Anthropic ID prefix (`msg_`, `toolu_`, …) and return up to 24
+/// chars of the remainder. Falls back to the whole id if the prefix isn't
+/// present, which protects against panics on short ids or multibyte
+/// boundaries inside the prefix.
+pub(crate) fn strip_anthropic_prefix(id: &str, prefix: &str) -> String {
+    id.strip_prefix(prefix)
+        .unwrap_or(id)
+        .chars()
+        .take(24)
+        .collect()
+}
+
 // ============================================================================
 // Anthropic Streaming Event Types
 // ============================================================================
@@ -820,10 +832,8 @@ impl<S> AnthropicToResponsesStream<S> {
         match event {
             AnthropicStreamEvent::MessageStart { message } => {
                 self.state.response_id = message.id.clone();
-                self.state.message_id = format!(
-                    "msg_{}",
-                    &message.id[4..].chars().take(24).collect::<String>()
-                );
+                self.state.message_id =
+                    format!("msg_{}", strip_anthropic_prefix(&message.id, "msg_"));
                 self.state.model = message.model;
                 if let Some(usage) = message.usage {
                     self.state.input_tokens = usage.input_tokens;
@@ -904,7 +914,7 @@ impl<S> AnthropicToResponsesStream<S> {
                                 "output_index": output_index,
                                 "item": {
                                     "type": "function_call",
-                                    "id": format!("fc_{}", &id[6..].chars().take(24).collect::<String>()),
+                                    "id": format!("fc_{}", strip_anthropic_prefix(&id, "toolu_")),
                                     "call_id": id,
                                     "name": name,
                                     "arguments": "",
@@ -927,7 +937,7 @@ impl<S> AnthropicToResponsesStream<S> {
                                     "output_index": 0,
                                     "item": {
                                         "type": "reasoning",
-                                        "id": format!("rs_{}", &self.state.response_id[4..].chars().take(24).collect::<String>()),
+                                        "id": format!("rs_{}", strip_anthropic_prefix(&self.state.response_id, "msg_")),
                                         "summary": []
                                     }
                                 }),
@@ -977,7 +987,7 @@ impl<S> AnthropicToResponsesStream<S> {
 
                         // Emit function call arguments delta
                         let fc_id =
-                            format!("fc_{}", &tool_id[6..].chars().take(24).collect::<String>());
+                            format!("fc_{}", strip_anthropic_prefix(&tool_id, "toolu_"));
                         self.emit_event(
                             "response.function_call_arguments.delta",
                             serde_json::json!({
@@ -996,10 +1006,7 @@ impl<S> AnthropicToResponsesStream<S> {
                         // Emit reasoning summary delta
                         let reasoning_id = format!(
                             "rs_{}",
-                            &self.state.response_id[4..]
-                                .chars()
-                                .take(24)
-                                .collect::<String>()
+                            strip_anthropic_prefix(&self.state.response_id, "msg_")
                         );
                         self.emit_event(
                             "response.reasoning_summary_text.delta",
@@ -1036,10 +1043,7 @@ impl<S> AnthropicToResponsesStream<S> {
                 if self.state.emitted_reasoning_added {
                     let reasoning_id = format!(
                         "rs_{}",
-                        &self.state.response_id[4..]
-                            .chars()
-                            .take(24)
-                            .collect::<String>()
+                        strip_anthropic_prefix(&self.state.response_id, "msg_")
                     );
 
                     // Emit reasoning summary done
@@ -1142,7 +1146,7 @@ impl<S> AnthropicToResponsesStream<S> {
                 for (i, tool_id, tool_name, arguments) in tool_calls {
                     let output_index = self.tool_output_index(i);
                     let fc_id =
-                        format!("fc_{}", &tool_id[6..].chars().take(24).collect::<String>());
+                        format!("fc_{}", strip_anthropic_prefix(tool_id.as_str(), "toolu_"));
 
                     self.emit_event(
                         "response.function_call_arguments.done",
@@ -1176,10 +1180,7 @@ impl<S> AnthropicToResponsesStream<S> {
                 if self.state.emitted_reasoning_added {
                     let reasoning_id = format!(
                         "rs_{}",
-                        &self.state.response_id[4..]
-                            .chars()
-                            .take(24)
-                            .collect::<String>()
+                        strip_anthropic_prefix(&self.state.response_id, "msg_")
                     );
                     let mut reasoning_item = serde_json::json!({
                         "type": "reasoning",
@@ -1215,7 +1216,7 @@ impl<S> AnthropicToResponsesStream<S> {
                 // Tool calls come last
                 for (_, tool_id, tool_name, arguments) in &self.state.tool_calls {
                     let fc_id =
-                        format!("fc_{}", &tool_id[6..].chars().take(24).collect::<String>());
+                        format!("fc_{}", strip_anthropic_prefix(tool_id.as_str(), "toolu_"));
                     output.push(serde_json::json!({
                         "type": "function_call",
                         "id": fc_id,
