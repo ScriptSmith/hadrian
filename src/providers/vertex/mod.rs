@@ -168,27 +168,15 @@ impl VertexProvider {
         }
     }
 
-    /// Build the full URL for a model endpoint.
+    /// Build the full URL for a model endpoint. The API key (when present) is
+    /// passed as the `x-goog-api-key` header in [`build_request`], not in the
+    /// query string — query parameters end up in HTTP access logs and tracing
+    /// span attributes.
     fn model_url(&self, model: &str, endpoint: &str, stream: bool) -> String {
         let base = self.base_url();
         let mut url = format!("{}/{}:{}", base, model, endpoint);
-
-        match &self.auth_mode {
-            AuthMode::ApiKey(api_key) => {
-                // Add API key as query parameter
-                if stream {
-                    url.push_str("?alt=sse&key=");
-                } else {
-                    url.push_str("?key=");
-                }
-                url.push_str(api_key);
-            }
-            AuthMode::OAuth { .. } => {
-                // OAuth uses header auth, just add SSE param if streaming
-                if stream {
-                    url.push_str("?alt=sse");
-                }
-            }
+        if stream {
+            url.push_str("?alt=sse");
         }
         url
     }
@@ -316,8 +304,14 @@ impl VertexProvider {
             .header("Content-Type", "application/json")
             .timeout(self.timeout);
 
-        if let Some(token) = token {
-            req = req.header("Authorization", format!("Bearer {}", token));
+        match (&self.auth_mode, token) {
+            (AuthMode::ApiKey(api_key), _) => {
+                req = req.header("x-goog-api-key", api_key.as_str());
+            }
+            (AuthMode::OAuth { .. }, Some(token)) => {
+                req = req.header("Authorization", format!("Bearer {}", token));
+            }
+            (AuthMode::OAuth { .. }, None) => {}
         }
 
         req
