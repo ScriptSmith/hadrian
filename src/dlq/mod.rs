@@ -74,6 +74,25 @@ pub async fn create_dlq(
             ttl_secs,
             ..
         } => {
+            // The table name is interpolated as raw SQL throughout
+            // `dlq::database`, so we validate it against an identifier shape
+            // here rather than trusting it. Mistyped/templated config values
+            // would otherwise become an injection surface.
+            let valid_ident = !table_name.is_empty()
+                && table_name.len() <= 63
+                && table_name
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_alphabetic() || c == '_')
+                    .unwrap_or(false)
+                && table_name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if !valid_ident {
+                return Err(DlqError::Internal(format!(
+                    "Invalid DLQ table_name '{table_name}': must match [A-Za-z_][A-Za-z0-9_]{{0,62}}"
+                )));
+            }
             let db = db.ok_or_else(|| {
                 DlqError::Internal(
                     "Database DLQ configured but no database connection available".to_string(),
