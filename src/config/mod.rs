@@ -166,26 +166,22 @@ impl GatewayConfig {
             ));
         }
 
-        // IAP without trusted_proxies is dangerous — anyone can spoof identity headers.
+        // IAP without trusted_proxies is fail-open: anyone who reaches the
+        // gateway can spoof identity headers. There is no safe fallback —
+        // refuse to start until the operator configures `server.trusted_proxies`.
         if matches!(self.auth.mode, AuthMode::Iap(_))
             && !self.server.trusted_proxies.is_configured()
         {
-            if !self.server.host.is_loopback() {
-                return Err(ConfigError::Validation(
-                    "IAP mode (auth.mode.type = \"iap\") is enabled and the server \
-                     binds to a non-localhost address, but server.trusted_proxies is not \
-                     configured. This allows any client to spoof identity headers. Either \
-                     configure server.trusted_proxies.cidrs with your proxy's IP ranges, \
-                     or bind to localhost (server.host = \"127.0.0.1\")."
-                        .into(),
-                ));
-            }
-            tracing::warn!(
-                "IAP mode is enabled without server.trusted_proxies configured. \
-                 Identity headers will be accepted from ANY source. This is safe only if \
-                 the gateway is exclusively accessible through a trusted reverse proxy. \
-                 Configure server.trusted_proxies.cidrs for production deployments."
-            );
+            return Err(ConfigError::Validation(
+                "IAP mode (auth.mode.type = \"iap\") is enabled but \
+                 server.trusted_proxies is not configured. Without trusted \
+                 proxies, identity headers can be spoofed by anyone able to \
+                 reach the gateway. Configure server.trusted_proxies.cidrs \
+                 with your proxy's IP ranges (or set \
+                 server.trusted_proxies.dangerously_trust_all = true \
+                 explicitly for isolated environments)."
+                    .into(),
+            ));
         }
 
         // Validate individual sections
@@ -809,9 +805,12 @@ key3 = "literal""#
 
     #[test]
     #[cfg(feature = "database-sqlite")]
-    fn test_iap_without_trusted_proxies_localhost_warns_but_ok() {
-        // IAP on localhost without trusted_proxies should succeed (just warn)
-        let result = GatewayConfig::parse(
+    fn test_iap_without_trusted_proxies_on_localhost_also_errors() {
+        // IAP on localhost without trusted_proxies must also fail; the
+        // localhost loopback compat path was removed (the proxy auth
+        // middleware no longer trusts headers when trusted_proxies is unset,
+        // so accepting this config would silently disable IAP).
+        let err = GatewayConfig::parse(
             r#"
             [server]
             host = "127.0.0.1"
@@ -828,12 +827,12 @@ key3 = "literal""#
             type = "open_ai"
             api_key = "sk-test"
         "#,
-        );
+        )
+        .unwrap_err();
 
         assert!(
-            result.is_ok(),
-            "IAP on localhost without trusted_proxies should be allowed: {:?}",
-            result.err()
+            err.to_string().contains("trusted_proxies"),
+            "should mention trusted_proxies: {err}"
         );
     }
 

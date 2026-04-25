@@ -1084,34 +1084,33 @@ async fn try_proxy_auth_auth(
         None => return Ok(None),
     };
 
-    // SECURITY: Validate that the request comes from a trusted proxy before trusting headers.
-    // If trusted_proxies is configured, we MUST verify the connecting IP is trusted.
-    // If trusted_proxies is NOT configured, we trust all sources (for backwards compatibility
-    // and development environments where the gateway is behind a trusted network boundary).
+    // SECURITY: Identity headers may only be trusted when the request comes
+    // from a trusted proxy. Config validation refuses startup if IAP is
+    // enabled without `server.trusted_proxies` set, so by this point the
+    // section must be configured — anything here that isn't from a trusted
+    // source is dropped.
     let trusted_proxies = &state.config.server.trusted_proxies;
-    if trusted_proxies.is_configured() {
-        let parsed_cidrs = trusted_proxies.parsed_cidrs();
+    let parsed_cidrs = trusted_proxies.parsed_cidrs();
 
-        let is_trusted = match connecting_ip {
-            Some(ip) => trusted_proxies.is_trusted_ip(ip, &parsed_cidrs),
-            // No connecting IP available - only trust if dangerously_trust_all is explicitly set
-            None => trusted_proxies.dangerously_trust_all,
-        };
+    let is_trusted = match connecting_ip {
+        Some(ip) => trusted_proxies.is_trusted_ip(ip, &parsed_cidrs),
+        // No connecting IP available — only trust if `dangerously_trust_all`
+        // is explicitly set (e.g. unit tests or fully air-gapped envs).
+        None => trusted_proxies.dangerously_trust_all,
+    };
 
-        if !is_trusted {
-            // Request is not from a trusted proxy - do not trust identity headers
-            if let Some(ip) = connecting_ip
-                && headers.contains_key(&config.identity_header)
-            {
-                tracing::warn!(
-                    connecting_ip = %ip,
-                    identity_header = %config.identity_header,
-                    "Ignoring Proxy auth identity header from untrusted IP - \
-                     configure server.trusted_proxies to trust this source"
-                );
-            }
-            return Ok(None);
+    if !is_trusted {
+        if let Some(ip) = connecting_ip
+            && headers.contains_key(&config.identity_header)
+        {
+            tracing::warn!(
+                connecting_ip = %ip,
+                identity_header = %config.identity_header,
+                "Ignoring Proxy auth identity header from untrusted IP - \
+                 configure server.trusted_proxies to trust this source"
+            );
         }
+        return Ok(None);
     }
 
     // Check for identity header
@@ -2403,12 +2402,12 @@ mod tests {
         map
     }
 
-    // ========== No trusted_proxies configured (backwards compatibility) ==========
+    // ========== No trusted_proxies configured (now fails closed) ==========
 
     #[tokio::test]
-    async fn test_proxy_auth_no_proxy_config_trusts_headers() {
-        // When trusted_proxies is NOT configured, headers should be trusted
-        // (backwards compatibility for development/internal deployments)
+    async fn test_proxy_auth_no_proxy_config_drops_headers() {
+        // Config validation refuses startup in this case, but we still want
+        // the middleware itself to fail closed defensively if it ever runs.
         let state = create_test_state(
             "X-Forwarded-User",
             TrustedProxiesConfig::default(), // No proxy config
@@ -2419,20 +2418,21 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().external_id, "alice@example.com");
+        assert!(
+            result.is_none(),
+            "headers must be dropped when trusted_proxies is unset"
+        );
     }
 
     #[tokio::test]
     async fn test_proxy_auth_no_proxy_config_no_connecting_ip() {
-        // When no trusted_proxies and no connecting IP, still trust headers
+        // No trusted_proxies and no connecting IP — still fail closed.
         let state = create_test_state("X-Forwarded-User", TrustedProxiesConfig::default());
         let headers = make_headers(vec![("X-Forwarded-User", "bob@example.com")]);
 
         let result = try_proxy_auth_auth(&headers, None, &state).await.unwrap();
 
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().external_id, "bob@example.com");
+        assert!(result.is_none());
     }
 
     // ========== dangerously_trust_all mode ==========
