@@ -549,8 +549,15 @@ pub async fn execute_with_fallback<E: ProviderExecutor>(
     let mut last_provider = primary_provider_name.clone();
     let mut last_model = primary_model_name.clone();
 
-    // Try primary provider first
-    let mut current_payload = payload.clone();
+    // Hold a template clone for the fallback chain only when needed; the
+    // primary call takes the original payload by value to avoid one clone in
+    // the common no-fallback path.
+    let payload_for_fallbacks = if fallback_chain.is_empty() {
+        None
+    } else {
+        Some(payload.clone())
+    };
+    let mut current_payload = payload;
     current_payload.set_model(primary_model_name.clone());
 
     // Store the last response for chain exhaustion case
@@ -606,7 +613,11 @@ pub async fn execute_with_fallback<E: ProviderExecutor>(
         }
     }
 
-    // Try each fallback in order
+    // Try each fallback in order. `payload_for_fallbacks` is `Some` whenever
+    // `fallback_chain` is non-empty (which is the only case we reach this loop
+    // with work to do), so unwrapping is safe.
+    let payload_template = payload_for_fallbacks
+        .expect("payload_for_fallbacks is Some when fallback_chain is non-empty");
     let mut last_error: Option<ProviderError> = None;
 
     for (idx, fallback) in fallback_chain.iter().enumerate() {
@@ -654,7 +665,7 @@ pub async fn execute_with_fallback<E: ProviderExecutor>(
         }
 
         // Update payload with fallback model
-        let mut fallback_payload = payload.clone();
+        let mut fallback_payload = payload_template.clone();
         fallback_payload.set_model(fallback.model_name.clone());
 
         tracing::debug!(
