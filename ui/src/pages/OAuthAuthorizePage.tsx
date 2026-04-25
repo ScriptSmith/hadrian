@@ -125,7 +125,7 @@ function ownerKeyToApiKeyOwner(key: string, userId: string): ApiKeyOwner {
     case "project":
       return { type: "project", project_id: id };
     default:
-      return { type: "user", user_id: userId };
+      throw new Error(`Unsupported owner kind: ${kind}`);
   }
 }
 
