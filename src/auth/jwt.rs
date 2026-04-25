@@ -148,9 +148,7 @@ impl JwtValidator {
         // real expected audience.
         let entries = config.audience.to_vec();
         if entries.is_empty() {
-            return Err(AuthError::Internal(
-                "JWT audience must not be empty".into(),
-            ));
+            return Err(AuthError::Internal("JWT audience must not be empty".into()));
         }
         for entry in entries {
             if entry.trim().is_empty() {

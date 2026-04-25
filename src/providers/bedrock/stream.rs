@@ -362,7 +362,8 @@ impl<S> BedrockToOpenAIStream<S> {
                     self.emit_chunk(&usage_chunk);
 
                     // Emit [DONE]
-                    self.output_buffer.push_back(Bytes::from("data: [DONE]\n\n"));
+                    self.output_buffer
+                        .push_back(Bytes::from("data: [DONE]\n\n"));
                 }
             }
             _ => {
@@ -1108,7 +1109,8 @@ impl<S> BedrockToResponsesStream<S> {
                     );
 
                     // Emit [DONE] to signal end of stream
-                    self.output_buffer.push_back(Bytes::from("data: [DONE]\n\n"));
+                    self.output_buffer
+                        .push_back(Bytes::from("data: [DONE]\n\n"));
                 }
             }
             _ => {

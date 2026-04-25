@@ -954,10 +954,7 @@ pub fn convert_anthropic_to_responses_response(
             type_: ResponsesReasoningType::Reasoning,
             id: format!(
                 "rs_{}",
-                crate::providers::anthropic::stream::strip_anthropic_prefix(
-                    &anthropic.id,
-                    "msg_"
-                )
+                crate::providers::anthropic::stream::strip_anthropic_prefix(&anthropic.id, "msg_")
             ),
             content: None,   // Anthropic doesn't provide structured reasoning content
             summary: vec![], // Would need to generate summary

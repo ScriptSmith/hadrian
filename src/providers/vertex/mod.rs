@@ -874,8 +874,7 @@ mod streaming_tests {
         transformer.handle_response(response);
 
         // Should emit [DONE] at the end
-        let last_chunk =
-            std::str::from_utf8(transformer.output_buffer.back().unwrap()).unwrap();
+        let last_chunk = std::str::from_utf8(transformer.output_buffer.back().unwrap()).unwrap();
         assert_eq!(last_chunk, "data: [DONE]\n\n");
 
         // Should have usage in second-to-last chunk

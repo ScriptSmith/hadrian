@@ -185,10 +185,7 @@ pub const EMERGENCY_ADMIN_ROLE: &str = "_emergency_admin";
 /// headers must never be able to claim these roles, since the gateway grants
 /// extra trust to them (bootstrap / emergency break-glass).
 pub(crate) fn strip_reserved_roles(roles: Vec<String>) -> Vec<String> {
-    roles
-        .into_iter()
-        .filter(|r| !r.starts_with('_'))
-        .collect()
+    roles.into_iter().filter(|r| !r.starts_with('_')).collect()
 }
 
 /// Try to authenticate via bootstrap API key.

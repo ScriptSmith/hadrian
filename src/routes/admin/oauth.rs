@@ -58,7 +58,11 @@ fn validate_callback_url(callback_url: &str, pkce: &OAuthPkceConfig) -> Result<S
         Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
         Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
         Some(url::Host::Ipv6(ip)) => {
-            ip.is_loopback() || ip.to_ipv4_mapped().map(|v4| v4.is_loopback()).unwrap_or(false)
+            ip.is_loopback()
+                || ip
+                    .to_ipv4_mapped()
+                    .map(|v4| v4.is_loopback())
+                    .unwrap_or(false)
         }
         None => false,
     };

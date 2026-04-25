@@ -402,12 +402,13 @@ impl DbPool {
                         sqlx::postgres::PgSslMode::VerifyFull
                     }
                 };
-                let connect_opts = |url: &str| -> Result<sqlx::postgres::PgConnectOptions, DbError> {
-                    let opts: sqlx::postgres::PgConnectOptions = url.parse().map_err(|e| {
-                        DbError::Validation(format!("Invalid Postgres URL: {e}"))
-                    })?;
-                    Ok(opts.ssl_mode(ssl_mode))
-                };
+                let connect_opts =
+                    |url: &str| -> Result<sqlx::postgres::PgConnectOptions, DbError> {
+                        let opts: sqlx::postgres::PgConnectOptions = url.parse().map_err(|e| {
+                            DbError::Validation(format!("Invalid Postgres URL: {e}"))
+                        })?;
+                        Ok(opts.ssl_mode(ssl_mode))
+                    };
                 let pool_opts = || {
                     sqlx::postgres::PgPoolOptions::new()
                         .min_connections(cfg.min_connections)

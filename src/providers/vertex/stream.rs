@@ -353,7 +353,8 @@ impl<S> VertexToOpenAIStream<S> {
                 self.emit_chunk(&usage_chunk);
 
                 // Emit [DONE]
-                self.output_buffer.push_back(Bytes::from("data: [DONE]\n\n"));
+                self.output_buffer
+                    .push_back(Bytes::from("data: [DONE]\n\n"));
             }
         }
     }
@@ -592,7 +593,8 @@ impl<S> VertexToResponsesStream<S> {
 
             // Pass through [DONE] marker
             if json_str == "[DONE]" {
-                self.output_buffer.push_back(Bytes::from("data: [DONE]\n\n"));
+                self.output_buffer
+                    .push_back(Bytes::from("data: [DONE]\n\n"));
                 return;
             }
 

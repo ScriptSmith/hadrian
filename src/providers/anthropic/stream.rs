@@ -541,7 +541,8 @@ impl<S> AnthropicToOpenAIStream<S> {
                 self.emit_chunk(&chunk);
 
                 // Emit [DONE]
-                self.output_buffer.push_back(Bytes::from("data: [DONE]\n\n"));
+                self.output_buffer
+                    .push_back(Bytes::from("data: [DONE]\n\n"));
             }
 
             AnthropicStreamEvent::Ping => {
@@ -995,8 +996,7 @@ impl<S> AnthropicToResponsesStream<S> {
                         let output_index = self.tool_output_index(tool_index);
 
                         // Emit function call arguments delta
-                        let fc_id =
-                            format!("fc_{}", strip_anthropic_prefix(&tool_id, "toolu_"));
+                        let fc_id = format!("fc_{}", strip_anthropic_prefix(&tool_id, "toolu_"));
                         self.emit_event(
                             "response.function_call_arguments.delta",
                             serde_json::json!({
@@ -1265,7 +1265,8 @@ impl<S> AnthropicToResponsesStream<S> {
                 );
 
                 // Emit [DONE] to signal end of stream (OpenAI Responses API convention)
-                self.output_buffer.push_back(Bytes::from("data: [DONE]\n\n"));
+                self.output_buffer
+                    .push_back(Bytes::from("data: [DONE]\n\n"));
             }
 
             AnthropicStreamEvent::Ping => {

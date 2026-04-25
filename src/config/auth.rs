@@ -608,10 +608,7 @@ impl ProxyAuthJwtConfig {
 /// Reject empty audience values. `jsonwebtoken` accepts an empty string as a
 /// valid audience match, so an empty entry would silently disable the audience
 /// check.
-fn validate_jwt_audience(
-    field: &str,
-    audience: &OneOrMany<String>,
-) -> Result<(), ConfigError> {
+fn validate_jwt_audience(field: &str, audience: &OneOrMany<String>) -> Result<(), ConfigError> {
     let entries = audience.to_vec();
     if entries.is_empty() {
         return Err(ConfigError::Validation(format!(

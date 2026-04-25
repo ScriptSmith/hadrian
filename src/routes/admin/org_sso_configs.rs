@@ -761,9 +761,8 @@ pub async fn parse_saml_metadata(
 
     // Block private/loopback/cloud-metadata addresses with DNS rebinding
     // protection — the same gate that `SamlAuthenticator::get_metadata` uses.
-    crate::validation::validate_base_url(&input.metadata_url, false).map_err(|e| {
-        AdminError::Validation(format!("SAML metadata URL is not permitted: {e}"))
-    })?;
+    crate::validation::validate_base_url(&input.metadata_url, false)
+        .map_err(|e| AdminError::Validation(format!("SAML metadata URL is not permitted: {e}")))?;
 
     // Fetch and parse the metadata
     let client = reqwest::Client::new();
