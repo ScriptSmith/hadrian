@@ -148,6 +148,7 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         let http_client = state.http_client.clone();
         let allow_loopback = config.server.allow_loopback_urls;
         let allow_private = config.server.allow_private_urls;
+        let jwt_loader_concurrency = config.server.jwt_loader_concurrency;
         state.task_tracker.spawn(async move {
             let configs = match db.org_sso_configs().list_enabled().await {
                 Ok(c) => c,
@@ -199,7 +200,7 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
                         }
                     }
                 })
-                .buffer_unordered(10)
+                .buffer_unordered(jwt_loader_concurrency)
                 .collect()
                 .await;
 
@@ -400,6 +401,8 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
     #[cfg(not(feature = "wizard"))]
     let _ = no_browser;
 
+    let shutdown_config = config.server.shutdown.clone();
+
     // Graceful shutdown: wait for SIGINT/SIGTERM, then wait for all background tasks.
     // `into_make_service_with_connect_info` is required so middleware can read the
     // connecting peer address via `ConnectInfo<SocketAddr>` for IP-based rate limits,
@@ -408,7 +411,11 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal(task_tracker, usage_buffer_handle))
+    .with_graceful_shutdown(shutdown_signal(
+        task_tracker,
+        usage_buffer_handle,
+        shutdown_config,
+    ))
     .await
     .unwrap();
 }
@@ -419,6 +426,7 @@ async fn shutdown_signal(
         Arc<usage_buffer::UsageLogBuffer>,
         tokio::task::JoinHandle<()>,
     )>,
+    shutdown_config: crate::config::ShutdownConfig,
 ) {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
@@ -450,7 +458,12 @@ async fn shutdown_signal(
     // Shutdown usage buffer worker and wait for it to flush
     if let Some((buffer, handle)) = usage_buffer_handle {
         buffer.shutdown();
-        if let Err(e) = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
+        if let Err(e) = tokio::time::timeout(
+            std::time::Duration::from_secs(shutdown_config.usage_buffer_flush_secs),
+            handle,
+        )
+        .await
+        {
             tracing::warn!(error = %e, "Timeout waiting for usage buffer to flush");
         } else {
             tracing::info!("Usage buffer flushed successfully");
@@ -458,8 +471,11 @@ async fn shutdown_signal(
     }
 
     // Wait for all in-flight tasks to complete (with timeout)
-    let wait_result =
-        tokio::time::timeout(std::time::Duration::from_secs(30), task_tracker.wait()).await;
+    let wait_result = tokio::time::timeout(
+        std::time::Duration::from_secs(shutdown_config.drain_secs),
+        task_tracker.wait(),
+    )
+    .await;
 
     match wait_result {
         Ok(()) => tracing::info!("All background tasks completed"),

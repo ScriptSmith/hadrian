@@ -67,6 +67,16 @@ pub struct ServerConfig {
     #[serde(default)]
     pub http_client: HttpClientConfig,
 
+    /// Graceful shutdown timing.
+    #[serde(default)]
+    pub shutdown: ShutdownConfig,
+
+    /// Maximum number of per-issuer JWKS endpoints fetched in parallel when
+    /// warming the gateway JWT validator registry on startup. Higher values
+    /// speed up startup but risk overwhelming individual IdPs.
+    #[serde(default = "default_jwt_loader_concurrency")]
+    pub jwt_loader_concurrency: usize,
+
     /// Allow loopback addresses (127.0.0.1, ::1, localhost) in user-supplied URLs.
     ///
     /// When false (default), URLs targeting loopback addresses are blocked to prevent SSRF.
@@ -100,6 +110,8 @@ impl Default for ServerConfig {
             cors: CorsConfig::default(),
             security_headers: SecurityHeadersConfig::default(),
             http_client: HttpClientConfig::default(),
+            shutdown: ShutdownConfig::default(),
+            jwt_loader_concurrency: default_jwt_loader_concurrency(),
             allow_loopback_urls: false,
             allow_private_urls: false,
         }
@@ -128,6 +140,47 @@ fn default_timeout() -> u64 {
 
 fn default_streaming_idle_timeout() -> u64 {
     120 // 2 minutes between chunks
+}
+
+/// Graceful shutdown timing.
+///
+/// These values were previously hardcoded constants. They control how long the
+/// server waits for in-flight work to drain before exiting. The defaults match
+/// the prior hardcoded values; deployments with longer-running tasks (or with
+/// shorter `terminationGracePeriodSeconds`) should override them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ShutdownConfig {
+    /// Seconds to wait for the usage-buffer worker to flush its final batch.
+    #[serde(default = "default_usage_buffer_flush_secs")]
+    pub usage_buffer_flush_secs: u64,
+
+    /// Seconds to wait for outstanding background tasks (request handlers,
+    /// usage logging, etc.) to complete after the close signal.
+    #[serde(default = "default_drain_secs")]
+    pub drain_secs: u64,
+}
+
+impl Default for ShutdownConfig {
+    fn default() -> Self {
+        Self {
+            usage_buffer_flush_secs: default_usage_buffer_flush_secs(),
+            drain_secs: default_drain_secs(),
+        }
+    }
+}
+
+fn default_usage_buffer_flush_secs() -> u64 {
+    5
+}
+
+fn default_drain_secs() -> u64 {
+    30
+}
+
+fn default_jwt_loader_concurrency() -> usize {
+    10
 }
 
 /// TLS configuration.
