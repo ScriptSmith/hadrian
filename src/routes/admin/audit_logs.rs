@@ -69,6 +69,29 @@ pub async fn list(
         query.from = Some(chrono::Utc::now() - chrono::Duration::days(7));
     }
 
+    // Constrain `org_id` to one the caller belongs to. Without this, anyone
+    // with the `audit_log:list` permission could read any tenant's logs by
+    // sending an arbitrary `?org_id=` query parameter. Subjects with no
+    // membership (e.g. super-admins) are allowed through unconstrained.
+    if !authz.subject.org_ids.is_empty() {
+        match query.org_id {
+            Some(requested) => {
+                if !authz.subject.is_org_member(&requested.to_string()) {
+                    return Err(AdminError::Forbidden(
+                        "audit_log:list scoped outside your organization".to_string(),
+                    ));
+                }
+            }
+            None => {
+                if let Some(first) = authz.subject.org_ids.first()
+                    && let Ok(parsed) = first.parse()
+                {
+                    query.org_id = Some(parsed);
+                }
+            }
+        }
+    }
+
     let result = services.audit_logs.list(query).await?;
 
     let pagination = PaginationMeta::with_cursors(
