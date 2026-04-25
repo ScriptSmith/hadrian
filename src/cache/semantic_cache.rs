@@ -337,6 +337,7 @@ impl SemanticCache {
                     );
                 }
                 Err(e) => {
+                    metrics::record_cache_operation("semantic", "get", "error");
                     tracing::warn!(
                         matched_key = %best_match.metadata.cache_key,
                         error = %e,
