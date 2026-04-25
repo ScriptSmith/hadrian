@@ -14,7 +14,7 @@ use crate::{
 #[openapi(
     info(
         title = "Hadrian Gateway API",
-        version = "0.1.0",
+        version = env!("CARGO_PKG_VERSION"),
         description = r#"**Hadrian Gateway** is an AI Gateway providing a unified OpenAI-compatible API for routing requests to multiple LLM providers.
 
 ## Overview
