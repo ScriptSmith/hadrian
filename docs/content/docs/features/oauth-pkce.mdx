@@ -15,11 +15,10 @@ clicks **Authorize**, and is sent back to your app with a one-time code.
 Your app exchanges that code for an API key.
 
 <Callout type="info">
-  By default the issued key is **owned by the consenting user**. The
-  consent page also lets the user pick any organization, team, or project
-  they have permission to create keys for, so the same flow works for
-  shared workspace keys. Keys can be revoked at any time from the API Keys
-  page in Hadrian.
+  By default the issued key is **owned by the consenting user**. The consent page also lets the user
+  pick any organization, team, or project they have permission to create keys for, so the same flow
+  works for shared workspace keys. Keys can be revoked at any time from the API Keys page in
+  Hadrian.
 </Callout>
 
 ## Standards
@@ -67,7 +66,16 @@ returns:
   "response_types_supported": ["code"],
   "grant_types_supported": ["authorization_code"],
   "token_endpoint_auth_methods_supported": ["none"],
-  "scopes_supported": ["chat", "completions", "embeddings", "images", "audio", "files", "models", "admin"],
+  "scopes_supported": [
+    "chat",
+    "completions",
+    "embeddings",
+    "images",
+    "audio",
+    "files",
+    "models",
+    "admin"
+  ],
   "service_documentation": "https://hadrian.example.com/docs/features/oauth-pkce"
 }
 ```
@@ -95,10 +103,7 @@ function base64url(bytes: Uint8Array) {
 }
 
 const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
-const challengeBytes = await crypto.subtle.digest(
-  "SHA-256",
-  new TextEncoder().encode(verifier)
-);
+const challengeBytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
 const challenge = base64url(new Uint8Array(challengeBytes));
 
 sessionStorage.setItem("hadrian-verifier", verifier);
@@ -124,14 +129,14 @@ https://hadrian.example.com/oauth/authorize?
 
 Recognised query parameters:
 
-| Parameter               | Required | Description                                                      |
-| ----------------------- | -------- | ---------------------------------------------------------------- |
+| Parameter               | Required | Description                                                                      |
+| ----------------------- | -------- | -------------------------------------------------------------------------------- |
 | `callback_url`          | yes      | Where to send the user after consent. Must be HTTPS (HTTP only for `localhost`). |
-| `code_challenge`        | yes      | PKCE challenge (base64url-encoded SHA-256 of the verifier).      |
-| `code_challenge_method` | no       | `S256` (default) or `plain` if explicitly enabled in config.     |
-| `app_name`              | no       | Display name shown to the user on the consent screen.            |
-| `scopes`                | no       | Comma-separated API key scopes used as the default for the form. |
-| `key_name`              | no       | Suggested label for the issued key. Defaults to `app_name`.      |
+| `code_challenge`        | yes      | PKCE challenge (base64url-encoded SHA-256 of the verifier).                      |
+| `code_challenge_method` | no       | `S256` (default) or `plain` if explicitly enabled in config.                     |
+| `app_name`              | no       | Display name shown to the user on the consent screen.                            |
+| `scopes`                | no       | Comma-separated API key scopes used as the default for the form.                 |
+| `key_name`              | no       | Suggested label for the issued key. Defaults to `app_name`.                      |
 
 The consent page exposes the same options as the in-app "Create API Key"
 modal — label, budget limit and period, expiration, scopes, model

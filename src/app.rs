@@ -4,7 +4,7 @@ use std::sync::Arc;
 use axum::Json;
 #[cfg(any(feature = "embed-ui", feature = "embed-docs"))]
 use axum::response::Response;
-#[cfg(any(feature = "sso", feature = "saml"))]
+#[cfg(any(feature = "server", feature = "sso", feature = "saml"))]
 use axum::routing::post;
 #[cfg(feature = "server")]
 use axum::{Router, routing::get};
