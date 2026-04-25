@@ -1211,8 +1211,12 @@ export function useChat({
                     }
                   }
                 }
-              } catch {
-                // Ignore parse errors for partial JSON
+              } catch (err) {
+                // Per-line `data:` payloads should always be complete JSON
+                // (we already split on `\n` and the last partial line stays
+                // in `buffer`). Surface the error at debug so producer/spec
+                // drift doesn't silently drop tool calls or citations.
+                console.debug("Failed to parse SSE event payload", { data, err });
               }
             }
           }
