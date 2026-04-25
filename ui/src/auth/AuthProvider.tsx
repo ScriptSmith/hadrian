@@ -60,45 +60,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     token: null,
   });
 
-  // Check for header-based auth (zero-trust proxy)
+  // Check for header-based auth (zero-trust proxy). Probe `/auth/me` rather
+  // than an admin endpoint so non-admin header-authenticated users (who cannot
+  // list organizations) still resolve to an authenticated session.
   const checkHeaderAuth = useCallback(async (): Promise<{
     user: User;
     token: string;
   } | null> => {
-    // In header auth mode, the proxy sets headers that the backend trusts
-    // We can make a request to a "whoami" endpoint or just trust the UI config
-    // For now, we'll check if header auth is available and make a test request
     if (!config?.auth.methods.includes("header")) {
       return null;
     }
 
-    try {
-      // Try to access an admin endpoint to see if we're authenticated via headers
-      const response = await fetch("/admin/v1/organizations?limit=1", {
-        credentials: "include",
-      });
-
-      if (response.ok) {
-        // Fetch user info from /auth/me
-        const user = await fetchMe();
-        if (user) {
-          return { user, token: "header-auth" };
-        }
-        // Fallback if /auth/me doesn't work
-        const userEmail = response.headers.get("X-Forwarded-User");
-        return {
-          user: {
-            id: userEmail || "header-user",
-            email: userEmail || undefined,
-          },
-          token: "header-auth",
-        };
-      }
-    } catch {
-      // Header auth not working
-    }
-
-    return null;
+    const user = await fetchMe();
+    return user ? { user, token: "header-auth" } : null;
   }, [config?.auth.methods]);
 
   // Initialize auth state

@@ -732,9 +732,7 @@ export function ConversationsProvider({ children }: ConversationsProviderProps) 
   const reorderPinned = useCallback(
     (orderedIds: string[]) => {
       // Snapshot current pin orders so we can roll back if any sync fails.
-      const previousOrders = new Map(
-        storedConversations.map((c) => [c.id, c.pinOrder] as const)
-      );
+      const previousOrders = new Map(storedConversations.map((c) => [c.id, c.pinOrder] as const));
 
       // Update local state with new pin orders
       setStoredConversations((prev) => {
@@ -759,9 +757,7 @@ export function ConversationsProvider({ children }: ConversationsProviderProps) 
                 onError: () => {
                   setStoredConversations((prev) =>
                     prev.map((c) =>
-                      previousOrders.has(c.id)
-                        ? { ...c, pinOrder: previousOrders.get(c.id) }
-                        : c
+                      previousOrders.has(c.id) ? { ...c, pinOrder: previousOrders.get(c.id) } : c
                     )
                   );
                 },

@@ -68,10 +68,7 @@ export default function LoginPage() {
   // cross-origin URL in the browser. Reject anything whose second character
   // makes it protocol-relative or backslash-prefixed.
   const isSafeReturnTo = (value: string | null): value is string =>
-    !!value &&
-    value.startsWith("/") &&
-    !value.startsWith("//") &&
-    !value.startsWith("/\\");
+    !!value && value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\");
   const returnToParam = new URLSearchParams(location.search).get("return_to");
   const from = isSafeReturnTo(returnToParam)
     ? returnToParam

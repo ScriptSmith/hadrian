@@ -21,7 +21,9 @@ const BRANDING_FONTS_STYLE_ID = "hadrian-branding-fonts";
 const COLOR_RE = /^[a-zA-Z0-9#%(),.\s\-/_]+$/;
 
 function isSafeColor(value: string | undefined): value is string {
-  return typeof value === "string" && value.length > 0 && value.length < 200 && COLOR_RE.test(value);
+  return (
+    typeof value === "string" && value.length > 0 && value.length < 200 && COLOR_RE.test(value)
+  );
 }
 
 /** Validate a font-family name. Quotes/braces/semicolons in here would let
