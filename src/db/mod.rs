@@ -327,6 +327,7 @@ impl DbPool {
                         sqlx::sqlite::SqliteConnectOptions::new()
                             .filename(&cfg.path)
                             .create_if_missing(cfg.create_if_missing)
+                            .foreign_keys(true)
                             .journal_mode(if cfg.wal_mode {
                                 sqlx::sqlite::SqliteJournalMode::Wal
                             } else {
@@ -335,6 +336,13 @@ impl DbPool {
                             .busy_timeout(std::time::Duration::from_millis(cfg.busy_timeout_ms)),
                     )
                     .await?;
+
+                let fk_check: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+                    .fetch_one(&pool)
+                    .await?;
+                if fk_check != 1 {
+                    return Err(DbError::NotConfigured);
+                }
 
                 let repos = CachedRepos {
                     organizations: Arc::new(sqlite::SqliteOrganizationRepo::new(pool.clone())),
