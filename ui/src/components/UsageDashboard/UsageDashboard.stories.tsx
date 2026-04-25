@@ -50,7 +50,7 @@ const mockByModel = [
     character_count: 35000,
   },
   {
-    model: "claude-opus-4-6",
+    model: "claude-opus-4-7",
     total_cost: 15.2,
     total_tokens: 350000,
     input_tokens: 230000,
@@ -109,7 +109,7 @@ const mockByProvider = [
   },
 ];
 
-const MODELS = ["gpt-4o", "claude-opus-4-6", "gpt-4o-mini", "claude-haiku-4-5"];
+const MODELS = ["gpt-4o", "claude-opus-4-7", "gpt-4o-mini", "claude-haiku-4-5"];
 const PROVIDERS = ["openai", "anthropic"];
 const PRICING_SOURCES = ["catalog", "provider", "provider_config", "pricing_config", "none"];
 

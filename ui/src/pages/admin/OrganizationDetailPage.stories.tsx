@@ -256,7 +256,7 @@ const mockAllUsers: User[] = [
 
 // --- Usage mock data ---
 
-const MODELS = ["gpt-4o", "claude-opus-4-6", "gpt-4o-mini", "claude-haiku-4-5"];
+const MODELS = ["gpt-4o", "claude-opus-4-7", "gpt-4o-mini", "claude-haiku-4-5"];
 const PROVIDERS_LIST = ["openai", "anthropic"];
 
 const mockUsageSummary = {
@@ -301,7 +301,7 @@ const mockUsageByModel = [
     character_count: 35000,
   },
   {
-    model: "claude-opus-4-6",
+    model: "claude-opus-4-7",
     total_cost: 15.2,
     total_tokens: 350000,
     input_tokens: 230000,

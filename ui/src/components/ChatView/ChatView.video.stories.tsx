@@ -28,7 +28,7 @@ const queryClient = new QueryClient({
 
 const mockModels: ModelInfo[] = [
   {
-    id: "anthropic/claude-4.6-opus",
+    id: "anthropic/claude-4.7-opus",
     owned_by: "anthropic",
     context_length: 200000,
     pricing: { prompt: "15", completion: "75" },
@@ -51,7 +51,7 @@ const selectedModels = mockModels.map((m) => m.id);
 
 // Per-model streaming responses (shown character-by-character)
 const streamedResponses: Record<string, string> = {
-  "anthropic/claude-4.6-opus": `Great question! Here's a simple explanation:
+  "anthropic/claude-4.7-opus": `Great question! Here's a simple explanation:
 
 ## What is Quantum Computing?
 
@@ -104,7 +104,7 @@ const modelUsage: Record<
     tokensPerSecond: number;
   }
 > = {
-  "anthropic/claude-4.6-opus": {
+  "anthropic/claude-4.7-opus": {
     inputTokens: 45,
     outputTokens: 210,
     totalTokens: 255,
@@ -181,7 +181,7 @@ function VideoSendMessageStory({ onSendMessage }: { onSendMessage: (content: str
 
         // Stagger model starts for realism
         const delays: Record<string, number> = {
-          "anthropic/claude-4.6-opus": 0,
+          "anthropic/claude-4.7-opus": 0,
           "google/gemini-3.1-pro": 200,
           "openai/gpt-5.4": 400,
         };

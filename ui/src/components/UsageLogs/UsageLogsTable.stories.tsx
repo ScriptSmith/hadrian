@@ -19,7 +19,7 @@ const models = [
   { model: "gpt-5.4", provider: "openai" },
   { model: "gpt-5.4-mini", provider: "openai" },
   { model: "o3", provider: "openai" },
-  { model: "claude-opus-4-6-20260301", provider: "anthropic" },
+  { model: "claude-opus-4-7-20260301", provider: "anthropic" },
   { model: "claude-sonnet-4-6-20260301", provider: "anthropic" },
   { model: "claude-haiku-4-5-20251001", provider: "anthropic" },
   { model: "gemini-3.1-pro", provider: "vertex_ai" },
@@ -52,7 +52,7 @@ const mockLogs: UsageLogResponse[] = Array.from({ length: 30 }, (_, i) => {
     input_tokens: 400 + i * 120,
     output_tokens: isError ? 0 : 80 + i * 60,
     cached_tokens: i % 4 === 0 ? 300 + i * 50 : 0,
-    reasoning_tokens: ["o3", "claude-opus-4-6-20260301"].includes(m.model) ? 600 + i * 80 : 0,
+    reasoning_tokens: ["o3", "claude-opus-4-7-20260301"].includes(m.model) ? 600 + i * 80 : 0,
     cost: isError ? 0 : parseFloat((0.002 + i * 0.008).toFixed(4)),
     streamed: i % 2 === 0,
     finish_reason: isError
@@ -264,7 +264,7 @@ export const WithPagination: Story = {
         http.get("*/admin/v1/usage/logs", () => {
           const pgModels = [
             "gpt-5.4",
-            "claude-opus-4-6-20260301",
+            "claude-opus-4-7-20260301",
             "gemini-3.1-pro",
             "o3",
             "claude-sonnet-4-6-20260301",

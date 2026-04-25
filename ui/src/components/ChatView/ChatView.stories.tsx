@@ -132,7 +132,7 @@ type Story = StoryObj<typeof meta>;
 
 const mockModels: ModelInfo[] = [
   {
-    id: "anthropic/claude-4.6-opus",
+    id: "anthropic/claude-4.7-opus",
     owned_by: "anthropic",
     context_length: 200000,
     pricing: { prompt: "15", completion: "75" },
@@ -144,7 +144,7 @@ const mockModels: ModelInfo[] = [
     pricing: { prompt: "3", completion: "15" },
   },
   {
-    id: "openai/gpt-5.3",
+    id: "openai/gpt-5.5",
     owned_by: "openai",
     context_length: 128000,
     pricing: { prompt: "5", completion: "15" },
@@ -167,7 +167,7 @@ const sampleConversation: ChatMessage[] = [
   {
     id: "2",
     role: "assistant",
-    model: "anthropic/claude-4.6-opus",
+    model: "anthropic/claude-4.7-opus",
     content: `React Hooks are functions that let you "hook into" React state and lifecycle features from function components. Here are the most common ones:
 
 ## useState
@@ -208,7 +208,7 @@ Would you like me to explain any of these in more detail?`,
   {
     id: "4",
     role: "assistant",
-    model: "anthropic/claude-4.6-opus",
+    model: "anthropic/claude-4.7-opus",
     content: `Here's a practical example of useEffect with cleanup - a window resize listener:
 
 \`\`\`jsx
@@ -261,7 +261,7 @@ The cleanup function (the returned function) is crucial to prevent memory leaks!
  * Test: Empty state renders with title and input
  */
 function EmptyStory({ onSendMessage }: { onSendMessage: (content: string) => void }) {
-  useStoreSetup({ messages: [], selectedModels: ["anthropic/claude-4.6-opus"] });
+  useStoreSetup({ messages: [], selectedModels: ["anthropic/claude-4.7-opus"] });
 
   return <ChatView availableModels={mockModels} onSendMessage={onSendMessage} />;
 }
@@ -280,7 +280,7 @@ export const Empty: Story = {
     ).toBeInTheDocument();
 
     // Verify empty chat state shows model info (from EmptyChat component)
-    await expect(canvas.getByText(/claude-4.6-opus/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/claude-4.7-opus/i)).toBeInTheDocument();
 
     // Verify input is present and enabled
     const textarea = canvas.getByPlaceholderText("Type a message...");
@@ -303,7 +303,7 @@ function WithConversationStory({
   onSendMessage: (content: string) => void;
   onClearMessages: () => void;
 }) {
-  useStoreSetup({ messages: sampleConversation, selectedModels: ["anthropic/claude-4.6-opus"] });
+  useStoreSetup({ messages: sampleConversation, selectedModels: ["anthropic/claude-4.7-opus"] });
 
   return (
     <ChatView
@@ -365,13 +365,13 @@ function StreamingStory({
 
   const streamingResponses: ModelResponse[] = [
     {
-      model: "anthropic/claude-4.6-opus",
+      model: "anthropic/claude-4.7-opus",
       content:
         "Let me explain the key differences between these two approaches to state management...",
       isStreaming: true,
     },
     {
-      model: "openai/gpt-5.3",
+      model: "openai/gpt-5.5",
       content: "When comparing Redux and React Context, there are several factors to consider:",
       isStreaming: true,
     },
@@ -380,7 +380,7 @@ function StreamingStory({
   // Set up stores for streaming
   useStoreSetup({
     messages: streamingMessages,
-    selectedModels: ["anthropic/claude-4.6-opus", "openai/gpt-5.3"],
+    selectedModels: ["anthropic/claude-4.7-opus", "openai/gpt-5.5"],
     modelResponses: streamingResponses,
   });
 
@@ -471,7 +471,7 @@ function MultiModelConversationStory({
     {
       id: "2",
       role: "assistant",
-      model: "anthropic/claude-4.6-opus",
+      model: "anthropic/claude-4.7-opus",
       content:
         "Use **try/catch** with async/await for clean, readable error handling:\n\n```js\ntry {\n  const data = await fetchData();\n} catch (error) {\n  console.error('Failed:', error);\n}\n```",
       timestamp: new Date("2024-01-15T10:00:05"),
@@ -480,7 +480,7 @@ function MultiModelConversationStory({
     {
       id: "3",
       role: "assistant",
-      model: "openai/gpt-5.3",
+      model: "openai/gpt-5.5",
       content:
         "I recommend using `.catch()` chains for promises or async/await with try/catch. For production, consider using error boundaries in React and global error handlers.",
       timestamp: new Date("2024-01-15T10:00:06"),
@@ -499,7 +499,7 @@ function MultiModelConversationStory({
 
   useStoreSetup({
     messages: multiModelMessages,
-    selectedModels: ["anthropic/claude-4.6-opus", "openai/gpt-5.3", "google/gemini-3.1-pro"],
+    selectedModels: ["anthropic/claude-4.7-opus", "openai/gpt-5.5", "google/gemini-3.1-pro"],
   });
 
   return (
@@ -545,8 +545,8 @@ export const MultiModelConversation: Story = {
 function AllModelsDisabledStory({ onSendMessage }: { onSendMessage: (content: string) => void }) {
   useStoreSetup({
     messages: [],
-    selectedModels: ["anthropic/claude-4.6-opus", "openai/gpt-5.3"],
-    disabledModels: ["anthropic/claude-4.6-opus", "openai/gpt-5.3"],
+    selectedModels: ["anthropic/claude-4.7-opus", "openai/gpt-5.5"],
+    disabledModels: ["anthropic/claude-4.7-opus", "openai/gpt-5.5"],
   });
 
   return <ChatView availableModels={mockModels} onSendMessage={onSendMessage} />;
@@ -577,7 +577,7 @@ export const AllModelsDisabled: Story = {
  * Test: Sending a message calls onSendMessage callback
  */
 function SendMessageStory({ onSendMessage }: { onSendMessage: (content: string) => void }) {
-  useStoreSetup({ messages: [], selectedModels: ["anthropic/claude-4.6-opus"] });
+  useStoreSetup({ messages: [], selectedModels: ["anthropic/claude-4.7-opus"] });
 
   return <ChatView availableModels={mockModels} onSendMessage={onSendMessage} />;
 }
@@ -613,7 +613,7 @@ export const SendMessage: Story = {
  * Test: Settings modal opens when settings button is clicked
  */
 function SettingsModalStory({ onSendMessage }: { onSendMessage: (content: string) => void }) {
-  useStoreSetup({ messages: [], selectedModels: ["anthropic/claude-4.6-opus"] });
+  useStoreSetup({ messages: [], selectedModels: ["anthropic/claude-4.7-opus"] });
 
   return <ChatView availableModels={mockModels} onSendMessage={onSendMessage} />;
 }
@@ -642,7 +642,7 @@ export const SettingsModal: Story = {
  * Test: Loading models state shows loading indicator in empty chat
  */
 function LoadingModelsStory({ onSendMessage }: { onSendMessage: (content: string) => void }) {
-  useStoreSetup({ messages: [], selectedModels: ["anthropic/claude-4.6-opus"] });
+  useStoreSetup({ messages: [], selectedModels: ["anthropic/claude-4.7-opus"] });
 
   return (
     <ChatView availableModels={mockModels} onSendMessage={onSendMessage} isLoadingModels={true} />
@@ -768,7 +768,7 @@ function KnowledgeBasesStory({ onSendMessage }: { onSendMessage: (content: strin
     {
       id: "kb-2",
       role: "assistant",
-      model: "anthropic/claude-4.6-opus",
+      model: "anthropic/claude-4.7-opus",
       content: `Based on the financial documents in your knowledge base, here's a summary:
 
 ## Q3 Performance
@@ -801,7 +801,7 @@ Management expressed confidence in sustained double-digit growth through 2026, c
     },
   ];
 
-  useStoreSetup({ messages, selectedModels: ["anthropic/claude-4.6-opus"] });
+  useStoreSetup({ messages, selectedModels: ["anthropic/claude-4.7-opus"] });
 
   return <ChatView availableModels={mockModels} onSendMessage={onSendMessage} />;
 }
@@ -957,7 +957,7 @@ print(f"Rendered {steps:,} steps, max velocity: {velocity.max():.1f}")`,
     {
       id: "py-2",
       role: "assistant",
-      model: "openai/gpt-5.3",
+      model: "openai/gpt-5.5",
       content: `Here's the Lorenz attractor projected onto the x-z plane, with each point colored by its instantaneous velocity through phase space.
 
 **What you're seeing:**
@@ -980,7 +980,7 @@ print(f"Rendered {steps:,} steps, max velocity: {velocity.max():.1f}")`,
     },
   ];
 
-  useStoreSetup({ messages, selectedModels: ["openai/gpt-5.3"] });
+  useStoreSetup({ messages, selectedModels: ["openai/gpt-5.5"] });
 
   return <ChatView availableModels={mockModels} onSendMessage={onSendMessage} />;
 }
