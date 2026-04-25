@@ -58,6 +58,8 @@ pub enum ImageError {
     TooLarge { size: usize, limit: usize },
     #[error("Unsupported content type: {0}")]
     UnsupportedContentType(String),
+    #[error("Image URL is not permitted: {0}")]
+    BlockedUrl(String),
     #[error("Failed to fetch image: {0}")]
     FetchError(String),
     #[error("Image URL timeout after {0:?}")]
@@ -176,6 +178,13 @@ pub async fn fetch_image_url(
             url
         )));
     }
+
+    // SSRF guard: reject loopback/private/cloud-metadata/RFC1918 addresses and
+    // resolve hostnames so DNS rebinding can't redirect us to a blocked range
+    // between this check and the actual HTTP request below. We deliberately do
+    // not enable `allow_loopback` — image URLs from chat content are untrusted.
+    crate::validation::validate_base_url(url, false)
+        .map_err(|e| ImageError::BlockedUrl(e.to_string()))?;
 
     // Build request with timeout
     let response = client
