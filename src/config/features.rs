@@ -826,6 +826,15 @@ pub struct DocumentExtractionConfig {
     /// Default: 300
     #[serde(default = "default_pdf_image_dpi")]
     pub pdf_image_dpi: u32,
+
+    /// Maximum time (in seconds) a single document extraction is allowed to
+    /// run. Set to 0 to disable the timeout.
+    ///
+    /// A malicious or pathological document (e.g. an OCR job on a 5,000-page
+    /// PDF) can otherwise tie up an extraction worker indefinitely.
+    /// Default: 120 seconds (2 minutes)
+    #[serde(default = "default_extraction_timeout_secs")]
+    pub extraction_timeout_secs: u64,
 }
 
 impl Default for DocumentExtractionConfig {
@@ -836,8 +845,13 @@ impl Default for DocumentExtractionConfig {
             ocr_language: default_ocr_language(),
             pdf_extract_images: false,
             pdf_image_dpi: default_pdf_image_dpi(),
+            extraction_timeout_secs: default_extraction_timeout_secs(),
         }
     }
+}
+
+fn default_extraction_timeout_secs() -> u64 {
+    120
 }
 
 fn default_ocr_language() -> String {
