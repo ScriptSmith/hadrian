@@ -632,53 +632,40 @@ where
         }
 
         // First, return any buffered output
-        if !self.output_buffer.is_empty() {
-            return Poll::Ready(Some(Ok(self
-                .output_buffer
-                .pop_front()
-                .expect("non-empty checked above"))));
+        if let Some(out) = self.output_buffer.pop_front() {
+            return Poll::Ready(Some(Ok(out)));
         }
 
-        // Poll the inner stream
-        let inner = Pin::new(&mut self.inner);
-        match inner.poll_next(cx) {
-            Poll::Ready(Some(Ok(bytes))) => {
-                // Process the Anthropic SSE bytes
-                self.process_bytes(&bytes);
+        // Drain the inner stream until we either produce output, hit a real
+        // Pending, or end. The previous implementation woke itself with
+        // `wake_by_ref` after consuming an empty chunk, which busy-loops the
+        // executor; an inline loop avoids that.
+        loop {
+            match Pin::new(&mut self.inner).poll_next(cx) {
+                Poll::Ready(Some(Ok(bytes))) => {
+                    self.process_bytes(&bytes);
 
-                // Check for buffer overflow after processing
-                if self.state.buffer_overflow {
-                    return Poll::Ready(Some(Err(io::Error::new(
-                        io::ErrorKind::OutOfMemory,
-                        "SSE buffer overflow",
-                    ))));
-                }
+                    if self.state.buffer_overflow {
+                        return Poll::Ready(Some(Err(io::Error::new(
+                            io::ErrorKind::OutOfMemory,
+                            "SSE buffer overflow",
+                        ))));
+                    }
 
-                // Return first buffered output if any
-                if !self.output_buffer.is_empty() {
-                    Poll::Ready(Some(Ok(self
-                        .output_buffer
-                        .pop_front()
-                        .expect("non-empty checked above"))))
-                } else {
-                    // No output yet, need to poll again
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
+                    if let Some(out) = self.output_buffer.pop_front() {
+                        return Poll::Ready(Some(Ok(out)));
+                    }
+                    // No output produced yet — keep draining.
                 }
-            }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
-            Poll::Ready(None) => {
-                // Stream ended - flush any remaining buffer
-                if !self.output_buffer.is_empty() {
-                    Poll::Ready(Some(Ok(self
-                        .output_buffer
-                        .pop_front()
-                        .expect("non-empty checked above"))))
-                } else {
-                    Poll::Ready(None)
+                Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
+                Poll::Ready(None) => {
+                    return match self.output_buffer.pop_front() {
+                        Some(out) => Poll::Ready(Some(Ok(out))),
+                        None => Poll::Ready(None),
+                    };
                 }
+                Poll::Pending => return Poll::Pending,
             }
-            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -1369,7 +1356,6 @@ where
     type Item = Result<Bytes, io::Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // Check for buffer overflow error
         if self.state.buffer_overflow {
             return Poll::Ready(Some(Err(io::Error::new(
                 io::ErrorKind::OutOfMemory,
@@ -1377,53 +1363,35 @@ where
             ))));
         }
 
-        // First, return any buffered output
-        if !self.output_buffer.is_empty() {
-            return Poll::Ready(Some(Ok(self
-                .output_buffer
-                .pop_front()
-                .expect("non-empty checked above"))));
+        if let Some(out) = self.output_buffer.pop_front() {
+            return Poll::Ready(Some(Ok(out)));
         }
 
-        // Poll the inner stream
-        let inner = Pin::new(&mut self.inner);
-        match inner.poll_next(cx) {
-            Poll::Ready(Some(Ok(bytes))) => {
-                // Process the Anthropic SSE bytes
-                self.process_bytes(&bytes);
+        loop {
+            match Pin::new(&mut self.inner).poll_next(cx) {
+                Poll::Ready(Some(Ok(bytes))) => {
+                    self.process_bytes(&bytes);
 
-                // Check for buffer overflow after processing
-                if self.state.buffer_overflow {
-                    return Poll::Ready(Some(Err(io::Error::new(
-                        io::ErrorKind::OutOfMemory,
-                        "SSE buffer overflow",
-                    ))));
-                }
+                    if self.state.buffer_overflow {
+                        return Poll::Ready(Some(Err(io::Error::new(
+                            io::ErrorKind::OutOfMemory,
+                            "SSE buffer overflow",
+                        ))));
+                    }
 
-                // Return buffered output or wake for more
-                if !self.output_buffer.is_empty() {
-                    Poll::Ready(Some(Ok(self
-                        .output_buffer
-                        .pop_front()
-                        .expect("non-empty checked above"))))
-                } else {
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
+                    if let Some(out) = self.output_buffer.pop_front() {
+                        return Poll::Ready(Some(Ok(out)));
+                    }
                 }
-            }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
-            Poll::Ready(None) => {
-                // Stream ended - flush any remaining buffer
-                if !self.output_buffer.is_empty() {
-                    Poll::Ready(Some(Ok(self
-                        .output_buffer
-                        .pop_front()
-                        .expect("non-empty checked above"))))
-                } else {
-                    Poll::Ready(None)
+                Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
+                Poll::Ready(None) => {
+                    return match self.output_buffer.pop_front() {
+                        Some(out) => Poll::Ready(Some(Ok(out))),
+                        None => Poll::Ready(None),
+                    };
                 }
+                Poll::Pending => return Poll::Pending,
             }
-            Poll::Pending => Poll::Pending,
         }
     }
 }
