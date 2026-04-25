@@ -44,9 +44,8 @@ WORKDIR /app/docs
 RUN pnpm build
 
 # Stage 2: Build Rust application
-# Pinned to a stable Rust toolchain. Requires 1.88+ for `if let` chains and
-# 1.85+ for edition 2024.
-FROM rust:1.90-slim AS builder
+# Pinned to a stable Rust toolchain. MSRV is 1.91 (see Cargo.toml).
+FROM rust:1.91-slim AS builder
 
 # Install build dependencies
 # Includes SAML libraries (libxml2, libxslt, xmlsec1) for samael crate

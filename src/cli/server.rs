@@ -52,8 +52,13 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
 
     // Initialize observability (tracing, metrics)
     // Keep the guard alive to ensure proper OpenTelemetry shutdown
-    let _tracing_guard =
-        observability::init_tracing(&config.observability).expect("Failed to initialize tracing");
+    let _tracing_guard = match observability::init_tracing(&config.observability) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("Failed to initialize tracing: {e}");
+            std::process::exit(1);
+        }
+    };
 
     if let Err(e) = observability::metrics::init_metrics(&config.observability.metrics) {
         tracing::warn!(error = %e, "Failed to initialize metrics: {e}");
@@ -100,9 +105,13 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         );
     }
 
-    let state = AppState::new(config.clone())
-        .await
-        .expect("Failed to initialize application state");
+    let state = match AppState::new(config.clone()).await {
+        Ok(state) => state,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to initialize application state");
+            std::process::exit(1);
+        }
+    };
 
     // Check for RBAC configuration mismatches with database state
     if !config.auth.rbac.enabled
@@ -375,9 +384,13 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
     let app = build_app(&config, state);
 
     let bind_addr = format!("{}:{}", config.server.host, config.server.port);
-    let listener = tokio::net::TcpListener::bind(&bind_addr)
-        .await
-        .expect("Failed to bind to address");
+    let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
+        Ok(listener) => listener,
+        Err(e) => {
+            tracing::error!(error = %e, bind_addr = %bind_addr, "Failed to bind to address");
+            std::process::exit(1);
+        }
+    };
 
     tracing::info!("Server listening on http://{}", bind_addr);
 
@@ -426,7 +439,7 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
     // `into_make_service_with_connect_info` is required so middleware can read the
     // connecting peer address via `ConnectInfo<SocketAddr>` for IP-based rate limits,
     // API-key IP allowlists, and audit logging.
-    axum::serve(
+    if let Err(e) = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
@@ -436,7 +449,10 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         shutdown_config,
     ))
     .await
-    .unwrap();
+    {
+        tracing::error!(error = %e, "Server error");
+        std::process::exit(1);
+    }
 }
 
 async fn shutdown_signal(
@@ -448,17 +464,22 @@ async fn shutdown_signal(
     shutdown_config: crate::config::ShutdownConfig,
 ) {
     let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::error!(error = %e, "Failed to install Ctrl+C handler");
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install signal handler")
-            .recv()
-            .await;
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to install SIGTERM handler");
+                std::future::pending::<()>().await;
+            }
+        }
     };
 
     #[cfg(not(unix))]
