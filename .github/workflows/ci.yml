@@ -427,6 +427,27 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install build deps for samael
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxml2-dev libxslt1-dev libxmlsec1-dev pkg-config libssl-dev
+
+      - name: Regenerate Hadrian OpenAPI spec
+        run: cargo run --release -- openapi --output openapi/hadrian.openapi.json
+
+      - name: Verify checked-in spec matches generated
+        run: |
+          if ! git diff --exit-code -- openapi/hadrian.openapi.json; then
+            echo "::error::openapi/hadrian.openapi.json is out of date. Run ./scripts/generate-openapi.sh and commit the result." >&2
+            exit 1
+          fi
+
       - name: Fetch reference specs
         run: ./scripts/fetch-openapi-specs.sh openai
 
