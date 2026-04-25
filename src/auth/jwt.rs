@@ -115,11 +115,7 @@ impl JwtValidator {
     /// Create a new JWT validator.
     #[allow(dead_code)] // Auth infrastructure
     pub fn new(config: JwtAuthConfig) -> Result<Self, AuthError> {
-        if config.allowed_algorithms.is_empty() {
-            return Err(AuthError::Internal(
-                "JWT allowed_algorithms must not be empty".into(),
-            ));
-        }
+        Self::check_config(&config)?;
         Ok(Self {
             config,
             http_client: reqwest::Client::new(),
@@ -132,16 +128,38 @@ impl JwtValidator {
         config: JwtAuthConfig,
         http_client: reqwest::Client,
     ) -> Result<Self, AuthError> {
-        if config.allowed_algorithms.is_empty() {
-            return Err(AuthError::Internal(
-                "JWT allowed_algorithms must not be empty".into(),
-            ));
-        }
+        Self::check_config(&config)?;
         Ok(Self {
             config,
             http_client,
             jwks_cache: RwLock::new(None),
         })
+    }
+
+    fn check_config(config: &JwtAuthConfig) -> Result<(), AuthError> {
+        if config.allowed_algorithms.is_empty() {
+            return Err(AuthError::Internal(
+                "JWT allowed_algorithms must not be empty".into(),
+            ));
+        }
+        // `jsonwebtoken::Validation::set_audience(&[""])` accepts a token whose
+        // `aud` claim equals the empty string, silently disabling the audience
+        // check. Reject empty entries here so the validator always enforces a
+        // real expected audience.
+        let entries = config.audience.to_vec();
+        if entries.is_empty() {
+            return Err(AuthError::Internal(
+                "JWT audience must not be empty".into(),
+            ));
+        }
+        for entry in entries {
+            if entry.trim().is_empty() {
+                return Err(AuthError::Internal(
+                    "JWT audience entries must not be empty".into(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Validate a JWT and return the claims.

@@ -586,8 +586,46 @@ impl IapConfig {
                 "IAP identity header cannot be empty".into(),
             ));
         }
+        if let Some(jwt) = &self.jwt_assertion {
+            jwt.validate()?;
+        }
         Ok(())
     }
+}
+
+impl ProxyAuthJwtConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_jwt_audience("auth.iap.jwt_assertion", &self.audience)?;
+        if self.issuer.is_empty() {
+            return Err(ConfigError::Validation(
+                "auth.iap.jwt_assertion.issuer cannot be empty".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Reject empty audience values. `jsonwebtoken` accepts an empty string as a
+/// valid audience match, so an empty entry would silently disable the audience
+/// check.
+fn validate_jwt_audience(
+    field: &str,
+    audience: &OneOrMany<String>,
+) -> Result<(), ConfigError> {
+    let entries = audience.to_vec();
+    if entries.is_empty() {
+        return Err(ConfigError::Validation(format!(
+            "{field}.audience must not be empty"
+        )));
+    }
+    for entry in &entries {
+        if entry.trim().is_empty() {
+            return Err(ConfigError::Validation(format!(
+                "{field}.audience entries must not be empty"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// API key authentication configuration.
