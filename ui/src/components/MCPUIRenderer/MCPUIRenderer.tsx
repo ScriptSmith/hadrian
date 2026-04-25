@@ -11,9 +11,10 @@
  * - Remote DOM (`application/vnd.mcp-ui.remote-dom`) - Server-generated components
  */
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { UIResourceRenderer, type UIActionResult } from "@mcp-ui/client";
 import { cn } from "@/utils/cn";
+import { linkSafety } from "@/components/Markdown/linkSafety";
 
 /** MCP-UI Resource type (matches @mcp-ui/client expectations) */
 export interface MCPUIResource {
@@ -67,6 +68,34 @@ export function MCPUIRenderer({
   style,
   autoResize = true,
 }: MCPUIRendererProps) {
+  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+
+  const openLink = useCallback((url: string) => {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }, []);
+
+  const requestLinkOpen = useCallback(
+    (url: string) => {
+      // Defer to the trusted-domain modal unless the user has already
+      // approved this domain. MCP-UI servers are user-configured but
+      // their content is still server-supplied, so untrusted links
+      // shouldn't open without explicit consent.
+      if (linkSafety.onLinkCheck(url)) {
+        openLink(url);
+      } else {
+        setPendingUrl(url);
+      }
+    },
+    [openLink]
+  );
+
+  const handleConfirmPendingUrl = useCallback(() => {
+    if (pendingUrl) {
+      openLink(pendingUrl);
+      setPendingUrl(null);
+    }
+  }, [pendingUrl, openLink]);
+
   // Handle UI actions from the rendered content
   const handleUIAction = useCallback(
     async (result: UIActionResult): Promise<unknown> => {
@@ -90,8 +119,7 @@ export function MCPUIRenderer({
           if (actionHandlers?.onLink) {
             actionHandlers.onLink(result.payload.url);
           } else {
-            // Default: open link in new tab
-            window.open(result.payload.url, "_blank", "noopener,noreferrer");
+            requestLinkOpen(result.payload.url);
           }
           return { status: "handled" };
 
@@ -117,7 +145,7 @@ export function MCPUIRenderer({
           return { status: "unhandled", reason: "Unknown action type" };
       }
     },
-    [actionHandlers]
+    [actionHandlers, requestLinkOpen]
   );
 
   return (
@@ -135,6 +163,13 @@ export function MCPUIRenderer({
           },
         }}
       />
+      {pendingUrl !== null &&
+        linkSafety.renderModal({
+          isOpen: true,
+          onClose: () => setPendingUrl(null),
+          onConfirm: handleConfirmPendingUrl,
+          url: pendingUrl,
+        })}
     </div>
   );
 }
