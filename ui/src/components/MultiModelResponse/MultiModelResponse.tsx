@@ -1535,6 +1535,8 @@ function areMultiModelResponsePropsEqual(
   if (prev.groupId !== next.groupId) return false;
   if (prev.selectedBest !== next.selectedBest) return false;
   if (prev.timestamp.getTime() !== next.timestamp.getTime()) return false;
+  if (prev.historyMode !== next.historyMode) return false;
+  if (prev.forceStacked !== next.forceStacked) return false;
 
   // Check callback identity - parent MUST use useCallback for stable refs
   if (prev.onSelectBest !== next.onSelectBest) return false;
@@ -1576,6 +1578,14 @@ function areMultiModelResponsePropsEqual(
     if (prevR.error !== nextR.error) return false;
     if (prevR.usage?.totalTokens !== nextR.usage?.totalTokens) return false;
     if (prevR.usage?.reasoningTokens !== nextR.usage?.reasoningTokens) return false;
+    // Feedback flips (rating, "select as best") — these change badges in the
+    // header; without a check the user has to scroll/click to see the new
+    // state.
+    if (prevR.feedback?.rating !== nextR.feedback?.rating) return false;
+    if (prevR.feedback?.selectedAsBest !== nextR.feedback?.selectedAsBest) return false;
+    // Mode metadata (e.g., router model swap on regenerate) drives the
+    // routing badge.
+    if (prevR.modeMetadata !== nextR.modeMetadata) return false;
     // Check citations (compare length as a quick check)
     if ((prevR.citations?.length ?? 0) !== (nextR.citations?.length ?? 0)) return false;
     // Check artifacts (compare length as a quick check)
