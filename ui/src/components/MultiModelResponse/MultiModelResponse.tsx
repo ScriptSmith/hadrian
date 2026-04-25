@@ -756,8 +756,16 @@ const ModelResponseCard = memo(function ModelResponseCard({
       return [{ toolExecution: liveRound }];
     }
     const last = completedRounds[completedRounds.length - 1];
-    // Last round already has tool execution (back-to-back tool calls) — append new round
+    // Last round already has tool execution. The local round object attached
+    // via setCompletedRoundToolExecution and the store's live round are
+    // separate objects, so compare by round number. Same number means the
+    // tool finished and the next round's text is streaming via showInFlight —
+    // don't duplicate. Only append when liveRound is genuinely new
+    // (back-to-back tool calls).
     if (last.toolExecution) {
+      if (last.toolExecution.round === liveRound.round) {
+        return completedRounds;
+      }
       return [...completedRounds, { toolExecution: liveRound }];
     }
     // Last round is text-only — inject live tools into it
