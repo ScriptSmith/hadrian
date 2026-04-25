@@ -17,6 +17,7 @@ import { runAdminApiCrudTests } from "../shared/admin-api-crud";
 import { runChatCompletionsTests } from "../shared/chat-completions";
 import { runRedisConnectivityTests } from "../shared/redis-connectivity";
 import { runPostgresDataTests } from "../shared/postgres-data";
+import { runOAuthPkceTests } from "../shared/oauth-pkce";
 
 describe("PostgreSQL + Redis Deployment", () => {
   let env: StartedComposeEnvironment;
@@ -77,6 +78,7 @@ describe("PostgreSQL + Redis Deployment", () => {
     client,
     execInService: env.execInService,
   }));
+  runOAuthPkceTests(() => ({ url: gatewayUrl, client, apiKeyClient }));
 
   // PostgreSQL-specific tests run after shared tests
   // These depend on data created by admin-api-crud tests

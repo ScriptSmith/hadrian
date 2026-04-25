@@ -16,6 +16,37 @@
     }
   ],
   "paths": {
+    "/.well-known/oauth-authorization-server": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Serve the OAuth 2.0 Authorization Server Metadata document.",
+        "operationId": "oauth_authorization_server_metadata",
+        "responses": {
+          "200": {
+            "description": "Authorization server metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationServerMetadata"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OAuth PKCE flow disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/v1/access-reviews/inventory": {
       "get": {
         "tags": [
@@ -206,21 +237,21 @@
                   "value": {
                     "name": "Production API Key",
                     "owner": {
-                      "org_id": "550e8400-e29b-41d4-a716-446655440000",
-                      "type": "organization"
+                      "type": "organization",
+                      "org_id": "550e8400-e29b-41d4-a716-446655440000"
                     }
                   }
                 },
                 "Project key with budget": {
                   "summary": "Create a project-scoped key with budget limits",
                   "value": {
-                    "budget_limit_cents": 10000,
-                    "budget_period": "monthly",
                     "name": "Dev Team Key",
                     "owner": {
-                      "project_id": "123e4567-e89b-12d3-a456-426614174000",
-                      "type": "project"
-                    }
+                      "type": "project",
+                      "project_id": "123e4567-e89b-12d3-a456-426614174000"
+                    },
+                    "budget_limit_cents": 10000,
+                    "budget_period": "monthly"
                   }
                 },
                 "Service account key": {
@@ -228,20 +259,20 @@
                   "value": {
                     "name": "CI/CD Pipeline Key",
                     "owner": {
-                      "service_account_id": "8d0e7891-3456-78ef-9012-345678901234",
-                      "type": "service_account"
+                      "type": "service_account",
+                      "service_account_id": "8d0e7891-3456-78ef-9012-345678901234"
                     }
                   }
                 },
                 "User key with expiration": {
                   "summary": "Create a user-scoped key with expiration",
                   "value": {
-                    "expires_at": "2025-12-31T23:59:59Z",
                     "name": "Personal Key",
                     "owner": {
                       "type": "user",
                       "user_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7"
-                    }
+                    },
+                    "expires_at": "2025-12-31T23:59:59Z"
                   }
                 }
               }
@@ -259,17 +290,17 @@
                 },
                 "example": {
                   "api_key": {
+                    "id": "550e8400-e29b-41d4-a716-446655440001",
+                    "name": "Production API Key",
+                    "key_prefix": "gw_live_abc",
+                    "owner": {
+                      "type": "organization",
+                      "org_id": "550e8400-e29b-41d4-a716-446655440000"
+                    },
                     "budget_limit": null,
                     "budget_period": null,
                     "created_at": "2025-01-15T10:30:00Z",
                     "expires_at": null,
-                    "id": "550e8400-e29b-41d4-a716-446655440001",
-                    "key_prefix": "gw_live_abc",
-                    "name": "Production API Key",
-                    "owner": {
-                      "org_id": "550e8400-e29b-41d4-a716-446655440000",
-                      "type": "organization"
-                    },
                     "revoked_at": null
                   },
                   "key": "gw_live_abc123def456ghi789jkl012mno345pqr678"
@@ -384,15 +415,15 @@
                 },
                 "example": {
                   "api_key": {
-                    "created_at": "2025-01-15T10:30:00Z",
                     "id": "550e8400-e29b-41d4-a716-446655440002",
-                    "key_prefix": "gw_live_xyz",
                     "name": "Production API Key (rotated)",
+                    "key_prefix": "gw_live_xyz",
                     "owner": {
-                      "org_id": "550e8400-e29b-41d4-a716-446655440000",
-                      "type": "organization"
+                      "type": "organization",
+                      "org_id": "550e8400-e29b-41d4-a716-446655440000"
                     },
-                    "rotated_from_key_id": "550e8400-e29b-41d4-a716-446655440001"
+                    "rotated_from_key_id": "550e8400-e29b-41d4-a716-446655440001",
+                    "created_at": "2025-01-15T10:30:00Z"
                   },
                   "key": "gw_live_xyz123abc456def789ghi012jkl345mno678"
                 }
@@ -2565,6 +2596,38 @@
         }
       }
     },
+    "/admin/v1/me/eligible-owners": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "List the owners the current user can plausibly issue an API key for.",
+        "description": "This is a hint for the OAuth consent UI; the actual create-permission\ncheck still runs server-side at consent time, so an owner appearing\nhere doesn't guarantee the create will succeed if RBAC denies it.",
+        "operationId": "me_eligible_owners",
+        "responses": {
+          "200": {
+            "description": "Owners the user can pick from",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EligibleOwnersResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "User not identified from session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/v1/me/export": {
       "get": {
         "tags": [
@@ -4222,6 +4285,130 @@
           },
           "404": {
             "description": "Model pricing not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/oauth/authorize": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Issue an authorization code after explicit user consent.",
+        "description": "The browser calls this endpoint from the consent page when the user clicks\n\"Allow\". The endpoint:\n\n1. Validates the requested scopes and key name shape (mirroring the\n   self-service API key endpoint), so we reject obvious mistakes before\n   issuing the code.\n2. Validates the callback URL scheme and host against\n   `auth.oauth_pkce.allowed_domains` / `denied_domains`.\n3. Persists a single-use authorization code bound to the current user\n   and the supplied PKCE challenge.\n4. Returns the redirect URL the page should send the browser to.",
+        "operationId": "oauth_authorize",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAuthorizationCode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Authorization code issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationCodeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid PKCE request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Callback domain not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OAuth PKCE flow disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/oauth/preflight": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Validate a `callback_url` against the deployment's OAuth PKCE policy\nwithout issuing a code. The consent UI calls this on mount and refuses\nto render if the URL is rejected — closing the gap where a \"Deny\"\nclick could otherwise redirect to a host the operator denied.",
+        "operationId": "oauth_preflight",
+        "parameters": [
+          {
+            "name": "callback_url",
+            "in": "query",
+            "description": "The callback URL the external app intends to use.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Callback URL passes policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreflightResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid URL or scheme",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Callback host denied by policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OAuth PKCE flow disabled",
             "content": {
               "application/json": {
                 "schema": {
@@ -5985,6 +6172,116 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ModelPricingListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor or direction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Organization or project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/organizations/{org_slug}/projects/{project_slug}/skills": {
+      "get": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "List skills by project.",
+        "operationId": "skill_list_by_project",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "Organization slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "Project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of results to return",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor for keyset pagination. Encoded as base64 string.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Pagination direction: \"forward\" (default) or \"backward\".",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "description": "Include soft-deleted records in results",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of skills",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillListResponse"
                 }
               }
             }
@@ -8341,6 +8638,107 @@
         }
       }
     },
+    "/admin/v1/organizations/{org_slug}/skills": {
+      "get": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "List skills by organization.",
+        "operationId": "skill_list_by_org",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "Organization slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of results to return",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor for keyset pagination. Encoded as base64 string.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Pagination direction: \"forward\" (default) or \"backward\".",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "description": "Include soft-deleted records in results",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of skills",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor or direction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Organization not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/v1/organizations/{org_slug}/sso-config": {
       "get": {
         "tags": [
@@ -8939,6 +9337,128 @@
           },
           "404": {
             "description": "Organization, SSO config, or domain verification not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/organizations/{org_slug}/sso-config/saml/parse-metadata": {
+      "post": {
+        "tags": [
+          "sso"
+        ],
+        "summary": "Parse SAML IdP metadata from a URL",
+        "description": "Fetches IdP metadata from the provided URL and extracts configuration fields.\nThis does NOT save the configuration - it returns the parsed data for admin review.\nUse the returned values to populate the SSO config fields.",
+        "operationId": "org_sso_config_parse_saml_metadata",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "Organization slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParseSamlMetadataRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Metadata parsed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParsedSamlIdpConfig"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid metadata URL or failed to parse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Organization not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/organizations/{org_slug}/sso-config/saml/sp-metadata": {
+      "get": {
+        "tags": [
+          "sso"
+        ],
+        "summary": "Get SP metadata for IdP configuration",
+        "description": "Returns Hadrian's Service Provider metadata XML that can be imported into\nthe IdP to configure the SAML integration automatically. The metadata includes\nthe SP entity ID, Assertion Consumer Service URL, and supported bindings.\n\nThis endpoint requires an existing SAML SSO configuration for the organization.",
+        "operationId": "org_sso_config_get_sp_metadata",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "Organization slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SP metadata XML",
+            "content": {
+              "application/samlmetadata+xml": {}
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Organization or SAML config not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -10216,6 +10736,116 @@
           },
           "404": {
             "description": "Organization, team, or membership not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/organizations/{org_slug}/teams/{team_slug}/skills": {
+      "get": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "List skills by team.",
+        "operationId": "skill_list_by_team",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "Organization slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "team_slug",
+            "in": "path",
+            "description": "Team slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of results to return",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor for keyset pagination. Encoded as base64 string.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Pagination direction: \"forward\" (default) or \"backward\".",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "description": "Include soft-deleted records in results",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of skills",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor or direction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Organization or team not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -13113,6 +13743,216 @@
         }
       }
     },
+    "/admin/v1/skills": {
+      "post": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "Create a skill.",
+        "operationId": "skill_create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSkill"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Skill created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Skill"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid skill (missing SKILL.md, duplicate path, or size limit exceeded)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Owner not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Skill with this name already exists for this owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/skills/{id}": {
+      "get": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "Get a skill by ID (with full file contents).",
+        "operationId": "skill_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Skill ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Skill found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Skill"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Skill not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "Soft-delete a skill.",
+        "operationId": "skill_delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Skill ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Skill deleted"
+          },
+          "404": {
+            "description": "Skill not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "Update a skill.",
+        "description": "When `files` is provided, the full file set is replaced.",
+        "operationId": "skill_update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Skill ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSkill"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Skill updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Skill"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid skill (missing SKILL.md, duplicate path, or size limit exceeded)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Skill not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Skill with this name already exists for this owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/v1/sso-connections": {
       "get": {
         "tags": [
@@ -15591,6 +16431,98 @@
         }
       }
     },
+    "/admin/v1/users/{user_id}/skills": {
+      "get": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "List skills by user.",
+        "operationId": "skill_list_by_user",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of results to return",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor for keyset pagination. Encoded as base64 string.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Pagination direction: \"forward\" (default) or \"backward\".",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "description": "Include soft-deleted records in results",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of skills",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor or direction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/v1/users/{user_id}/templates": {
       "get": {
         "tags": [
@@ -16413,78 +17345,78 @@
                 "Simple": {
                   "summary": "Simple text completion",
                   "value": {
+                    "model": "openai/gpt-4o",
                     "messages": [
                       {
-                        "content": "Hello, how are you?",
-                        "role": "user"
+                        "role": "user",
+                        "content": "Hello, how are you?"
                       }
-                    ],
-                    "model": "openai/gpt-4o"
+                    ]
                   }
                 },
                 "Streaming": {
                   "summary": "Streaming completion",
                   "value": {
+                    "model": "openai/gpt-4o",
                     "messages": [
                       {
-                        "content": "Write a short poem about coding.",
-                        "role": "user"
+                        "role": "user",
+                        "content": "Write a short poem about coding."
                       }
                     ],
-                    "model": "openai/gpt-4o",
                     "stream": true
                   }
                 },
                 "With system prompt": {
                   "summary": "Completion with system prompt and parameters",
                   "value": {
-                    "max_tokens": 500,
+                    "model": "anthropic/claude-sonnet-4-20250514",
                     "messages": [
                       {
-                        "content": "You are a helpful assistant.",
-                        "role": "system"
+                        "role": "system",
+                        "content": "You are a helpful assistant."
                       },
                       {
-                        "content": "Explain quantum computing in simple terms.",
-                        "role": "user"
+                        "role": "user",
+                        "content": "Explain quantum computing in simple terms."
                       }
                     ],
-                    "model": "anthropic/claude-sonnet-4-20250514",
+                    "max_tokens": 500,
                     "temperature": 0.7
                   }
                 },
                 "With tools": {
                   "summary": "Completion with function calling",
                   "value": {
+                    "model": "openai/gpt-4o",
                     "messages": [
                       {
-                        "content": "What's the weather in San Francisco?",
-                        "role": "user"
+                        "role": "user",
+                        "content": "What's the weather in San Francisco?"
                       }
                     ],
-                    "model": "openai/gpt-4o",
-                    "tool_choice": "auto",
                     "tools": [
                       {
+                        "type": "function",
                         "function": {
-                          "description": "Get the current weather for a location",
                           "name": "get_weather",
+                          "description": "Get the current weather for a location",
                           "parameters": {
+                            "type": "object",
                             "properties": {
                               "location": {
-                                "description": "City name",
-                                "type": "string"
+                                "type": "string",
+                                "description": "City name"
                               }
                             },
                             "required": [
                               "location"
-                            ],
-                            "type": "object"
+                            ]
                           }
-                        },
-                        "type": "function"
+                        }
                       }
-                    ]
+                    ],
+                    "tool_choice": "auto"
                   }
                 }
               }
@@ -16538,12 +17470,12 @@
                 "example": {
                   "error": {
                     "code": "rate_limit_exceeded",
+                    "message": "Rate limit exceeded: 100 requests per minute",
                     "details": {
                       "limit": 100,
-                      "retry_after_secs": 30,
-                      "window": "minute"
-                    },
-                    "message": "Rate limit exceeded: 100 requests per minute"
+                      "window": "minute",
+                      "retry_after_secs": 30
+                    }
                   }
                 }
               }
@@ -16641,20 +17573,20 @@
                 "Multiple texts": {
                   "summary": "Embed multiple texts in one request",
                   "value": {
-                    "dimensions": 1024,
+                    "model": "openai/text-embedding-3-large",
                     "input": [
                       "First document to embed",
                       "Second document to embed",
                       "Third document to embed"
                     ],
-                    "model": "openai/text-embedding-3-large"
+                    "dimensions": 1024
                   }
                 },
                 "Single text": {
                   "summary": "Embed a single text string",
                   "value": {
-                    "input": "Hello world",
-                    "model": "openai/text-embedding-3-small"
+                    "model": "openai/text-embedding-3-small",
+                    "input": "Hello world"
                   }
                 }
               }
@@ -18450,6 +19382,57 @@
           }
         }
       }
+    },
+    "/oauth/token": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Exchange a PKCE authorization code for a user-scoped API key.",
+        "operationId": "oauth_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExchangeCodeForKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "API key issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthTokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Authorization code is invalid, expired, or already used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OAuth PKCE flow is disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -19215,6 +20198,100 @@
             ],
             "format": "date-time",
             "description": "End of time range (exclusive)"
+          }
+        }
+      },
+      "AuthorizationCodeResponse": {
+        "type": "object",
+        "description": "Response from `POST /admin/v1/oauth/authorize` after consent.",
+        "required": [
+          "code",
+          "redirect_url",
+          "expires_at"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Authorization code to forward to the external app via `callback_url?code=...`."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the code expires; the exchange must complete before this time."
+          },
+          "redirect_url": {
+            "type": "string",
+            "description": "Fully-formed redirect URL (callback_url with the `code` query parameter)."
+          }
+        }
+      },
+      "AuthorizationServerMetadata": {
+        "type": "object",
+        "description": "Authorization Server Metadata document per\n[RFC 8414](https://www.rfc-editor.org/rfc/rfc8414). Lets PKCE clients\ndiscover Hadrian's authorize/token endpoints, supported challenge\nmethods, and supported scopes without hard-coding URLs.\n\nHadrian implements only the subset of OAuth 2.0 needed for the PKCE\nauthorization-code flow: there is no dynamic client registration, no\nrefresh tokens, and no client credentials grant. Fields the spec marks\nas required but that are not meaningful for our flow are emitted with\nthe closest accurate value (e.g. `token_endpoint_auth_methods_supported`\nis `[\"none\"]` because clients authenticate via PKCE proof, not a secret).",
+        "required": [
+          "issuer",
+          "authorization_endpoint",
+          "token_endpoint",
+          "code_challenge_methods_supported",
+          "response_types_supported",
+          "grant_types_supported",
+          "token_endpoint_auth_methods_supported",
+          "scopes_supported"
+        ],
+        "properties": {
+          "authorization_endpoint": {
+            "type": "string",
+            "description": "URL of the authorization (consent) endpoint."
+          },
+          "code_challenge_methods_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "PKCE challenge methods supported by this server."
+          },
+          "grant_types_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "OAuth 2.0 grant types supported. Always `[\"authorization_code\"]`."
+          },
+          "issuer": {
+            "type": "string",
+            "description": "Issuer identifier — the deployment's base URL."
+          },
+          "response_types_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "OAuth 2.0 response types supported. Always `[\"code\"]`."
+          },
+          "scopes_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API-key scopes that may appear in `scopes` on the authorize request."
+          },
+          "service_documentation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Whether the server provides a metadata document (always true here —\nincluded for clients that probe the field)."
+          },
+          "token_endpoint": {
+            "type": "string",
+            "description": "URL of the token (code-exchange) endpoint."
+          },
+          "token_endpoint_auth_methods_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Token endpoint client-authentication methods. Always `[\"none\"]` —\nPKCE is the authentication mechanism."
           }
         }
       },
@@ -20149,6 +21226,40 @@
                 "description": "Sovereignty requirements for model access"
               }
             ]
+          }
+        }
+      },
+      "CreateAuthorizationCode": {
+        "type": "object",
+        "description": "Request body for `POST /admin/v1/oauth/authorize` — issued by the\nauthenticated user from the consent page after they click \"Allow\".",
+        "required": [
+          "callback_url",
+          "code_challenge",
+          "code_challenge_method"
+        ],
+        "properties": {
+          "app_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional human-readable name of the requesting app, shown on the consent screen."
+          },
+          "callback_url": {
+            "type": "string",
+            "description": "Where the external app expects the user to land after consent.\nThe exchange endpoint requires this exact same value when redeeming."
+          },
+          "code_challenge": {
+            "type": "string",
+            "description": "PKCE challenge supplied by the external app. RFC 7636 §4.1 mandates\n43–128 characters for both the verifier and (by extension) the\n`S256` / `plain` challenges."
+          },
+          "code_challenge_method": {
+            "$ref": "#/components/schemas/PkceCodeChallengeMethod",
+            "description": "Method used to derive the challenge. `S256` unless `auth.oauth_pkce.allow_plain_method` is set."
+          },
+          "key_options": {
+            "$ref": "#/components/schemas/OAuthKeyOptions",
+            "description": "User's choices for the API key that will be issued on exchange.\nMirrors the fields shown in the self-service \"Create API Key\" modal."
           }
         }
       },
@@ -21873,6 +22984,82 @@
           }
         }
       },
+      "CreateSkill": {
+        "type": "object",
+        "description": "Request to create a new skill. `files` must contain exactly one entry\nwith `path == \"SKILL.md\"`; the service layer rejects otherwise.",
+        "required": [
+          "owner",
+          "name",
+          "description",
+          "files"
+        ],
+        "properties": {
+          "allowed_tools": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "argument_hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "disable_model_invocation": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillFileInput"
+            }
+          },
+          "frontmatter_extra": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/SkillOwner"
+          },
+          "source_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_invocable": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
       "CreateSpeechRequest": {
         "type": "object",
         "description": "Create speech request (POST /v1/audio/speech)",
@@ -23553,6 +24740,89 @@
           }
         }
       },
+      "EligibleOwner": {
+        "type": "object",
+        "description": "One owner the current user could pick on the OAuth consent page.",
+        "required": [
+          "id",
+          "slug",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Owner ID (uuid)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name shown in the picker."
+          },
+          "org_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Parent organization id, if applicable. `None` for orgs themselves\nand the user's own identity."
+          },
+          "org_slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Parent organization slug, if applicable."
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "User's role in the owner (member, admin, etc.). `None` for the user\nentry, where role is implicit."
+          },
+          "slug": {
+            "type": "string",
+            "description": "Slug the user sees in URLs."
+          }
+        }
+      },
+      "EligibleOwnersResponse": {
+        "type": "object",
+        "description": "Response from `GET /admin/v1/me/eligible-owners`.",
+        "required": [
+          "user",
+          "organizations",
+          "teams",
+          "projects"
+        ],
+        "properties": {
+          "organizations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EligibleOwner"
+            },
+            "description": "Organizations the user belongs to."
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EligibleOwner"
+            },
+            "description": "Projects the user belongs to."
+          },
+          "teams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EligibleOwner"
+            },
+            "description": "Teams the user belongs to."
+          },
+          "user": {
+            "$ref": "#/components/schemas/EligibleOwner",
+            "description": "The current user as an owner choice — always present."
+          }
+        }
+      },
       "EmbeddingInput": {
         "oneOf": [
           {
@@ -23652,6 +24922,35 @@
           "error": {
             "$ref": "#/components/schemas/ErrorInfo",
             "description": "Error information"
+          }
+        }
+      },
+      "ExchangeCodeForKey": {
+        "type": "object",
+        "description": "Request body for the public `POST /oauth/token` endpoint.\n\nPer RFC 7636 §4.5, the server already knows `code_challenge_method` from\nthe authorization request, so the client does not need to re-submit it.\nWe keep it accepted-but-optional purely for sanity-checking — the\nstored method is what's actually used during verification.",
+        "required": [
+          "code",
+          "code_verifier"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The authorization code received via the callback URL. We generate\n256-bit codes, so anything shorter than ~32 chars is definitely not\none of ours; the upper bound just defends the deserializer."
+          },
+          "code_challenge_method": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PkceCodeChallengeMethod",
+                "description": "Optional client-side hint of the method used to derive the\nchallenge. If supplied and it doesn't match the method recorded at\nauthorize time, the request is rejected; if omitted, the stored\nmethod is used."
+              }
+            ]
+          },
+          "code_verifier": {
+            "type": "string",
+            "description": "The original PKCE verifier the external app generated. Length range\nmatches RFC 7636 §4.1, which mandates 43–128 URL-safe characters."
           }
         }
       },
@@ -25249,6 +26548,138 @@
           }
         }
       },
+      "OAuthKeyOptions": {
+        "type": "object",
+        "description": "User-chosen options for the API key that will be issued when the external\napp redeems the code. Mirrors the fields the self-service \"Create API\nKey\" modal exposes; `owner` is implied from the consenting user.\n\nAll fields are optional — the consent page populates whichever ones the\nuser filled in, and the token endpoint applies them to the issued key.",
+        "properties": {
+          "allowed_models": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Allowed model patterns. `None` = all models."
+          },
+          "budget_limit_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Spending cap in cents. `None` or `0` means unlimited."
+          },
+          "budget_period": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BudgetPeriod",
+                "description": "Period the budget resets over. Required when `budget_limit_cents` is set."
+              }
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Optional expiration timestamp for the issued API key."
+          },
+          "ip_allowlist": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "IP/CIDR allowlist. `None` = all IPs."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Friendly label for the issued key. Falls back to `app_name` then\n`\"OAuth app\"` when empty."
+          },
+          "owner": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiKeyOwner",
+                "description": "Owner the issued key should belong to. Defaults to the consenting\nuser. The authorize endpoint validates that the user has permission\nto create keys for the chosen owner using the same RBAC rules as the\nadmin \"Create API Key\" endpoint."
+              }
+            ]
+          },
+          "rate_limit_rpm": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Per-key requests-per-minute override."
+          },
+          "rate_limit_tpm": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Per-key tokens-per-minute override."
+          },
+          "scopes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Permission scopes (e.g. `chat`, `embeddings`). `None` = full access."
+          },
+          "sovereignty_requirements": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SovereigntyRequirements",
+                "description": "Sovereignty requirements for model access."
+              }
+            ]
+          }
+        }
+      },
+      "OAuthTokenResponse": {
+        "type": "object",
+        "description": "Response from `POST /oauth/token`. Mirrors OpenRouter's shape so that\nexisting client libraries written against their PKCE flow drop in.",
+        "required": [
+          "key",
+          "key_prefix",
+          "key_id"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The newly-issued API key. Only returned once — store it securely."
+          },
+          "key_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "ID of the API key record, for revocation via the admin API."
+          },
+          "key_prefix": {
+            "type": "string",
+            "description": "User-facing prefix of the key (e.g. `gw_abc...`). Useful for display."
+          }
+        }
+      },
       "OrgAccessEntry": {
         "type": "object",
         "description": "Organization access entry for access reviews",
@@ -26325,6 +27756,60 @@
           }
         }
       },
+      "ParseSamlMetadataRequest": {
+        "type": "object",
+        "description": "Request to parse SAML IdP metadata from a URL.",
+        "required": [
+          "metadata_url"
+        ],
+        "properties": {
+          "metadata_url": {
+            "type": "string",
+            "description": "URL to fetch IdP metadata from (must be HTTPS for security)"
+          }
+        }
+      },
+      "ParsedSamlIdpConfig": {
+        "type": "object",
+        "description": "Parsed SAML IdP configuration extracted from metadata.\n\nThis is returned for admin review before saving - use the individual fields\nto populate the SSO config.",
+        "required": [
+          "entity_id",
+          "sso_url",
+          "certificates",
+          "name_id_formats"
+        ],
+        "properties": {
+          "certificates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "X.509 certificates for signature verification (PEM format)\nMultiple certificates may be present for key rollover"
+          },
+          "entity_id": {
+            "type": "string",
+            "description": "IdP entity identifier"
+          },
+          "name_id_formats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Supported NameID formats"
+          },
+          "slo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "IdP Single Logout service URL (if available)"
+          },
+          "sso_url": {
+            "type": "string",
+            "description": "IdP Single Sign-On service URL"
+          }
+        }
+      },
       "PartialImages": {
         "type": "object",
         "description": "Partial images configuration for streaming",
@@ -26338,6 +27823,14 @@
             "description": "Number of partial images to generate during streaming"
           }
         }
+      },
+      "PkceCodeChallengeMethod": {
+        "type": "string",
+        "description": "PKCE code challenge method supplied by the external app.",
+        "enum": [
+          "S256",
+          "plain"
+        ]
       },
       "PolicyEvaluationResult": {
         "type": "object",
@@ -26416,6 +27909,19 @@
           "system",
           "organization"
         ]
+      },
+      "PreflightResponse": {
+        "type": "object",
+        "description": "Result of the preflight check.",
+        "required": [
+          "callback_host"
+        ],
+        "properties": {
+          "callback_host": {
+            "type": "string",
+            "description": "The validated host (lowercased) — useful for surfacing in the UI."
+          }
+        }
       },
       "PricingOwner": {
         "oneOf": [
@@ -28097,6 +29603,319 @@
             "description": "User ID (internal)"
           }
         }
+      },
+      "Skill": {
+        "type": "object",
+        "description": "A packaged Agent Skill.",
+        "required": [
+          "id",
+          "owner_type",
+          "owner_id",
+          "name",
+          "description",
+          "total_bytes",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "allowed_tools": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Tools the skill is allowed to use. Informational; the chat UI may\nuse this to pre-approve tools while the skill is active."
+          },
+          "argument_hint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Hint shown during autocomplete to describe expected arguments."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description. Used by the model to decide when to\ninvoke the skill."
+          },
+          "disable_model_invocation": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "If `true`, the model cannot auto-invoke this skill. `None` = unset\n(defaults to `false`)."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillFile"
+            },
+            "description": "Full file contents. Populated by get-by-id endpoints."
+          },
+          "files_manifest": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillFileManifest"
+            },
+            "description": "File summary (no contents). Populated by list endpoints."
+          },
+          "frontmatter_extra": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Unknown / forward-compat frontmatter keys preserved verbatim.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "Skill name (unique per owner). See [`validate_skill_name`]."
+          },
+          "owner_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "owner_type": {
+            "$ref": "#/components/schemas/SkillOwnerType"
+          },
+          "source_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Git ref if imported."
+          },
+          "source_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Origin URL if imported (e.g. a GitHub tree URL)."
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cached total size across all files (bytes)."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "user_invocable": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "If `false`, the skill is hidden from the user-visible slash-command\nlist. `None` = unset (defaults to `true`)."
+          }
+        }
+      },
+      "SkillFile": {
+        "type": "object",
+        "description": "A file bundled with a skill. Returned in full detail by get-by-id; list\nendpoints populate [`SkillFileManifest`] instead.",
+        "required": [
+          "path",
+          "content",
+          "byte_size",
+          "content_type",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "byte_size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Byte length of `content`."
+          },
+          "content": {
+            "type": "string",
+            "description": "File contents. Text-only in v1 (binary assets unsupported)."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "MIME type, e.g. \"text/markdown\"."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "path": {
+            "type": "string",
+            "description": "Relative path inside the skill, e.g. \"SKILL.md\" or \"scripts/extract.py\"."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SkillFileInput": {
+        "type": "object",
+        "description": "A single file in a create/update request.",
+        "required": [
+          "path",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional MIME type. If omitted, the service sniffs it from the path\nextension."
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "SkillFileManifest": {
+        "type": "object",
+        "description": "Lightweight file entry returned by list endpoints — contents omitted.",
+        "required": [
+          "path",
+          "byte_size",
+          "content_type"
+        ],
+        "properties": {
+          "byte_size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "SkillListResponse": {
+        "type": "object",
+        "description": "Paginated list of skills.",
+        "required": [
+          "data",
+          "pagination"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Skill"
+            },
+            "description": "List of skills (file contents omitted; see `files_manifest` on each)."
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta",
+            "description": "Pagination metadata."
+          }
+        }
+      },
+      "SkillOwner": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "organization_id",
+              "type"
+            ],
+            "properties": {
+              "organization_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "organization"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "team_id",
+              "type"
+            ],
+            "properties": {
+              "team_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "team"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "project_id",
+              "type"
+            ],
+            "properties": {
+              "project_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "project"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "user_id",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "user"
+                ]
+              },
+              "user_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ],
+        "description": "Owner specification for creating a skill."
+      },
+      "SkillOwnerType": {
+        "type": "string",
+        "description": "Owner type for skills (organization, team, project, or user).",
+        "enum": [
+          "organization",
+          "team",
+          "project",
+          "user"
+        ]
       },
       "SortOrder": {
         "type": "string",
@@ -30761,6 +32580,82 @@
           }
         }
       },
+      "UpdateSkill": {
+        "type": "object",
+        "description": "Request to update a skill. Any field that is `Some(_)` replaces the\nstored value. When `files` is `Some(_)`, the entire file set is\nreplaced.",
+        "properties": {
+          "allowed_tools": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "argument_hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "disable_model_invocation": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "files": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SkillFileInput"
+            }
+          },
+          "frontmatter_extra": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_invocable": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
       "UpdateSsoGroupMapping": {
         "type": "object",
         "description": "Request to update an existing SSO group mapping.\n\nAll fields are optional - only provided fields will be updated.",
@@ -32642,6 +34537,10 @@
       "description": "Self-service endpoints for authenticated users. Export personal data for GDPR compliance."
     },
     {
+      "name": "oauth",
+      "description": "OAuth-style PKCE flow for issuing user-scoped API keys to external apps. The user grants consent in the Hadrian UI; the external app exchanges the resulting code at `/oauth/token` for an API key bound to that user."
+    },
+    {
       "name": "Images",
       "description": "Generate, edit, and create variations of images using DALL-E models. OpenAI-compatible."
     },
@@ -32684,6 +34583,10 @@
     {
       "name": "templates",
       "description": "Manage reusable prompt templates. Templates can be owned by organizations, teams, projects, or users and include metadata for configuration."
+    },
+    {
+      "name": "skills",
+      "description": "Manage Agent Skills (https://agentskills.io). A skill packages a SKILL.md instruction file plus optional bundled scripts, references, and assets. Skills can be user-invoked via slash command or auto-invoked by the model via the frontend Skill tool."
     },
     {
       "name": "audit-logs",

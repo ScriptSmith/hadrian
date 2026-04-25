@@ -16,6 +16,7 @@ import { runHealthCheckTests } from "../shared/health-checks";
 import { runAdminApiCrudTests } from "../shared/admin-api-crud";
 import { runChatCompletionsTests } from "../shared/chat-completions";
 import { runRedisConnectivityTests } from "../shared/redis-connectivity";
+import { runOAuthPkceTests } from "../shared/oauth-pkce";
 
 describe("SQLite + Redis Deployment", () => {
   let env: StartedComposeEnvironment;
@@ -74,4 +75,5 @@ describe("SQLite + Redis Deployment", () => {
     client,
     execInService: env.execInService,
   }));
+  runOAuthPkceTests(() => ({ url: gatewayUrl, client, apiKeyClient }));
 });

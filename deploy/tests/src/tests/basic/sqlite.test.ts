@@ -15,6 +15,7 @@ import type { Client } from "../../client/client";
 import { runHealthCheckTests } from "../shared/health-checks";
 import { runAdminApiCrudTests } from "../shared/admin-api-crud";
 import { runChatCompletionsTests } from "../shared/chat-completions";
+import { runOAuthPkceTests } from "../shared/oauth-pkce";
 
 describe("SQLite Deployment", () => {
   let env: StartedComposeEnvironment;
@@ -65,4 +66,5 @@ describe("SQLite Deployment", () => {
     apiKeyClient,
     testName,
   }));
+  runOAuthPkceTests(() => ({ url: gatewayUrl, client, apiKeyClient }));
 });
