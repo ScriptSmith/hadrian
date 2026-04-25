@@ -12,10 +12,15 @@ export interface User {
 /** Admin roles that grant access to the admin UI */
 export const ADMIN_ROLES = ["super_admin", "org_admin", "team_admin"] as const;
 
-/** Check if a user has any admin role */
+/** Check if a user has any admin role.
+ *
+ * The earlier shortcut "always allow in `import.meta.env.DEV`" leaked into
+ * Storybook builds and any local production-ish setup with `pnpm dev`, so
+ * the admin UI rendered for unprivileged users. Bypassing the role check now
+ * requires an explicit opt-in via `VITE_FORCE_ADMIN_ACCESS=1` so each
+ * developer turning it on is doing so deliberately. */
 export function hasAdminAccess(user: User | null): boolean {
-  // In dev mode, always show admin pages for easier development
-  if (import.meta.env.DEV) return true;
+  if (import.meta.env.VITE_FORCE_ADMIN_ACCESS === "1") return true;
 
   if (!user?.roles) return false;
   return user.roles.some((role) => ADMIN_ROLES.includes(role as (typeof ADMIN_ROLES)[number]));
