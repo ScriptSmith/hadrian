@@ -811,22 +811,40 @@ pub async fn execute_with_fallback<E: ProviderExecutor>(
 // Helper Functions
 // ============================================================================
 
-/// Convert a provider error to an API error.
+/// Convert a provider error to an API error. The full error string is logged
+/// for operator debugging (it can contain internal URLs/paths from upstream
+/// SDKs) while only a generic message is returned to the client.
+/// `CircuitBreakerOpen` is exposed verbatim because its display string is a
+/// curated message we control (provider name + retry-at hint).
 pub fn provider_error_to_api_error(e: ProviderError) -> ApiError {
     use http::StatusCode;
 
-    let message = e.to_string();
-    let (status, code) = match &e {
-        ProviderError::Request(_) => (StatusCode::BAD_GATEWAY, "provider_error"),
-        ProviderError::ResponseBuilder(_) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, "response_builder_error")
-        }
-        ProviderError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
-        ProviderError::CircuitBreakerOpen(_) => {
-            (StatusCode::SERVICE_UNAVAILABLE, "circuit_breaker_open")
-        }
+    let (status, code, public_message) = match &e {
+        ProviderError::Request(_) => (
+            StatusCode::BAD_GATEWAY,
+            "provider_error",
+            "Upstream provider request failed".to_string(),
+        ),
+        ProviderError::ResponseBuilder(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "response_builder_error",
+            "Failed to build response".to_string(),
+        ),
+        ProviderError::Internal(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "Internal provider error".to_string(),
+        ),
+        ProviderError::CircuitBreakerOpen(cb) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "circuit_breaker_open",
+            cb.to_string(),
+        ),
     };
-    ApiError::new(status, code, message)
+
+    tracing::error!(error_code = %code, error = %e, "Provider error converted to API error");
+
+    ApiError::new(status, code, public_message)
 }
 
 #[cfg(test)]

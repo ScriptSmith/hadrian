@@ -164,23 +164,45 @@ impl From<ProviderError> for StatusCode {
 
 impl IntoResponse for ProviderError {
     fn into_response(self) -> Response {
-        let (status, error_code) = match &self {
-            ProviderError::Request(_) => (StatusCode::BAD_GATEWAY, "request_failed"),
-            ProviderError::ResponseBuilder(_) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "response_builder")
-            }
-            ProviderError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
-            ProviderError::CircuitBreakerOpen(_) => {
-                (StatusCode::SERVICE_UNAVAILABLE, "circuit_breaker_open")
-            }
+        // CircuitBreakerOpen is a curated message we own (no upstream detail
+        // mixed in), so it's safe to expose. The other variants wrap reqwest
+        // / http / arbitrary internal strings that may include hostnames,
+        // file paths, or stack-trace fragments — keep those in logs only.
+        let (status, error_code, public_message) = match &self {
+            ProviderError::Request(_) => (
+                StatusCode::BAD_GATEWAY,
+                "request_failed",
+                "Upstream provider request failed".to_string(),
+            ),
+            ProviderError::ResponseBuilder(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "response_builder",
+                "Failed to build response".to_string(),
+            ),
+            ProviderError::Internal(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                "Internal provider error".to_string(),
+            ),
+            ProviderError::CircuitBreakerOpen(e) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "circuit_breaker_open",
+                e.to_string(),
+            ),
         };
+
+        tracing::error!(
+            error_code = %error_code,
+            error = %self,
+            "Provider error returned to client"
+        );
 
         // Record provider error metric
         // Note: Provider name is tracked via llm_requests_total with status="error"
         // This counter provides unified error categorization across all error types
         metrics::record_gateway_error("provider_error", error_code, None);
 
-        (status, self.to_string()).into_response()
+        (status, public_message).into_response()
     }
 }
 
