@@ -527,6 +527,13 @@ export function ConversationsProvider({ children }: ConversationsProviderProps) 
 
   // Track conversations that are pending LLM title generation to avoid duplicate calls
   const pendingTitleGenRef = useRef<Set<string>>(new Set());
+  // AbortController used to cancel any in-flight title generations on unmount.
+  const titleGenAbortRef = useRef<AbortController>(new AbortController());
+  useEffect(() => {
+    return () => {
+      titleGenAbortRef.current.abort();
+    };
+  }, []);
 
   const updateConversation = useCallback(
     (id: string, messages: ChatMessage[], models?: string[]) => {
@@ -564,7 +571,7 @@ export function ConversationsProvider({ children }: ConversationsProviderProps) 
       const titleModel = preferences.titleGenerationModel;
       if (needsLLMTitle && firstUserMessage && titleModel) {
         pendingTitleGenRef.current.add(id);
-        generateTitleWithLLM(firstUserMessage, titleModel)
+        generateTitleWithLLM(firstUserMessage, titleModel, titleGenAbortRef.current.signal)
           .then((result) => {
             // Only update if the title is different and better
             setConversations((prev) =>
