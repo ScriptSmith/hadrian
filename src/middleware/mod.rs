@@ -36,6 +36,8 @@ pub(crate) mod util;
 
 // ── Middleware layer exports — server only ───────────────────────────────────
 #[cfg(feature = "sso")]
+pub use layers::admin::strip_reserved_roles;
+#[cfg(feature = "sso")]
 pub use layers::rate_limit::extract_client_ip_from_parts;
 #[cfg(feature = "server")]
 pub use layers::{

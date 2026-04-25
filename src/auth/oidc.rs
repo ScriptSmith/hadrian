@@ -481,14 +481,22 @@ impl OidcAuthenticator {
         let external_id = validator.extract_identity(&claims);
         let org = validator.extract_org(&claims);
 
+        // IdPs must never be able to claim reserved-prefix roles (e.g.
+        // `_emergency_admin`, `_system_bootstrap`) — those grant special trust
+        // and are reserved for bootstrap/break-glass auth paths.
+        let roles =
+            crate::middleware::strip_reserved_roles(claims.roles.clone().unwrap_or_default());
+        let groups =
+            crate::middleware::strip_reserved_roles(claims.groups.clone().unwrap_or_default());
+
         let session = OidcSession {
             id: Uuid::new_v4(),
             external_id,
             email: claims.email.clone(),
             name: claims.name.clone(),
             org,
-            groups: claims.groups.clone().unwrap_or_default(),
-            roles: claims.roles.clone().unwrap_or_default(),
+            groups,
+            roles,
             access_token: Some(tokens.access_token),
             refresh_token: tokens.refresh_token,
             created_at: now,

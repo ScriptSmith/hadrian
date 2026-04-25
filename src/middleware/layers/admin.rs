@@ -184,7 +184,7 @@ pub const EMERGENCY_ADMIN_ROLE: &str = "_emergency_admin";
 /// Drop any role with the reserved `_` prefix from a list. IdPs and proxy
 /// headers must never be able to claim these roles, since the gateway grants
 /// extra trust to them (bootstrap / emergency break-glass).
-pub(crate) fn strip_reserved_roles(roles: Vec<String>) -> Vec<String> {
+pub fn strip_reserved_roles(roles: Vec<String>) -> Vec<String> {
     roles.into_iter().filter(|r| !r.starts_with('_')).collect()
 }
 

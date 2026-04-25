@@ -346,13 +346,19 @@ impl SamlAuthenticator {
         let now = Utc::now();
         let session_duration = chrono::Duration::seconds(self.config.session.duration_secs as i64);
 
+        // IdPs must never be able to claim reserved-prefix roles via SAML
+        // group attributes — `session.groups` falls through to `roles` in the
+        // middleware when `roles` is empty, which would otherwise smuggle in
+        // bootstrap/emergency privileges.
+        let groups = crate::middleware::strip_reserved_roles(assertion.groups);
+
         let session = OidcSession {
             id: Uuid::new_v4(),
             external_id: assertion.name_id,
             email: assertion.email,
             name: assertion.name,
             org: None, // SAML doesn't have org claim like OIDC
-            groups: assertion.groups,
+            groups,
             roles: vec![],      // Roles would need to be mapped from groups
             access_token: None, // SAML doesn't use access tokens
             refresh_token: None,
