@@ -62,10 +62,11 @@ export function DataTable<TData, TValue>({
       getSortedRowModel: getSortedRowModel(),
       onSortingChange: setSorting,
     }),
-    ...(searchColumn && {
-      getFilteredRowModel: getFilteredRowModel(),
-      onColumnFiltersChange: setColumnFilters,
-    }),
+    // Always enable the filtered row model when filtering is possible —
+    // either column-scoped (searchColumn) or via globalFilter — so the
+    // search input doesn't silently no-op when `searchColumn` is unset.
+    getFilteredRowModel: getFilteredRowModel(),
+    onColumnFiltersChange: setColumnFilters,
     onColumnVisibilityChange: setColumnVisibility,
     onGlobalFilterChange: setGlobalFilter,
     state: {
