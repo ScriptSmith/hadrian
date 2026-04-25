@@ -162,14 +162,23 @@ const CitationItem = memo(function CitationItem({
             </p>
           )}
           {citation.type === "url" && (
-            <a
-              href={citation.url}
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              type="button"
+              onClick={() => {
+                // Route through the parent's URL handler so the same trusted-
+                // domain confirmation modal that markdown links use applies
+                // here. Citations are model-supplied — a citation that
+                // displays "Wikipedia" can link to attacker.example.
+                if (onUrlClick) {
+                  onUrlClick(citation.url);
+                } else {
+                  window.open(citation.url, "_blank", "noopener,noreferrer");
+                }
+              }}
               className="text-xs text-primary hover:underline mt-1 inline-flex items-center gap-1"
             >
               Open source <ExternalLink className="h-3 w-3" />
-            </a>
+            </button>
           )}
         </div>
       )}
