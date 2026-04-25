@@ -1516,6 +1516,14 @@ pub struct StreamingBufferConfig {
     /// Default: 1000 chunks
     #[serde(default = "default_max_output_buffer_chunks")]
     pub max_output_buffer_chunks: usize,
+
+    /// Maximum total bytes of accumulated response state (text and reasoning
+    /// content) per stream. Bounds memory usage if a provider produces a
+    /// runaway response. Bytes beyond this cap are silently dropped from the
+    /// state buffer, but pass-through deltas are still emitted to the client.
+    /// Default: 32 MB
+    #[serde(default = "default_max_response_state_bytes")]
+    pub max_response_state_bytes: usize,
 }
 
 impl Default for StreamingBufferConfig {
@@ -1523,12 +1531,17 @@ impl Default for StreamingBufferConfig {
         Self {
             max_input_buffer_bytes: default_max_input_buffer_bytes(),
             max_output_buffer_chunks: default_max_output_buffer_chunks(),
+            max_response_state_bytes: default_max_response_state_bytes(),
         }
     }
 }
 
 fn default_max_input_buffer_bytes() -> usize {
     16 * 1024 * 1024 // 16 MB
+}
+
+fn default_max_response_state_bytes() -> usize {
+    32 * 1024 * 1024 // 32 MB
 }
 
 fn default_max_output_buffer_chunks() -> usize {

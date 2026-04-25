@@ -26,6 +26,26 @@ pub(crate) fn strip_anthropic_prefix(id: &str, prefix: &str) -> String {
         .collect()
 }
 
+/// Append `delta` to `buf` up to `max_bytes` total. Slices on a UTF-8
+/// character boundary so the buffer remains valid UTF-8. Once the cap is hit
+/// further deltas are dropped from the in-memory state — pass-through SSE
+/// chunks to the client are unaffected.
+fn bounded_push(buf: &mut String, delta: &str, max_bytes: usize) {
+    if buf.len() >= max_bytes {
+        return;
+    }
+    let remaining = max_bytes - buf.len();
+    if delta.len() <= remaining {
+        buf.push_str(delta);
+        return;
+    }
+    let mut end = remaining;
+    while end > 0 && !delta.is_char_boundary(end) {
+        end -= 1;
+    }
+    buf.push_str(&delta[..end]);
+}
+
 // ============================================================================
 // Anthropic Streaming Event Types
 // ============================================================================
@@ -726,6 +746,8 @@ pub struct AnthropicToResponsesStream<S> {
     max_input_buffer_bytes: usize,
     /// Maximum output buffer chunks
     max_output_buffer_chunks: usize,
+    /// Maximum total bytes of accumulated text+reasoning state
+    max_response_state_bytes: usize,
 }
 
 impl<S> AnthropicToResponsesStream<S> {
@@ -743,6 +765,7 @@ impl<S> AnthropicToResponsesStream<S> {
             output_buffer: std::collections::VecDeque::new(),
             max_input_buffer_bytes: streaming_buffer.max_input_buffer_bytes,
             max_output_buffer_chunks: streaming_buffer.max_output_buffer_chunks,
+            max_response_state_bytes: streaming_buffer.max_response_state_bytes,
         }
     }
 
@@ -946,7 +969,11 @@ impl<S> AnthropicToResponsesStream<S> {
 
             AnthropicStreamEvent::ContentBlockDelta { index, delta } => match delta {
                 ContentDelta::TextDelta { text } => {
-                    self.state.text_content.push_str(&text);
+                    bounded_push(
+                        &mut self.state.text_content,
+                        &text,
+                        self.max_response_state_bytes,
+                    );
 
                     // Emit text delta
                     let msg_output_index = self.message_output_index();
@@ -997,7 +1024,11 @@ impl<S> AnthropicToResponsesStream<S> {
                 ContentDelta::ThinkingDelta { thinking } => {
                     // Emit thinking delta as reasoning content
                     if self.state.thinking_block_indices.contains(&index) {
-                        self.state.reasoning_content.push_str(&thinking);
+                        bounded_push(
+                            &mut self.state.reasoning_content,
+                            &thinking,
+                            self.max_response_state_bytes,
+                        );
 
                         // Emit reasoning summary delta
                         let reasoning_id = format!(
@@ -1399,6 +1430,37 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_push_under_cap_appends_full_delta() {
+        let mut buf = "hello".to_string();
+        bounded_push(&mut buf, " world", 100);
+        assert_eq!(buf, "hello world");
+    }
+
+    #[test]
+    fn bounded_push_clamps_at_cap() {
+        let mut buf = "abc".to_string();
+        bounded_push(&mut buf, "defghi", 5);
+        assert_eq!(buf, "abcde");
+    }
+
+    #[test]
+    fn bounded_push_drops_when_full() {
+        let mut buf = "abcde".to_string();
+        bounded_push(&mut buf, "fg", 5);
+        assert_eq!(buf, "abcde");
+    }
+
+    #[test]
+    fn bounded_push_respects_utf8_boundary() {
+        let mut buf = String::new();
+        // "aé" is 3 bytes (a=1, é=2). Cap=2: push "a", drop é to avoid
+        // splitting the multibyte char.
+        bounded_push(&mut buf, "aé", 2);
+        assert!(buf.is_char_boundary(buf.len()));
+        assert_eq!(buf, "a");
+    }
 
     #[test]
     fn test_parse_message_start() {

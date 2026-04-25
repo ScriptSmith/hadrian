@@ -18,6 +18,26 @@ use futures_util::stream::Stream;
 use super::types::*;
 use crate::config::StreamingBufferConfig;
 
+/// Append `delta` to `buf` up to `max_bytes` total. Slices on a UTF-8
+/// character boundary so the buffer remains valid UTF-8. Once the cap is hit
+/// further deltas are dropped from in-memory state — pass-through SSE chunks
+/// to the client are unaffected.
+fn bounded_push(buf: &mut String, delta: &str, max_bytes: usize) {
+    if buf.len() >= max_bytes {
+        return;
+    }
+    let remaining = max_bytes - buf.len();
+    if delta.len() <= remaining {
+        buf.push_str(delta);
+        return;
+    }
+    let mut end = remaining;
+    while end > 0 && !delta.is_char_boundary(end) {
+        end -= 1;
+    }
+    buf.push_str(&delta[..end]);
+}
+
 /// Stream state for tracking the transformation
 #[derive(Debug, Default)]
 pub(super) struct StreamState {
@@ -535,6 +555,8 @@ pub struct BedrockToResponsesStream<S> {
     pub max_input_buffer_bytes: usize,
     /// Maximum output buffer chunks
     pub max_output_buffer_chunks: usize,
+    /// Maximum total bytes of accumulated text+reasoning state
+    pub max_response_state_bytes: usize,
 }
 
 impl<S> BedrockToResponsesStream<S> {
@@ -567,6 +589,7 @@ impl<S> BedrockToResponsesStream<S> {
             output_buffer: std::collections::VecDeque::new(),
             max_input_buffer_bytes: streaming_buffer.max_input_buffer_bytes,
             max_output_buffer_chunks: streaming_buffer.max_output_buffer_chunks,
+            max_response_state_bytes: streaming_buffer.max_response_state_bytes,
         }
     }
 
@@ -798,7 +821,11 @@ impl<S> BedrockToResponsesStream<S> {
                             .reasoning_block_indices
                             .contains(&delta.content_block_index)
                     {
-                        self.state.reasoning_content.push_str(&reasoning.text);
+                        bounded_push(
+                            &mut self.state.reasoning_content,
+                            &reasoning.text,
+                            self.max_response_state_bytes,
+                        );
 
                         // Accumulate signature if present
                         if let Some(sig) = &reasoning.signature {
@@ -820,7 +847,11 @@ impl<S> BedrockToResponsesStream<S> {
                     else if let Some(text) = delta.delta.text
                         && !text.is_empty()
                     {
-                        self.state.text_content.push_str(&text);
+                        bounded_push(
+                            &mut self.state.text_content,
+                            &text,
+                            self.max_response_state_bytes,
+                        );
 
                         // Emit text delta
                         let msg_output_index = self.message_output_index();
