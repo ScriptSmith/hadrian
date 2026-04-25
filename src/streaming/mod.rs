@@ -229,8 +229,10 @@ impl SseParser {
                         .and_then(|delta| delta.get("content"))
                         .and_then(|c| c.as_str())
                     {
-                        // Rough approximation: 1 token ≈ 4 characters
-                        let estimated_tokens = (content.len() as i64 + 3) / 4;
+                        // Rough approximation: 1 token ≈ 4 characters.
+                        // Use chars() instead of len() so multibyte content
+                        // (CJK, emoji) isn't over-counted as a token-per-byte.
+                        let estimated_tokens = (content.chars().count() as i64 + 3) / 4;
                         return Some(SseChunk::Delta {
                             tokens: estimated_tokens,
                         });
@@ -1019,6 +1021,23 @@ mod tests {
                 assert_eq!(finish_reason, Some("stop".to_string()));
             }
             _ => panic!("Expected Usage chunk"),
+        }
+    }
+
+    #[test]
+    fn test_parse_sse_delta_multibyte_content() {
+        // Four CJK chars = 12 bytes. len()/4 would estimate 3 tokens;
+        // chars().count()/4 estimates 1.
+        let chunk = r#"data: {"choices":[{"delta":{"content":"日本語😀"}}]}"#;
+        let result = SseParser::parse_chunk(chunk.as_bytes());
+        match result {
+            Some(SseChunk::Delta { tokens }) => {
+                assert_eq!(
+                    tokens, 1,
+                    "4 chars should estimate to 1 token, got {tokens}"
+                );
+            }
+            _ => panic!("Expected Delta chunk"),
         }
     }
 
