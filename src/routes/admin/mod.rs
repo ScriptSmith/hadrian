@@ -16,6 +16,7 @@ pub mod me_providers;
 #[cfg(feature = "sso")]
 pub mod me_sessions;
 pub mod model_pricing;
+pub mod oauth;
 pub mod org_rbac_policies;
 #[cfg(feature = "sso")]
 pub mod org_sso_configs;
@@ -84,6 +85,7 @@ pub(crate) fn admin_v1_routes() -> Router<AppState> {
         // Self-service endpoints (current user)
         .route("/me", delete(me::delete))
         .route("/me/export", get(me::export))
+        .route("/me/eligible-owners", get(me::eligible_owners))
         .route(
             "/me/providers",
             get(me_providers::list).merge(post(me_providers::create)),
@@ -115,6 +117,9 @@ pub(crate) fn admin_v1_routes() -> Router<AppState> {
             get(me_api_keys::get).merge(delete(me_api_keys::revoke)),
         )
         .route("/me/api-keys/{key_id}/rotate", post(me_api_keys::rotate))
+        // OAuth-style PKCE flow for issuing user-scoped keys to external apps
+        .route("/oauth/authorize", post(oauth::authorize))
+        .route("/oauth/preflight", get(oauth::preflight))
         // Organizations
         .route(
             "/organizations",

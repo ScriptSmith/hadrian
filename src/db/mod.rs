@@ -72,6 +72,8 @@ struct CachedRepos {
     org_rbac_policies: Arc<dyn OrgRbacPolicyRepo>,
     // Service accounts (machine identities)
     service_accounts: Arc<dyn ServiceAccountRepo>,
+    // OAuth PKCE authorization codes
+    oauth_authorization_codes: Arc<dyn OAuthAuthorizationCodeRepo>,
 }
 
 enum PoolStorage {
@@ -148,6 +150,9 @@ impl DbPool {
             scim_group_mappings: Arc::new(sqlite::SqliteScimGroupMappingRepo::new(pool.clone())),
             org_rbac_policies: Arc::new(sqlite::SqliteOrgRbacPolicyRepo::new(pool.clone())),
             service_accounts: Arc::new(sqlite::SqliteServiceAccountRepo::new(pool.clone())),
+            oauth_authorization_codes: Arc::new(sqlite::SqliteOAuthAuthorizationCodeRepo::new(
+                pool.clone(),
+            )),
         };
         DbPool {
             inner: PoolStorage::Sqlite(pool),
@@ -187,6 +192,9 @@ impl DbPool {
             scim_group_mappings: unreachable!("SSO not supported in WASM builds"),
             org_rbac_policies: Arc::new(sqlite::SqliteOrgRbacPolicyRepo::new(pool.clone())),
             service_accounts: Arc::new(sqlite::SqliteServiceAccountRepo::new(pool.clone())),
+            oauth_authorization_codes: Arc::new(sqlite::SqliteOAuthAuthorizationCodeRepo::new(
+                pool.clone(),
+            )),
         };
         DbPool {
             inner: PoolStorage::WasmSqlite(pool),
@@ -293,6 +301,10 @@ impl DbPool {
                 write_pool.clone(),
                 read_pool.clone(),
             )),
+            oauth_authorization_codes: Arc::new(postgres::PostgresOAuthAuthorizationCodeRepo::new(
+                write_pool.clone(),
+                read_pool.clone(),
+            )),
         };
         DbPool {
             inner: PoolStorage::Postgres(PgPoolPair {
@@ -361,6 +373,9 @@ impl DbPool {
                     )),
                     org_rbac_policies: Arc::new(sqlite::SqliteOrgRbacPolicyRepo::new(pool.clone())),
                     service_accounts: Arc::new(sqlite::SqliteServiceAccountRepo::new(pool.clone())),
+                    oauth_authorization_codes: Arc::new(
+                        sqlite::SqliteOAuthAuthorizationCodeRepo::new(pool.clone()),
+                    ),
                 };
 
                 Ok(DbPool {
@@ -484,6 +499,12 @@ impl DbPool {
                         write_pool.clone(),
                         read_pool.clone(),
                     )),
+                    oauth_authorization_codes: Arc::new(
+                        postgres::PostgresOAuthAuthorizationCodeRepo::new(
+                            write_pool.clone(),
+                            read_pool.clone(),
+                        ),
+                    ),
                 };
 
                 Ok(DbPool {
@@ -647,6 +668,11 @@ impl DbPool {
     /// Get service account repository
     pub fn service_accounts(&self) -> Arc<dyn ServiceAccountRepo> {
         Arc::clone(&self.repos.service_accounts)
+    }
+
+    /// Get OAuth PKCE authorization code repository
+    pub fn oauth_authorization_codes(&self) -> Arc<dyn OAuthAuthorizationCodeRepo> {
+        Arc::clone(&self.repos.oauth_authorization_codes)
     }
 
     /// Get a reference to the underlying database pool.

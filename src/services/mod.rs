@@ -16,6 +16,7 @@ mod files;
 #[cfg(feature = "forecasting")]
 pub mod forecasting;
 mod model_pricing;
+pub mod oauth_pkce;
 mod org_rbac_policies;
 #[cfg(feature = "sso")]
 mod org_sso_configs;
@@ -78,6 +79,7 @@ pub use file_storage::{
 };
 pub use files::{FilesService, FilesServiceError, FilesServiceResult};
 pub use model_pricing::ModelPricingService;
+pub use oauth_pkce::{OAuthPkceError, OAuthPkceService};
 pub use org_rbac_policies::{OrgRbacPolicyError, OrgRbacPolicyService};
 #[cfg(feature = "sso")]
 pub use org_sso_configs::{OrgSsoConfigError, OrgSsoConfigService, OrgSsoConfigWithClientSecret};
@@ -148,6 +150,7 @@ pub struct Services {
     pub scim_provisioning: ScimProvisioningService,
     pub org_rbac_policies: OrgRbacPolicyService,
     pub service_accounts: ServiceAccountService,
+    pub oauth_pkce: OAuthPkceService,
 }
 
 impl Services {
@@ -184,6 +187,7 @@ impl Services {
             scim_provisioning: ScimProvisioningService::new(db.clone()),
             org_rbac_policies: OrgRbacPolicyService::new(db.clone(), max_expression_length),
             service_accounts: ServiceAccountService::new(db.clone()),
+            oauth_pkce: OAuthPkceService::new(db.clone()),
             files: FilesService::new(db, file_storage),
         }
     }
@@ -223,6 +227,7 @@ impl Services {
             scim_provisioning: ScimProvisioningService::new(db.clone()),
             org_rbac_policies: OrgRbacPolicyService::new(db.clone(), max_expression_length),
             service_accounts: ServiceAccountService::new(db.clone()),
+            oauth_pkce: OAuthPkceService::new(db.clone()),
             files: FilesService::new(db, file_storage),
         }
     }

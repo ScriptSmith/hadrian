@@ -171,6 +171,18 @@ export default defineConfig({
             target: "http://localhost:8080",
             changeOrigin: true,
           },
+          // PKCE token-exchange endpoint. Only `/oauth/token` is proxied —
+          // `/oauth/authorize` is the in-app consent page handled client-side
+          // by the React router.
+          "/oauth/token": {
+            target: "http://localhost:8080",
+            changeOrigin: true,
+          },
+          // RFC 8414 Authorization Server Metadata.
+          "/.well-known/oauth-authorization-server": {
+            target: "http://localhost:8080",
+            changeOrigin: true,
+          },
         },
   },
   worker: {

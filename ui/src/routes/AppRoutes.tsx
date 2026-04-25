@@ -8,6 +8,7 @@ import { lazy, Suspense } from "react";
 import { Spinner } from "@/components/Spinner/Spinner";
 
 const LoginPage = lazy(() => import("@/pages/LoginPage"));
+const OAuthAuthorizePage = lazy(() => import("@/pages/OAuthAuthorizePage"));
 const AccountPage = lazy(() => import("@/pages/AccountPage"));
 const ProjectsPage = lazy(() => import("@/pages/ProjectsPage"));
 const TeamsPage = lazy(() => import("@/pages/TeamsPage"));
@@ -81,6 +82,17 @@ export function AppRoutes() {
         element={
           <Suspense fallback={<PageLoader />}>
             <LoginPage />
+          </Suspense>
+        }
+      />
+
+      {/* OAuth-style PKCE consent page for external apps requesting an API key.
+          Self-gates authentication so it can preserve query string through login. */}
+      <Route
+        path="/oauth/authorize"
+        element={
+          <Suspense fallback={<PageLoader />}>
+            <OAuthAuthorizePage />
           </Suspense>
         }
       />

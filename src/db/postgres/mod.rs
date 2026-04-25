@@ -5,6 +5,7 @@ mod conversations;
 mod domain_verifications;
 mod files;
 mod model_pricing;
+mod oauth_authorization_codes;
 mod org_rbac_policies;
 #[cfg(feature = "sso")]
 mod org_sso_configs;
@@ -34,6 +35,7 @@ pub use conversations::PostgresConversationRepo;
 pub use domain_verifications::PostgresDomainVerificationRepo;
 pub use files::PostgresFilesRepo;
 pub use model_pricing::PostgresModelPricingRepo;
+pub use oauth_authorization_codes::PostgresOAuthAuthorizationCodeRepo;
 pub use org_rbac_policies::PostgresOrgRbacPolicyRepo;
 #[cfg(feature = "sso")]
 pub use org_sso_configs::PostgresOrgSsoConfigRepo;

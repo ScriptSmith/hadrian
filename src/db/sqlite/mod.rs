@@ -7,6 +7,7 @@ mod conversations;
 mod domain_verifications;
 mod files;
 mod model_pricing;
+mod oauth_authorization_codes;
 mod org_rbac_policies;
 #[cfg(feature = "sso")]
 mod org_sso_configs;
@@ -36,6 +37,7 @@ pub use conversations::SqliteConversationRepo;
 pub use domain_verifications::SqliteDomainVerificationRepo;
 pub use files::SqliteFilesRepo;
 pub use model_pricing::SqliteModelPricingRepo;
+pub use oauth_authorization_codes::SqliteOAuthAuthorizationCodeRepo;
 pub use org_rbac_policies::SqliteOrgRbacPolicyRepo;
 #[cfg(feature = "sso")]
 pub use org_sso_configs::SqliteOrgSsoConfigRepo;

@@ -6,6 +6,7 @@ pub mod cursor;
 mod domain_verifications;
 mod files;
 mod model_pricing;
+mod oauth_authorization_codes;
 mod org_rbac_policies;
 #[cfg(feature = "sso")]
 mod org_sso_configs;
@@ -37,6 +38,7 @@ pub use cursor::*;
 pub use domain_verifications::*;
 pub use files::*;
 pub use model_pricing::*;
+pub use oauth_authorization_codes::*;
 pub use org_rbac_policies::*;
 #[cfg(feature = "sso")]
 pub use org_sso_configs::*;

@@ -1,0 +1,303 @@
+---
+title: OAuth PKCE for External Apps
+description: Let external apps obtain user-scoped Hadrian API keys via a PKCE consent flow
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Steps, Step } from "fumadocs-ui/components/steps";
+
+External apps can ask Hadrian users to grant them an API key without ever
+seeing the user's credentials, using the same PKCE flow popularised by
+[OpenRouter's OAuth flow](https://openrouter.ai/docs/guides/overview/auth/oauth).
+
+The user clicks a button in your app, lands on Hadrian's consent page,
+clicks **Authorize**, and is sent back to your app with a one-time code.
+Your app exchanges that code for an API key.
+
+<Callout type="info">
+  By default the issued key is **owned by the consenting user**. The consent page also lets the user
+  pick any organization, team, or project they have permission to create keys for, so the same flow
+  works for shared workspace keys. Keys can be revoked at any time from the API Keys page in
+  Hadrian.
+</Callout>
+
+## Standards
+
+Hadrian implements the subset of OAuth 2.0 needed for the PKCE
+authorization-code flow. Specifically:
+
+- **[RFC 7636 — Proof Key for Code Exchange](https://www.rfc-editor.org/rfc/rfc7636)** —
+  governs the `code_verifier` / `code_challenge` exchange. `S256` is the
+  default and recommended method; `plain` is gated behind
+  `auth.oauth_pkce.allow_plain_method`.
+- **[RFC 6749 §4.1 — Authorization Code Grant](https://www.rfc-editor.org/rfc/rfc6749#section-4.1)** —
+  the overall request/response shape. The token endpoint uses
+  `invalid_grant` (RFC 6749 §5.2) when a code is unknown, expired,
+  reused, or paired with the wrong verifier.
+- **[RFC 8414 — Authorization Server Metadata](https://www.rfc-editor.org/rfc/rfc8414)** —
+  served at `/.well-known/oauth-authorization-server` so PKCE clients can
+  discover the authorize/token endpoints, supported challenge methods, and
+  supported scopes without hard-coding URLs.
+
+What Hadrian does **not** implement (and clients shouldn't expect):
+
+- **Dynamic Client Registration** ([RFC 7591](https://www.rfc-editor.org/rfc/rfc7591))
+  — apps don't pre-register; the consent screen is the only gating step.
+- **Refresh tokens** — the issued credential is a regular Hadrian API key
+  with the rotation, expiry, and revoke semantics documented for self-service
+  keys.
+- **Client credentials / password / device-code grants** — only the PKCE
+  authorization-code grant is supported.
+
+### Discovering the endpoints
+
+```
+GET https://hadrian.example.com/.well-known/oauth-authorization-server
+```
+
+returns:
+
+```json
+{
+  "issuer": "https://hadrian.example.com",
+  "authorization_endpoint": "https://hadrian.example.com/oauth/authorize",
+  "token_endpoint": "https://hadrian.example.com/oauth/token",
+  "code_challenge_methods_supported": ["S256"],
+  "response_types_supported": ["code"],
+  "grant_types_supported": ["authorization_code"],
+  "token_endpoint_auth_methods_supported": ["none"],
+  "scopes_supported": [
+    "chat",
+    "completions",
+    "embeddings",
+    "images",
+    "audio",
+    "files",
+    "models",
+    "admin"
+  ],
+  "service_documentation": "https://hadrian.example.com/docs/features/oauth-pkce"
+}
+```
+
+The discovery document is unauthenticated by RFC 8414, so Hadrian
+deliberately does **not** consume `X-Forwarded-*` headers when building
+it — those are trivially spoofable and would let an attacker poison the
+document into advertising attacker-controlled endpoints. Operators behind
+a reverse proxy (or anywhere the externally-visible URL differs from the
+bind address) must set `auth.oauth_pkce.public_url`:
+
+```toml
+[auth.oauth_pkce]
+public_url = "https://hadrian.example.com"
+```
+
+When `public_url` is unset, the document falls back to building URLs from
+`server.host`, `server.port`, and `server.tls`.
+
+## Flow
+
+<Steps>
+
+<Step>
+
+### Generate a PKCE pair in your app
+
+Generate a cryptographically random `code_verifier` (43–128 URL-safe characters)
+and derive a `code_challenge`:
+
+```ts
+function base64url(bytes: Uint8Array) {
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
+const challengeBytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+const challenge = base64url(new Uint8Array(challengeBytes));
+
+sessionStorage.setItem("hadrian-verifier", verifier);
+```
+
+</Step>
+
+<Step>
+
+### Send the user to Hadrian's consent page
+
+Redirect the user's browser to `/oauth/authorize` on your Hadrian
+deployment with the challenge and your callback URL:
+
+```
+https://hadrian.example.com/oauth/authorize?
+  callback_url=https://yourapp.example/cb&
+  code_challenge=<challenge>&
+  code_challenge_method=S256&
+  app_name=YourApp&
+  scopes=chat,embeddings
+```
+
+Recognised query parameters:
+
+| Parameter               | Required | Description                                                                      |
+| ----------------------- | -------- | -------------------------------------------------------------------------------- |
+| `callback_url`          | yes      | Where to send the user after consent. Must be HTTPS (HTTP only for `localhost`). |
+| `code_challenge`        | yes      | PKCE challenge (base64url-encoded SHA-256 of the verifier).                      |
+| `code_challenge_method` | no       | `S256` (default) or `plain` if explicitly enabled in config.                     |
+| `app_name`              | no       | Display name shown to the user on the consent screen.                            |
+| `scopes`                | no       | Comma-separated API key scopes used as the default for the form.                 |
+| `key_name`              | no       | Suggested label for the issued key. Defaults to `app_name`.                      |
+
+The consent page exposes the same options as the in-app "Create API Key"
+modal — label, budget limit and period, expiration, scopes, model
+restrictions, IP allowlist, rate limits, and sovereignty requirements —
+all defaulted from the URL parameters above and editable by the user
+before they click **Authorize**.
+
+#### Scopes
+
+The `scopes` URL parameter is a comma-separated list of API key scopes
+the app would like the user to grant. It pre-selects entries in the
+**Permission Scopes** field on the consent page; the user can add or
+remove scopes before authorizing. Leaving the field empty issues a key
+with full access.
+
+These are **Hadrian API key scopes**, not OAuth 2.0 scopes — they map
+directly to groups of OpenAI-compatible endpoints. The full set:
+
+| Scope         | Endpoints granted                                                                          |
+| ------------- | ------------------------------------------------------------------------------------------ |
+| `chat`        | `POST /v1/chat/completions`, `POST /v1/responses`                                          |
+| `completions` | `POST /v1/completions` (legacy)                                                            |
+| `embeddings`  | `POST /v1/embeddings`                                                                      |
+| `images`      | `POST /v1/images/generations`, `/v1/images/edits`, `/v1/images/variations`                 |
+| `audio`       | `POST /v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/translations`              |
+| `files`       | `POST/GET/DELETE /v1/files/*`, `POST/GET/DELETE /v1/vector_stores/*`                       |
+| `models`      | `GET /v1/models`                                                                           |
+| `admin`       | All `/admin/*` endpoints — full administrative access. Grant only to apps you fully trust. |
+
+Scopes are also reported in the discovery document under
+`scopes_supported`, so clients can introspect the list at runtime instead
+of hard-coding it.
+
+#### Owner selection
+
+The consent page also includes an **Owner** dropdown so the user can
+choose what the issued key will belong to. Options are populated from the
+user's actual memberships:
+
+- **Personal** — the consenting user's own account (default).
+- Any **organization** they belong to.
+- Any **team** they're a member of.
+- Any **project** they're a member of.
+
+Picking a non-personal owner requires the same `api_key:create` permission
+the in-app admin endpoint requires for that scope, and the same
+per-organization/team/project key-count limits apply. If the user lacks
+permission, the consent submission returns `403`. Service-account owners
+aren't exposed in the dropdown but can be passed in `key_options.owner`
+programmatically by callers that build their own consent UI.
+
+If the user is not signed in, Hadrian routes them through the normal
+sign-in flow first and brings them back to the consent page automatically.
+
+</Step>
+
+<Step>
+
+### Exchange the code for an API key
+
+After the user clicks **Allow**, Hadrian redirects them back to your
+`callback_url` with `?code=...`. Exchange it server-side or in your app:
+
+```ts
+const code = new URLSearchParams(location.search).get("code");
+const verifier = sessionStorage.getItem("hadrian-verifier");
+
+const response = await fetch("https://hadrian.example.com/oauth/token", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ code, code_verifier: verifier }),
+});
+
+const { key, key_prefix, key_id } = await response.json();
+```
+
+`code_challenge_method` does not need to be re-sent at token exchange —
+per RFC 7636 §4.5, the server already knows the method from the
+authorization request. If you do send it, it must match what was used at
+authorize time or the request is rejected.
+
+The `key` field is the raw API key. Store it securely — it cannot be
+retrieved again.
+
+If the user clicks **Deny**, Hadrian redirects to your `callback_url` with
+`?error=access_denied` instead.
+
+</Step>
+
+</Steps>
+
+## Server configuration
+
+The flow is enabled by default. Tune it under `[auth.oauth_pkce]` in
+`hadrian.toml`:
+
+```toml
+[auth.oauth_pkce]
+# Disable the flow entirely. Both /oauth/authorize and /oauth/token return
+# 404 when this is false.
+enabled = true
+
+# Code lifetime in seconds (max 3600). Codes are also single-use.
+code_ttl_seconds = 600
+
+# Require S256 (recommended). Set true to also accept plain verifiers.
+allow_plain_method = false
+
+# Optional callback host allow/deny lists. Each entry matches the host
+# exactly or as a parent domain (so "example.com" allows "app.example.com").
+# Leave allowed_domains empty to allow any host. denied_domains always wins.
+allowed_domains = []
+denied_domains = []
+
+# Externally-visible base URL of this deployment, used as the issuer in
+# /.well-known/oauth-authorization-server. Required when Hadrian is reached
+# via a different host than `server.host:server.port` (e.g. behind a reverse
+# proxy). Forwarded headers are NOT trusted on the unauthenticated discovery
+# endpoint, so this must be set explicitly.
+# public_url = "https://hadrian.example.com"
+```
+
+### Restricting which apps can use the flow
+
+For most installations the default — open allowlist, no denylist — is fine:
+the user must explicitly approve every app on a Hadrian-hosted page, and any
+key issued is bound to their account.
+
+If you need stricter controls, populate `allowed_domains`:
+
+```toml
+[auth.oauth_pkce]
+allowed_domains = ["yourcompany.dev", "trusted-partner.io"]
+```
+
+To disable the flow for a single deployment without changing TOML across the
+fleet, set `HADRIAN_AUTH__OAUTH_PKCE__ENABLED=false` in the environment.
+
+## Security notes
+
+- The PKCE verifier is the only secret in the flow. Generate it with a CSPRNG
+  and never log it.
+- `code_challenge_method = plain` is disabled by default. Don't enable it
+  unless you have a hard reason to support a client that can't compute SHA-256.
+- The redirect URL is validated server-side: HTTPS is required (HTTP is
+  permitted only for `localhost`/`127.0.0.1`/`::1`). Allow/deny lists are
+  applied to the host before any code is issued.
+- Authorization codes are single-use, expire (default 10 minutes), and are
+  bound to the original PKCE challenge. A code that is replayed or used with
+  the wrong verifier returns `400 invalid_grant`.
+- Every issued code is recorded in the audit log under
+  `api_key.oauth_authorize`, with the callback host and the requesting user.

@@ -29,10 +29,12 @@
 //! ```
 
 mod model_catalog_sync;
+mod oauth_code_cleanup;
 mod provider_health_check;
 mod vector_store_cleanup;
 
 pub use model_catalog_sync::start_model_catalog_sync_worker;
+pub use oauth_code_cleanup::start_oauth_code_cleanup_worker;
 pub use provider_health_check::{
     ProviderHealthChecker, ProviderHealthState, ProviderHealthStateRegistry,
 };
