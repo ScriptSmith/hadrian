@@ -4,11 +4,9 @@
 //! and protect against unhealthy providers. This module provides a
 //! registry that stores circuit breakers keyed by provider name.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, sync::Arc};
 
+use parking_lot::RwLock;
 use serde::Serialize;
 
 use super::circuit_breaker::{CircuitBreaker, CircuitState};
@@ -74,7 +72,7 @@ impl CircuitBreakerRegistry {
 
     /// Register a circuit breaker for a provider.
     pub fn register(&self, provider_name: &str, breaker: CircuitBreaker) {
-        let mut breakers = self.breakers.write().expect("RwLock poisoned");
+        let mut breakers = self.breakers.write();
         breakers.insert(provider_name.to_string(), Arc::new(breaker));
     }
 
@@ -93,14 +91,14 @@ impl CircuitBreakerRegistry {
 
         // Try read lock first
         {
-            let breakers = self.breakers.read().expect("RwLock poisoned");
+            let breakers = self.breakers.read();
             if let Some(breaker) = breakers.get(provider_name) {
                 return Some(breaker.clone());
             }
         }
 
         // Need to create - upgrade to write lock
-        let mut breakers = self.breakers.write().expect("RwLock poisoned");
+        let mut breakers = self.breakers.write();
         // Double-check after acquiring write lock
         if let Some(breaker) = breakers.get(provider_name) {
             return Some(breaker.clone());
@@ -121,13 +119,13 @@ impl CircuitBreakerRegistry {
 
     /// Get a circuit breaker by name if it exists.
     pub fn get(&self, provider_name: &str) -> Option<Arc<CircuitBreaker>> {
-        let breakers = self.breakers.read().expect("RwLock poisoned");
+        let breakers = self.breakers.read();
         breakers.get(provider_name).cloned()
     }
 
     /// Get the status of all circuit breakers.
     pub fn status(&self) -> Vec<CircuitBreakerStatus> {
-        let breakers = self.breakers.read().expect("RwLock poisoned");
+        let breakers = self.breakers.read();
         breakers
             .iter()
             .map(
@@ -142,7 +140,7 @@ impl CircuitBreakerRegistry {
 
     /// Get the status of a specific circuit breaker.
     pub fn status_for(&self, provider_name: &str) -> Option<CircuitBreakerStatus> {
-        let breakers = self.breakers.read().expect("RwLock poisoned");
+        let breakers = self.breakers.read();
         breakers
             .get(provider_name)
             .map(|breaker: &Arc<CircuitBreaker>| CircuitBreakerStatus {
