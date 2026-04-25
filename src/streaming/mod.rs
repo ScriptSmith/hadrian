@@ -276,7 +276,11 @@ fn inject_cost_into_sse_chunk(chunk: &[u8], cost_dollars: f64) -> Bytes {
     };
 
     let mut output = String::with_capacity(chunk_str.len() + 32);
-    for line in chunk_str.split('\n') {
+    for raw in chunk_str.split_inclusive('\n') {
+        let (line, terminator) = match raw.strip_suffix('\n') {
+            Some(without) => (without, "\n"),
+            None => (raw, ""),
+        };
         if let Some(json_str) = line.strip_prefix("data: ") {
             if let Ok(mut json) = serde_json::from_str::<Value>(json_str) {
                 // Try root-level usage (Chat Completions format)
@@ -308,13 +312,7 @@ fn inject_cost_into_sse_chunk(chunk: &[u8], cost_dollars: f64) -> Bytes {
         } else {
             output.push_str(line);
         }
-        output.push('\n');
-    }
-
-    // The split('\n') + push('\n') loop adds one extra trailing newline;
-    // remove it to match original chunk ending
-    if !chunk_str.ends_with('\n') {
-        output.pop();
+        output.push_str(terminator);
     }
 
     Bytes::from(output)
@@ -1022,6 +1020,25 @@ mod tests {
             }
             _ => panic!("Expected Usage chunk"),
         }
+    }
+
+    #[test]
+    fn test_inject_cost_preserves_double_newline_terminator() {
+        let chunk = b"data: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2}}\n\n";
+        let injected = inject_cost_into_sse_chunk(chunk, 0.0042);
+        let s = std::str::from_utf8(&injected).unwrap();
+        assert!(s.ends_with("\n\n"), "must preserve SSE event terminator");
+        assert!(!s.ends_with("\n\n\n"), "must not add extra newline");
+        assert!(s.contains("\"cost\":0.0042"));
+    }
+
+    #[test]
+    fn test_inject_cost_no_trailing_newline() {
+        let chunk = b"data: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2}}";
+        let injected = inject_cost_into_sse_chunk(chunk, 0.0042);
+        let s = std::str::from_utf8(&injected).unwrap();
+        assert!(!s.ends_with('\n'), "must preserve absent terminator");
+        assert!(s.contains("\"cost\":0.0042"));
     }
 
     #[test]
