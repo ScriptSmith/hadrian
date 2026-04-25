@@ -21,7 +21,6 @@ use convert::{
     convert_responses_tool_choice_to_vertex, convert_responses_tools_to_vertex, convert_stop,
     convert_tool_choice, convert_tools, convert_vertex_to_responses_response,
 };
-use google_cloud_token::TokenSourceProvider;
 #[cfg(test)]
 use stream::StreamState;
 pub use stream::{VertexToOpenAIStream, VertexToResponsesStream};
@@ -53,14 +52,6 @@ use crate::{
 
 const VERTEX_AI_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
-/// Buffer time before token expiry to trigger refresh (5 minutes).
-/// Ensures tokens are refreshed before they actually expire.
-const TOKEN_REFRESH_BUFFER_SECS: u64 = 300;
-
-/// Default token cache duration (1 hour).
-/// Most Google OAuth tokens have a 1-hour lifetime.
-const TOKEN_CACHE_DURATION_SECS: u64 = 3600;
-
 /// Authentication mode for the Vertex provider.
 #[derive(Clone)]
 enum AuthMode {
@@ -80,18 +71,16 @@ pub struct VertexProvider {
     auth_mode: AuthMode,
     publisher: String,
     base_url_override: Option<String>,
-    token_cache: Arc<RwLock<Option<CachedToken>>>,
+    /// Cached token-source provider. The underlying `DefaultTokenSourceProvider`
+    /// wraps a `ReuseTokenSource`, which honors the token's actual `expiry`
+    /// rather than a hardcoded duration — so we let it own all caching.
+    token_source: Arc<RwLock<Option<Arc<dyn google_cloud_token::TokenSourceProvider>>>>,
     timeout: Duration,
     retry: RetryConfig,
     circuit_breaker_config: CircuitBreakerConfig,
     circuit_breaker: Option<Arc<CircuitBreaker>>,
     streaming_buffer: StreamingBufferConfig,
     image_fetch_config: ImageFetchConfig,
-}
-
-struct CachedToken {
-    token: String,
-    expires_at: std::time::Instant,
 }
 
 impl VertexProvider {
@@ -132,7 +121,7 @@ impl VertexProvider {
             auth_mode,
             publisher: config.publisher.clone(),
             base_url_override: config.base_url.clone(),
-            token_cache: Arc::new(RwLock::new(None)),
+            token_source: Arc::new(RwLock::new(None)),
             timeout: Duration::from_secs(config.timeout_secs),
             retry: config.retry.clone(),
             circuit_breaker_config: config.circuit_breaker.clone(),
@@ -189,107 +178,90 @@ impl VertexProvider {
             AuthMode::OAuth { credentials, .. } => credentials,
         };
 
-        // Check cache first
-        {
-            let cache = self.token_cache.read().await;
-            if let Some(cached) = cache.as_ref() {
-                // Return cached token if not expired (with refresh buffer)
-                if cached.expires_at
-                    > std::time::Instant::now()
-                        + std::time::Duration::from_secs(TOKEN_REFRESH_BUFFER_SECS)
-                {
-                    return Ok(Some(cached.token.clone()));
+        // Reuse the cached `TokenSourceProvider` if we already created one. The
+        // provider's underlying `ReuseTokenSource` honors the token's actual
+        // `expiry`, so we don't need (and should not maintain) a parallel cache.
+        let provider = {
+            let guard = self.token_source.read().await;
+            guard.clone()
+        };
+        let provider = match provider {
+            Some(p) => p,
+            None => {
+                let mut guard = self.token_source.write().await;
+                if let Some(p) = guard.as_ref() {
+                    p.clone()
+                } else {
+                    let p: Arc<dyn google_cloud_token::TokenSourceProvider> =
+                        Arc::from(self.build_token_source(credentials).await?);
+                    *guard = Some(p.clone());
+                    p
                 }
-            }
-        }
-
-        // Get token based on credential type
-        let token = match credentials {
-            GcpCredentials::Default => {
-                // Use Application Default Credentials
-                let config =
-                    google_cloud_auth::project::Config::default().with_scopes(&[VERTEX_AI_SCOPE]);
-
-                let ts = google_cloud_auth::token::DefaultTokenSourceProvider::new(config)
-                    .await
-                    .map_err(|e| {
-                        ProviderError::Internal(format!("Failed to create token source: {}", e))
-                    })?;
-
-                ts.token_source()
-                    .token()
-                    .await
-                    .map_err(|e| ProviderError::Internal(format!("Failed to get token: {}", e)))?
-            }
-            GcpCredentials::ServiceAccount { key_path } => {
-                // Load service account key from file
-                self.get_token_from_service_account_file(Path::new(key_path))
-                    .await?
-            }
-            GcpCredentials::ServiceAccountJson { json } => {
-                // Parse service account key from JSON string
-                self.get_token_from_service_account_json(json).await?
             }
         };
 
-        // Cache token (assume standard expiry for Google tokens)
-        {
-            let mut cache = self.token_cache.write().await;
-            *cache = Some(CachedToken {
-                token: token.clone(),
-                expires_at: std::time::Instant::now()
-                    + std::time::Duration::from_secs(TOKEN_CACHE_DURATION_SECS),
-            });
-        }
+        let token = provider
+            .token_source()
+            .token()
+            .await
+            .map_err(|e| ProviderError::Internal(format!("Failed to get token: {}", e)))?;
 
         Ok(Some(token))
     }
 
-    /// Get token from a service account key file.
-    async fn get_token_from_service_account_file(
+    /// Build a `DefaultTokenSourceProvider` for the configured credentials.
+    async fn build_token_source(
         &self,
-        key_path: &Path,
-    ) -> Result<String, ProviderError> {
-        let key_json = tokio::fs::read_to_string(key_path).await.map_err(|e| {
-            ProviderError::Internal(format!(
-                "Failed to read service account key file '{}': {}",
-                key_path.display(),
-                e
-            ))
-        })?;
-
-        self.get_token_from_service_account_json(&key_json).await
-    }
-
-    /// Get token from a service account key JSON string.
-    async fn get_token_from_service_account_json(
-        &self,
-        json: &str,
-    ) -> Result<String, ProviderError> {
-        use google_cloud_auth::credentials::CredentialsFile;
-
-        let creds: CredentialsFile = serde_json::from_str(json).map_err(|e| {
-            ProviderError::Internal(format!("Failed to parse service account JSON: {}", e))
-        })?;
+        credentials: &GcpCredentials,
+    ) -> Result<Box<dyn google_cloud_token::TokenSourceProvider>, ProviderError> {
+        use google_cloud_auth::{credentials::CredentialsFile, token::DefaultTokenSourceProvider};
 
         let config = google_cloud_auth::project::Config::default().with_scopes(&[VERTEX_AI_SCOPE]);
 
-        let ts = google_cloud_auth::token::DefaultTokenSourceProvider::new_with_credentials(
-            config,
-            Box::new(creds),
-        )
-        .await
-        .map_err(|e| {
-            ProviderError::Internal(format!(
-                "Failed to create token source from service account: {}",
-                e
-            ))
-        })?;
-
-        ts.token_source()
-            .token()
-            .await
-            .map_err(|e| ProviderError::Internal(format!("Failed to get token: {}", e)))
+        match credentials {
+            GcpCredentials::Default => {
+                let ts = DefaultTokenSourceProvider::new(config).await.map_err(|e| {
+                    ProviderError::Internal(format!("Failed to create token source: {}", e))
+                })?;
+                Ok(Box::new(ts))
+            }
+            GcpCredentials::ServiceAccount { key_path } => {
+                let json = tokio::fs::read_to_string(Path::new(key_path))
+                    .await
+                    .map_err(|e| {
+                        ProviderError::Internal(format!(
+                            "Failed to read service account key file '{}': {}",
+                            key_path, e
+                        ))
+                    })?;
+                let creds: CredentialsFile = serde_json::from_str(&json).map_err(|e| {
+                    ProviderError::Internal(format!("Failed to parse service account JSON: {}", e))
+                })?;
+                let ts = DefaultTokenSourceProvider::new_with_credentials(config, Box::new(creds))
+                    .await
+                    .map_err(|e| {
+                        ProviderError::Internal(format!(
+                            "Failed to create token source from service account: {}",
+                            e
+                        ))
+                    })?;
+                Ok(Box::new(ts))
+            }
+            GcpCredentials::ServiceAccountJson { json } => {
+                let creds: CredentialsFile = serde_json::from_str(json).map_err(|e| {
+                    ProviderError::Internal(format!("Failed to parse service account JSON: {}", e))
+                })?;
+                let ts = DefaultTokenSourceProvider::new_with_credentials(config, Box::new(creds))
+                    .await
+                    .map_err(|e| {
+                        ProviderError::Internal(format!(
+                            "Failed to create token source from service account: {}",
+                            e
+                        ))
+                    })?;
+                Ok(Box::new(ts))
+            }
+        }
     }
 
     /// Build a request with appropriate authentication.
