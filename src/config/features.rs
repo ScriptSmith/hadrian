@@ -2126,6 +2126,8 @@ impl ImageFetchingConfig {
             max_size_bytes: self.max_size_mb * 1024 * 1024,
             timeout: std::time::Duration::from_secs(self.timeout_secs),
             allowed_content_types: self.allowed_content_types.clone(),
+            // Per-provider; Anthropic's constructor sets this on its own copy.
+            pass_through_https: false,
         }
     }
 }

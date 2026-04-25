@@ -100,6 +100,11 @@ impl AnthropicProvider {
     ) -> Self {
         let circuit_breaker = registry.get_or_create(provider_name, &config.circuit_breaker);
 
+        // Anthropic supports HTTPS image URLs natively, so don't waste cycles
+        // re-encoding them as base64 data URLs in the preprocess step.
+        let mut image_fetch_config = image_fetch_config;
+        image_fetch_config.pass_through_https = true;
+
         Self {
             api_key: config.api_key.clone(),
             base_url: config.base_url.trim_end_matches('/').to_string(),

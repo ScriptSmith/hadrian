@@ -31,6 +31,12 @@ pub struct ImageFetchConfig {
     pub timeout: Duration,
     /// Allowed content types (empty = allow all image types)
     pub allowed_content_types: Vec<String>,
+    /// Skip preprocessing for `https://` URLs (default: false). Set this for
+    /// providers that natively support HTTPS image URLs (e.g. Anthropic), so
+    /// we don't waste bandwidth fetching and re-encoding images the upstream
+    /// can pull itself. `http://` URLs are still preprocessed because most
+    /// providers reject plain HTTP.
+    pub pass_through_https: bool,
 }
 
 impl Default for ImageFetchConfig {
@@ -45,6 +51,7 @@ impl Default for ImageFetchConfig {
                 "image/gif".to_string(),
                 "image/webp".to_string(),
             ],
+            pass_through_https: false,
         }
     }
 }
@@ -377,6 +384,14 @@ async fn preprocess_content_for_images(
                 if let ContentPart::ImageUrl { image_url, .. } = part {
                     // Skip if already a data URL
                     if image_url.url.starts_with("data:") {
+                        continue;
+                    }
+
+                    // Providers like Anthropic accept HTTPS URLs directly;
+                    // fetching and re-encoding them is wasted work.
+                    if image_url.url.starts_with("https://")
+                        && config.is_some_and(|c| c.pass_through_https)
+                    {
                         continue;
                     }
 
