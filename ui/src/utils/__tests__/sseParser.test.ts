@@ -69,4 +69,37 @@ describe("SseParser", () => {
     const events = [...parser.feed("\n\n\n")];
     expect(events).toEqual([]);
   });
+
+  it("treats a CRLF split across chunks as a single separator", () => {
+    // Network chunking can land between the `\r` and `\n` of a CRLF pair.
+    // The parser must not treat the lone trailing `\r` as a CR terminator
+    // and the leading `\n` of the next chunk as a fresh blank line — that
+    // would emit a phantom blank-line dispatch and prematurely complete the
+    // in-flight event.
+    const parser = new SseParser();
+    // Chunk 1 ends with a lone `\r`; nothing should emit.
+    const first = [...parser.feed("data: alpha\r")];
+    expect(first).toEqual([]);
+    // Chunk 2 starts with `\n` — this should pair with the buffered `\r` to
+    // close the line, and then `\r\n\r\n` should dispatch the event exactly
+    // once.
+    const second = [...parser.feed("\ndata: beta\r\n\r\n")];
+    expect(second.map((e) => e.data)).toEqual(["alpha\nbeta"]);
+  });
+
+  it("handles a lone trailing CR followed by content on next feed", () => {
+    // If the next chunk starts with a non-`\n` character, the trailing `\r`
+    // must be treated as a CR-only line terminator (per the spec) once the
+    // disambiguating byte arrives. The buffered final `\r` becomes a CR
+    // terminator on flush so the trailing event still surfaces.
+    const parser = new SseParser();
+    const first = [...parser.feed("data: alpha\r")];
+    expect(first).toEqual([]);
+    const second = [...parser.feed("data: beta\r\r")];
+    // The terminating blank-line `\r` is still buffered (it's the last byte
+    // and could pair with a `\n` in the next chunk); flush surfaces it.
+    expect(second).toEqual([]);
+    const flushed = [...parser.flush()];
+    expect(flushed.map((e) => e.data)).toEqual(["alpha\nbeta"]);
+  });
 });

@@ -45,16 +45,28 @@ export class SseParser {
    */
   *feed(chunk: string): Generator<SseEvent> {
     this.buffer += chunk;
-    // Spec: events are separated by `\r\n`, `\r`, or `\n`. Use a regex
-    // that matches any of them.
-    let newlineIdx: number;
-    while ((newlineIdx = this.buffer.search(/\r\n|\r|\n/)) !== -1) {
-      const line = this.buffer.slice(0, newlineIdx);
-      const sepLen =
-        this.buffer.charAt(newlineIdx) === "\r" && this.buffer.charAt(newlineIdx + 1) === "\n"
-          ? 2
-          : 1;
-      this.buffer = this.buffer.slice(newlineIdx + sepLen);
+    // Spec: events are separated by `\r\n`, `\r`, or `\n`. We scan for any
+    // of those, but if the buffer ends on a lone `\r` we leave it in place
+    // until the next chunk arrives — otherwise a chunk boundary that splits
+    // a `\r\n` would be misread as `\r` followed by an empty `\n`-terminated
+    // line, which would emit a spurious blank-line dispatch on the next
+    // feed and prematurely complete an in-flight event.
+    while (true) {
+      const sepStart = this.buffer.search(/\r\n|\r|\n/);
+      if (sepStart === -1) break;
+      let sepLen: number;
+      if (this.buffer.charAt(sepStart) === "\r") {
+        if (sepStart === this.buffer.length - 1) {
+          // Lone trailing `\r` — could still pair with a `\n` in the next
+          // chunk. Defer until we see what follows.
+          break;
+        }
+        sepLen = this.buffer.charAt(sepStart + 1) === "\n" ? 2 : 1;
+      } else {
+        sepLen = 1;
+      }
+      const line = this.buffer.slice(0, sepStart);
+      this.buffer = this.buffer.slice(sepStart + sepLen);
 
       if (line === "") {
         // Blank line: dispatch the accumulated event, if any.
