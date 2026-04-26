@@ -44,13 +44,13 @@ async function bootstrap() {
             return false;
           }
         })
-        .map((r) => r.unregister()),
+        .map((r) => r.unregister())
     );
   }
 
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
       <App />
-    </StrictMode>,
+    </StrictMode>
   );
 }

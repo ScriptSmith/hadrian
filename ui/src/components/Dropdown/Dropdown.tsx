@@ -362,7 +362,15 @@ export function DropdownContent({
       document.removeEventListener("mousedown", handleClickOutside);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [open, setOpen, triggerRef, highlightedIndex, setHighlightedIndex, itemCount, setInputModality]);
+  }, [
+    open,
+    setOpen,
+    triggerRef,
+    highlightedIndex,
+    setHighlightedIndex,
+    itemCount,
+    setInputModality,
+  ]);
 
   if (!open) return null;
 
