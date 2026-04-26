@@ -777,6 +777,126 @@ fn get_services(state: &AppState) -> Result<&Services, AdminError> {
     state.services.as_ref().ok_or(AdminError::ServicesRequired)
 }
 
+/// Pre-fetch an API key and authorise the caller against the key's owner scope.
+///
+/// `/admin/v1/api-keys/{key_id}/usage/...` handlers used to pass `None` for
+/// org/team/project, so cross-tenant org-admins satisfied policies that key on
+/// tenant scope. This helper resolves the `ApiKeyOwner` to the matching
+/// `(org, team, project)` triple before calling `authz.require`.
+async fn usage_key_authz(
+    services: &Services,
+    authz: &AuthzContext,
+    key_id: Uuid,
+) -> Result<(), AdminError> {
+    let key = services
+        .api_keys
+        .get_by_id(key_id)
+        .await?
+        .ok_or_else(|| AdminError::NotFound(format!("API key '{key_id}' not found")))?;
+    let key_id_str = key_id.to_string();
+    match key.owner {
+        crate::models::ApiKeyOwner::Organization { org_id } => {
+            authz.require(
+                "usage",
+                "read",
+                Some(&key_id_str),
+                Some(&org_id.to_string()),
+                None,
+                None,
+            )?;
+        }
+        crate::models::ApiKeyOwner::Team { team_id } => {
+            let team = services
+                .teams
+                .get_by_id(team_id)
+                .await?
+                .ok_or_else(|| AdminError::NotFound(format!("Team '{team_id}' not found")))?;
+            authz.require(
+                "usage",
+                "read",
+                Some(&key_id_str),
+                Some(&team.org_id.to_string()),
+                Some(&team_id.to_string()),
+                None,
+            )?;
+        }
+        crate::models::ApiKeyOwner::Project { project_id } => {
+            let project = services
+                .projects
+                .get_by_id(project_id)
+                .await?
+                .ok_or_else(|| {
+                    AdminError::NotFound(format!("Project '{project_id}' not found"))
+                })?;
+            authz.require(
+                "usage",
+                "read",
+                Some(&key_id_str),
+                Some(&project.org_id.to_string()),
+                None,
+                Some(&project_id.to_string()),
+            )?;
+        }
+        crate::models::ApiKeyOwner::User { .. } => {
+            authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
+        }
+        crate::models::ApiKeyOwner::ServiceAccount { service_account_id } => {
+            let sa = services
+                .service_accounts
+                .get_by_id(service_account_id)
+                .await?
+                .ok_or_else(|| {
+                    AdminError::NotFound(format!(
+                        "Service account '{service_account_id}' not found"
+                    ))
+                })?;
+            authz.require(
+                "usage",
+                "read",
+                Some(&key_id_str),
+                Some(&sa.org_id.to_string()),
+                None,
+                None,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Pre-fetch a user and authorise the caller against the user's organization scope.
+///
+/// Users in this codebase only ever belong to one organization, so the first
+/// (and only) org membership is treated as the user's authoritative scope.
+/// A user with no org membership is treated as platform-scoped (no org filter).
+async fn usage_user_authz(
+    services: &Services,
+    authz: &AuthzContext,
+    user_id: Uuid,
+) -> Result<(), AdminError> {
+    let _user = services
+        .users
+        .get_by_id(user_id)
+        .await?
+        .ok_or_else(|| AdminError::NotFound(format!("User not found: {user_id}")))?;
+    let user_id_str = user_id.to_string();
+    let org_id = services
+        .users
+        .get_org_memberships_for_user(user_id)
+        .await?
+        .into_iter()
+        .next()
+        .map(|m| m.org_id.to_string());
+    authz.require(
+        "usage",
+        "read",
+        Some(&user_id_str),
+        org_id.as_deref(),
+        None,
+        None,
+    )?;
+    Ok(())
+}
+
 /// Get usage summary for an API key
 #[cfg_attr(feature = "utoipa", utoipa::path(
     get,
@@ -798,9 +918,8 @@ pub async fn get_summary(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<UsageSummaryResponse>, AdminError> {
-    let key_id_str = key_id.to_string();
-    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_key_authz(services, &authz, key_id).await?;
 
     let range = query.parse_date_range()?;
     let summary = services.usage.get_summary(key_id, range).await?;
@@ -829,9 +948,8 @@ pub async fn get_by_date(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<DailySpendResponse>>, AdminError> {
-    let key_id_str = key_id.to_string();
-    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_key_authz(services, &authz, key_id).await?;
 
     let range = query.parse_date_range()?;
     let daily_spend = services.usage.get_by_date(key_id, range).await?;
@@ -860,9 +978,8 @@ pub async fn get_by_model(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<ModelSpendResponse>>, AdminError> {
-    let key_id_str = key_id.to_string();
-    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_key_authz(services, &authz, key_id).await?;
 
     let range = query.parse_date_range()?;
     let model_spend = services.usage.get_by_model(key_id, range).await?;
@@ -891,9 +1008,8 @@ pub async fn get_by_referer(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<RefererSpendResponse>>, AdminError> {
-    let key_id_str = key_id.to_string();
-    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_key_authz(services, &authz, key_id).await?;
 
     let range = query.parse_date_range()?;
     let referer_spend = services.usage.get_by_referer(key_id, range).await?;
@@ -925,9 +1041,8 @@ pub async fn get_forecast(
     Query(query): Query<ForecastQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<CostForecastResponse>, AdminError> {
-    let key_id_str = key_id.to_string();
-    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_key_authz(services, &authz, key_id).await?;
 
     let forecast = services
         .usage
@@ -1468,16 +1583,8 @@ pub async fn get_user_summary(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<UsageSummaryResponse>, AdminError> {
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
-
-    // Verify user exists
-    let _ = services
-        .users
-        .get_by_id(user_id)
-        .await?
-        .ok_or_else(|| AdminError::NotFound(format!("User not found: {user_id}")))?;
+    usage_user_authz(services, &authz, user_id).await?;
 
     let range = query.parse_date_range()?;
     let summary = services.usage.get_summary_by_user(user_id, range).await?;
@@ -1506,16 +1613,8 @@ pub async fn get_user_by_date(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<DailySpendResponse>>, AdminError> {
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
-
-    // Verify user exists
-    let _ = services
-        .users
-        .get_by_id(user_id)
-        .await?
-        .ok_or_else(|| AdminError::NotFound(format!("User not found: {user_id}")))?;
+    usage_user_authz(services, &authz, user_id).await?;
 
     let range = query.parse_date_range()?;
     let daily_spend = services.usage.get_by_date_by_user(user_id, range).await?;
@@ -1544,16 +1643,8 @@ pub async fn get_user_by_model(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<ModelSpendResponse>>, AdminError> {
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
-
-    // Verify user exists
-    let _ = services
-        .users
-        .get_by_id(user_id)
-        .await?
-        .ok_or_else(|| AdminError::NotFound(format!("User not found: {user_id}")))?;
+    usage_user_authz(services, &authz, user_id).await?;
 
     let range = query.parse_date_range()?;
     let model_spend = services.usage.get_by_model_by_user(user_id, range).await?;
@@ -1585,16 +1676,8 @@ pub async fn get_user_forecast(
     Query(query): Query<ForecastQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<CostForecastResponse>, AdminError> {
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
-
-    // Verify user exists
-    let _ = services
-        .users
-        .get_by_id(user_id)
-        .await?
-        .ok_or_else(|| AdminError::NotFound(format!("User not found: {user_id}")))?;
+    usage_user_authz(services, &authz, user_id).await?;
 
     let forecast = services
         .usage
@@ -2014,9 +2097,8 @@ pub async fn get_me_summary(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_user_authz(services, &authz, user_id).await?;
     let range = query.parse_date_range()?;
     let summary = services.usage.get_summary_by_user(user_id, range).await?;
     Ok(Json(summary.into()))
@@ -2043,9 +2125,8 @@ pub async fn get_me_by_date(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_user_authz(services, &authz, user_id).await?;
     let range = query.parse_date_range()?;
     let daily_spend = services.usage.get_by_date_by_user(user_id, range).await?;
     Ok(Json(daily_spend.into_iter().map(|s| s.into()).collect()))
@@ -2072,9 +2153,8 @@ pub async fn get_me_by_model(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_user_authz(services, &authz, user_id).await?;
     let range = query.parse_date_range()?;
     let model_spend = services.usage.get_by_model_by_user(user_id, range).await?;
     Ok(Json(model_spend.into_iter().map(|s| s.into()).collect()))
@@ -2101,9 +2181,8 @@ pub async fn get_by_provider(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<ProviderSpendResponse>>, AdminError> {
-    let key_id_str = key_id.to_string();
-    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_key_authz(services, &authz, key_id).await?;
     let range = query.parse_date_range()?;
     let provider_spend = services.usage.get_by_provider(key_id, range).await?;
     Ok(Json(provider_spend.into_iter().map(|s| s.into()).collect()))
@@ -2179,14 +2258,8 @@ pub async fn get_user_by_provider(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<ProviderSpendResponse>>, AdminError> {
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
-    let _ = services
-        .users
-        .get_by_id(user_id)
-        .await?
-        .ok_or_else(|| AdminError::NotFound(format!("User not found: {user_id}")))?;
+    usage_user_authz(services, &authz, user_id).await?;
     let range = query.parse_date_range()?;
     let provider_spend = services
         .usage
@@ -2216,9 +2289,8 @@ pub async fn get_me_by_provider(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_user_authz(services, &authz, user_id).await?;
     let range = query.parse_date_range()?;
     let provider_spend = services
         .usage
@@ -2246,9 +2318,8 @@ pub async fn get_by_date_model(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<DailyModelSpendResponse>>, AdminError> {
-    let key_id_str = key_id.to_string();
-    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_key_authz(services, &authz, key_id).await?;
     let range = query.parse_date_range()?;
     let data = services.usage.get_by_date_model(key_id, range).await?;
     Ok(Json(data.into_iter().map(|s| s.into()).collect()))
@@ -2351,14 +2422,8 @@ pub async fn get_user_by_date_model(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<DailyModelSpendResponse>>, AdminError> {
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
-    let _ = services
-        .users
-        .get_by_id(user_id)
-        .await?
-        .ok_or_else(|| AdminError::NotFound(format!("User not found: {user_id}")))?;
+    usage_user_authz(services, &authz, user_id).await?;
     let range = query.parse_date_range()?;
     let data = services
         .usage
@@ -2419,9 +2484,8 @@ pub async fn get_me_by_date_model(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_user_authz(services, &authz, user_id).await?;
     let range = query.parse_date_range()?;
     let data = services
         .usage
@@ -2449,9 +2513,8 @@ pub async fn get_by_date_provider(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<DailyProviderSpendResponse>>, AdminError> {
-    let key_id_str = key_id.to_string();
-    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_key_authz(services, &authz, key_id).await?;
     let range = query.parse_date_range()?;
     let data = services.usage.get_by_date_provider(key_id, range).await?;
     Ok(Json(data.into_iter().map(|s| s.into()).collect()))
@@ -2554,14 +2617,8 @@ pub async fn get_user_by_date_provider(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<DailyProviderSpendResponse>>, AdminError> {
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
-    let _ = services
-        .users
-        .get_by_id(user_id)
-        .await?
-        .ok_or_else(|| AdminError::NotFound(format!("User not found: {user_id}")))?;
+    usage_user_authz(services, &authz, user_id).await?;
     let range = query.parse_date_range()?;
     let data = services
         .usage
@@ -2622,9 +2679,8 @@ pub async fn get_me_by_date_provider(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_user_authz(services, &authz, user_id).await?;
     let range = query.parse_date_range()?;
     let data = services
         .usage
@@ -2652,9 +2708,8 @@ pub async fn get_by_pricing_source(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<PricingSourceSpendResponse>>, AdminError> {
-    let key_id_str = key_id.to_string();
-    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_key_authz(services, &authz, key_id).await?;
     let range = query.parse_date_range()?;
     let data = services.usage.get_by_pricing_source(key_id, range).await?;
     Ok(Json(data.into_iter().map(|s| s.into()).collect()))
@@ -2757,14 +2812,8 @@ pub async fn get_user_by_pricing_source(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<PricingSourceSpendResponse>>, AdminError> {
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
-    let _ = services
-        .users
-        .get_by_id(user_id)
-        .await?
-        .ok_or_else(|| AdminError::NotFound(format!("User not found: {user_id}")))?;
+    usage_user_authz(services, &authz, user_id).await?;
     let range = query.parse_date_range()?;
     let data = services
         .usage
@@ -2825,9 +2874,8 @@ pub async fn get_me_by_pricing_source(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_user_authz(services, &authz, user_id).await?;
     let range = query.parse_date_range()?;
     let data = services
         .usage
@@ -2855,9 +2903,8 @@ pub async fn get_by_date_pricing_source(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<DailyPricingSourceSpendResponse>>, AdminError> {
-    let key_id_str = key_id.to_string();
-    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_key_authz(services, &authz, key_id).await?;
     let range = query.parse_date_range()?;
     let data = services
         .usage
@@ -2963,14 +3010,8 @@ pub async fn get_user_by_date_pricing_source(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<DailyPricingSourceSpendResponse>>, AdminError> {
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
-    let _ = services
-        .users
-        .get_by_id(user_id)
-        .await?
-        .ok_or_else(|| AdminError::NotFound(format!("User not found: {user_id}")))?;
+    usage_user_authz(services, &authz, user_id).await?;
     let range = query.parse_date_range()?;
     let data = services
         .usage
@@ -3031,9 +3072,8 @@ pub async fn get_me_by_date_pricing_source(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_user_authz(services, &authz, user_id).await?;
     let range = query.parse_date_range()?;
     let data = services
         .usage
@@ -4135,9 +4175,8 @@ pub async fn list_me_logs(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_user_authz(services, &authz, user_id).await?;
 
     let limit = params.limit.unwrap_or(100).min(1000);
     if let Some(ref dir) = params.direction
@@ -4330,9 +4369,8 @@ pub async fn export_me_logs(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    let user_id_str = user_id.to_string();
-    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
+    usage_user_authz(services, &authz, user_id).await?;
 
     let (params, format) = export_query.into_params();
     let mut query = params.into_export_query();
