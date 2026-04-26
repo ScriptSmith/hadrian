@@ -896,6 +896,10 @@ mod tests {
             circuit_breakers: CircuitBreakerRegistry::new(),
             provider_health: crate::jobs::ProviderHealthStateRegistry::new(),
             task_tracker: tokio_util::task::TaskTracker::new(),
+            usage_drain: {
+                let tracker = tokio_util::task::TaskTracker::new();
+                crate::streaming::UsageDrainHandle::spawn(&tracker, 16)
+            },
             #[cfg(feature = "sso")]
             oidc_registry: None,
             #[cfg(feature = "saml")]

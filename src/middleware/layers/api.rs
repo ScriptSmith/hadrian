@@ -2264,6 +2264,10 @@ mod tests {
             circuit_breakers: crate::providers::CircuitBreakerRegistry::new(),
             provider_health: crate::jobs::ProviderHealthStateRegistry::new(),
             task_tracker: TaskTracker::new(),
+            usage_drain: {
+                let tracker = TaskTracker::new();
+                crate::streaming::UsageDrainHandle::spawn(&tracker, 16)
+            },
             #[cfg(feature = "sso")]
             oidc_registry: None,
             #[cfg(feature = "saml")]
@@ -2318,6 +2322,10 @@ mod tests {
             circuit_breakers: crate::providers::CircuitBreakerRegistry::new(),
             provider_health: crate::jobs::ProviderHealthStateRegistry::new(),
             task_tracker: TaskTracker::new(),
+            usage_drain: {
+                let tracker = TaskTracker::new();
+                crate::streaming::UsageDrainHandle::spawn(&tracker, 16)
+            },
             #[cfg(feature = "sso")]
             oidc_registry: None,
             #[cfg(feature = "saml")]

@@ -1023,6 +1023,8 @@ pub async fn api_v1_chat_completions(
             usage_entry,
             #[cfg(feature = "server")]
             task_tracker: Some(&state.task_tracker),
+            #[cfg(feature = "server")]
+            usage_drain: Some(&state.usage_drain),
             max_response_body_bytes: state.config.server.max_response_body_bytes,
             streaming_idle_timeout_secs: state.config.server.streaming_idle_timeout_secs,
             validation_config: &state.config.observability.response_validation,
@@ -1691,6 +1693,8 @@ pub async fn api_v1_responses(
             usage_entry,
             #[cfg(feature = "server")]
             task_tracker: Some(&state.task_tracker),
+            #[cfg(feature = "server")]
+            usage_drain: Some(&state.usage_drain),
             max_response_body_bytes: state.config.server.max_response_body_bytes,
             streaming_idle_timeout_secs: state.config.server.streaming_idle_timeout_secs,
             validation_config: &state.config.observability.response_validation,
@@ -2295,6 +2299,8 @@ pub async fn api_v1_completions(
             usage_entry,
             #[cfg(feature = "server")]
             task_tracker: Some(&state.task_tracker),
+            #[cfg(feature = "server")]
+            usage_drain: Some(&state.usage_drain),
             max_response_body_bytes: state.config.server.max_response_body_bytes,
             streaming_idle_timeout_secs: state.config.server.streaming_idle_timeout_secs,
             validation_config: &state.config.observability.response_validation,

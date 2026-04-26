@@ -294,6 +294,8 @@ pub async fn api_v1_embeddings(
             usage_entry: None,
             #[cfg(feature = "server")]
             task_tracker: Some(&state.task_tracker),
+            #[cfg(feature = "server")]
+            usage_drain: Some(&state.usage_drain),
             max_response_body_bytes: state.config.server.max_response_body_bytes,
             streaming_idle_timeout_secs: 0, // Embeddings don't stream
             validation_config: &state.config.observability.response_validation,

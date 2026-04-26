@@ -124,6 +124,10 @@ pub struct CostInjectionParams<'a> {
     pub usage_entry: Option<crate::models::UsageLogEntry>,
     #[cfg(feature = "server")]
     pub task_tracker: Option<&'a TaskTracker>,
+    /// Handle to the usage-drain channel; used by `UsageTrackingStream` to
+    /// log partial usage from `Drop` without spawning a task there directly.
+    #[cfg(feature = "server")]
+    pub usage_drain: Option<&'a crate::streaming::UsageDrainHandle>,
     pub max_response_body_bytes: usize,
     /// Idle timeout for streaming responses in seconds.
     /// If a streaming response doesn't receive a chunk within this timeout,
@@ -570,6 +574,8 @@ async fn build_response(
 pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Response {
     #[cfg(feature = "server")]
     let task_tracker = params.task_tracker;
+    #[cfg(feature = "server")]
+    let usage_drain = params.usage_drain;
     let CostInjectionParams {
         response,
         provider,
@@ -617,7 +623,9 @@ pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Respo
         #[cfg(feature = "server")]
         {
             // For streaming responses, wrap the body to track tokens as they arrive
-            if let (Some(db_pool), Some(entry), Some(tracker)) = (db, usage_entry, task_tracker) {
+            if let (Some(db_pool), Some(entry), Some(tracker), Some(drain)) =
+                (db, usage_entry, task_tracker, usage_drain)
+            {
                 use futures_util::StreamExt;
 
                 let (parts, body) = response.into_parts();
@@ -669,6 +677,7 @@ pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Respo
                     provider.to_string(),
                     model.to_string(),
                     tracker.clone(),
+                    drain.clone(),
                 );
 
                 let new_body = axum::body::Body::from_stream(tracking_stream);

@@ -12,11 +12,73 @@ use std::{
 use bytes::Bytes;
 use futures_util::stream::Stream;
 use serde_json::Value;
+#[cfg(feature = "server")]
+use tokio::sync::mpsc;
 use tokio::time::Sleep;
 #[cfg(feature = "server")]
 use tokio_util::task::TaskTracker;
 
 use crate::{db::DbPool, models::UsageLogEntry, observability::metrics, pricing::PricingConfig};
+
+/// Default capacity for the usage-drain channel.
+///
+/// Each pending job holds two `Arc`s, so memory pressure is small. The cap is
+/// here to bound the worst case if the drainer falls behind — under normal
+/// operation it stays empty.
+#[cfg(feature = "server")]
+pub const USAGE_DRAIN_CAPACITY: usize = 4096;
+
+/// A handle to the usage-drain background task.
+///
+/// `UsageTrackingStream::Drop` runs synchronously and is not guaranteed to be
+/// called from within a Tokio runtime context (clients can disconnect on a
+/// thread that's tearing down, or the future can be cancelled in
+/// `poll_cancel`). Spawning a task directly from `Drop` therefore risks a
+/// `there is no reactor running` panic and also unbounded fan-out under heavy
+/// disconnect storms.
+///
+/// Instead, drops push a job into a bounded mpsc channel; a single drainer
+/// task spawned at startup (owned by the existing `TaskTracker` so graceful
+/// shutdown awaits it) pulls jobs and runs `UsageLogger::log_usage` from
+/// inside the runtime where spawning is safe.
+#[cfg(feature = "server")]
+#[derive(Clone)]
+pub struct UsageDrainHandle {
+    tx: mpsc::Sender<UsageDrainJob>,
+}
+
+#[cfg(feature = "server")]
+struct UsageDrainJob {
+    logger: Arc<UsageLogger>,
+    tokens: Arc<TokenAccumulator>,
+}
+
+#[cfg(feature = "server")]
+impl UsageDrainHandle {
+    /// Spawn the drainer task and return a clonable handle for sending jobs.
+    pub fn spawn(task_tracker: &TaskTracker, capacity: usize) -> Self {
+        let (tx, mut rx) = mpsc::channel::<UsageDrainJob>(capacity);
+        task_tracker.spawn(async move {
+            while let Some(job) = rx.recv().await {
+                job.logger.log_usage(&job.tokens).await;
+            }
+            tracing::debug!("Usage drain channel closed; drainer exiting");
+        });
+        Self { tx }
+    }
+
+    /// Sync-send a usage log job. Safe to call from any thread/context,
+    /// including `Drop`. Drops the job (with a warning) if the channel is
+    /// full or closed — this is preferable to panicking from a destructor.
+    fn try_log(&self, logger: Arc<UsageLogger>, tokens: Arc<TokenAccumulator>) {
+        if let Err(err) = self.tx.try_send(UsageDrainJob { logger, tokens }) {
+            tracing::warn!(
+                error = %err,
+                "Usage drain channel rejected job; partial usage will not be recorded"
+            );
+        }
+    }
+}
 
 /// Sentinel value indicating an optional field is not set
 const NONE_SENTINEL: i64 = i64::MIN;
@@ -458,7 +520,7 @@ pub struct UsageTrackingStream<S> {
     usage_logger: Arc<UsageLogger>,
     stream_ended: bool,
     #[cfg(feature = "server")]
-    task_tracker: TaskTracker,
+    usage_drain: UsageDrainHandle,
     /// Streaming metrics tracking
     streaming_metrics: Arc<StreamingMetrics>,
 }
@@ -738,6 +800,7 @@ where
         provider: String,
         model: String,
         #[cfg(feature = "server")] task_tracker: TaskTracker,
+        #[cfg(feature = "server")] usage_drain: UsageDrainHandle,
     ) -> Self {
         let logger = Arc::new(UsageLogger::new(
             db,
@@ -755,7 +818,7 @@ where
             usage_logger: logger,
             stream_ended: false,
             #[cfg(feature = "server")]
-            task_tracker: task_tracker.clone(),
+            usage_drain,
             streaming_metrics: Arc::new(StreamingMetrics::new(provider, model)),
         }
     }
@@ -816,18 +879,12 @@ where
                 // Stream ended normally - log usage and report metrics
                 if !self.stream_ended {
                     self.stream_ended = true;
-                    let logger = self.usage_logger.clone();
-                    let tokens = self.accumulated_tokens.clone();
-                    let streaming_metrics = self.streaming_metrics.clone();
-
-                    // Report streaming metrics (completed successfully)
-                    streaming_metrics.report("completed");
-
-                    // Use task_tracker to ensure usage logging completes during graceful shutdown
+                    self.streaming_metrics.report("completed");
                     #[cfg(feature = "server")]
-                    self.task_tracker.spawn(async move {
-                        logger.log_usage(&tokens).await;
-                    });
+                    self.usage_drain.try_log(
+                        self.usage_logger.clone(),
+                        self.accumulated_tokens.clone(),
+                    );
                 }
 
                 Poll::Ready(None)
@@ -836,19 +893,15 @@ where
                 // Error in stream - still try to log what we have
                 if !self.stream_ended {
                     self.stream_ended = true;
-                    let logger = self.usage_logger.clone();
-                    let tokens = self.accumulated_tokens.clone();
-                    let streaming_metrics = self.streaming_metrics.clone();
-
-                    // Report streaming metrics (ended with error)
-                    streaming_metrics.report("error");
-
-                    // Use task_tracker to ensure usage logging completes during graceful shutdown
+                    self.streaming_metrics.report("error");
                     #[cfg(feature = "server")]
-                    self.task_tracker.spawn(async move {
+                    {
                         tracing::warn!("Stream ended with error, logging partial usage");
-                        logger.log_usage(&tokens).await;
-                    });
+                        self.usage_drain.try_log(
+                            self.usage_logger.clone(),
+                            self.accumulated_tokens.clone(),
+                        );
+                    }
                 }
 
                 Poll::Ready(Some(Err(e)))
@@ -868,26 +921,21 @@ impl<S> Drop for UsageTrackingStream<S> {
         //
         // This is important for budget enforcement - without this, an attacker
         // could consume tokens without them being recorded by dropping connections.
+        //
+        // Drop runs synchronously and is not guaranteed to be inside a Tokio
+        // runtime context, so we hand the job to the bounded usage-drain
+        // channel instead of spawning a task here directly.
         if !self.stream_ended {
             self.stream_ended = true;
-
-            let logger = self.usage_logger.clone();
-            let tokens = self.accumulated_tokens.clone();
-            let streaming_metrics = self.streaming_metrics.clone();
-
-            // Report streaming metrics (dropped/cancelled)
-            streaming_metrics.report("dropped");
-
-            // Spawn async task to log usage
-            // Note: We can't await here since Drop is sync, so we spawn a task.
-            // The task_tracker ensures this completes during graceful shutdown.
+            self.streaming_metrics.report("dropped");
             #[cfg(feature = "server")]
-            self.task_tracker.spawn(async move {
+            {
                 tracing::warn!(
                     "Stream dropped without completing - logging partial usage for budget accuracy"
                 );
-                logger.log_usage(&tokens).await;
-            });
+                self.usage_drain
+                    .try_log(self.usage_logger.clone(), self.accumulated_tokens.clone());
+            }
         }
     }
 }

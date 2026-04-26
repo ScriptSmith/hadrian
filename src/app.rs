@@ -38,6 +38,8 @@ use crate::{
     usage_buffer,
 };
 #[cfg(feature = "server")]
+use crate::streaming;
+#[cfg(feature = "server")]
 use crate::{middleware, routes};
 
 /// Embedded UI assets from ui/dist directory.
@@ -320,6 +322,11 @@ pub struct AppState {
     /// Ensures all spawned tasks complete during graceful shutdown.
     #[cfg(feature = "server")]
     pub task_tracker: TaskTracker,
+    /// Bounded channel + drainer for partial-usage logging from
+    /// `UsageTrackingStream::Drop`, which can fire outside a runtime context
+    /// (so it cannot safely spawn tasks of its own).
+    #[cfg(feature = "server")]
+    pub usage_drain: streaming::UsageDrainHandle,
     /// Registry of per-organization OIDC authenticators.
     /// Loaded from org_sso_configs table at startup for multi-tenant SSO.
     #[cfg(feature = "sso")]
@@ -953,6 +960,11 @@ impl AppState {
         // Create the task tracker for background tasks
         #[cfg(feature = "server")]
         let task_tracker = TaskTracker::new();
+        // Bounded usage-drain channel + drainer task. Owned by the same
+        // tracker so graceful shutdown waits for it to finish flushing.
+        #[cfg(feature = "server")]
+        let usage_drain =
+            streaming::UsageDrainHandle::spawn(&task_tracker, streaming::USAGE_DRAIN_CAPACITY);
 
         // Initialize semantic cache if configured
         #[cfg(feature = "server")]
@@ -1129,6 +1141,8 @@ impl AppState {
             provider_health: jobs::ProviderHealthStateRegistry::new(),
             #[cfg(feature = "server")]
             task_tracker,
+            #[cfg(feature = "server")]
+            usage_drain,
             #[cfg(feature = "sso")]
             oidc_registry,
             #[cfg(feature = "saml")]
