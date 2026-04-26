@@ -111,11 +111,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM debian:trixie-slim
 
 # Install runtime dependencies
-# Includes SAML libraries for XML signature verification
+# Includes SAML libraries for XML signature verification.
+# `curl` was previously required for the HEALTHCHECK; the binary now ships
+# with a `hadrian healthcheck` subcommand so curl is no longer needed.
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
-    curl \
     libxml2 \
     libxslt1.1 \
     libxmlsec1 \
@@ -157,8 +158,9 @@ EOF
 # Expose port
 EXPOSE 8080
 
-# Health check
+# Health check (uses the built-in `hadrian healthcheck` subcommand so the
+# runtime image doesn't need to ship `curl`).
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health/live || exit 1
+    CMD ["/app/hadrian", "--config", "/app/config/hadrian.toml", "healthcheck"]
 
 CMD ["/app/hadrian", "--config", "/app/config/hadrian.toml"]

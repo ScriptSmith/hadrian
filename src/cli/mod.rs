@@ -1,5 +1,7 @@
 mod bootstrap;
 mod features;
+#[cfg(feature = "server")]
+mod healthcheck;
 mod init;
 mod migrate;
 mod openapi;
@@ -99,6 +101,21 @@ enum Command {
     },
     /// Show enabled compile-time features
     Features,
+    /// Probe the gateway's `/health/live` endpoint and exit with status.
+    ///
+    /// Used by the Docker `HEALTHCHECK` so the runtime image doesn't need to
+    /// install `curl`. Exits 0 on success, 1 on failure. Reads the listen
+    /// host/port from the same config the server uses (defaults to
+    /// `127.0.0.1` / configured port).
+    #[cfg(feature = "server")]
+    Healthcheck {
+        /// Override the URL to probe (e.g. `http://localhost:8080/health/live`).
+        #[arg(long)]
+        url: Option<String>,
+        /// Per-request timeout in seconds.
+        #[arg(long, default_value = "3")]
+        timeout_secs: u64,
+    },
 }
 
 /// Dispatch to the appropriate subcommand handler.
@@ -160,6 +177,10 @@ pub async fn dispatch(args: Args) {
         }
         Some(Command::Features) => {
             features::run_features();
+        }
+        #[cfg(feature = "server")]
+        Some(Command::Healthcheck { url, timeout_secs }) => {
+            healthcheck::run_healthcheck(args.config.as_deref(), url, timeout_secs).await;
         }
         Some(Command::Serve) | None => {
             server::run_server(args.config.as_deref(), args.no_browser).await;
