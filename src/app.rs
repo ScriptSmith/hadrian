@@ -2010,12 +2010,14 @@ pub fn build_app(config: &config::GatewayConfig, state: AppState) -> Router {
             }
 
             // Add SSO discovery endpoint if database is configured (for per-org SSO)
-            // This is needed for both OIDC and SAML per-org configurations
+            // This is needed for both OIDC and SAML per-org configurations.
+            // Use the dedicated discover throttle (tighter than the global IP
+            // rate limit) to deter SSO-domain enumeration.
             if !config.database.is_none() {
                 let discover_route = get(routes::auth_routes::discover).route_layer(
                     axum::middleware::from_fn_with_state(
                         state.clone(),
-                        middleware::rate_limit_middleware,
+                        middleware::discover_rate_limit_middleware,
                     ),
                 );
                 app = app.route("/auth/discover", discover_route);

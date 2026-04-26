@@ -336,6 +336,46 @@ pub fn extract_client_ip_from_parts(
     connecting_ip
 }
 
+/// Tighter per-IP throttle for `/auth/discover`.
+///
+/// Discover takes an email and tells the caller whether the domain has SSO
+/// configured (and which IdP), which makes it a fast oracle for enumerating
+/// customer email domains. The default IP rate limit (60/min) is generous
+/// for normal API traffic but lets a single host probe ~86k domains per
+/// day. Bound discovery to roughly one domain per second per source IP,
+/// using a separate `discover-minute` window so it doesn't share counters
+/// with other IP-rate-limited endpoints.
+const DISCOVER_REQUESTS_PER_MINUTE: u32 = 10;
+
+#[allow(clippy::question_mark)]
+pub async fn discover_rate_limit_middleware(
+    State(state): State<AppState>,
+    req: Request,
+    next: Next,
+) -> Result<Response, RateLimitError> {
+    let cache = match &state.cache {
+        Some(c) => c,
+        None => return Ok(next.run(req).await),
+    };
+
+    let client_ip = extract_client_ip(&req, &state.config.server.trusted_proxies);
+    let client_ip_str = client_ip
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let result = check_ip_rate_limit(
+        cache,
+        &client_ip_str,
+        "discover-minute",
+        DISCOVER_REQUESTS_PER_MINUTE,
+        Duration::from_secs(60),
+    )
+    .await?;
+
+    let response = next.run(req).await;
+    Ok(add_rate_limit_headers(response, &result))
+}
+
 async fn check_ip_rate_limit(
     cache: &std::sync::Arc<dyn Cache>,
     client_ip: &str,

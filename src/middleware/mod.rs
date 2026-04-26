@@ -44,7 +44,7 @@ pub use layers::{
     admin::admin_auth_middleware,
     api::api_middleware,
     authz::{AuthzResponse, api_authz_middleware, authz_middleware, permissive_authz_middleware},
-    rate_limit::rate_limit_middleware,
+    rate_limit::{discover_rate_limit_middleware, rate_limit_middleware},
     request_id::request_id_middleware,
     security_headers::security_headers_middleware,
 };
