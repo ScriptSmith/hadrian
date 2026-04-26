@@ -284,8 +284,10 @@ export function useChat({
   projectIdRef.current = projectId;
   const conversationIdRef = useRef(conversationId);
   conversationIdRef.current = conversationId;
-  const streamingStore = useStreamingStore();
-  const debugStore = useDebugStore();
+  // Pull actions through getState() — subscribing to the entire store would
+  // re-render this hook on every streaming/debug update.
+  const streamingStore = useStreamingStore.getState();
+  const debugStore = useDebugStore.getState();
   const modelResponses = useAllStreams();
   const isStreaming = useIsStreaming();
 
