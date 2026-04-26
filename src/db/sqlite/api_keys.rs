@@ -783,6 +783,22 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
         Ok(row.col::<i64>("count"))
     }
 
+    async fn count_total_active(&self) -> DbResult<i64> {
+        let now = truncate_to_millis(Utc::now());
+        let row = query(
+            r#"
+            SELECT COUNT(*) as count
+            FROM api_keys
+            WHERE revoked_at IS NULL
+              AND (expires_at IS NULL OR expires_at >= ?)
+            "#,
+        )
+        .bind(now)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.col::<i64>("count"))
+    }
+
     async fn revoke(&self, id: Uuid) -> DbResult<()> {
         let now = truncate_to_millis(Utc::now());
         query(

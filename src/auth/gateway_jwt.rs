@@ -6,10 +6,12 @@
 
 use std::{
     collections::{HashMap, VecDeque},
-    net::IpAddr,
     sync::Arc,
     time::Instant,
 };
+
+#[cfg(feature = "sso")]
+use std::net::IpAddr;
 
 #[cfg(feature = "sso")]
 use tokio::sync::Mutex;
