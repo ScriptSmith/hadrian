@@ -1384,7 +1384,18 @@ async fn test_vision_base64_success(#[case] spec: &'static ProviderTestSpec) {
 
     assert_eq!(status, StatusCode::OK, "Expected OK for {}", spec.name);
     assert_eq!(body["object"], "chat.completion");
-    assert!(body["choices"][0]["message"]["content"].is_string());
+    let content = body["choices"][0]["message"]["content"]
+        .as_str()
+        .expect("vision response should have textual content");
+    assert!(
+        !content.trim().is_empty(),
+        "vision response content must be non-empty for {}",
+        spec.name
+    );
+    assert!(
+        body["choices"][0]["finish_reason"].is_string(),
+        "vision response should have finish_reason"
+    );
 
     // Vision requests typically have high prompt token counts due to image encoding
     if spec.min_vision_prompt_tokens > 0 {
@@ -1433,7 +1444,18 @@ async fn test_vision_url_success(#[case] spec: &'static ProviderTestSpec) {
 
     assert_eq!(status, StatusCode::OK, "Expected OK for {}", spec.name);
     assert_eq!(body["object"], "chat.completion");
-    assert!(body["choices"][0]["message"]["content"].is_string());
+    let content = body["choices"][0]["message"]["content"]
+        .as_str()
+        .expect("vision response should have textual content");
+    assert!(
+        !content.trim().is_empty(),
+        "vision response content must be non-empty for {}",
+        spec.name
+    );
+    assert!(
+        body["choices"][0]["finish_reason"].is_string(),
+        "vision response should have finish_reason"
+    );
 }
 
 // =============================================================================
@@ -3155,11 +3177,16 @@ async fn test_audio_speech_success(#[case] spec: &'static ProviderTestSpec) {
         content_type
     );
 
-    // Verify we got some audio bytes back
+    // Verify we got non-trivial audio bytes back (not just headers).
     let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    assert!(!body_bytes.is_empty(), "Audio response should not be empty");
+    assert!(
+        body_bytes.len() > 32,
+        "Audio response too small ({} bytes) for {}",
+        body_bytes.len(),
+        spec.name
+    );
 }
 
 #[rstest]
@@ -3209,9 +3236,14 @@ async fn test_audio_transcription_success(#[case] spec: &'static ProviderTestSpe
     let json: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
 
     assert_eq!(status, StatusCode::OK, "Expected OK for {}", spec.name);
+    let text = json
+        .get("text")
+        .and_then(|v| v.as_str())
+        .expect("Transcription response should have a string 'text' field");
     assert!(
-        json.get("text").is_some(),
-        "Transcription response should have 'text' field"
+        !text.trim().is_empty(),
+        "Transcription text must be non-empty for {}",
+        spec.name
     );
 }
 
@@ -3262,8 +3294,13 @@ async fn test_audio_translation_success(#[case] spec: &'static ProviderTestSpec)
     let json: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
 
     assert_eq!(status, StatusCode::OK, "Expected OK for {}", spec.name);
+    let text = json
+        .get("text")
+        .and_then(|v| v.as_str())
+        .expect("Translation response should have a string 'text' field");
     assert!(
-        json.get("text").is_some(),
-        "Translation response should have 'text' field"
+        !text.trim().is_empty(),
+        "Translation text must be non-empty for {}",
+        spec.name
     );
 }
