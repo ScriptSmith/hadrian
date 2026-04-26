@@ -37,24 +37,17 @@ pub struct ListQuery {
     pub include_deleted: Option<bool>,
 }
 
-/// Hard upper bound on `limit` for any admin list endpoint. A client passing
-/// `limit=999999999` would otherwise scan an entire table and DoS the gateway.
-pub const MAX_LIST_LIMIT: i64 = 1000;
-
-fn clamp_limit(limit: Option<i64>) -> Option<i64> {
-    limit.map(|n| n.clamp(1, MAX_LIST_LIMIT))
-}
-
 /// Simple conversion that requires using try_into_with_cursor() for cursor validation.
 impl From<ListQuery> for ListParams {
     fn from(q: ListQuery) -> Self {
         ListParams {
-            limit: clamp_limit(q.limit),
+            limit: q.limit,
             cursor: None,
             direction: CursorDirection::Forward,
             sort_order: Default::default(),
             include_deleted: q.include_deleted.unwrap_or(false),
         }
+        .clamp()
     }
 }
 
@@ -81,12 +74,13 @@ impl ListQuery {
         };
 
         Ok(ListParams {
-            limit: clamp_limit(self.limit),
+            limit: self.limit,
             cursor,
             direction,
             sort_order: Default::default(),
             include_deleted: self.include_deleted.unwrap_or(false),
-        })
+        }
+        .clamp())
     }
 }
 
