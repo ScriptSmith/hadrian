@@ -68,25 +68,29 @@ pub async fn list(
         query.from = Some(chrono::Utc::now() - chrono::Duration::days(7));
     }
 
-    // Constrain `org_id` to one the caller belongs to. Without this, anyone
+    // Constrain `org_id` to the caller's organization. Without this, anyone
     // with the `audit_log:list` permission could read any tenant's logs by
     // sending an arbitrary `?org_id=` query parameter. Subjects with no
     // membership (e.g. super-admins) are allowed through unconstrained.
-    if !authz.subject.org_ids.is_empty() {
+    //
+    // Users in this codebase only ever belong to one organization, so
+    // `org_ids` is a single-element set in practice. We pin to that single
+    // org rather than aggregating across `org_ids` — multi-org membership
+    // would require a different model (and is unreachable today).
+    if let Some(membership) = authz.subject.org_ids.first() {
+        let scoped: Uuid = membership.parse().map_err(|_| {
+            AdminError::Internal(
+                "audit_log:list authz subject has a non-UUID org membership".to_string(),
+            )
+        })?;
         match query.org_id {
-            Some(requested) => {
-                if !authz.subject.is_org_member(&requested.to_string()) {
-                    return Err(AdminError::Forbidden(
-                        "audit_log:list scoped outside your organization".to_string(),
-                    ));
-                }
+            Some(requested) if requested != scoped => {
+                return Err(AdminError::Forbidden(
+                    "audit_log:list scoped outside your organization".to_string(),
+                ));
             }
-            None => {
-                if let Some(first) = authz.subject.org_ids.first()
-                    && let Ok(parsed) = first.parse()
-                {
-                    query.org_id = Some(parsed);
-                }
+            _ => {
+                query.org_id = Some(scoped);
             }
         }
     }
