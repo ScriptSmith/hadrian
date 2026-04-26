@@ -88,11 +88,25 @@ interface CommandPaletteDialogProps {
   onClose: () => void;
 }
 
+// Stable IDs for the combobox / listbox / option ARIA wiring. Generated once
+// per dialog instance because `aria-controls` / `aria-activedescendant` need
+// fixed references that screen readers can resolve.
+let commandPaletteCounter = 0;
+
 function CommandPaletteDialog({ commands, onClose }: CommandPaletteDialogProps) {
   const [search, setSearch] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const idsRef = useRef<{ listbox: string; option: (i: number) => string } | null>(null);
+  if (!idsRef.current) {
+    const seq = ++commandPaletteCounter;
+    idsRef.current = {
+      listbox: `command-palette-listbox-${seq}`,
+      option: (i: number) => `command-palette-option-${seq}-${i}`,
+    };
+  }
+  const ids = idsRef.current;
 
   // Filter commands based on search
   const filteredCommands = Array.from(commands.values()).filter((cmd) => {
@@ -175,7 +189,8 @@ function CommandPaletteDialog({ commands, onClose }: CommandPaletteDialogProps) 
       {/* Dialog */}
       <div className="fixed left-1/2 top-[20%] z-50 w-full max-w-lg -translate-x-1/2 animate-in fade-in-0 zoom-in-95 slide-in-from-top-4">
         <div className="overflow-hidden rounded-xl border bg-popover shadow-2xl ring-1 ring-black/5">
-          {/* Search input */}
+          {/* Search input — exposed as a combobox per WAI-ARIA APG so AT
+              users hear that the input drives a listbox below. */}
           <div className="flex items-center border-b px-4">
             <Search className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden="true" />
             <input
@@ -186,6 +201,13 @@ function CommandPaletteDialog({ commands, onClose }: CommandPaletteDialogProps) 
               onKeyDown={handleKeyDown}
               placeholder="Type a command or search..."
               aria-label="Search commands"
+              role="combobox"
+              aria-expanded={flatCommands.length > 0}
+              aria-controls={ids.listbox}
+              aria-autocomplete="list"
+              aria-activedescendant={
+                flatCommands.length > 0 ? ids.option(selectedIndex) : undefined
+              }
               className="flex-1 bg-transparent px-4 py-4 text-sm outline-none placeholder:text-muted-foreground"
             />
             <kbd className="pointer-events-none hidden h-6 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-xs text-muted-foreground sm:flex">
@@ -193,16 +215,26 @@ function CommandPaletteDialog({ commands, onClose }: CommandPaletteDialogProps) 
             </kbd>
           </div>
 
-          {/* Commands list */}
-          <div ref={listRef} className="max-h-[300px] overflow-y-auto p-2">
+          {/* Commands list — listbox owned by the combobox above, with
+              per-row option semantics so selection reads correctly. */}
+          <div
+            ref={listRef}
+            id={ids.listbox}
+            role="listbox"
+            aria-label="Commands"
+            className="max-h-[300px] overflow-y-auto p-2"
+          >
             {flatCommands.length === 0 ? (
               <div className="py-6 text-center text-sm text-muted-foreground">
                 No commands found
               </div>
             ) : (
               Array.from(groupedCommands.entries()).map(([category, items]) => (
-                <div key={category}>
-                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
+                <div key={category} role="group" aria-label={category}>
+                  <div
+                    aria-hidden="true"
+                    className="px-2 py-1.5 text-xs font-semibold text-muted-foreground"
+                  >
                     {category}
                   </div>
                   {items.map((cmd) => {
@@ -211,7 +243,15 @@ function CommandPaletteDialog({ commands, onClose }: CommandPaletteDialogProps) 
                     return (
                       <button
                         key={cmd.id}
+                        id={ids.option(index)}
+                        role="option"
+                        aria-selected={isSelected}
                         data-index={index}
+                        // Suppress the button-in-listbox warning: the
+                        // combobox-with-listbox pattern uses
+                        // aria-activedescendant for navigation so the
+                        // listbox children don't take real DOM focus.
+                        tabIndex={-1}
                         className={cn(
                           "flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors",
                           isSelected ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
