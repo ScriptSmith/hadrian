@@ -97,6 +97,20 @@ else
     echo "  cargo-audit not installed, skipping"
 fi
 
+# SQLite repos must use truncate_to_millis-bound RFC-3339 timestamps, not
+# datetime('now'), so cursor pagination and TEXT comparisons stay consistent
+# (see CLAUDE.md "Cursor pagination timestamps"). DEFAULT clauses in CREATE
+# TABLE are fine (only fire when no value is bound), so we exclude them.
+step "Checking for datetime('now') in SQLite query bodies"
+if datetime_hits=$(grep -RIn "datetime('now')" src/db/sqlite \
+    | grep -v "DEFAULT (datetime('now'))" || true) && [ -n "$datetime_hits" ]; then
+    echo -e "${RED}✗${NC} datetime('now') found in SQLite repo queries; bind truncate_to_millis(Utc::now()) instead:"
+    echo "$datetime_hits"
+    FAILED=1
+else
+    success "No stray datetime('now') in SQLite query bodies"
+fi
+
 # Summary
 echo ""
 if [ $FAILED -eq 0 ]; then

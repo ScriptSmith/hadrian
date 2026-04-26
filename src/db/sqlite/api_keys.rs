@@ -784,13 +784,16 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
     }
 
     async fn revoke(&self, id: Uuid) -> DbResult<()> {
+        let now = truncate_to_millis(Utc::now());
         query(
             r#"
             UPDATE api_keys
-            SET revoked_at = datetime('now'), updated_at = datetime('now')
+            SET revoked_at = ?, updated_at = ?
             WHERE id = ?
             "#,
         )
+        .bind(now)
+        .bind(now)
         .bind(id.to_string())
         .execute(&self.pool)
         .await?;
@@ -799,13 +802,15 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
     }
 
     async fn update_last_used(&self, id: Uuid) -> DbResult<()> {
+        let now = truncate_to_millis(Utc::now());
         query(
             r#"
             UPDATE api_keys
-            SET last_used_at = datetime('now')
+            SET last_used_at = ?
             WHERE id = ?
             "#,
         )
+        .bind(now)
         .bind(id.to_string())
         .execute(&self.pool)
         .await?;
@@ -814,13 +819,16 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
     }
 
     async fn revoke_by_user(&self, user_id: Uuid) -> DbResult<u64> {
+        let now = truncate_to_millis(Utc::now());
         let result = query(
             r#"
             UPDATE api_keys
-            SET revoked_at = datetime('now'), updated_at = datetime('now')
+            SET revoked_at = ?, updated_at = ?
             WHERE owner_type = 'user' AND owner_id = ? AND revoked_at IS NULL
             "#,
         )
+        .bind(now)
+        .bind(now)
         .bind(user_id.to_string())
         .execute(&self.pool)
         .await?;
@@ -901,13 +909,16 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
     }
 
     async fn revoke_by_service_account(&self, service_account_id: Uuid) -> DbResult<u64> {
+        let now = truncate_to_millis(Utc::now());
         let result = query(
             r#"
             UPDATE api_keys
-            SET revoked_at = datetime('now'), updated_at = datetime('now')
+            SET revoked_at = ?, updated_at = ?
             WHERE owner_type = 'service_account' AND owner_id = ? AND revoked_at IS NULL
             "#,
         )
+        .bind(now)
+        .bind(now)
         .bind(service_account_id.to_string())
         .execute(&self.pool)
         .await?;
@@ -940,11 +951,12 @@ impl ApiKeyRepo for SqliteApiKeyRepo {
         query(
             r#"
             UPDATE api_keys
-            SET rotation_grace_until = ?, updated_at = datetime('now')
+            SET rotation_grace_until = ?, updated_at = ?
             WHERE id = ?
             "#,
         )
         .bind(grace_until)
+        .bind(now)
         .bind(old_key_id.to_string())
         .execute(&mut *tx)
         .await?;

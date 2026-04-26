@@ -2329,13 +2329,15 @@ mod tests {
         let org_id = Uuid::new_v4();
 
         // Create deleted project
+        let deleted_at = crate::db::repos::truncate_to_millis(chrono::Utc::now());
         sqlx::query(
-            "INSERT INTO projects (id, org_id, slug, name, deleted_at) VALUES (?, ?, ?, ?, datetime('now'))",
+            "INSERT INTO projects (id, org_id, slug, name, deleted_at) VALUES (?, ?, ?, ?, ?)",
         )
         .bind(project_id.to_string())
         .bind(org_id.to_string())
         .bind("deleted-project")
         .bind("Deleted Project")
+        .bind(deleted_at)
         .execute(&pool)
         .await
         .expect("Failed to create project");
