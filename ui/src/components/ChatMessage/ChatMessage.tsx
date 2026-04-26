@@ -92,8 +92,11 @@ function ChatMessageComponent({
   const isUser = message.role === "user";
   const isAnyStreaming = useIsStreaming();
 
-  // Inline editing state
-  const isEditing = useIsEditing(message.id);
+  // Inline editing state. Namespace the key so a user-message id can never
+  // collide with the `<groupId>:<instanceId>` composite that
+  // MultiModelResponse writes into the same global slot.
+  const editingKey = `chat:${message.id}`;
+  const isEditing = useIsEditing(editingKey);
   const [editContent, setEditContent] = useState(message.content);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { startEditing, stopEditing } = useChatUIStore();
@@ -108,8 +111,8 @@ function ChatMessageComponent({
   }, [isEditing, message.content]);
 
   const handleStartEdit = useCallback(() => {
-    startEditing(message.id);
-  }, [startEditing, message.id]);
+    startEditing(editingKey);
+  }, [startEditing, editingKey]);
 
   const handleRegenerate = useCallback(() => {
     onRegenerate?.(message.id);

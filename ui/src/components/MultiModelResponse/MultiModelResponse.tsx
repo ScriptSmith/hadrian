@@ -636,8 +636,10 @@ const ModelResponseCard = memo(function ModelResponseCard({
     setQuotePopover((prev) => ({ ...prev, isOpen: false }));
   }, []);
 
-  // Inline editing state - use composite key for unique identification
-  const editingKey = `${groupId}:${instanceId}`;
+  // Inline editing state - use a namespaced composite key so it can never
+  // collide with the `chat:<message.id>` keys ChatMessage writes into the
+  // same global slot.
+  const editingKey = `multi:${groupId}:${instanceId}`;
   const isEditing = useIsEditing(editingKey);
   const [editContent, setEditContent] = useState(response.content);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
