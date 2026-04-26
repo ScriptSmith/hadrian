@@ -410,7 +410,7 @@ impl AppState {
 
         // Initialize database and services if configured
         #[allow(unreachable_patterns)]
-        let (db, services) = match &config.database {
+        let (db, mut services) = match &config.database {
             config::DatabaseConfig::None => (None, None),
             _ => {
                 let pool = db::DbPool::from_config(&config.database).await?;
@@ -459,6 +459,21 @@ impl AppState {
                 }
             }
         };
+
+        // Wire the cache into services that benefit from a shared backend.
+        // OAuth PKCE uses it for the per-code failure counter that burns a
+        // code after repeated bad verifiers; without a cache it falls back
+        // to the legacy "never burn on failure" behaviour.
+        if let Some(services) = services.as_mut() {
+            services.oauth_pkce = std::mem::replace(
+                &mut services.oauth_pkce,
+                services::OAuthPkceService::new(
+                    db.clone()
+                        .expect("services exist only when db is configured"),
+                ),
+            )
+            .with_cache(cache.clone());
+        }
 
         // Initialize secrets manager based on configuration
         let secrets: Arc<dyn secrets::SecretManager> = match &config.secrets {

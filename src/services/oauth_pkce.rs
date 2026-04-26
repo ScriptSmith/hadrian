@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration as StdDuration};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{Duration, Utc};
@@ -9,9 +9,22 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
+    cache::Cache,
     db::{DbPool, DbResult, NewAuthorizationCode},
     models::{OAuthAuthorizationCode, OAuthKeyOptions, PkceCodeChallengeMethod},
 };
+
+/// How many failed PKCE verifications a single authorization code may suffer
+/// before it is destroyed. The choice trades two attacks against each other:
+/// burning on the first failure lets a network attacker who can write any
+/// request DoS legitimate users; never burning lets an attacker who actually
+/// stole the code keep guessing the verifier offline. Three matches the OAuth
+/// security BCP guidance on "limited" retries.
+const MAX_PKCE_FAILURES_PER_CODE: i64 = 3;
+/// TTL for the failure counter. Authorization codes themselves live ~10 min,
+/// so the counter is forced to outlive any reasonable code lifetime — that
+/// way the count for a given code can't be reset by waiting it out.
+const PKCE_FAILURE_TTL: StdDuration = StdDuration::from_secs(900);
 
 /// Errors specific to the OAuth PKCE service. Mapped to HTTP status codes
 /// by the route handlers.
@@ -42,11 +55,21 @@ pub struct IssueCodeInput {
 #[derive(Clone)]
 pub struct OAuthPkceService {
     db: Arc<DbPool>,
+    /// Optional cache backing the per-code failure counter. When absent we
+    /// fall back to the legacy "never burn on failure" behaviour because we
+    /// have nowhere to track attempts; deployments that care about the
+    /// limited-retry guarantee should configure a cache backend.
+    cache: Option<Arc<dyn Cache>>,
 }
 
 impl OAuthPkceService {
     pub fn new(db: Arc<DbPool>) -> Self {
-        Self { db }
+        Self { db, cache: None }
+    }
+
+    pub fn with_cache(mut self, cache: Option<Arc<dyn Cache>>) -> Self {
+        self.cache = cache;
+        self
     }
 
     /// Generate and persist a new authorization code bound to `user_id` and
@@ -115,6 +138,12 @@ impl OAuthPkceService {
             .unwrap_u8()
             != 1
         {
+            // Bump the per-code failure counter. Once the threshold is hit
+            // we burn the code so an attacker who stole it can't keep
+            // probing verifiers. We still hand out the same `PkceMismatch`
+            // error either way so the attacker can't probe for "this code
+            // is now burned" vs "still alive".
+            self.record_pkce_failure(code).await;
             return Err(OAuthPkceError::PkceMismatch);
         }
 
@@ -123,6 +152,41 @@ impl OAuthPkceService {
         // rather than handing out a second key.
         repo.consume(code).await?.ok_or(OAuthPkceError::InvalidCode)
     }
+
+    /// Increment the per-code PKCE failure counter and burn the code once it
+    /// exceeds `MAX_PKCE_FAILURES_PER_CODE`. Cache errors are swallowed: if
+    /// the cache is unavailable we fall back to the original (no-burn)
+    /// behaviour rather than blocking authentication.
+    async fn record_pkce_failure(&self, code: &str) {
+        let Some(cache) = &self.cache else {
+            return;
+        };
+        let key = pkce_failure_key(code);
+        match cache.incr(&key, PKCE_FAILURE_TTL).await {
+            Ok(count) if count >= MAX_PKCE_FAILURES_PER_CODE => {
+                // Burn the code. Failures from a network attacker or a
+                // genuinely broken client both end up here; the legitimate
+                // user has had `MAX_PKCE_FAILURES_PER_CODE - 1` chances to
+                // retry, which is enough headroom for a transient bug.
+                if let Err(e) = self.db.oauth_authorization_codes().consume(code).await {
+                    tracing::warn!(error = %e, "Failed to burn PKCE code after repeated verifier failures");
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to record PKCE failure counter; not burning code");
+            }
+        }
+    }
+}
+
+/// Cache key for the per-code PKCE failure counter. The code itself is
+/// hashed so we never persist a raw authorization code in the cache.
+fn pkce_failure_key(code: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(code.as_bytes());
+    let digest = hasher.finalize();
+    format!("gw:oauth:pkce:fails:{:x}", digest)
 }
 
 /// Generate a 256-bit URL-safe base64 random code (~43 chars).
