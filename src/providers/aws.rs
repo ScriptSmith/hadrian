@@ -22,13 +22,6 @@ use crate::config::AwsCredentials;
 /// preventing request failures during the refresh window.
 const CREDENTIAL_REFRESH_BUFFER_SECS: u64 = 300;
 
-/// Maximum time a waiting task will block on `refresh_notify` before
-/// re-checking the cache. `Notify::notify_waiters` only signals tasks that are
-/// already in `notified()` at the moment of the call, so a task that loses
-/// the refresh race but reaches `notified()` after the refresher finishes
-/// would otherwise wait indefinitely. The timeout bounds that worst case.
-const REFRESH_NOTIFY_TIMEOUT_SECS: u64 = 10;
-
 /// Error type for AWS credential operations.
 #[derive(Debug, thiserror::Error)]
 pub enum AwsError {
@@ -82,6 +75,17 @@ impl AwsCredentialCache {
     /// problem where multiple concurrent requests could all trigger refresh.
     pub async fn get_credentials(&self) -> Result<Credentials, AwsError> {
         loop {
+            // Arm a waiter BEFORE the CAS check. `Notify::notify_waiters`
+            // only wakes tasks already registered at the moment of the call,
+            // so registering after losing the CAS race opens a window where
+            // the refresher could fire `notify_waiters` between our CAS
+            // failure and our `notified().await` — leaving us blocked
+            // indefinitely. `enable()` arms the future without polling so
+            // any subsequent `notify_waiters` is captured.
+            let notified = self.refresh_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
             // Fast path: check cache with read lock
             {
                 let cache = self.credentials.read().await;
@@ -120,15 +124,11 @@ impl AwsCredentialCache {
                 return result;
             }
 
-            // Another task is refreshing. Wait for notification then retry.
-            // Apply a timeout so a task that reaches this point after the
-            // refresher already called `notify_waiters` doesn't deadlock —
-            // it will simply re-check the cache on the next loop iteration.
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(REFRESH_NOTIFY_TIMEOUT_SECS),
-                self.refresh_notify.notified(),
-            )
-            .await;
+            // Lost the CAS race. Our `notified` future is already armed, so
+            // any `notify_waiters` fired after we armed it (including the
+            // one the in-flight refresher will fire) will wake us — no
+            // window for a missed notification.
+            notified.await;
         }
     }
 
