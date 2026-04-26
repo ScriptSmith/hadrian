@@ -2,12 +2,12 @@ import { Streamdown, type MermaidOptions } from "streamdown";
 import { createCodePlugin } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
-import "katex/dist/katex.min.css";
 import "streamdown/styles.css";
-import { memo } from "react";
+import { memo, useEffect } from "react";
 
 import { cn } from "@/utils/cn";
 import { usePreferences } from "@/preferences/PreferencesProvider";
+import { loadKatexCss } from "@/utils/katexCss";
 import { linkSafety } from "@/components/Markdown/linkSafety";
 
 const lightCode = createCodePlugin({
@@ -67,6 +67,12 @@ interface StreamingMarkdownProps {
  */
 function StreamingMarkdownComponent({ content, isStreaming, className }: StreamingMarkdownProps) {
   const { resolvedTheme } = usePreferences();
+
+  // Lazy-load the KaTeX stylesheet on first mount so it doesn't bloat the
+  // initial bundle on pages that never render markdown.
+  useEffect(() => {
+    void loadKatexCss();
+  }, []);
 
   const mermaidOptions: MermaidOptions = {
     config: {

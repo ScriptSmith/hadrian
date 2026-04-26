@@ -3,10 +3,10 @@ import { Streamdown, type MermaidOptions } from "streamdown";
 import { createCodePlugin } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
-import "katex/dist/katex.min.css";
 
 import { cn } from "@/utils/cn";
 import { usePreferences } from "@/preferences/PreferencesProvider";
+import { loadKatexCss } from "@/utils/katexCss";
 import { linkSafety } from "./linkSafety";
 
 const lightCode = createCodePlugin({
@@ -22,6 +22,12 @@ interface MarkdownProps {
 export function Markdown({ content, className }: MarkdownProps) {
   const { resolvedTheme } = usePreferences();
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Lazy-load the KaTeX stylesheet on first mount so it doesn't bloat the
+  // initial bundle on pages that never render markdown.
+  useEffect(() => {
+    void loadKatexCss();
+  }, []);
 
   // Streamdown renders <pre> elements that we can't control directly.
   // Post-render fixup: set tabIndex="0" on all <pre> children so keyboard
