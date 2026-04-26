@@ -210,6 +210,13 @@ fn default_jwt_loader_concurrency() -> usize {
 }
 
 /// TLS configuration.
+///
+/// Native TLS termination is not yet implemented. Until it is, the gateway
+/// listens on plain HTTP and operators must terminate TLS upstream (reverse
+/// proxy / load balancer). Setting `[server.tls]` without
+/// `acknowledge_unsupported = true` is treated as a misconfiguration and
+/// refuses startup, so an operator following stale documentation can't
+/// silently expose plaintext.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -219,6 +226,14 @@ pub struct TlsConfig {
 
     /// Path to the private key file (PEM format).
     pub key_path: String,
+
+    /// Set to `true` to acknowledge that native TLS termination is not yet
+    /// implemented and the gateway will continue to listen on plain HTTP.
+    /// When unset, the gateway refuses to start to avoid an operator
+    /// accidentally exposing plaintext after copying TLS config from
+    /// stale documentation.
+    #[serde(default)]
+    pub acknowledge_unsupported: bool,
 }
 
 /// Configuration for trusted reverse proxies.

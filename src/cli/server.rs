@@ -105,12 +105,23 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         );
     }
 
-    if config.server.tls.is_some() {
-        tracing::error!(
-            "[server.tls] is set but the gateway does not yet terminate TLS \
-             itself; the gateway will continue to listen on plain HTTP. \
-             Terminate TLS upstream (reverse proxy / load balancer) and \
-             remove the [server.tls] section, or wait for native TLS support."
+    if let Some(tls) = config.server.tls.as_ref() {
+        if !tls.acknowledge_unsupported {
+            tracing::error!(
+                "[server.tls] is set but the gateway does not yet terminate TLS \
+                 itself. Refusing to start to avoid serving the gateway on plain \
+                 HTTP while the operator believes TLS is active. Terminate TLS \
+                 upstream (reverse proxy / load balancer) and remove the \
+                 [server.tls] section, or set \
+                 `[server.tls].acknowledge_unsupported = true` to opt in to the \
+                 plaintext-listener behaviour while native TLS support is built out."
+            );
+            std::process::exit(1);
+        }
+        tracing::warn!(
+            "[server.tls] is set with acknowledge_unsupported = true; the \
+             gateway will continue to listen on plain HTTP because native \
+             TLS is not yet implemented. Terminate TLS upstream."
         );
     }
 
