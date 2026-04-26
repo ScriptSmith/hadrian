@@ -206,6 +206,8 @@ async fn try_bootstrap_auth(
     connecting_ip: Option<IpAddr>,
     state: &AppState,
 ) -> Result<Option<Identity>, AuthError> {
+    use crate::cache::CacheKeys;
+
     // Check if bootstrap API key is configured
     let bootstrap_key = match &state.config.auth.bootstrap {
         Some(bootstrap) => match &bootstrap.api_key {
@@ -221,6 +223,22 @@ async fn try_bootstrap_auth(
         Some(key) => key,
         None => return Ok(None),
     };
+
+    // Per-IP throttle: refuse further attempts when this source IP is locked out.
+    let ip_str = connecting_ip
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    if let Some(cache) = &state.cache {
+        let lockout_key = CacheKeys::bootstrap_lockout(&ip_str);
+        if let Ok(Some(_)) = cache.get_bytes(&lockout_key).await {
+            tracing::warn!(
+                ip = %ip_str,
+                event = "bootstrap_auth.locked_out",
+                "Bootstrap auth attempt blocked: IP is locked out"
+            );
+            return Err(AuthError::Forbidden("Bootstrap auth denied".to_string()));
+        }
+    }
 
     // Constant-time comparison to prevent timing attacks
     use subtle::ConstantTimeEq;
@@ -252,6 +270,7 @@ async fn try_bootstrap_auth(
                 })
                 .await;
         }
+        increment_bootstrap_rate_limit(&ip_str, state).await;
         return Ok(None);
     }
 
@@ -281,6 +300,8 @@ async fn try_bootstrap_auth(
             user_count = user_count,
             "Bootstrap auth rejected: database has users"
         );
+        // Treat post-bootstrap probing as a failed attempt to deter scanners.
+        increment_bootstrap_rate_limit(&ip_str, state).await;
         return Ok(None);
     }
 
@@ -298,6 +319,55 @@ async fn try_bootstrap_auth(
         team_ids: vec![],
         project_ids: vec![],
     }))
+}
+
+/// Per-IP throttle parameters for bootstrap auth failures.
+///
+/// Bootstrap is unauthenticated until the first user is created and is exposed
+/// on every admin route, so an attacker can make unlimited guesses. We cap
+/// failures and lock the source IP out for an hour after exceeding the
+/// threshold. Values are intentionally hardcoded — bootstrap auth is a narrow
+/// installer flow, so additional configuration would just be footgun surface.
+const BOOTSTRAP_MAX_ATTEMPTS: i64 = 10;
+const BOOTSTRAP_WINDOW_SECS: u64 = 900;
+const BOOTSTRAP_LOCKOUT_SECS: u64 = 3600;
+
+/// Increment the bootstrap auth rate-limit counter for an IP and lock the IP
+/// out once attempts exceed [`BOOTSTRAP_MAX_ATTEMPTS`].
+async fn increment_bootstrap_rate_limit(ip_str: &str, state: &AppState) {
+    use std::time::Duration;
+
+    use crate::cache::CacheKeys;
+
+    let Some(cache) = &state.cache else {
+        return;
+    };
+
+    let rate_limit_key = CacheKeys::bootstrap_rate_limit(ip_str);
+    let count = cache
+        .incr(&rate_limit_key, Duration::from_secs(BOOTSTRAP_WINDOW_SECS))
+        .await
+        .unwrap_or(1);
+
+    if count >= BOOTSTRAP_MAX_ATTEMPTS {
+        let lockout_key = CacheKeys::bootstrap_lockout(ip_str);
+        let _ = cache
+            .set_bytes(
+                &lockout_key,
+                b"1",
+                Duration::from_secs(BOOTSTRAP_LOCKOUT_SECS),
+            )
+            .await;
+
+        tracing::warn!(
+            ip = %ip_str,
+            attempts = count,
+            lockout_secs = BOOTSTRAP_LOCKOUT_SECS,
+            event = "bootstrap_auth.lockout_triggered",
+            "Bootstrap auth lockout triggered after {} failed attempts",
+            count
+        );
+    }
 }
 
 /// Try to authenticate via emergency access key.

@@ -127,6 +127,22 @@ impl CacheKeys {
         format!("gw:emergency:lockout:{}", ip)
     }
 
+    /// Bootstrap auth rate limiting: gw:bootstrap:ratelimit:{ip}
+    ///
+    /// Tracks failed bootstrap-key attempts from an IP address. Counter
+    /// increments on each failed attempt and resets after the window expires.
+    pub fn bootstrap_rate_limit(ip: &str) -> String {
+        format!("gw:bootstrap:ratelimit:{}", ip)
+    }
+
+    /// Bootstrap auth lockout: gw:bootstrap:lockout:{ip}
+    ///
+    /// Set when an IP exceeds the bootstrap-auth failure threshold.
+    /// Presence blocks further bootstrap-auth attempts from the IP.
+    pub fn bootstrap_lockout(ip: &str) -> String {
+        format!("gw:bootstrap:lockout:{}", ip)
+    }
+
     /// Response cache key for chat completions.
     ///
     /// Generates a deterministic cache key based on configurable components:
