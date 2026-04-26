@@ -9,10 +9,22 @@ export const AuthContext = createContext<AuthContextValue | null>(null);
 
 const STORAGE_KEY = "hadrian-auth";
 
+/**
+ * TTL for the API key kept in `localStorage`. The proper fix is to move the
+ * token into a httpOnly+Secure cookie, but that requires a backend session
+ * the gateway doesn't currently issue for API-key logins. Until then, we cap
+ * the on-disk lifetime so an exfiltrated localStorage entry stops being
+ * useful within a day. Re-login refreshes the timestamp.
+ */
+const API_KEY_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
 interface StoredAuth {
   method: AuthMethod;
   token: string;
   user?: User;
+  /** Wall-clock expiry; absent on entries written by older builds (treated as
+   *  expired so they get cleared on next load). */
+  expiresAt?: number;
 }
 
 interface MeResponse {
@@ -107,8 +119,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      // Check for stored credentials
+      // Check for stored credentials. API-key entries written before the TTL
+      // landed (or that have aged out) are evicted here so a long-stale token
+      // doesn't keep authenticating the SPA forever.
       if (storedAuth) {
+        const expired =
+          storedAuth.method === "api_key" &&
+          (storedAuth.expiresAt === undefined || storedAuth.expiresAt < Date.now());
+        if (expired) {
+          setStoredAuth(null);
+          setState({
+            isAuthenticated: false,
+            isLoading: false,
+            user: null,
+            method: null,
+            token: null,
+          });
+          return;
+        }
+
         // Refresh user info from server (user_id may have changed)
         const user = await fetchMe(storedAuth.token);
         setState({
@@ -179,6 +208,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             method: "api_key",
             token: credentials.apiKey,
             user: user || undefined,
+            expiresAt: Date.now() + API_KEY_TTL_MS,
           };
 
           setStoredAuth(authData);
