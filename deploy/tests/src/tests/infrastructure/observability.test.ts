@@ -224,22 +224,42 @@ describe("Observability Stack Deployment", () => {
     });
 
     it("sends traces to OTEL collector", async () => {
-      // Make a request that should generate a trace via the tracked SDK client
+      // Generate a few requests so we're not racing a single trace through the
+      // OTEL collector batch processor.
+      await healthCheck({ client });
+      await healthCheck({ client });
       await healthCheck({ client });
 
-      // Give the trace a moment to be processed
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      // Check Jaeger for traces from hadrian-gateway service
       const jaegerUrl = env.getServiceUrl("jaeger", 16686);
-      const response = await fetch(`${jaegerUrl}/api/services`);
-      const data = await response.json();
+      const expectedService = "hadrian-gateway";
 
-      expect(response.status).toBe(200);
-      // The gateway service should appear in Jaeger
-      // Note: Service name depends on OTEL_SERVICE_NAME env var (hadrian-gateway)
-      // This may take time to appear, so we just verify Jaeger is collecting services
-      expect(data.data).toBeDefined();
+      // Poll Jaeger until the gateway service shows up. The collector
+      // batches traces (default 5s), and Jaeger only registers a service
+      // after it ingests its first span — a single 2s sleep was almost
+      // always too short, so the previous assertion only checked that
+      // Jaeger itself was up.
+      const deadline = Date.now() + 30000;
+      let services: string[] = [];
+      while (Date.now() < deadline) {
+        const resp = await fetch(`${jaegerUrl}/api/services`);
+        expect(resp.status).toBe(200);
+        const json = (await resp.json()) as { data?: string[] };
+        services = json.data ?? [];
+        if (services.includes(expectedService)) break;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      expect(services).toContain(expectedService);
+
+      // And the gateway should have at least one trace recorded — verify by
+      // pulling traces for the service. Empty `data` here means the service
+      // appeared but no spans landed, which is the failure mode this test
+      // is meant to catch.
+      const tracesResp = await fetch(
+        `${jaegerUrl}/api/traces?service=${encodeURIComponent(expectedService)}&limit=5`
+      );
+      expect(tracesResp.status).toBe(200);
+      const tracesJson = (await tracesResp.json()) as { data?: unknown[] };
+      expect(Array.isArray(tracesJson.data) && tracesJson.data.length > 0).toBe(true);
     });
   });
 });
