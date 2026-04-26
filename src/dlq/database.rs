@@ -91,51 +91,47 @@ impl DeadLetterQueue for DatabaseDlq {
     }
 
     async fn pop(&self) -> DlqResult<Option<DlqEntry>> {
-        // Get the oldest entry
+        // Atomic claim-and-delete so concurrent consumers cannot pop the same row.
+        // Postgres uses FOR UPDATE SKIP LOCKED to let other workers progress past
+        // the locked row instead of blocking. SQLite doesn't support row locking,
+        // but write transactions are serialized at the database level, so the
+        // single DELETE ... WHERE id = (SELECT ... LIMIT 1) RETURNING ... is
+        // atomic with respect to other writers.
         let entry = match self.pool.pool() {
             #[cfg(feature = "database-sqlite")]
             DbPoolRef::Sqlite(pool) => {
                 let row = sqlx::query_as::<_, DlqRow>(&format!(
-                    r#"SELECT id, entry_type, payload, error, retry_count, created_at, last_retry_at, metadata
-                       FROM {} ORDER BY created_at ASC LIMIT 1"#,
-                    self.table_name
+                    r#"DELETE FROM {table}
+                       WHERE id = (
+                           SELECT id FROM {table}
+                           ORDER BY created_at ASC
+                           LIMIT 1
+                       )
+                       RETURNING id, entry_type, payload, error, retry_count, created_at, last_retry_at, metadata"#,
+                    table = self.table_name
                 ))
                 .fetch_optional(pool)
                 .await?;
 
-                if let Some(row) = row {
-                    // Delete it
-                    sqlx::query(&format!("DELETE FROM {} WHERE id = ?", self.table_name))
-                        .bind(&row.id)
-                        .execute(pool)
-                        .await?;
-
-                    Some(row.into_entry()?)
-                } else {
-                    None
-                }
+                row.map(|r| r.into_entry()).transpose()?
             }
             #[cfg(feature = "database-postgres")]
             DbPoolRef::Postgres(pools) => {
                 let row = sqlx::query_as::<_, DlqRowPg>(&format!(
-                    r#"SELECT id, entry_type, payload, error, retry_count, created_at, last_retry_at, metadata
-                       FROM {} ORDER BY created_at ASC LIMIT 1"#,
-                    self.table_name
+                    r#"DELETE FROM {table}
+                       WHERE id = (
+                           SELECT id FROM {table}
+                           ORDER BY created_at ASC
+                           FOR UPDATE SKIP LOCKED
+                           LIMIT 1
+                       )
+                       RETURNING id, entry_type, payload, error, retry_count, created_at, last_retry_at, metadata"#,
+                    table = self.table_name
                 ))
                 .fetch_optional(pools.write_pool())
                 .await?;
 
-                if let Some(row) = row {
-                    // Delete it
-                    sqlx::query(&format!("DELETE FROM {} WHERE id = $1", self.table_name))
-                        .bind(row.id)
-                        .execute(pools.write_pool())
-                        .await?;
-
-                    Some(row.into_entry()?)
-                } else {
-                    None
-                }
+                row.map(|r| r.into_entry()).transpose()?
             }
         };
 
