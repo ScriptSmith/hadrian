@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -16,19 +17,49 @@ use crate::{
     },
 };
 
+type HmacSha256 = Hmac<Sha256>;
+
 /// Service layer for organization SCIM configuration operations.
 ///
 /// SCIM tokens are hashed (like API keys) before storage. Unlike SSO client
 /// secrets, we don't use the SecretManager because SCIM tokens need fast
 /// lookup for every provisioning request.
+///
+/// Hashing uses HMAC-SHA256 keyed with a server-side pepper instead of a
+/// raw SHA-256, so an attacker who exfiltrates the database alone can't
+/// brute-force tokens — they also need the pepper, which lives only in
+/// process memory and the deployment's session secret material.
 #[derive(Clone)]
 pub struct OrgScimConfigService {
     db: Arc<DbPool>,
+    /// HMAC pepper. `None` falls back to plain SHA-256 for tests/wasm/local
+    /// deployments that haven't configured a pepper. Production deployments
+    /// must set one (we wire this from the session secret in `app.rs`).
+    pepper: Option<Arc<Vec<u8>>>,
 }
 
 impl OrgScimConfigService {
     pub fn new(db: Arc<DbPool>) -> Self {
-        Self { db }
+        Self { db, pepper: None }
+    }
+
+    /// Install the HMAC pepper used for SCIM token hashing. Pass `None` to
+    /// disable peppering (default for environments without a session secret).
+    pub fn with_token_pepper(mut self, pepper: Option<Vec<u8>>) -> Self {
+        self.pepper = pepper.map(Arc::new);
+        self
+    }
+
+    fn hash_token(&self, token: &str) -> String {
+        match self.pepper.as_deref() {
+            Some(pepper) => {
+                let mut mac =
+                    HmacSha256::new_from_slice(pepper).expect("HMAC-SHA256 accepts any key length");
+                mac.update(token.as_bytes());
+                hex::encode(mac.finalize().into_bytes())
+            }
+            None => unsalted_sha256(token),
+        }
     }
 
     /// Create a new SCIM configuration for an organization.
@@ -48,7 +79,8 @@ impl OrgScimConfigService {
         input: CreateOrgScimConfig,
     ) -> Result<CreatedOrgScimConfig, OrgScimConfigError> {
         // Generate a secure token
-        let (raw_token, token_hash, token_prefix) = generate_scim_token();
+        let (raw_token, token_prefix) = generate_scim_token();
+        let token_hash = self.hash_token(&raw_token);
 
         // Create the config in the database
         let config = self
@@ -89,7 +121,7 @@ impl OrgScimConfigService {
         token: &str,
     ) -> Result<Option<OrgScimConfigWithHash>, OrgScimConfigError> {
         // Hash the incoming token
-        let token_hash = hash_token(token);
+        let token_hash = self.hash_token(token);
 
         // Look up by hash
         let config = self
@@ -126,7 +158,8 @@ impl OrgScimConfigService {
     /// The updated config along with the new raw token (shown only once)
     pub async fn rotate_token(&self, id: Uuid) -> Result<CreatedOrgScimConfig, OrgScimConfigError> {
         // Generate a new secure token
-        let (raw_token, token_hash, token_prefix) = generate_scim_token();
+        let (raw_token, token_prefix) = generate_scim_token();
+        let token_hash = self.hash_token(&raw_token);
 
         // Update the token in the database
         let config = self
@@ -162,10 +195,11 @@ pub enum OrgScimConfigError {
 
 /// Generate a new SCIM bearer token.
 ///
-/// Returns (raw_token, token_hash, token_prefix).
+/// Returns (raw_token, token_prefix). The hash is computed by the service so
+/// it can mix in the configured pepper.
 ///
 /// Token format: `scim_<32 bytes base64url>` (approximately 48 characters)
-fn generate_scim_token() -> (String, String, String) {
+fn generate_scim_token() -> (String, String) {
     use base64::Engine;
     use rand::RngCore;
 
@@ -179,19 +213,15 @@ fn generate_scim_token() -> (String, String, String) {
     // Construct the full token
     let raw_token = format!("scim_{}", encoded);
 
-    // Hash for storage
-    let token_hash = hash_token(&raw_token);
-
     // Prefix for identification (first 8 chars of the random part)
     let token_prefix = format!("scim_{}", &encoded[..4]);
 
-    (raw_token, token_hash, token_prefix)
+    (raw_token, token_prefix)
 }
 
-/// Hash a token using SHA-256.
-fn hash_token(token: &str) -> String {
+/// Plain SHA-256 fallback used when no pepper is configured.
+fn unsalted_sha256(token: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
-    let result = hasher.finalize();
-    hex::encode(result)
+    hex::encode(hasher.finalize())
 }

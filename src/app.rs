@@ -473,6 +473,35 @@ impl AppState {
                 ),
             )
             .with_cache(cache.clone());
+
+            // SCIM tokens get HMAC-SHA256 hashed with a pepper so that an
+            // attacker who exfiltrates the database alone can't brute-force
+            // them. We derive the pepper from the configured session secret
+            // when one exists; otherwise we fall back to plain SHA-256 (and
+            // log so operators know to set a session secret).
+            #[cfg(feature = "sso")]
+            {
+                let pepper = config
+                    .auth
+                    .session
+                    .as_ref()
+                    .and_then(|s| s.secret.as_ref())
+                    .map(|secret| secret.as_bytes().to_vec());
+                if pepper.is_none() {
+                    tracing::warn!(
+                        "[auth.session].secret is not set — SCIM tokens will be stored as \
+                         unsalted SHA-256. Configure a session secret to enable HMAC peppering."
+                    );
+                }
+                services.scim_configs = std::mem::replace(
+                    &mut services.scim_configs,
+                    services::OrgScimConfigService::new(
+                        db.clone()
+                            .expect("services exist only when db is configured"),
+                    ),
+                )
+                .with_token_pepper(pepper);
+            }
         }
 
         // Initialize secrets manager based on configuration
