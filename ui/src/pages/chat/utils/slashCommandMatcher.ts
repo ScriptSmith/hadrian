@@ -42,20 +42,39 @@ export function detectSlashQuery(text: string, caret: number): SlashQuery | null
  * substring (fallback). Skills marked `user_invocable: false` are excluded
  * since the slash-command UI is a user-facing surface. Results are sorted
  * with prefix matches first, then alphabetical.
+ *
+ * The result is cached on `(skills array identity, query)` so the keystroke
+ * paths in `ChatInput` (input-change handler, key-down Enter/Tab handlers,
+ * the popover's own `useMemo`) share work — without this, each keystroke
+ * fanned out into 2–3 redundant linear scans of every user skill.
  */
+let lastSkillsRef: Skill[] | null = null;
+let lastQuery: string | null = null;
+let lastResult: Skill[] = [];
+
 export function matchSkills(skills: Skill[], query: string): Skill[] {
+  if (skills === lastSkillsRef && query === lastQuery) return lastResult;
+
   const q = query.toLowerCase();
   const invocable = skills.filter((s) => s.user_invocable !== false);
-  if (!q) return invocable.slice(0, 20);
-
-  const prefix: Skill[] = [];
-  const contains: Skill[] = [];
-  for (const s of invocable) {
-    const name = s.name.toLowerCase();
-    if (name.startsWith(q)) prefix.push(s);
-    else if (name.includes(q)) contains.push(s);
+  let result: Skill[];
+  if (!q) {
+    result = invocable.slice(0, 20);
+  } else {
+    const prefix: Skill[] = [];
+    const contains: Skill[] = [];
+    for (const s of invocable) {
+      const name = s.name.toLowerCase();
+      if (name.startsWith(q)) prefix.push(s);
+      else if (name.includes(q)) contains.push(s);
+    }
+    prefix.sort((a, b) => a.name.localeCompare(b.name));
+    contains.sort((a, b) => a.name.localeCompare(b.name));
+    result = [...prefix, ...contains].slice(0, 20);
   }
-  prefix.sort((a, b) => a.name.localeCompare(b.name));
-  contains.sort((a, b) => a.name.localeCompare(b.name));
-  return [...prefix, ...contains].slice(0, 20);
+
+  lastSkillsRef = skills;
+  lastQuery = query;
+  lastResult = result;
+  return result;
 }
