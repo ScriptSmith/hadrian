@@ -28,6 +28,7 @@
 //! interval_secs = 60
 //! ```
 
+mod leader_lock;
 mod model_catalog_sync;
 mod oauth_code_cleanup;
 mod provider_health_check;

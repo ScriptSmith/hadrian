@@ -12,6 +12,7 @@ use chrono::Utc;
 use tokio::time::sleep;
 
 use crate::db::DbPool;
+use crate::jobs::leader_lock::{self, LeadershipOutcome, keys};
 
 /// How often to run the cleanup pass. The query is a single indexed DELETE,
 /// so a 10-minute cadence is cheap and keeps the table near-empty even
@@ -29,6 +30,18 @@ pub async fn start_oauth_code_cleanup_worker(db: Arc<DbPool>) {
     loop {
         // Sleep first so we don't race the rest of startup.
         sleep(CLEANUP_INTERVAL).await;
+
+        // Multi-replica deployments would otherwise have every replica fire
+        // this same DELETE every interval; the advisory lock makes one
+        // replica per tick the leader, the rest skip.
+        let _guard = match leader_lock::try_acquire(&db, keys::OAUTH_CODE_CLEANUP).await {
+            LeadershipOutcome::Leader(g) => Some(g),
+            LeadershipOutcome::NotLeader => {
+                tracing::trace!("oauth_code_cleanup: not leader this tick, skipping");
+                continue;
+            }
+            LeadershipOutcome::NoCoordination => None,
+        };
 
         let now = Utc::now();
         match db.oauth_authorization_codes().delete_stale(now).await {

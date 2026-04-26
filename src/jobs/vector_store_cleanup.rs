@@ -20,6 +20,7 @@ use crate::{
     cache::vector_store::VectorBackend,
     config::VectorStoreCleanupConfig,
     db::DbPool,
+    jobs::leader_lock::{self, LeadershipOutcome, keys},
     observability::metrics,
     services::{FileStorage, FileStorageError},
 };
@@ -94,6 +95,19 @@ pub async fn start_vector_store_cleanup_worker(
     let interval = config.interval();
 
     loop {
+        // Skip ticks where another replica already holds the cleanup lock —
+        // running deletes from two replicas would race on external storage
+        // (one replica deletes the file while the other is mid-delete).
+        let _guard = match leader_lock::try_acquire(&db, keys::VECTOR_STORE_CLEANUP).await {
+            LeadershipOutcome::Leader(g) => Some(g),
+            LeadershipOutcome::NotLeader => {
+                tracing::trace!("vector_store_cleanup: not leader this tick, skipping");
+                tokio::time::sleep(interval).await;
+                continue;
+            }
+            LeadershipOutcome::NoCoordination => None,
+        };
+
         match run_cleanup(&db, &vector_store, file_storage.as_ref(), &config).await {
             Ok(result) => {
                 if result.has_deletions() {
