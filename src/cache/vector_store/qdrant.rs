@@ -799,6 +799,15 @@ impl VectorBackend for QdrantStore {
         // `SemanticCache::lookup` call site. We still take the parameter to
         // satisfy the trait and to fold organization_id matching into the
         // server-side `must` filter when a value is present.
+        //
+        // Known limitation (cache-hit rate, not security): when the caller is
+        // unscoped (`organization_id = None`) we cannot push the "match only
+        // entries with no organization_id" condition down to Qdrant. The
+        // post-filter still rejects scoped entries, but if the top_k window
+        // is exhausted by scoped neighbours, valid unscoped matches can fall
+        // outside the window and be missed. Fixing this would require either
+        // an `is_scoped` boolean payload field or a sentinel value in place
+        // of NULL, which would require migrating existing entries.
         tenant_filter: VectorTenantFilter<'_>,
     ) -> VectorStoreResult<Vec<VectorSearchResult>> {
         if embedding.len() != self.dimensions {

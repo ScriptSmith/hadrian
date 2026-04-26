@@ -225,11 +225,16 @@ async fn try_bootstrap_auth(
     };
 
     // Per-IP throttle: refuse further attempts when this source IP is locked out.
-    let ip_str = connecting_ip
-        .map(|ip| ip.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-    if let Some(cache) = &state.cache {
-        let lockout_key = CacheKeys::bootstrap_lockout(&ip_str);
+    //
+    // We deliberately skip rate-limiting when no source IP is available: a single
+    // shared "unknown" bucket would let one attacker lock out every other
+    // bootstrapper sharing that proxy. Bootstrap is also self-disabling once the
+    // first user is created, and the key compare is constant-time, so this
+    // degraded path is acceptable. Operators behind a proxy that strips the
+    // client IP should configure `trusted_proxies` to recover the throttle.
+    let ip_str = connecting_ip.map(|ip| ip.to_string());
+    if let (Some(ip_str), Some(cache)) = (ip_str.as_deref(), &state.cache) {
+        let lockout_key = CacheKeys::bootstrap_lockout(ip_str);
         if let Ok(Some(_)) = cache.get_bytes(&lockout_key).await {
             tracing::warn!(
                 ip = %ip_str,
@@ -270,7 +275,9 @@ async fn try_bootstrap_auth(
                 })
                 .await;
         }
-        increment_bootstrap_rate_limit(&ip_str, state).await;
+        if let Some(ip_str) = ip_str.as_deref() {
+            increment_bootstrap_rate_limit(ip_str, state).await;
+        }
         return Ok(None);
     }
 
@@ -301,7 +308,9 @@ async fn try_bootstrap_auth(
             "Bootstrap auth rejected: database has users"
         );
         // Treat post-bootstrap probing as a failed attempt to deter scanners.
-        increment_bootstrap_rate_limit(&ip_str, state).await;
+        if let Some(ip_str) = ip_str.as_deref() {
+            increment_bootstrap_rate_limit(ip_str, state).await;
+        }
         return Ok(None);
     }
 
@@ -1113,8 +1122,13 @@ async fn validate_bearer_token(
         ],
     };
 
-    let validator =
-        crate::auth::jwt::JwtValidator::with_client(jwt_config, state.http_client.clone())?;
+    let validator = crate::auth::jwt::JwtValidator::with_options(
+        jwt_config,
+        crate::validation::UrlValidationOptions {
+            allow_loopback: state.config.server.allow_loopback_urls,
+            allow_private: state.config.server.allow_private_urls,
+        },
+    )?;
 
     let claims = validator.validate(token).await?;
 

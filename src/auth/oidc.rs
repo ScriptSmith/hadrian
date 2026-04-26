@@ -307,9 +307,9 @@ impl OidcAuthenticator {
                         crate::config::JwtAlgorithm::ES384,
                     ],
                 };
-                *validator = Some(Arc::new(JwtValidator::with_client(
+                *validator = Some(Arc::new(JwtValidator::with_options(
                     jwt_config,
-                    self.http_client.clone(),
+                    self.url_validation_opts,
                 )?));
             }
         }

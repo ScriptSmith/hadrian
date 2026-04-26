@@ -120,7 +120,13 @@ impl GatewayJwtRegistry {
             super::fetch_jwks_uri(discovery_url, http_client, allow_loopback, allow_private)
                 .await?;
         let jwt_config = build_jwt_config_from_sso(issuer, client_id, &jwks_url, config);
-        let validator = Arc::new(JwtValidator::with_client(jwt_config, http_client.clone())?);
+        let validator = Arc::new(JwtValidator::with_options(
+            jwt_config,
+            crate::validation::UrlValidationOptions {
+                allow_loopback,
+                allow_private,
+            },
+        )?);
 
         // Single write lock: remove old issuer index, insert validator, update index
         let mut inner = self.inner.write().await;
