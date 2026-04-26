@@ -191,7 +191,11 @@ export default function ChatPage() {
     captureRawSSEEvents,
     subAgentModel,
     projectId: currentConversation?.projectId ?? pendingProject.id ?? undefined,
-    conversationId,
+    // Use the stable local conversation id, not the URL param. After background
+    // sync assigns a remoteId, useConversationSync rewrites the URL from the
+    // local UUID to the remoteId — that URL flip would otherwise look like a
+    // conversation switch to useChat and abort the in-flight stream.
+    conversationId: currentConversation?.id ?? conversationId,
   });
 
   const { moveToProject } = useConversationsContext();

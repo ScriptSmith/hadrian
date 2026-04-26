@@ -301,10 +301,15 @@ export function useChat({
   // Without this, an in-progress stream from conversation A would commit its
   // assistant message into conversation B's store after the switch.
   // Per-send epoch checks below also drop any results that race the abort.
+  // Skip the undefined → new-id transition: that's a brand-new conversation
+  // being created mid-send, and aborting would kill the very stream we just
+  // kicked off.
   const previousConversationIdRef = useRef(conversationId);
   useEffect(() => {
-    if (previousConversationIdRef.current === conversationId) return;
+    const previous = previousConversationIdRef.current;
+    if (previous === conversationId) return;
     previousConversationIdRef.current = conversationId;
+    if (previous === undefined) return;
     abortControllersRef.current.forEach((controller) => controller.abort());
     abortControllersRef.current = [];
     streamingStore.stopStreaming();
@@ -1980,7 +1985,12 @@ export function useChat({
 
       // Drop results if the user switched conversations during the stream —
       // committing them now would attach them to the wrong conversation.
-      if (sendEpoch === conversationIdRef.current && allResponses.length > 0) {
+      // sendEpoch === undefined means there was no conversation when we kicked
+      // off (the send itself just created one), so we always commit those.
+      if (
+        (sendEpoch === undefined || sendEpoch === conversationIdRef.current) &&
+        allResponses.length > 0
+      ) {
         addAssistantMessages(allResponses);
       }
 
