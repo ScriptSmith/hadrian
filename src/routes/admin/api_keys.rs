@@ -901,11 +901,23 @@ pub async fn revoke(
     // Fetch the key first so authz can scope the check by owner. Without
     // this, the key id alone is insufficient — RBAC needs the org/team/
     // project to distinguish org-admins of different tenants.
-    let key_info = services
-        .api_keys
-        .get_by_id(key_id)
-        .await?
-        .ok_or_else(|| AdminError::NotFound(format!("API key '{}' not found", key_id)))?;
+    //
+    // If the key isn't found, we still need to gate before returning
+    // NotFound — otherwise an attacker probing key ids could distinguish
+    // "key exists but you don't have permission" (Forbidden) from "key
+    // doesn't exist" (NotFound). Run an unscoped authz check first; only
+    // callers with unscoped (system-level) permission see NotFound, every
+    // other caller gets the same Forbidden as a cross-tenant key.
+    let key_info = match services.api_keys.get_by_id(key_id).await? {
+        Some(k) => k,
+        None => {
+            authz.require("api_key", "delete", Some(&key_id.to_string()), None, None, None)?;
+            return Err(AdminError::NotFound(format!(
+                "API key '{}' not found",
+                key_id
+            )));
+        }
+    };
     check_owner_modify_authz(services, &authz, "delete", key_id, &key_info.owner).await?;
     let key_info = Some(key_info);
 
@@ -1054,11 +1066,18 @@ pub async fn rotate(
     let actor = AuditActor::from(&admin_auth);
 
     // Fetch first so authz can scope by owner; see `revoke` for rationale.
-    let old_key_for_authz = services
-        .api_keys
-        .get_by_id(key_id)
-        .await?
-        .ok_or_else(|| AdminError::NotFound(format!("API key '{}' not found", key_id)))?;
+    // Missing-key path runs an unscoped authz check first so non-system
+    // callers can't tell whether the id exists.
+    let old_key_for_authz = match services.api_keys.get_by_id(key_id).await? {
+        Some(k) => k,
+        None => {
+            authz.require("api_key", "update", Some(&key_id.to_string()), None, None, None)?;
+            return Err(AdminError::NotFound(format!(
+                "API key '{}' not found",
+                key_id
+            )));
+        }
+    };
     check_owner_modify_authz(services, &authz, "update", key_id, &old_key_for_authz.owner).await?;
 
     // Validate grace period
