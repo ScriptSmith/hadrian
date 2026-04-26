@@ -632,6 +632,23 @@ pub async fn execute_with_fallback<E: ProviderExecutor>(
             continue;
         };
 
+        // Re-check the circuit breaker right before we call this fallback.
+        // The chain was built once up front, but a provider may have tripped
+        // its breaker since then (often *because of* the failures that drove
+        // us into the fallback path). Skip provider+model combos whose breaker
+        // is open so we don't waste a hop poking a known-down upstream.
+        if let Some(breaker) = state.circuit_breakers.get(&fallback.provider_name) {
+            if let Err(cb_err) = breaker.check() {
+                tracing::info!(
+                    provider = %fallback.provider_name,
+                    model = %fallback.model_name,
+                    error = %cb_err,
+                    "Skipping fallback: circuit breaker is open"
+                );
+                continue;
+            }
+        }
+
         // Check sovereignty requirements for fallback provider/model
         if let Some(reqs) = sovereignty_requirements {
             let model_config = fallback_config.get_model_config(&fallback.model_name);
