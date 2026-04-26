@@ -825,9 +825,7 @@ async fn usage_key_authz(
                 .projects
                 .get_by_id(project_id)
                 .await?
-                .ok_or_else(|| {
-                    AdminError::NotFound(format!("Project '{project_id}' not found"))
-                })?;
+                .ok_or_else(|| AdminError::NotFound(format!("Project '{project_id}' not found")))?;
             authz.require(
                 "usage",
                 "read",

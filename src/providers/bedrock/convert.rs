@@ -996,8 +996,7 @@ pub fn convert_chat_completion_reasoning_to_bedrock_claude(
                 "output_config": { "effort": anthropic_effort }
             });
             if matches_interleaved_thinking_model(model, interleaved_thinking_models) {
-                config["anthropic_beta"] =
-                    serde_json::json!(["interleaved-thinking-2025-05-14"]);
+                config["anthropic_beta"] = serde_json::json!(["interleaved-thinking-2025-05-14"]);
             }
             return Some(config);
         }
@@ -1151,8 +1150,7 @@ pub fn convert_responses_reasoning_to_bedrock_claude(
                 "output_config": { "effort": anthropic_effort }
             });
             if matches_interleaved_thinking_model(model, interleaved_thinking_models) {
-                config["anthropic_beta"] =
-                    serde_json::json!(["interleaved-thinking-2025-05-14"]);
+                config["anthropic_beta"] = serde_json::json!(["interleaved-thinking-2025-05-14"]);
             }
             return Some(config);
         }

@@ -911,7 +911,14 @@ pub async fn revoke(
     let key_info = match services.api_keys.get_by_id(key_id).await? {
         Some(k) => k,
         None => {
-            authz.require("api_key", "delete", Some(&key_id.to_string()), None, None, None)?;
+            authz.require(
+                "api_key",
+                "delete",
+                Some(&key_id.to_string()),
+                None,
+                None,
+                None,
+            )?;
             return Err(AdminError::NotFound(format!(
                 "API key '{}' not found",
                 key_id
@@ -1071,7 +1078,14 @@ pub async fn rotate(
     let old_key_for_authz = match services.api_keys.get_by_id(key_id).await? {
         Some(k) => k,
         None => {
-            authz.require("api_key", "update", Some(&key_id.to_string()), None, None, None)?;
+            authz.require(
+                "api_key",
+                "update",
+                Some(&key_id.to_string()),
+                None,
+                None,
+                None,
+            )?;
             return Err(AdminError::NotFound(format!(
                 "API key '{}' not found",
                 key_id

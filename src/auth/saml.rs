@@ -150,21 +150,17 @@ impl SamlAuthenticator {
             allow_loopback: false,
             allow_private: false,
         };
-        let validated = crate::validation::validate_base_url_opts(metadata_url, url_opts)
-            .map_err(|e| {
+        let validated =
+            crate::validation::validate_base_url_opts(metadata_url, url_opts).map_err(|e| {
                 AuthError::Internal(format!("SAML metadata URL failed SSRF validation: {e}"))
             })?;
         let pinned_client = crate::validation::pinned_reqwest_client(&validated)
             .map_err(|e| AuthError::Internal(format!("Failed to build pinned HTTP client: {e}")))?;
 
-        let response = pinned_client
-            .get(metadata_url)
-            .send()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, url = %metadata_url, "Failed to fetch SAML metadata");
-                AuthError::Internal("Failed to fetch SAML metadata".to_string())
-            })?;
+        let response = pinned_client.get(metadata_url).send().await.map_err(|e| {
+            tracing::error!(error = %e, url = %metadata_url, "Failed to fetch SAML metadata");
+            AuthError::Internal("Failed to fetch SAML metadata".to_string())
+        })?;
 
         if !response.status().is_success() {
             let status = response.status();

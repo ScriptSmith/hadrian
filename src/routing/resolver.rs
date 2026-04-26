@@ -729,8 +729,8 @@ pub async fn dynamic_provider_to_config(
                     health_check: Default::default(),
                     catalog_provider: None,
                     sovereignty: provider.sovereignty.clone(),
-                    interleaved_thinking_models:
-                        crate::config::default_interleaved_thinking_models(),
+                    interleaved_thinking_models: crate::config::default_interleaved_thinking_models(
+                    ),
                 },
             ))
         }

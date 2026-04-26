@@ -881,10 +881,8 @@ where
                     self.stream_ended = true;
                     self.streaming_metrics.report("completed");
                     #[cfg(feature = "server")]
-                    self.usage_drain.try_log(
-                        self.usage_logger.clone(),
-                        self.accumulated_tokens.clone(),
-                    );
+                    self.usage_drain
+                        .try_log(self.usage_logger.clone(), self.accumulated_tokens.clone());
                 }
 
                 Poll::Ready(None)
@@ -897,10 +895,8 @@ where
                     #[cfg(feature = "server")]
                     {
                         tracing::warn!("Stream ended with error, logging partial usage");
-                        self.usage_drain.try_log(
-                            self.usage_logger.clone(),
-                            self.accumulated_tokens.clone(),
-                        );
+                        self.usage_drain
+                            .try_log(self.usage_logger.clone(), self.accumulated_tokens.clone());
                     }
                 }
 

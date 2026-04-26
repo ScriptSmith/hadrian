@@ -173,10 +173,8 @@ struct EntryScope {
 fn entry_authz_scope(entry: &DlqEntry) -> Result<EntryScope, AdminError> {
     match entry.entry_type.as_str() {
         "usage_log" => {
-            let usage_entry: UsageLogEntry =
-                serde_json::from_str(&entry.payload).map_err(|e| {
-                    AdminError::BadRequest(format!("Invalid usage_log payload: {}", e))
-                })?;
+            let usage_entry: UsageLogEntry = serde_json::from_str(&entry.payload)
+                .map_err(|e| AdminError::BadRequest(format!("Invalid usage_log payload: {}", e)))?;
             Ok(EntryScope {
                 org_id: usage_entry.org_id.map(|id| id.to_string()),
                 team_id: usage_entry.team_id.map(|id| id.to_string()),

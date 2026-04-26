@@ -51,8 +51,7 @@ fn resolve_url_from_config(config_path: Option<&str>) -> Result<String, String> 
     let path = config_path.ok_or_else(|| {
         "no --config supplied and no --url override; pass one of them".to_string()
     })?;
-    let config =
-        crate::config::GatewayConfig::from_file(path).map_err(|e| e.to_string())?;
+    let config = crate::config::GatewayConfig::from_file(path).map_err(|e| e.to_string())?;
     let host = match config.server.host.to_string().as_str() {
         // 0.0.0.0 isn't dialable; map back to loopback for the local probe.
         "0.0.0.0" => "127.0.0.1".to_string(),

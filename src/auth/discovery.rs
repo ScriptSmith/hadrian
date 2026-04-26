@@ -40,9 +40,8 @@ pub async fn fetch_jwks_uri(
     // SSRF-validate the discovery URL and pin reqwest to the resolved IPs.
     let validated = crate::validation::validate_base_url_opts(&url, url_opts)
         .map_err(|e| AuthError::Internal(format!("Discovery URL failed SSRF validation: {e}")))?;
-    let pinned_client = crate::validation::pinned_reqwest_client(&validated).map_err(|e| {
-        AuthError::Internal(format!("Failed to build pinned HTTP client: {e}"))
-    })?;
+    let pinned_client = crate::validation::pinned_reqwest_client(&validated)
+        .map_err(|e| AuthError::Internal(format!("Failed to build pinned HTTP client: {e}")))?;
 
     tracing::debug!(url = %url, "Fetching OIDC discovery for JWKS URI");
 

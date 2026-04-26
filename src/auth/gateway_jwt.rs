@@ -4,14 +4,13 @@
 //! Validators are cached across requests so the JWKS cache is reused, fixing the
 //! per-request `JwtValidator` creation that previously discarded the JWKS cache.
 
+#[cfg(feature = "sso")]
+use std::net::IpAddr;
 use std::{
     collections::{HashMap, VecDeque},
     sync::Arc,
     time::Instant,
 };
-
-#[cfg(feature = "sso")]
-use std::net::IpAddr;
 
 #[cfg(feature = "sso")]
 use tokio::sync::Mutex;

@@ -211,9 +211,7 @@ pub fn validate_base_url_opts(
 /// Pass the [`ValidatedUrl`] returned by [`validate_base_url_opts`]; reqwest's
 /// `resolve_to_addrs` overrides DNS for that exact hostname only, ignoring the
 /// port and re-using the request's port.
-pub fn pinned_reqwest_client(
-    validated: &ValidatedUrl,
-) -> Result<reqwest::Client, reqwest::Error> {
+pub fn pinned_reqwest_client(validated: &ValidatedUrl) -> Result<reqwest::Client, reqwest::Error> {
     reqwest::Client::builder()
         .resolve_to_addrs(&validated.host, &validated.addrs)
         .build()

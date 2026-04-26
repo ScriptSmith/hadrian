@@ -49,8 +49,8 @@ impl OrgScimConfigService {
     }
 
     fn hash_token(&self, token: &str) -> String {
-        let mut mac = HmacSha256::new_from_slice(&self.pepper)
-            .expect("HMAC-SHA256 accepts any key length");
+        let mut mac =
+            HmacSha256::new_from_slice(&self.pepper).expect("HMAC-SHA256 accepts any key length");
         mac.update(token.as_bytes());
         hex::encode(mac.finalize().into_bytes())
     }
@@ -211,4 +211,3 @@ fn generate_scim_token() -> (String, String) {
 
     (raw_token, token_prefix)
 }
-

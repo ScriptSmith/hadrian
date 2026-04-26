@@ -32,13 +32,13 @@ use utoipa_scalar::{Scalar, Servable};
 use crate::observability;
 #[cfg(feature = "utoipa")]
 use crate::openapi;
+#[cfg(feature = "server")]
+use crate::streaming;
 use crate::{
     auth, authz, cache, catalog, config, db, dlq, events, guardrails,
     init::create_provider_instance, jobs, models, pricing, providers, secrets, services,
     usage_buffer,
 };
-#[cfg(feature = "server")]
-use crate::streaming;
 #[cfg(feature = "server")]
 use crate::{middleware, routes};
 
@@ -495,7 +495,6 @@ impl AppState {
                 ),
             )
             .with_cache(cache.clone());
-
         }
 
         // Initialize secrets manager based on configuration

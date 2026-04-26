@@ -11,8 +11,10 @@ use std::{sync::Arc, time::Duration as StdDuration};
 use chrono::Utc;
 use tokio::time::sleep;
 
-use crate::db::DbPool;
-use crate::jobs::leader_lock::{self, LeadershipOutcome, keys};
+use crate::{
+    db::DbPool,
+    jobs::leader_lock::{self, LeadershipOutcome, keys},
+};
 
 /// How often to run the cleanup pass. The query is a single indexed DELETE,
 /// so a 10-minute cadence is cheap and keeps the table near-empty even

@@ -206,8 +206,8 @@ impl OidcAuthenticator {
         // DNS resolution to the addresses we just resolved so a fresh DNS
         // lookup between validation and fetch can't redirect us to a
         // re-bound private IP.
-        let validated = validate_base_url_opts(&discovery_url, self.url_validation_opts)
-            .map_err(|e| {
+        let validated =
+            validate_base_url_opts(&discovery_url, self.url_validation_opts).map_err(|e| {
                 tracing::error!(error = %e, "OIDC discovery URL failed SSRF validation");
                 AuthError::Internal(format!("OIDC discovery URL failed SSRF validation: {e}"))
             })?;

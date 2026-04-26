@@ -361,9 +361,10 @@ pub fn init_tracing(config: &ObservabilityConfig) -> Result<TracingGuard, Tracin
 fn build_otel_provider(
     config: &crate::config::TracingConfig,
 ) -> Result<SdkTracerProvider, TracingError> {
-    use crate::config::{OtlpConfig, OtlpProtocol};
     use opentelemetry::KeyValue;
     use opentelemetry_sdk::Resource;
+
+    use crate::config::{OtlpConfig, OtlpProtocol};
 
     // The Helm chart (and most production deployments) drives OpenTelemetry
     // through standard OTel env vars rather than a TOML stanza. Honor them so

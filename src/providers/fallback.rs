@@ -194,8 +194,7 @@ pub fn build_fallback_chain(
     providers_config: &crate::config::ProvidersConfig,
 ) -> Vec<FallbackTarget> {
     let mut chain = Vec::new();
-    let mut seen: std::collections::HashSet<(String, String)> =
-        std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     // Seed with the primary so we never retry the same (provider, model)
     // pair via a redundant model_fallbacks entry.
     seen.insert((
@@ -209,9 +208,9 @@ pub fn build_fallback_chain(
     };
 
     let push_target = |chain: &mut Vec<FallbackTarget>,
-                           seen: &mut std::collections::HashSet<(String, String)>,
-                           provider: String,
-                           model: String|
+                       seen: &mut std::collections::HashSet<(String, String)>,
+                       provider: String,
+                       model: String|
      -> bool {
         if chain.len() >= MAX_FALLBACK_CHAIN_LENGTH {
             tracing::warn!(
