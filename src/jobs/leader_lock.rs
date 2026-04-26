@@ -2,10 +2,16 @@
 //!
 //! Without coordination every gateway replica runs every cleanup tick — that
 //! duplicates upstream calls (vector store deletes, provider health probes),
-//! emits redundant events, and wastes egress. We use Postgres' session-level
-//! `pg_try_advisory_lock(bigint)` so each tick can early-out when another
-//! replica is already holding the lock, releasing automatically when the
-//! holding session disconnects.
+//! emits redundant events, and wastes egress. We use Postgres'
+//! `pg_try_advisory_lock(bigint)` (session-level) for the duration of a
+//! single tick.
+//!
+//! Postgres only releases session-level advisory locks when the holding
+//! session ends, so we explicitly call `pg_advisory_unlock` on Drop and only
+//! return the connection to the pool after the unlock has been observed.
+//! The fallback path on a runtime-tear-down race detaches the connection so
+//! Postgres reclaims the lock when the underlying socket closes — that way
+//! the lock can never persist past tick.
 //!
 //! SQLite is single-process by construction, so the helper is a no-op there;
 //! every tick proceeds.
@@ -38,10 +44,54 @@ pub enum LeadershipOutcome {
 }
 
 /// Holds an open dedicated connection that owns a Postgres advisory lock.
-/// Drop releases the connection (and therefore the lock).
+///
+/// Sync `Drop` cannot `await`, so it spawns a task that calls
+/// `pg_advisory_unlock` and only then drops the pooled connection. If no
+/// Tokio runtime is available (e.g. drop firing during shutdown), the
+/// connection is detached from the pool so dropping it terminates the
+/// Postgres session and releases the lock that way.
 pub struct LeaderGuard {
     #[cfg(feature = "database-postgres")]
-    _conn: sqlx::pool::PoolConnection<sqlx::Postgres>,
+    conn: Option<sqlx::pool::PoolConnection<sqlx::Postgres>>,
+    #[cfg(feature = "database-postgres")]
+    key: i64,
+}
+
+#[cfg(feature = "database-postgres")]
+impl Drop for LeaderGuard {
+    fn drop(&mut self) {
+        let Some(mut conn) = self.conn.take() else {
+            return;
+        };
+        let key = self.key;
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    if let Err(err) = sqlx::query("SELECT pg_advisory_unlock($1)")
+                        .bind(key)
+                        .execute(&mut *conn)
+                        .await
+                    {
+                        tracing::warn!(
+                            error = %err,
+                            key,
+                            "advisory lock: pg_advisory_unlock failed; detaching connection so the session ends and the lock is released",
+                        );
+                        // Detaching drops the inner connection rather than
+                        // returning it to the pool, so the Postgres session
+                        // ends and the lock is released regardless.
+                        drop(conn.detach());
+                    }
+                });
+            }
+            Err(_) => {
+                // No async runtime to issue an explicit unlock. Detach so
+                // dropping the connection closes the socket — Postgres
+                // releases session-level locks when the session ends.
+                drop(conn.detach());
+            }
+        }
+    }
 }
 
 /// Try to acquire the named advisory lock for the duration of the returned
@@ -72,7 +122,10 @@ pub async fn try_acquire(db: &DbPool, key: i64) -> LeadershipOutcome {
             }
         };
         if acquired {
-            LeadershipOutcome::Leader(LeaderGuard { _conn: conn })
+            LeadershipOutcome::Leader(LeaderGuard {
+                conn: Some(conn),
+                key,
+            })
         } else {
             LeadershipOutcome::NotLeader
         }
