@@ -12,6 +12,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from "recharts";
+import { ChartA11y, downsampleForChart } from "./a11y";
 import type { ChartSeries } from "./MultiLineChart";
 import { CHART_COLORS } from "./constants";
 
@@ -79,6 +80,12 @@ export interface StackedBarChartProps {
   showGrid?: boolean;
   /** Whether to show the legend */
   showLegend?: boolean;
+  /** Short description for screen readers (used as figure aria-label). */
+  ariaLabel?: string;
+  /** Optional X-axis label for the SR-only data table (defaults to xKey). */
+  xLabel?: string;
+  /** Hard cap on rendered points before downsampling kicks in. */
+  maxPoints?: number;
 }
 
 export function StackedBarChart({
@@ -90,63 +97,90 @@ export function StackedBarChart({
   xFormatter,
   showGrid = true,
   showLegend = true,
+  ariaLabel,
+  xLabel,
+  maxPoints = 500,
 }: StackedBarChartProps) {
   if (!data.length || !series.length) return null;
 
+  const renderData = downsampleForChart(data, maxPoints);
+  const seriesNames = series.map((s) => s.name).join(", ");
+
   return (
-    <ResponsiveContainer width="100%" height={height}>
-      <RechartsBarChart data={data} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
-        {showGrid && <CartesianGrid strokeDasharray="3 3" className="stroke-border opacity-50" />}
-        <XAxis
-          dataKey={xKey}
-          tick={{ fontSize: 11 }}
-          tickFormatter={xFormatter}
-          className="text-muted-foreground"
-          stroke="currentColor"
-          tickLine={false}
-          axisLine={false}
-        />
-        <YAxis
-          tick={{ fontSize: 11 }}
-          tickFormatter={formatter}
-          className="text-muted-foreground"
-          stroke="currentColor"
-          tickLine={false}
-          axisLine={false}
-          width={60}
-        />
-        <Tooltip
-          isAnimationActive={false}
-          content={
-            (({ active, payload, label }: ChartTooltipProps) => (
-              <ChartTooltip
-                active={active}
-                payload={payload}
-                label={label}
-                formatter={formatter}
-                xFormatter={xFormatter}
-              />
-            )) as CustomTooltipContent
-          }
-        />
-        {showLegend && (
-          <Legend
-            wrapperStyle={{ fontSize: "12px" }}
-            iconType="rect"
-            iconSize={10}
-            formatter={(value) => <span className="text-muted-foreground">{value}</span>}
+    <ChartA11y
+      ariaLabel={ariaLabel ?? `Stacked ${seriesNames} over ${xLabel ?? xKey}`}
+      data={renderData}
+      columns={[
+        {
+          header: xLabel ?? xKey,
+          render: (row) => {
+            const v = row[xKey];
+            return xFormatter && typeof v === "string" ? xFormatter(v) : (v as string | number);
+          },
+        },
+        ...series.map((s) => ({
+          header: s.name,
+          render: (row: Record<string, unknown>) => {
+            const v = row[s.dataKey];
+            return formatter && typeof v === "number" ? formatter(v) : (v as number | undefined);
+          },
+        })),
+      ]}
+    >
+      <ResponsiveContainer width="100%" height={height}>
+        <RechartsBarChart data={renderData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
+          {showGrid && <CartesianGrid strokeDasharray="3 3" className="stroke-border opacity-50" />}
+          <XAxis
+            dataKey={xKey}
+            tick={{ fontSize: 11 }}
+            tickFormatter={xFormatter}
+            className="text-muted-foreground"
+            stroke="currentColor"
+            tickLine={false}
+            axisLine={false}
           />
-        )}
-        {series.map((s, index) => (
-          <Bar
-            key={s.dataKey}
-            dataKey={s.dataKey}
-            name={s.name}
-            stackId="stack"
-            fill={s.color ?? CHART_COLORS[index % CHART_COLORS.length]}
+          <YAxis
+            tick={{ fontSize: 11 }}
+            tickFormatter={formatter}
+            className="text-muted-foreground"
+            stroke="currentColor"
+            tickLine={false}
+            axisLine={false}
+            width={60}
           />
-        ))}
-      </RechartsBarChart>
-    </ResponsiveContainer>
+          <Tooltip
+            isAnimationActive={false}
+            content={
+              (({ active, payload, label }: ChartTooltipProps) => (
+                <ChartTooltip
+                  active={active}
+                  payload={payload}
+                  label={label}
+                  formatter={formatter}
+                  xFormatter={xFormatter}
+                />
+              )) as CustomTooltipContent
+            }
+          />
+          {showLegend && (
+            <Legend
+              wrapperStyle={{ fontSize: "12px" }}
+              iconType="rect"
+              iconSize={10}
+              formatter={(value) => <span className="text-muted-foreground">{value}</span>}
+            />
+          )}
+          {series.map((s, index) => (
+            <Bar
+              key={s.dataKey}
+              dataKey={s.dataKey}
+              name={s.name}
+              stackId="stack"
+              fill={s.color ?? CHART_COLORS[index % CHART_COLORS.length]}
+            />
+          ))}
+        </RechartsBarChart>
+      </ResponsiveContainer>
+    </ChartA11y>
   );
 }

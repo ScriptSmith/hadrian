@@ -12,6 +12,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from "recharts";
+import { ChartA11y, downsampleForChart } from "./a11y";
 import { CHART_COLORS } from "./constants";
 
 interface ChartTooltipProps {
@@ -80,6 +81,12 @@ export interface MultiLineChartProps {
   showGrid?: boolean;
   /** Whether to show the legend */
   showLegend?: boolean;
+  /** Short description for screen readers (used as figure aria-label). */
+  ariaLabel?: string;
+  /** Optional X-axis label for the SR-only data table (defaults to xKey). */
+  xLabel?: string;
+  /** Hard cap on rendered points before LTTB-style downsampling kicks in. */
+  maxPoints?: number;
 }
 
 export function MultiLineChart({
@@ -91,66 +98,93 @@ export function MultiLineChart({
   xFormatter,
   showGrid = true,
   showLegend = true,
+  ariaLabel,
+  xLabel,
+  maxPoints = 500,
 }: MultiLineChartProps) {
   if (!data.length || !series.length) return null;
 
+  const renderData = downsampleForChart(data, maxPoints);
+  const seriesNames = series.map((s) => s.name).join(", ");
+
   return (
-    <ResponsiveContainer width="100%" height={height}>
-      <RechartsLineChart data={data} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
-        {showGrid && <CartesianGrid strokeDasharray="3 3" className="stroke-border opacity-50" />}
-        <XAxis
-          dataKey={xKey}
-          tick={{ fontSize: 11 }}
-          tickFormatter={xFormatter}
-          className="text-muted-foreground"
-          stroke="currentColor"
-          tickLine={false}
-          axisLine={false}
-        />
-        <YAxis
-          tick={{ fontSize: 11 }}
-          tickFormatter={formatter}
-          className="text-muted-foreground"
-          stroke="currentColor"
-          tickLine={false}
-          axisLine={false}
-          width={60}
-        />
-        <Tooltip
-          content={
-            (({ active, payload, label }: ChartTooltipProps) => (
-              <ChartTooltip
-                active={active}
-                payload={payload}
-                label={label}
-                formatter={formatter}
-                xFormatter={xFormatter}
-              />
-            )) as CustomTooltipContent
-          }
-        />
-        {showLegend && (
-          <Legend
-            wrapperStyle={{ fontSize: "12px" }}
-            iconType="line"
-            iconSize={10}
-            formatter={(value) => <span className="text-muted-foreground">{value}</span>}
+    <ChartA11y
+      ariaLabel={ariaLabel ?? `${seriesNames} over ${xLabel ?? xKey}`}
+      data={renderData}
+      columns={[
+        {
+          header: xLabel ?? xKey,
+          render: (row) => {
+            const v = row[xKey];
+            return xFormatter && typeof v === "string" ? xFormatter(v) : (v as string | number);
+          },
+        },
+        ...series.map((s) => ({
+          header: s.name,
+          render: (row: Record<string, unknown>) => {
+            const v = row[s.dataKey];
+            return formatter && typeof v === "number" ? formatter(v) : (v as number | undefined);
+          },
+        })),
+      ]}
+    >
+      <ResponsiveContainer width="100%" height={height}>
+        <RechartsLineChart data={renderData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
+          {showGrid && <CartesianGrid strokeDasharray="3 3" className="stroke-border opacity-50" />}
+          <XAxis
+            dataKey={xKey}
+            tick={{ fontSize: 11 }}
+            tickFormatter={xFormatter}
+            className="text-muted-foreground"
+            stroke="currentColor"
+            tickLine={false}
+            axisLine={false}
           />
-        )}
-        {series.map((s, index) => (
-          <Line
-            key={s.dataKey}
-            type="monotone"
-            dataKey={s.dataKey}
-            name={s.name}
-            stroke={s.color ?? CHART_COLORS[index % CHART_COLORS.length]}
-            strokeWidth={2}
-            dot={false}
-            activeDot={{ r: 4, strokeWidth: 0 }}
-            connectNulls
+          <YAxis
+            tick={{ fontSize: 11 }}
+            tickFormatter={formatter}
+            className="text-muted-foreground"
+            stroke="currentColor"
+            tickLine={false}
+            axisLine={false}
+            width={60}
           />
-        ))}
-      </RechartsLineChart>
-    </ResponsiveContainer>
+          <Tooltip
+            content={
+              (({ active, payload, label }: ChartTooltipProps) => (
+                <ChartTooltip
+                  active={active}
+                  payload={payload}
+                  label={label}
+                  formatter={formatter}
+                  xFormatter={xFormatter}
+                />
+              )) as CustomTooltipContent
+            }
+          />
+          {showLegend && (
+            <Legend
+              wrapperStyle={{ fontSize: "12px" }}
+              iconType="line"
+              iconSize={10}
+              formatter={(value) => <span className="text-muted-foreground">{value}</span>}
+            />
+          )}
+          {series.map((s, index) => (
+            <Line
+              key={s.dataKey}
+              type="monotone"
+              dataKey={s.dataKey}
+              name={s.name}
+              stroke={s.color ?? CHART_COLORS[index % CHART_COLORS.length]}
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 4, strokeWidth: 0 }}
+              connectNulls
+            />
+          ))}
+        </RechartsLineChart>
+      </ResponsiveContainer>
+    </ChartA11y>
   );
 }
