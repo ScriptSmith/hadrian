@@ -437,12 +437,27 @@ impl AppState {
 
                 let max_expr_len = config.auth.rbac.max_expression_length;
                 let max_skill_bytes = config.limits.resource_limits.max_skill_bytes;
+                #[cfg(feature = "sso")]
+                let scim_token_pepper = config
+                    .auth
+                    .session
+                    .as_ref()
+                    .and_then(|s| s.secret.as_ref())
+                    .map(|s| s.as_bytes().to_vec())
+                    .ok_or(
+                        "[auth.session].secret must be configured to derive the SCIM \
+                         token pepper. SCIM bearer-token hashing is now mandatory \
+                         HMAC-SHA256; the unsalted-SHA-256 fallback was removed. \
+                         Set [auth.session].secret in hadrian.toml.",
+                    )?;
                 let services = services::Services::with_event_bus(
                     db.clone(),
                     file_storage,
                     event_bus.clone(),
                     max_expr_len,
                     max_skill_bytes,
+                    #[cfg(feature = "sso")]
+                    scim_token_pepper,
                 );
                 (Some(db), Some(services))
             }
@@ -481,34 +496,6 @@ impl AppState {
             )
             .with_cache(cache.clone());
 
-            // SCIM tokens get HMAC-SHA256 hashed with a pepper so that an
-            // attacker who exfiltrates the database alone can't brute-force
-            // them. We derive the pepper from the configured session secret
-            // when one exists; otherwise we fall back to plain SHA-256 (and
-            // log so operators know to set a session secret).
-            #[cfg(feature = "sso")]
-            {
-                let pepper = config
-                    .auth
-                    .session
-                    .as_ref()
-                    .and_then(|s| s.secret.as_ref())
-                    .map(|secret| secret.as_bytes().to_vec());
-                if pepper.is_none() {
-                    tracing::warn!(
-                        "[auth.session].secret is not set — SCIM tokens will be stored as \
-                         unsalted SHA-256. Configure a session secret to enable HMAC peppering."
-                    );
-                }
-                services.scim_configs = std::mem::replace(
-                    &mut services.scim_configs,
-                    services::OrgScimConfigService::new(
-                        db.clone()
-                            .expect("services exist only when db is configured"),
-                    ),
-                )
-                .with_token_pepper(pepper);
-            }
         }
 
         // Initialize secrets manager based on configuration

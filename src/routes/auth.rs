@@ -1450,6 +1450,7 @@ allow_private_urls = true
 type = "idp"
 
 [auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
 secure = false
 cookie_name = "__test_session"
 
@@ -1697,6 +1698,9 @@ path = "file:auth_test_no_oidc_{}?mode=memory&cache=shared"
 create_if_missing = true
 run_migrations = true
 wal_mode = false
+
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
 
 [providers.test]
 type = "test"
@@ -2105,6 +2109,9 @@ create_if_missing = true
 run_migrations = true
 wal_mode = false
 
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
+
 [providers.test]
 type = "test"
 "#,
@@ -2171,6 +2178,7 @@ allow_private_urls = true
 type = "idp"
 
 [auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
 secure = false
 cookie_name = "__test_session"
 

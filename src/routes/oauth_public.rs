@@ -316,6 +316,7 @@ mod tests {
         let tls = tls.then(|| crate::config::TlsConfig {
             cert_path: String::new(),
             key_path: String::new(),
+            acknowledge_unsupported: true,
         });
         ServerConfig {
             host: host.parse().unwrap(),

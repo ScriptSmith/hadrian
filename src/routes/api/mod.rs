@@ -993,6 +993,9 @@ run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
 
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
+
 [providers]
 default_provider = "test"
 
@@ -2862,6 +2865,9 @@ run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
 
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
+
 [providers]
 default_provider = "test"
 
@@ -2913,6 +2919,9 @@ create_if_missing = true
 run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
+
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
 
 [providers]
 default_provider = "test"
@@ -2999,6 +3008,9 @@ create_if_missing = true
 run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
+
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
 
 [providers]
 default_provider = "test"

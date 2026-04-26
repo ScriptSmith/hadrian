@@ -271,6 +271,9 @@ run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
 
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
+
 [providers.test-openai]
 type = "open_ai"
 api_key = "sk-test-key"

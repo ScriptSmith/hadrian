@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use hmac::{Hmac, Mac};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use uuid::Uuid;
 
 use crate::{
@@ -29,37 +29,30 @@ type HmacSha256 = Hmac<Sha256>;
 /// raw SHA-256, so an attacker who exfiltrates the database alone can't
 /// brute-force tokens — they also need the pepper, which lives only in
 /// process memory and the deployment's session secret material.
+///
+/// The pepper is mandatory: deployments without a configured
+/// `[auth.session].secret` fail to start. Tokens issued under the prior
+/// unsalted-SHA-256 fallback are not migrated and stop authenticating after
+/// upgrade — operators must rotate them.
 #[derive(Clone)]
 pub struct OrgScimConfigService {
     db: Arc<DbPool>,
-    /// HMAC pepper. `None` falls back to plain SHA-256 for tests/wasm/local
-    /// deployments that haven't configured a pepper. Production deployments
-    /// must set one (we wire this from the session secret in `app.rs`).
-    pepper: Option<Arc<Vec<u8>>>,
+    pepper: Arc<Vec<u8>>,
 }
 
 impl OrgScimConfigService {
-    pub fn new(db: Arc<DbPool>) -> Self {
-        Self { db, pepper: None }
-    }
-
-    /// Install the HMAC pepper used for SCIM token hashing. Pass `None` to
-    /// disable peppering (default for environments without a session secret).
-    pub fn with_token_pepper(mut self, pepper: Option<Vec<u8>>) -> Self {
-        self.pepper = pepper.map(Arc::new);
-        self
+    pub fn new(db: Arc<DbPool>, pepper: Vec<u8>) -> Self {
+        Self {
+            db,
+            pepper: Arc::new(pepper),
+        }
     }
 
     fn hash_token(&self, token: &str) -> String {
-        match self.pepper.as_deref() {
-            Some(pepper) => {
-                let mut mac =
-                    HmacSha256::new_from_slice(pepper).expect("HMAC-SHA256 accepts any key length");
-                mac.update(token.as_bytes());
-                hex::encode(mac.finalize().into_bytes())
-            }
-            None => unsalted_sha256(token),
-        }
+        let mut mac = HmacSha256::new_from_slice(&self.pepper)
+            .expect("HMAC-SHA256 accepts any key length");
+        mac.update(token.as_bytes());
+        hex::encode(mac.finalize().into_bytes())
     }
 
     /// Create a new SCIM configuration for an organization.
@@ -219,9 +212,3 @@ fn generate_scim_token() -> (String, String) {
     (raw_token, token_prefix)
 }
 
-/// Plain SHA-256 fallback used when no pepper is configured.
-fn unsalted_sha256(token: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(token.as_bytes());
-    hex::encode(hasher.finalize())
-}
