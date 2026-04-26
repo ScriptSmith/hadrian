@@ -1155,11 +1155,16 @@ fn escape_toml_string(s: &str) -> String {
 /// Generate a fresh 256-bit URL-safe base64 session-signing secret. Called
 /// from the wizard so a freshly-installed deployment has a stable secret
 /// without the operator having to remember to set `SESSION_SECRET`.
+///
+/// Uses `OsRng` directly for an unambiguous CSPRNG sourced from the OS — the
+/// `rand` 0.8 thread RNG is also CSPRNG-quality (ChaCha-seeded from the OS),
+/// but pinning to `OsRng` is secure-by-construction and avoids the wizard
+/// regressing if the `rand` defaults ever shift.
 fn generate_session_secret() -> String {
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-    use rand::RngCore;
+    use rand::{RngCore, rngs::OsRng};
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    OsRng.fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
