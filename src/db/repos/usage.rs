@@ -561,15 +561,4 @@ pub trait UsageRepo: Send + Sync {
         batch_size: u32,
         max_deletes: u64,
     ) -> DbResult<u64>;
-
-    /// Delete daily spend aggregates older than the given cutoff date.
-    ///
-    /// Deletes in batches to avoid locking the database.
-    /// Returns the total number of records deleted.
-    async fn delete_daily_spend_before(
-        &self,
-        cutoff: DateTime<Utc>,
-        batch_size: u32,
-        max_deletes: u64,
-    ) -> DbResult<u64>;
 }

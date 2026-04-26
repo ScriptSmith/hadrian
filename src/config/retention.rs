@@ -12,7 +12,6 @@
 //!
 //! [retention.periods]
 //! usage_records_days = 90
-//! daily_spend_days = 365
 //! audit_logs_days = 730
 //! conversations_deleted_days = 30
 //!
@@ -80,12 +79,6 @@ pub struct RetentionPeriods {
     #[serde(default = "default_usage_records_days")]
     pub usage_records_days: u32,
 
-    /// Days to keep aggregated daily spend records.
-    /// These are lower-volume summary records (one per API key per model per day).
-    /// Default: 365 days
-    #[serde(default = "default_daily_spend_days")]
-    pub daily_spend_days: u32,
-
     /// Days to keep audit log entries.
     /// Audit logs track admin operations and may be required for compliance.
     /// Default: 730 days (2 years)
@@ -104,7 +97,6 @@ impl Default for RetentionPeriods {
     fn default() -> Self {
         Self {
             usage_records_days: default_usage_records_days(),
-            daily_spend_days: default_daily_spend_days(),
             audit_logs_days: default_audit_logs_days(),
             conversations_deleted_days: default_conversations_deleted_days(),
         }
@@ -113,10 +105,6 @@ impl Default for RetentionPeriods {
 
 fn default_usage_records_days() -> u32 {
     90
-}
-
-fn default_daily_spend_days() -> u32 {
-    365
 }
 
 fn default_audit_logs_days() -> u32 {
@@ -177,7 +165,6 @@ impl RetentionConfig {
     /// Check if any retention periods are configured (non-zero).
     pub fn has_any_retention(&self) -> bool {
         self.periods.usage_records_days > 0
-            || self.periods.daily_spend_days > 0
             || self.periods.audit_logs_days > 0
             || self.periods.conversations_deleted_days > 0
     }
@@ -192,11 +179,6 @@ impl RetentionPeriods {
     /// Check if usage records retention is enabled.
     pub fn should_retain_usage_records(&self) -> bool {
         self.usage_records_days > 0
-    }
-
-    /// Check if daily spend retention is enabled.
-    pub fn should_retain_daily_spend(&self) -> bool {
-        self.daily_spend_days > 0
     }
 
     /// Check if audit logs retention is enabled.
@@ -220,7 +202,6 @@ mod tests {
         assert!(!config.enabled);
         assert_eq!(config.interval_hours, 24);
         assert_eq!(config.periods.usage_records_days, 90);
-        assert_eq!(config.periods.daily_spend_days, 365);
         assert_eq!(config.periods.audit_logs_days, 730);
         assert_eq!(config.periods.conversations_deleted_days, 30);
         assert!(!config.safety.dry_run);
@@ -246,7 +227,6 @@ mod tests {
 
             [periods]
             usage_records_days = 60
-            daily_spend_days = 180
             audit_logs_days = 365
             conversations_deleted_days = 7
 
@@ -259,7 +239,6 @@ mod tests {
         assert!(config.enabled);
         assert_eq!(config.interval_hours, 12);
         assert_eq!(config.periods.usage_records_days, 60);
-        assert_eq!(config.periods.daily_spend_days, 180);
         assert_eq!(config.periods.audit_logs_days, 365);
         assert_eq!(config.periods.conversations_deleted_days, 7);
         assert!(config.safety.dry_run);
@@ -274,13 +253,11 @@ mod tests {
 
             [periods]
             usage_records_days = 0
-            daily_spend_days = 0
             audit_logs_days = 0
             conversations_deleted_days = 0
         "#;
         let config: RetentionConfig = toml::from_str(toml).unwrap();
         assert!(!config.periods.should_retain_usage_records());
-        assert!(!config.periods.should_retain_daily_spend());
         assert!(!config.periods.should_retain_audit_logs());
         assert!(!config.periods.should_retain_conversations());
         assert!(!config.has_any_retention());
@@ -292,7 +269,6 @@ mod tests {
         assert!(config.has_any_retention()); // Defaults have retention
 
         config.periods.usage_records_days = 0;
-        config.periods.daily_spend_days = 0;
         config.periods.audit_logs_days = 0;
         config.periods.conversations_deleted_days = 0;
         assert!(!config.has_any_retention());

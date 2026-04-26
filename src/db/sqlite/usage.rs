@@ -4124,51 +4124,6 @@ impl UsageRepo for SqliteUsageRepo {
 
         Ok(total_deleted)
     }
-
-    async fn delete_daily_spend_before(
-        &self,
-        cutoff: DateTime<Utc>,
-        batch_size: u32,
-        max_deletes: u64,
-    ) -> DbResult<u64> {
-        let mut total_deleted: u64 = 0;
-        // daily_spend.date is stored as TEXT in 'YYYY-MM-DD' format
-        let cutoff_date = cutoff.format("%Y-%m-%d").to_string();
-
-        loop {
-            if total_deleted >= max_deletes {
-                break;
-            }
-
-            let remaining = max_deletes - total_deleted;
-            let limit = std::cmp::min(batch_size as u64, remaining) as i64;
-
-            // daily_spend uses composite primary key (api_key_id, date, model), use rowid for deletion
-            let result = query(
-                r#"
-                DELETE FROM daily_spend
-                WHERE rowid IN (
-                    SELECT rowid FROM daily_spend
-                    WHERE date < ?
-                    LIMIT ?
-                )
-                "#,
-            )
-            .bind(&cutoff_date)
-            .bind(limit)
-            .execute(&self.pool)
-            .await?;
-
-            let rows_deleted = result.rows_affected();
-            total_deleted += rows_deleted;
-
-            if rows_deleted < limit as u64 {
-                break;
-            }
-        }
-
-        Ok(total_deleted)
-    }
 }
 
 /// Helper function to compute usage stats from daily cost rows.

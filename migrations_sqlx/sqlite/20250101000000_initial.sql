@@ -636,36 +636,6 @@ CREATE INDEX IF NOT EXISTS idx_usage_records_model ON usage_records(model);
 CREATE INDEX IF NOT EXISTS idx_usage_records_request_id ON usage_records(request_id);
 
 -- ======================================================================
--- Daily Spend
--- ======================================================================
-
--- Materialized aggregates from usage_records, computed periodically
-CREATE TABLE IF NOT EXISTS daily_spend (
-    id TEXT PRIMARY KEY NOT NULL,
-    -- Attribution context
-    api_key_id TEXT REFERENCES api_keys(id) ON DELETE SET NULL,
-    -- Principal-based attribution (mirrors usage_records)
-    user_id TEXT,
-    org_id TEXT,
-    project_id TEXT,
-    team_id TEXT,
-    service_account_id TEXT,
-    date TEXT NOT NULL,
-    model TEXT NOT NULL,
-    -- Total cost in microcents (1/1,000,000 of a dollar) for sub-cent precision
-    total_cost_microcents INTEGER NOT NULL DEFAULT 0,
-    total_tokens INTEGER NOT NULL DEFAULT 0,
-    request_count INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_daily_spend_date ON daily_spend(date);
-CREATE INDEX IF NOT EXISTS idx_daily_spend_api_key_date ON daily_spend(api_key_id, date);
-CREATE INDEX IF NOT EXISTS idx_daily_spend_org_date ON daily_spend(org_id, date);
-CREATE INDEX IF NOT EXISTS idx_daily_spend_user_date ON daily_spend(user_id, date);
-CREATE INDEX IF NOT EXISTS idx_daily_spend_project_date ON daily_spend(project_id, date);
-CREATE INDEX IF NOT EXISTS idx_daily_spend_team_date ON daily_spend(team_id, date);
-
--- ======================================================================
 -- Model Pricing
 -- ======================================================================
 

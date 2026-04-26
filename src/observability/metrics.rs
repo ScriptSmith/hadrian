@@ -389,7 +389,7 @@ pub fn record_dlq_operation(operation: &str, entry_type: &str) {
 /// - Alerting on unexpected deletion volumes
 ///
 /// # Arguments
-/// * `table` - The table from which records were deleted (e.g., "usage_records", "daily_spend", "audit_logs", "conversations")
+/// * `table` - The table from which records were deleted (e.g., "usage_records", "audit_logs", "conversations")
 /// * `count` - The number of records deleted
 pub fn record_retention_deletion(table: &str, count: u64) {
     #[cfg(feature = "prometheus")]

@@ -4030,49 +4030,4 @@ impl UsageRepo for PostgresUsageRepo {
 
         Ok(total_deleted)
     }
-
-    async fn delete_daily_spend_before(
-        &self,
-        cutoff: DateTime<Utc>,
-        batch_size: u32,
-        max_deletes: u64,
-    ) -> DbResult<u64> {
-        let mut total_deleted: u64 = 0;
-        // daily_spend.date is stored as DATE in PostgreSQL
-        let cutoff_date = cutoff.date_naive();
-
-        loop {
-            if total_deleted >= max_deletes {
-                break;
-            }
-
-            let remaining = max_deletes - total_deleted;
-            let limit = std::cmp::min(batch_size as u64, remaining) as i64;
-
-            // PostgreSQL efficient batched deletion using ctid
-            let result = sqlx::query(
-                r#"
-                DELETE FROM daily_spend
-                WHERE ctid IN (
-                    SELECT ctid FROM daily_spend
-                    WHERE date < $1
-                    LIMIT $2
-                )
-                "#,
-            )
-            .bind(cutoff_date)
-            .bind(limit)
-            .execute(&self.write_pool)
-            .await?;
-
-            let rows_deleted = result.rows_affected();
-            total_deleted += rows_deleted;
-
-            if rows_deleted < limit as u64 {
-                break;
-            }
-        }
-
-        Ok(total_deleted)
-    }
 }
