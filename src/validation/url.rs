@@ -204,6 +204,21 @@ pub fn validate_base_url_opts(
     })
 }
 
+/// Build a `reqwest::Client` that pins the given hostname to a fixed list of
+/// resolved socket addresses, so DNS resolution between SSRF validation and
+/// the outbound request cannot redirect us to a freshly-rebound IP.
+///
+/// Pass the [`ValidatedUrl`] returned by [`validate_base_url_opts`]; reqwest's
+/// `resolve_to_addrs` overrides DNS for that exact hostname only, ignoring the
+/// port and re-using the request's port.
+pub fn pinned_reqwest_client(
+    validated: &ValidatedUrl,
+) -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .resolve_to_addrs(&validated.host, &validated.addrs)
+        .build()
+}
+
 /// Validate that a URL uses HTTPS scheme.
 #[cfg(feature = "saml")]
 pub fn require_https(url: &str) -> Result<(), UrlValidationError> {

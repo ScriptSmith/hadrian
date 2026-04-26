@@ -186,12 +186,23 @@ pub async fn fetch_image_url(
         )));
     }
 
-    // SSRF guard: reject loopback/private/cloud-metadata/RFC1918 addresses and
-    // resolve hostnames so DNS rebinding can't redirect us to a blocked range
-    // between this check and the actual HTTP request below. We deliberately do
-    // not enable `allow_loopback` — image URLs from chat content are untrusted.
-    crate::validation::validate_base_url(url, false)
-        .map_err(|e| ImageError::BlockedUrl(e.to_string()))?;
+    // SSRF guard: reject loopback/private/cloud-metadata/RFC1918 addresses,
+    // and pin reqwest's DNS resolution to the addresses we just resolved so a
+    // fresh lookup between validation and fetch can't redirect us to a
+    // re-bound blocked range. We deliberately do not enable `allow_loopback`
+    // — image URLs from chat content are untrusted.
+    let validated = crate::validation::validate_base_url_opts(
+        url,
+        crate::validation::UrlValidationOptions::default(),
+    )
+    .map_err(|e| ImageError::BlockedUrl(e.to_string()))?;
+    let pinned_client = crate::validation::pinned_reqwest_client(&validated)
+        .map_err(|e| ImageError::FetchError(format!("Failed to pin DNS resolution: {e}")))?;
+    // Use the caller-supplied `client` only for connection-pool tuning; for
+    // the actual outbound request we want our IP-pinned client. We don't
+    // reuse the caller's pool because the pin is per-host.
+    let _ = client;
+    let client = &pinned_client;
 
     // Build request with timeout
     let response = client
@@ -244,22 +255,30 @@ pub async fn fetch_image_url(
         });
     }
 
-    // Fetch the body
-    let bytes = response.bytes().await.map_err(|e| {
-        if e.is_timeout() {
-            ImageError::Timeout(config.timeout)
-        } else {
-            ImageError::FetchError(e.to_string())
+    // Stream the body and abort as soon as we cross `max_size_bytes`, instead
+    // of buffering the whole response and discovering the limit was breached
+    // after the fact (which lets a malicious upstream burn server memory
+    // proportional to whatever the server is willing to wait through).
+    use futures::StreamExt;
+    let mut bytes = bytes::BytesMut::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| {
+            if e.is_timeout() {
+                ImageError::Timeout(config.timeout)
+            } else {
+                ImageError::FetchError(e.to_string())
+            }
+        })?;
+        if bytes.len() + chunk.len() > config.max_size_bytes {
+            return Err(ImageError::TooLarge {
+                size: bytes.len() + chunk.len(),
+                limit: config.max_size_bytes,
+            });
         }
-    })?;
-
-    // Check actual size
-    if bytes.len() > config.max_size_bytes {
-        return Err(ImageError::TooLarge {
-            size: bytes.len(),
-            limit: config.max_size_bytes,
-        });
+        bytes.extend_from_slice(&chunk);
     }
+    let bytes = bytes.freeze();
 
     // Convert to base64
     let data = BASE64.encode(&bytes);

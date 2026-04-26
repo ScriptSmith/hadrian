@@ -202,16 +202,23 @@ impl OidcAuthenticator {
             self.config.discovery_base_url().trim_end_matches('/')
         );
 
-        // SSRF-validate the discovery URL before fetching
-        validate_base_url_opts(&discovery_url, self.url_validation_opts).map_err(|e| {
-            tracing::error!(error = %e, "OIDC discovery URL failed SSRF validation");
-            AuthError::Internal(format!("OIDC discovery URL failed SSRF validation: {e}"))
+        // SSRF-validate the discovery URL before fetching, then pin reqwest's
+        // DNS resolution to the addresses we just resolved so a fresh DNS
+        // lookup between validation and fetch can't redirect us to a
+        // re-bound private IP.
+        let validated = validate_base_url_opts(&discovery_url, self.url_validation_opts)
+            .map_err(|e| {
+                tracing::error!(error = %e, "OIDC discovery URL failed SSRF validation");
+                AuthError::Internal(format!("OIDC discovery URL failed SSRF validation: {e}"))
+            })?;
+        let pinned_client = crate::validation::pinned_reqwest_client(&validated).map_err(|e| {
+            tracing::error!(error = %e, "Failed to build pinned reqwest client for OIDC discovery");
+            AuthError::Internal("Failed to build pinned HTTP client for OIDC discovery".to_string())
         })?;
 
         tracing::debug!(url = %discovery_url, "Fetching OIDC discovery document");
 
-        let response = self
-            .http_client
+        let response = pinned_client
             .get(&discovery_url)
             .send()
             .await

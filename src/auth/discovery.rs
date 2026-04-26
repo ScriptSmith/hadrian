@@ -14,10 +14,12 @@ struct DiscoveryDocument {
 /// Fetch the `jwks_uri` from an OIDC discovery endpoint.
 ///
 /// Validates both `discovery_url` and the returned `jwks_uri` against SSRF
-/// using [`crate::validation::validate_base_url_opts`].
+/// using [`crate::validation::validate_base_url_opts`], and pins reqwest's
+/// DNS resolution to the validated addresses to prevent DNS rebinding
+/// between validation and fetch.
 pub async fn fetch_jwks_uri(
     discovery_url: &str,
-    http_client: &reqwest::Client,
+    _http_client: &reqwest::Client,
     allow_loopback: bool,
     allow_private: bool,
 ) -> Result<String, AuthError> {
@@ -25,9 +27,6 @@ pub async fn fetch_jwks_uri(
         allow_loopback,
         allow_private,
     };
-    // SSRF-validate the discovery URL before fetching
-    crate::validation::validate_base_url_opts(discovery_url, url_opts)
-        .map_err(|e| AuthError::Internal(format!("Discovery URL failed SSRF validation: {e}")))?;
 
     let url = if discovery_url.ends_with("/.well-known/openid-configuration") {
         discovery_url.to_string()
@@ -38,9 +37,16 @@ pub async fn fetch_jwks_uri(
         )
     };
 
+    // SSRF-validate the discovery URL and pin reqwest to the resolved IPs.
+    let validated = crate::validation::validate_base_url_opts(&url, url_opts)
+        .map_err(|e| AuthError::Internal(format!("Discovery URL failed SSRF validation: {e}")))?;
+    let pinned_client = crate::validation::pinned_reqwest_client(&validated).map_err(|e| {
+        AuthError::Internal(format!("Failed to build pinned HTTP client: {e}"))
+    })?;
+
     tracing::debug!(url = %url, "Fetching OIDC discovery for JWKS URI");
 
-    let response = http_client
+    let response = pinned_client
         .get(&url)
         .send()
         .await

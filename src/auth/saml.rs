@@ -91,7 +91,6 @@ struct CachedMetadata {
 /// SAML 2.0 authenticator that handles SP-initiated SSO.
 pub struct SamlAuthenticator {
     config: SamlAuthConfig,
-    http_client: reqwest::Client,
     metadata_cache: RwLock<Option<CachedMetadata>>,
     session_store: SharedSessionStore,
 }
@@ -104,21 +103,6 @@ impl SamlAuthenticator {
     pub fn new(config: SamlAuthConfig, session_store: SharedSessionStore) -> Self {
         Self {
             config,
-            http_client: reqwest::Client::new(),
-            metadata_cache: RwLock::new(None),
-            session_store,
-        }
-    }
-
-    /// Create a new SAML authenticator with a custom HTTP client.
-    pub fn with_client(
-        config: SamlAuthConfig,
-        http_client: reqwest::Client,
-        session_store: SharedSessionStore,
-    ) -> Self {
-        Self {
-            config,
-            http_client,
             metadata_cache: RwLock::new(None),
             session_store,
         }
@@ -158,23 +142,28 @@ impl SamlAuthenticator {
             )));
         }
 
-        // SSRF validation: block private IPs, loopback, and cloud metadata endpoints
+        // SSRF validation: block private IPs, loopback, and cloud metadata
+        // endpoints, then pin reqwest's DNS resolution to the addresses we
+        // just resolved so a fresh lookup between validation and fetch can't
+        // redirect us to a re-bound private/loopback/metadata address.
         let url_opts = crate::validation::UrlValidationOptions {
             allow_loopback: false,
             allow_private: false,
         };
-        crate::validation::validate_base_url_opts(metadata_url, url_opts).map_err(|e| {
-            AuthError::Internal(format!("SAML metadata URL failed SSRF validation: {e}"))
-        })?;
+        let validated = crate::validation::validate_base_url_opts(metadata_url, url_opts)
+            .map_err(|e| {
+                AuthError::Internal(format!("SAML metadata URL failed SSRF validation: {e}"))
+            })?;
+        let pinned_client = crate::validation::pinned_reqwest_client(&validated)
+            .map_err(|e| AuthError::Internal(format!("Failed to build pinned HTTP client: {e}")))?;
 
-        let response = self
-            .http_client
+        let response = pinned_client
             .get(metadata_url)
             .send()
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, url = %metadata_url, "Failed to fetch SAML metadata");
-                AuthError::Internal(format!("Failed to fetch SAML metadata: {}", e))
+                AuthError::Internal("Failed to fetch SAML metadata".to_string())
             })?;
 
         if !response.status().is_success() {
@@ -188,13 +177,13 @@ impl SamlAuthenticator {
 
         let metadata_xml = response.text().await.map_err(|e| {
             tracing::error!(error = %e, "Failed to read SAML metadata response");
-            AuthError::Internal(format!("Failed to read SAML metadata: {}", e))
+            AuthError::Internal("Failed to read SAML metadata".to_string())
         })?;
 
         let entity_descriptor: EntityDescriptor = samael::metadata::de::from_str(&metadata_xml)
             .map_err(|e| {
                 tracing::error!(error = %e, "Failed to parse SAML metadata");
-                AuthError::Internal(format!("Failed to parse SAML metadata: {}", e))
+                AuthError::Internal("Failed to parse SAML metadata".to_string())
             })?;
 
         // Update cache
