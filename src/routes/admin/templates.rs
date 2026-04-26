@@ -31,6 +31,42 @@ fn get_services(state: &AppState) -> Result<&Services, AdminError> {
     state.services.as_ref().ok_or(AdminError::ServicesRequired)
 }
 
+/// Authorization scope derived from a template's owner. Mirrors the pattern in
+/// `create()` so policies can deny cross-tenant operations on existing rows.
+struct TemplateAuthzScope {
+    org: Option<String>,
+    team: Option<String>,
+    project: Option<String>,
+}
+
+fn template_authz_scope(template: &Template) -> TemplateAuthzScope {
+    let id = template.owner_id.to_string();
+    match template.owner_type {
+        TemplateOwnerType::Organization => TemplateAuthzScope {
+            org: Some(id),
+            team: None,
+            project: None,
+        },
+        TemplateOwnerType::Team => TemplateAuthzScope {
+            org: None,
+            team: Some(id),
+            project: None,
+        },
+        TemplateOwnerType::Project => TemplateAuthzScope {
+            org: None,
+            team: None,
+            project: Some(id),
+        },
+        // User-owned templates carry no team/org scope; the policy compares
+        // owner_id against the caller subject via resource_id.
+        TemplateOwnerType::User => TemplateAuthzScope {
+            org: None,
+            team: None,
+            project: None,
+        },
+    }
+}
+
 /// Create a template
 #[cfg_attr(feature = "utoipa", utoipa::path(
     post,
@@ -143,13 +179,23 @@ pub async fn get(
 ) -> Result<Json<Template>, AdminError> {
     let services = get_services(&state)?;
 
-    authz.require("template", "read", None, None, None, None)?;
-
+    // Pre-fetch the template so authz sees its owner scope; without this an
+    // all-None call lets a permissive policy return cross-tenant templates.
     let template = services
         .templates
         .get_by_id(id)
         .await?
         .ok_or_else(|| AdminError::NotFound("Template not found".to_string()))?;
+    let id_str = id.to_string();
+    let scope = template_authz_scope(&template);
+    authz.require(
+        "template",
+        "read",
+        Some(&id_str),
+        scope.org.as_deref(),
+        scope.team.as_deref(),
+        scope.project.as_deref(),
+    )?;
 
     Ok(Json(template))
 }
@@ -180,7 +226,23 @@ pub async fn update(
     let services = get_services(&state)?;
     let actor = AuditActor::from(&admin_auth);
 
-    authz.require("template", "update", None, None, None, None)?;
+    // Resolve the existing template's owner scope so authz can deny
+    // cross-tenant updates before we mutate storage.
+    let existing = services
+        .templates
+        .get_by_id(id)
+        .await?
+        .ok_or_else(|| AdminError::NotFound("Template not found".to_string()))?;
+    let id_str = id.to_string();
+    let scope = template_authz_scope(&existing);
+    authz.require(
+        "template",
+        "update",
+        Some(&id_str),
+        scope.org.as_deref(),
+        scope.team.as_deref(),
+        scope.project.as_deref(),
+    )?;
 
     // Capture changes for audit log
     let changes = json!({
@@ -245,14 +307,23 @@ pub async fn delete(
     let services = get_services(&state)?;
     let actor = AuditActor::from(&admin_auth);
 
-    authz.require("template", "delete", None, None, None, None)?;
-
-    // Get template details before deletion for audit log
+    // Pre-fetch the template so authz sees its owner scope rather than
+    // all-None, and reuse the row for the audit log below.
     let template = services
         .templates
         .get_by_id(id)
         .await?
         .ok_or_else(|| AdminError::NotFound("Template not found".to_string()))?;
+    let id_str = id.to_string();
+    let scope = template_authz_scope(&template);
+    authz.require(
+        "template",
+        "delete",
+        Some(&id_str),
+        scope.org.as_deref(),
+        scope.team.as_deref(),
+        scope.project.as_deref(),
+    )?;
 
     // Extract org_id and project_id from owner for audit log
     let (org_id, project_id) = match template.owner_type {
@@ -525,7 +596,10 @@ pub async fn list_by_user(
 ) -> Result<Json<TemplateListResponse>, AdminError> {
     let services = get_services(&state)?;
 
-    authz.require("template", "list", None, None, None, None)?;
+    // Pass the target user_id through `resource_id` so policies can reject
+    // listing templates owned by a different user.
+    let user_id_str = user_id.to_string();
+    authz.require("template", "list", Some(&user_id_str), None, None, None)?;
 
     let limit = query.limit.unwrap_or(100);
     let params = query.try_into_with_cursor()?;

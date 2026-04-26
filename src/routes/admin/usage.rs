@@ -798,7 +798,8 @@ pub async fn get_summary(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<UsageSummaryResponse>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let key_id_str = key_id.to_string();
+    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
 
     let range = query.parse_date_range()?;
@@ -828,7 +829,8 @@ pub async fn get_by_date(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<DailySpendResponse>>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let key_id_str = key_id.to_string();
+    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
 
     let range = query.parse_date_range()?;
@@ -858,7 +860,8 @@ pub async fn get_by_model(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<ModelSpendResponse>>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let key_id_str = key_id.to_string();
+    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
 
     let range = query.parse_date_range()?;
@@ -888,7 +891,8 @@ pub async fn get_by_referer(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<RefererSpendResponse>>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let key_id_str = key_id.to_string();
+    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
 
     let range = query.parse_date_range()?;
@@ -921,7 +925,8 @@ pub async fn get_forecast(
     Query(query): Query<ForecastQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<CostForecastResponse>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let key_id_str = key_id.to_string();
+    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
 
     let forecast = services
@@ -1463,7 +1468,8 @@ pub async fn get_user_summary(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<UsageSummaryResponse>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
 
     // Verify user exists
@@ -1500,7 +1506,8 @@ pub async fn get_user_by_date(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<DailySpendResponse>>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
 
     // Verify user exists
@@ -1537,7 +1544,8 @@ pub async fn get_user_by_model(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<ModelSpendResponse>>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
 
     // Verify user exists
@@ -1577,7 +1585,8 @@ pub async fn get_user_forecast(
     Query(query): Query<ForecastQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<CostForecastResponse>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
 
     // Verify user exists
@@ -1647,7 +1656,8 @@ pub async fn get_provider_summary(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<UsageSummaryResponse>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let provider_str = provider.to_string();
+    authz.require("usage", "read", Some(&provider_str), None, None, None)?;
     let services = get_services(&state)?;
 
     let range = query.parse_date_range()?;
@@ -1679,7 +1689,8 @@ pub async fn get_provider_by_date(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<DailySpendResponse>>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let provider_str = provider.to_string();
+    authz.require("usage", "read", Some(&provider_str), None, None, None)?;
     let services = get_services(&state)?;
 
     let range = query.parse_date_range()?;
@@ -1711,7 +1722,8 @@ pub async fn get_provider_by_model(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<ModelSpendResponse>>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let provider_str = provider.to_string();
+    authz.require("usage", "read", Some(&provider_str), None, None, None)?;
     let services = get_services(&state)?;
 
     let range = query.parse_date_range()?;
@@ -1746,7 +1758,8 @@ pub async fn get_provider_forecast(
     Query(query): Query<ForecastQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<CostForecastResponse>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let provider_str = provider.to_string();
+    authz.require("usage", "read", Some(&provider_str), None, None, None)?;
     let services = get_services(&state)?;
 
     let forecast = services
@@ -2001,7 +2014,8 @@ pub async fn get_me_summary(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let range = query.parse_date_range()?;
     let summary = services.usage.get_summary_by_user(user_id, range).await?;
@@ -2029,7 +2043,8 @@ pub async fn get_me_by_date(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let range = query.parse_date_range()?;
     let daily_spend = services.usage.get_by_date_by_user(user_id, range).await?;
@@ -2057,7 +2072,8 @@ pub async fn get_me_by_model(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let range = query.parse_date_range()?;
     let model_spend = services.usage.get_by_model_by_user(user_id, range).await?;
@@ -2085,7 +2101,8 @@ pub async fn get_by_provider(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<ProviderSpendResponse>>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let key_id_str = key_id.to_string();
+    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let range = query.parse_date_range()?;
     let provider_spend = services.usage.get_by_provider(key_id, range).await?;
@@ -2162,7 +2179,8 @@ pub async fn get_user_by_provider(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<ProviderSpendResponse>>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let _ = services
         .users
@@ -2198,7 +2216,8 @@ pub async fn get_me_by_provider(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let range = query.parse_date_range()?;
     let provider_spend = services
@@ -2227,7 +2246,8 @@ pub async fn get_by_date_model(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<DailyModelSpendResponse>>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let key_id_str = key_id.to_string();
+    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let range = query.parse_date_range()?;
     let data = services.usage.get_by_date_model(key_id, range).await?;
@@ -2331,7 +2351,8 @@ pub async fn get_user_by_date_model(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<DailyModelSpendResponse>>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let _ = services
         .users
@@ -2398,7 +2419,8 @@ pub async fn get_me_by_date_model(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let range = query.parse_date_range()?;
     let data = services
@@ -2427,7 +2449,8 @@ pub async fn get_by_date_provider(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<DailyProviderSpendResponse>>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let key_id_str = key_id.to_string();
+    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let range = query.parse_date_range()?;
     let data = services.usage.get_by_date_provider(key_id, range).await?;
@@ -2531,7 +2554,8 @@ pub async fn get_user_by_date_provider(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<DailyProviderSpendResponse>>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let _ = services
         .users
@@ -2598,7 +2622,8 @@ pub async fn get_me_by_date_provider(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let range = query.parse_date_range()?;
     let data = services
@@ -2627,7 +2652,8 @@ pub async fn get_by_pricing_source(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<PricingSourceSpendResponse>>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let key_id_str = key_id.to_string();
+    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let range = query.parse_date_range()?;
     let data = services.usage.get_by_pricing_source(key_id, range).await?;
@@ -2731,7 +2757,8 @@ pub async fn get_user_by_pricing_source(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<PricingSourceSpendResponse>>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let _ = services
         .users
@@ -2798,7 +2825,8 @@ pub async fn get_me_by_pricing_source(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let range = query.parse_date_range()?;
     let data = services
@@ -2827,7 +2855,8 @@ pub async fn get_by_date_pricing_source(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<DailyPricingSourceSpendResponse>>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let key_id_str = key_id.to_string();
+    authz.require("usage", "read", Some(&key_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let range = query.parse_date_range()?;
     let data = services
@@ -2934,7 +2963,8 @@ pub async fn get_user_by_date_pricing_source(
     Query(query): Query<UsageQuery>,
     Extension(authz): Extension<AuthzContext>,
 ) -> Result<Json<Vec<DailyPricingSourceSpendResponse>>, AdminError> {
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let _ = services
         .users
@@ -3001,7 +3031,8 @@ pub async fn get_me_by_date_pricing_source(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
     let range = query.parse_date_range()?;
     let data = services
@@ -4104,7 +4135,8 @@ pub async fn list_me_logs(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
 
     let limit = params.limit.unwrap_or(100).min(1000);
@@ -4298,7 +4330,8 @@ pub async fn export_me_logs(
     let user_id = admin_auth.identity.user_id.ok_or(AdminError::NotFound(
         "User not found in database".to_string(),
     ))?;
-    authz.require("usage", "read", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("usage", "read", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
 
     let (params, format) = export_query.into_params();

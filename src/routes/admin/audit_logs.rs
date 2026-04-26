@@ -45,7 +45,6 @@ pub async fn list(
     Extension(authz): Extension<AuthzContext>,
     Query(query): Query<AuditLogQuery>,
 ) -> Result<Json<AuditLogListResponse>, AdminError> {
-    authz.require("audit_log", "list", None, None, None, None)?;
     let services = get_services(&state)?;
 
     let limit = query.limit.unwrap_or(100);
@@ -92,6 +91,12 @@ pub async fn list(
         }
     }
 
+    // Run authz with the effective org scope so policies see the tenant they
+    // need to allow/deny against. `authz.require` evaluated with all-None
+    // would let anyone with `audit_log:list` see logs across orgs.
+    let org_scope = query.org_id.map(|id| id.to_string());
+    authz.require("audit_log", "list", None, org_scope.as_deref(), None, None)?;
+
     let result = services.audit_logs.list(query).await?;
 
     let pagination = PaginationMeta::with_cursors(
@@ -124,14 +129,28 @@ pub async fn get(
     Extension(authz): Extension<AuthzContext>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<AuditLog>, AdminError> {
-    authz.require("audit_log", "read", None, None, None, None)?;
     let services = get_services(&state)?;
 
+    // Pre-fetch the row so authz can see the entry's org/project rather than
+    // an all-None scope; otherwise a permissive policy would expose every
+    // tenant's audit history through this endpoint.
     let entry = services
         .audit_logs
         .get_by_id(id)
         .await?
         .ok_or_else(|| AdminError::NotFound("Audit log entry not found".to_string()))?;
+
+    let id_str = id.to_string();
+    let org_scope = entry.org_id.map(|o| o.to_string());
+    let project_scope = entry.project_id.map(|p| p.to_string());
+    authz.require(
+        "audit_log",
+        "read",
+        Some(&id_str),
+        org_scope.as_deref(),
+        None,
+        project_scope.as_deref(),
+    )?;
 
     Ok(Json(entry))
 }

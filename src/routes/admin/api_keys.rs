@@ -162,8 +162,18 @@ pub(super) async fn check_owner_create_authz(
                 Some(&project_id.to_string()),
             )?;
         }
-        crate::models::ApiKeyOwner::User { .. } => {
-            authz.require("api_key", "create", None, None, None, None)?;
+        crate::models::ApiKeyOwner::User { user_id } => {
+            // Surface the target user_id via `resource_id` so policies can
+            // reject cross-user key creation; `check_owner_modify_authz`
+            // already does the same for revoke/rotate.
+            authz.require(
+                "api_key",
+                "create",
+                Some(&user_id.to_string()),
+                None,
+                None,
+                None,
+            )?;
         }
         crate::models::ApiKeyOwner::ServiceAccount { service_account_id } => {
             let sa = services
@@ -765,7 +775,10 @@ pub async fn list_by_user(
     Path(user_id): Path<Uuid>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<ApiKeyListResponse>, AdminError> {
-    authz.require("api_key", "list", None, None, None, None)?;
+    // Pass the target user_id through `resource_id` so policies can compare
+    // it against the calling subject and reject cross-user listing.
+    let user_id_str = user_id.to_string();
+    authz.require("api_key", "list", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
 
     let limit = query.limit.unwrap_or(100);
