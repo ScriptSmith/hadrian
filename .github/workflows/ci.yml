@@ -451,6 +451,9 @@ jobs:
       - name: Fetch reference specs
         run: ./scripts/fetch-openapi-specs.sh openai
 
+      - name: Test conformance script
+        run: ./scripts/test_openapi_conformance.py
+
       - name: Run conformance check
         run: ./scripts/openapi-conformance.py
 
