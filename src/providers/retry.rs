@@ -18,10 +18,34 @@ use crate::{
 
 /// Determines if a reqwest error is retryable.
 ///
-/// Connection errors, timeouts, and other transient issues are retryable.
+/// Only errors where we are reasonably confident the request did *not* reach
+/// (or was not processed by) the upstream server are retried. In particular,
+/// `is_body()` errors mean the request body failed mid-transmission after the
+/// server already accepted the connection — retrying would risk re-charging
+/// the user for an upstream that already started inference / token-counting.
+///
+/// Retryable:
+/// - Connection errors (`is_connect`): TCP handshake / DNS / TLS setup failed.
+/// - Timeouts (`is_timeout`): the call did not complete in the configured time.
+///   Note this is still ambiguous — the server may have processed the request
+///   but failed to deliver the response in time. We keep it retryable because
+///   the dominant case in practice is hung connects / hung first byte; users
+///   that want stricter no-double-bill semantics should narrow `max_retries`.
+///
+/// Not retryable:
+/// - `is_body()` — body stream errored after the server accepted bytes.
+/// - `is_decode()` / `is_redirect()` / `is_builder()` / `is_status()` — either
+///   we already got a response or the failure is a programming/config bug that
+///   retrying won't fix.
+/// - The catch-all `is_request()`, which conflates the above.
 pub fn is_retryable_error(error: &reqwest::Error) -> bool {
-    // Connection errors, timeouts, and other transient issues
-    let mut retryable = error.is_timeout() || error.is_request();
+    // Body errors mean bytes were already in flight to the server. Surface
+    // those to the caller without retrying so we don't double-bill.
+    if error.is_body() {
+        return false;
+    }
+
+    let mut retryable = error.is_timeout();
     #[cfg(not(target_arch = "wasm32"))]
     {
         retryable = retryable || error.is_connect();
