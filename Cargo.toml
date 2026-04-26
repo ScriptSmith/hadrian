@@ -2,9 +2,6 @@
 name = "hadrian"
 version = "0.0.0-alpha.12"
 edition = "2024"
-# 1.91 stabilized `str::{floor,ceil}_char_boundary`; 1.88 stabilized `if let`
-# chains; 1.85 stabilized edition 2024.
-rust-version = "1.91"
 license = "Apache-2.0 OR MIT"
 description = "An open-source AI Gateway providing a unified OpenAI-compatible API for routing requests to multiple LLM providers"
 repository = "https://github.com/ScriptSmith/hadrian"
