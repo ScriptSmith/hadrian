@@ -108,6 +108,10 @@ pub struct BedrockProvider {
     image_fetch_config: ImageFetchConfig,
     /// Custom Converse API base URL override.
     converse_base_url_override: Option<String>,
+    /// Substring allowlist of models that get the
+    /// `interleaved-thinking-2025-05-14` beta header (mirrors the Anthropic
+    /// provider's allowlist).
+    interleaved_thinking_models: Vec<String>,
     /// Cached inference profiles
     inference_profile_cache: Arc<RwLock<InferenceProfileCache>>,
     /// Cached foundation models
@@ -158,6 +162,7 @@ impl BedrockProvider {
             streaming_buffer: config.streaming_buffer.clone(),
             image_fetch_config,
             converse_base_url_override: config.converse_base_url.clone(),
+            interleaved_thinking_models: config.interleaved_thinking_models.clone(),
             inference_profile_cache: Arc::new(RwLock::new(InferenceProfileCache::default())),
             foundation_models_cache: Arc::new(RwLock::new(FoundationModelsCache::default())),
         }
@@ -573,7 +578,11 @@ impl Provider for BedrockProvider {
 
         // Convert reasoning config based on model type
         let additional_model_request_fields = if is_claude_model(&model) {
-            convert_chat_completion_reasoning_to_bedrock_claude(payload.reasoning.as_ref(), &model)
+            convert_chat_completion_reasoning_to_bedrock_claude(
+                payload.reasoning.as_ref(),
+                &model,
+                &self.interleaved_thinking_models,
+            )
         } else if is_nova_model(&model) {
             convert_chat_completion_reasoning_to_bedrock_nova(payload.reasoning.as_ref())
         } else {
@@ -710,7 +719,11 @@ impl Provider for BedrockProvider {
 
         // Convert reasoning config based on model type
         let additional_model_request_fields = if is_claude_model(&model) {
-            convert_responses_reasoning_to_bedrock_claude(payload.reasoning.as_ref(), &model)
+            convert_responses_reasoning_to_bedrock_claude(
+                payload.reasoning.as_ref(),
+                &model,
+                &self.interleaved_thinking_models,
+            )
         } else if is_nova_model(&model) {
             convert_responses_reasoning_to_bedrock_nova(payload.reasoning.as_ref())
         } else {
@@ -978,6 +991,7 @@ mod url_tests {
             health_check: Default::default(),
             catalog_provider: None,
             sovereignty: None,
+            interleaved_thinking_models: crate::config::default_interleaved_thinking_models(),
         };
         let registry = CircuitBreakerRegistry::default();
         BedrockProvider::from_config_with_registry(&config, "test", &registry)

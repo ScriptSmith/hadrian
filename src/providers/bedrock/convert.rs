@@ -972,6 +972,7 @@ pub(super) fn convert_bedrock_to_responses_response(
 pub fn convert_chat_completion_reasoning_to_bedrock_claude(
     reasoning: Option<&CreateChatCompletionReasoning>,
     model: &str,
+    interleaved_thinking_models: &[String],
 ) -> Option<serde_json::Value> {
     let reasoning = reasoning?;
 
@@ -990,11 +991,15 @@ pub fn convert_chat_completion_reasoning_to_bedrock_claude(
                 ReasoningEffort::High => "high",
                 ReasoningEffort::None => unreachable!(),
             };
-            return Some(serde_json::json!({
+            let mut config = serde_json::json!({
                 "reasoning_config": { "type": "adaptive" },
-                "anthropic_beta": ["interleaved-thinking-2025-05-14"],
                 "output_config": { "effort": anthropic_effort }
-            }));
+            });
+            if matches_interleaved_thinking_model(model, interleaved_thinking_models) {
+                config["anthropic_beta"] =
+                    serde_json::json!(["interleaved-thinking-2025-05-14"]);
+            }
+            return Some(config);
         }
 
         let reasoning_config = match effort {
@@ -1089,6 +1094,16 @@ fn supports_adaptive_thinking(model: &str) -> bool {
     model.contains("opus-4-6") || model.contains("opus-4.6")
 }
 
+/// Whether the model matches a substring in the configured allowlist for
+/// the `interleaved-thinking-2025-05-14` beta header. Bedrock-hosted Claude
+/// models that don't accept the header reject the request, so the header is
+/// gated by an opt-in list (matches the Anthropic provider's behaviour).
+fn matches_interleaved_thinking_model(model: &str, allowlist: &[String]) -> bool {
+    allowlist
+        .iter()
+        .any(|pattern| !pattern.is_empty() && model.contains(pattern))
+}
+
 /// Convert Responses API reasoning config to Bedrock Claude format.
 ///
 /// For Anthropic Claude models on Bedrock, the thinking configuration uses
@@ -1101,6 +1116,7 @@ fn supports_adaptive_thinking(model: &str) -> bool {
 pub fn convert_responses_reasoning_to_bedrock_claude(
     reasoning: Option<&ResponsesReasoningConfig>,
     model: &str,
+    interleaved_thinking_models: &[String],
 ) -> Option<serde_json::Value> {
     let reasoning = reasoning?;
 
@@ -1130,11 +1146,15 @@ pub fn convert_responses_reasoning_to_bedrock_claude(
                 Some(ResponsesReasoningEffort::Medium) | None => "medium",
                 Some(ResponsesReasoningEffort::High) => "high",
             };
-            return Some(serde_json::json!({
+            let mut config = serde_json::json!({
                 "reasoning_config": { "type": "adaptive" },
-                "anthropic_beta": ["interleaved-thinking-2025-05-14"],
                 "output_config": { "effort": anthropic_effort }
-            }));
+            });
+            if matches_interleaved_thinking_model(model, interleaved_thinking_models) {
+                config["anthropic_beta"] =
+                    serde_json::json!(["interleaved-thinking-2025-05-14"]);
+            }
+            return Some(config);
         }
 
         // Non-adaptive: use fixed budget tokens
@@ -2207,6 +2227,7 @@ mod reasoning_tests {
         let result = convert_responses_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2228,6 +2249,7 @@ mod reasoning_tests {
         let result = convert_responses_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2248,6 +2270,7 @@ mod reasoning_tests {
         let result = convert_responses_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2268,6 +2291,7 @@ mod reasoning_tests {
         let result = convert_responses_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2288,6 +2312,7 @@ mod reasoning_tests {
         let result = convert_responses_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2504,6 +2529,7 @@ mod reasoning_tests {
         let result = convert_chat_completion_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2523,6 +2549,7 @@ mod reasoning_tests {
         let result = convert_chat_completion_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2542,6 +2569,7 @@ mod reasoning_tests {
         let result = convert_chat_completion_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2561,6 +2589,7 @@ mod reasoning_tests {
         let result = convert_chat_completion_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2580,6 +2609,7 @@ mod reasoning_tests {
         let result = convert_chat_completion_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2598,6 +2628,7 @@ mod reasoning_tests {
         let result = convert_chat_completion_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_none());
     }
@@ -2607,6 +2638,7 @@ mod reasoning_tests {
         let result = convert_chat_completion_reasoning_to_bedrock_claude(
             None,
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_none());
     }
@@ -2729,6 +2761,7 @@ mod reasoning_tests {
         let result = convert_chat_completion_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-opus-4-6-20260525-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2753,6 +2786,7 @@ mod reasoning_tests {
         let result = convert_chat_completion_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-opus-4-6-20260525-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2774,6 +2808,7 @@ mod reasoning_tests {
         let result = convert_chat_completion_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-opus-4-6-20260525-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2792,6 +2827,7 @@ mod reasoning_tests {
         let result = convert_chat_completion_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-opus-4-6-20260525-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2814,6 +2850,7 @@ mod reasoning_tests {
         let result = convert_responses_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-opus-4-6-20260525-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2841,6 +2878,7 @@ mod reasoning_tests {
         let result = convert_responses_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-opus-4-6-20260525-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2865,6 +2903,7 @@ mod reasoning_tests {
         let result = convert_responses_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-opus-4-6-20260525-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2887,6 +2926,7 @@ mod reasoning_tests {
         let result = convert_chat_completion_reasoning_to_bedrock_claude(
             Some(&config),
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            &["opus-4-6".to_string(), "opus-4.6".to_string()],
         );
         assert!(result.is_some());
 
@@ -2897,5 +2937,51 @@ mod reasoning_tests {
         // Should NOT have adaptive fields
         assert!(json.get("anthropic_beta").is_none());
         assert!(json.get("output_config").is_none());
+    }
+
+    #[test]
+    fn test_interleaved_thinking_allowlist_omits_header_when_empty() {
+        let config = CreateChatCompletionReasoning {
+            effort: Some(ReasoningEffort::High),
+            summary: None,
+        };
+
+        // Adaptive-capable model + empty allowlist -> still adaptive but no
+        // anthropic_beta header (some Bedrock-hosted Claude models reject it).
+        let result = convert_chat_completion_reasoning_to_bedrock_claude(
+            Some(&config),
+            "anthropic.claude-opus-4-6-20260525-v1:0",
+            &[],
+        );
+        let json = result.unwrap();
+        assert_eq!(
+            json.get("reasoning_config").unwrap().get("type").unwrap(),
+            "adaptive"
+        );
+        assert!(json.get("anthropic_beta").is_none());
+        assert_eq!(
+            json.get("output_config").unwrap().get("effort").unwrap(),
+            "high"
+        );
+    }
+
+    #[test]
+    fn test_interleaved_thinking_allowlist_substring_match() {
+        let config = ResponsesReasoningConfig {
+            effort: Some(ResponsesReasoningEffort::Medium),
+            summary: None,
+            enabled: None,
+            max_tokens: None,
+        };
+        // Custom allowlist with a different substring still matches via
+        // contains() — operators can opt models in/out without recompiling.
+        let result = convert_responses_reasoning_to_bedrock_claude(
+            Some(&config),
+            "anthropic.claude-opus-4-6-20260525-v1:0",
+            &["opus-4-6".to_string()],
+        );
+        let json = result.unwrap();
+        let beta = json.get("anthropic_beta").unwrap().as_array().unwrap();
+        assert!(beta.iter().any(|v| v == "interleaved-thinking-2025-05-14"));
     }
 }

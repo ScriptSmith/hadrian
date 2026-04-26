@@ -892,6 +892,15 @@ pub struct BedrockProviderConfig {
     /// Sovereignty and compliance metadata for this provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sovereignty: Option<SovereigntyMetadata>,
+
+    /// Substring allowlist of Bedrock-hosted Claude models that should
+    /// receive the `interleaved-thinking-2025-05-14` beta header when
+    /// adaptive thinking is requested. Some Bedrock-hosted Claude models
+    /// reject the header, so this lets operators opt models in/out without
+    /// recompiling. Set to an empty list to disable the beta header.
+    /// Mirrors `AnthropicProviderConfig.interleaved_thinking_models`.
+    #[serde(default = "default_interleaved_thinking_models")]
+    pub interleaved_thinking_models: Vec<String>,
 }
 
 #[cfg(feature = "provider-bedrock")]
