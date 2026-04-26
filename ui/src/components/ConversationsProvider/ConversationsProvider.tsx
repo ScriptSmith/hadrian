@@ -243,13 +243,17 @@ export function ConversationsProvider({ children }: ConversationsProviderProps) 
     [storedConversations]
   );
 
+  // Track the live deserialized form so setConversations doesn't have to
+  // re-parse every Date on each update (was the dominant cost on hot paths
+  // like streaming token appends).
+  const conversationsRef = useRef<Conversation[]>(conversations);
+  conversationsRef.current = conversations;
+
   const setConversations = useCallback(
     (updater: (prev: Conversation[]) => Conversation[]) => {
-      setStoredConversations((prev) => {
-        const currentConvs = deserializeConversations(prev);
-        const newConvs = updater(currentConvs);
-        return serializeConversations(newConvs);
-      });
+      const next = updater(conversationsRef.current);
+      conversationsRef.current = next;
+      setStoredConversations(serializeConversations(next));
     },
     [setStoredConversations]
   );
