@@ -1285,7 +1285,7 @@ async fn try_authenticate(
             let identity = if let Some(id) = try_session_api_auth(cookies, state).await? {
                 Some(id)
             } else {
-                try_jwt_api_auth(headers, state).await?
+                try_jwt_api_auth(headers, connecting_ip, state).await?
             };
             let kind = match (api_key, identity) {
                 (Some(api_key), Some(identity)) => IdentityKind::Both {
@@ -1758,6 +1758,7 @@ async fn try_identity_auth(
 #[cfg(feature = "sso")]
 async fn try_jwt_api_auth(
     headers: &axum::http::HeaderMap,
+    connecting_ip: Option<IpAddr>,
     state: &AppState,
 ) -> Result<Option<Identity>, AuthError> {
     // JWT auth is only available via per-org GatewayJwtRegistry (Idp mode)
@@ -1799,6 +1800,12 @@ async fn try_jwt_api_auth(
             // find_or_load_by_issuer deduplicates concurrent loads and caches
             // negative results to prevent DB query amplification.
             let validators = if let Some(db) = &state.db {
+                let rate_limit = match (&state.cache, connecting_ip) {
+                    (Some(cache), Some(ip)) => {
+                        Some(crate::auth::gateway_jwt::LazyLoadRateLimit { cache, ip })
+                    }
+                    _ => None,
+                };
                 match registry
                     .find_or_load_by_issuer(
                         &iss,
@@ -1806,6 +1813,7 @@ async fn try_jwt_api_auth(
                         &state.http_client,
                         state.config.server.allow_loopback_urls,
                         state.config.server.allow_private_urls,
+                        rate_limit,
                     )
                     .await
                 {
@@ -2493,7 +2501,7 @@ mod tests {
         let state = create_multi_auth_state("X-API-Key", "gw_");
         let headers = make_headers(vec![("Authorization", "Bearer gw_test_api_key")]);
 
-        let result = try_jwt_api_auth(&headers, &state).await;
+        let result = try_jwt_api_auth(&headers, None, &state).await;
 
         // Should return Ok(None) - has API key prefix, handled by API key auth
         assert!(result.is_ok());
