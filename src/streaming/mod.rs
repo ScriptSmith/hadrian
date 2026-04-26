@@ -792,6 +792,7 @@ impl<S> UsageTrackingStream<S>
 where
     S: Stream<Item = Result<Bytes, io::Error>> + Unpin,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         stream: S,
         db: Arc<DbPool>,

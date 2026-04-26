@@ -5351,6 +5351,7 @@ ttl_secs = 86400
 
     /// Create a test application with a custom config string
     async fn test_app_with_config(config_str: &str) -> axum::Router {
+        #[cfg_attr(not(feature = "sso"), allow(unused_mut))]
         let mut config =
             crate::config::GatewayConfig::parse(config_str).expect("Failed to parse test config");
         // The SCIM token pepper is mandatory; tests that don't override

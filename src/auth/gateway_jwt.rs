@@ -469,6 +469,7 @@ mod tests {
         assert_eq!(found[0].0, org2);
     }
 
+    #[cfg(feature = "sso")]
     #[tokio::test]
     async fn test_negative_cache_invalidation() {
         let registry = GatewayJwtRegistry::new();

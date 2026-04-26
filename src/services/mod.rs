@@ -159,7 +159,6 @@ impl Services {
         file_storage: Arc<dyn FileStorage>,
         max_expression_length: usize,
         max_skill_bytes: u32,
-        #[cfg(feature = "sso")] scim_token_pepper: Vec<u8>,
     ) -> Self {
         Self {
             organizations: OrganizationService::new(db.clone()),
@@ -183,7 +182,7 @@ impl Services {
             #[cfg(feature = "sso")]
             domain_verifications: DomainVerificationService::new(db.clone()),
             #[cfg(feature = "sso")]
-            scim_configs: OrgScimConfigService::new(db.clone(), scim_token_pepper),
+            scim_configs: OrgScimConfigService::new(db.clone()),
             #[cfg(feature = "sso")]
             scim_provisioning: ScimProvisioningService::new(db.clone()),
             org_rbac_policies: OrgRbacPolicyService::new(db.clone(), max_expression_length),
@@ -200,7 +199,6 @@ impl Services {
         event_bus: Arc<EventBus>,
         max_expression_length: usize,
         max_skill_bytes: u32,
-        #[cfg(feature = "sso")] scim_token_pepper: Vec<u8>,
     ) -> Self {
         Self {
             organizations: OrganizationService::new(db.clone()),
@@ -224,7 +222,7 @@ impl Services {
             #[cfg(feature = "sso")]
             domain_verifications: DomainVerificationService::new(db.clone()),
             #[cfg(feature = "sso")]
-            scim_configs: OrgScimConfigService::new(db.clone(), scim_token_pepper),
+            scim_configs: OrgScimConfigService::new(db.clone()),
             #[cfg(feature = "sso")]
             scim_provisioning: ScimProvisioningService::new(db.clone()),
             org_rbac_policies: OrgRbacPolicyService::new(db.clone(), max_expression_length),

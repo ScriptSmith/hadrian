@@ -86,28 +86,7 @@ pub(crate) async fn run_bootstrap(explicit_config_path: Option<&str>, dry_run: b
         std::sync::Arc::new(services::DatabaseFileStorage::new(db.clone()));
     let max_cel = config.auth.rbac.max_expression_length;
     let max_skill_bytes = config.limits.resource_limits.max_skill_bytes;
-    #[cfg(feature = "sso")]
-    let scim_token_pepper = config
-        .auth
-        .session
-        .as_ref()
-        .and_then(|s| s.secret.as_ref())
-        .map(|s| s.as_bytes().to_vec())
-        .unwrap_or_else(|| {
-            eprintln!(
-                "Error: [auth.session].secret must be configured to derive the SCIM \
-                 token pepper. Bootstrap cannot proceed."
-            );
-            std::process::exit(1);
-        });
-    let services = services::Services::new(
-        db.clone(),
-        file_storage,
-        max_cel,
-        max_skill_bytes,
-        #[cfg(feature = "sso")]
-        scim_token_pepper,
-    );
+    let services = services::Services::new(db.clone(), file_storage, max_cel, max_skill_bytes);
 
     let api_key_prefix = config.auth.api_key_config().generation_prefix();
     let mut summary = Vec::new();

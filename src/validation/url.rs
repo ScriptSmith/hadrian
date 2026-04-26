@@ -211,10 +211,21 @@ pub fn validate_base_url_opts(
 /// Pass the [`ValidatedUrl`] returned by [`validate_base_url_opts`]; reqwest's
 /// `resolve_to_addrs` overrides DNS for that exact hostname only, ignoring the
 /// port and re-using the request's port.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn pinned_reqwest_client(validated: &ValidatedUrl) -> Result<reqwest::Client, reqwest::Error> {
     reqwest::Client::builder()
         .resolve_to_addrs(&validated.host, &validated.addrs)
         .build()
+}
+
+/// On wasm32, reqwest delegates to the browser's `fetch` API which performs
+/// its own DNS resolution and exposes no hook to pin a hostname to specific
+/// addresses. Return a default client; SSRF validation already ran on the
+/// host, and the browser's same-origin / fetch policies are the actual
+/// security boundary in this environment.
+#[cfg(target_arch = "wasm32")]
+pub fn pinned_reqwest_client(_validated: &ValidatedUrl) -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder().build()
 }
 
 /// Validate that a URL uses HTTPS scheme.

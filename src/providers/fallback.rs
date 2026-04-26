@@ -166,7 +166,7 @@ pub struct FallbackTarget {
 /// Without a cap, a misconfiguration where every provider lists every other
 /// provider as a fallback can produce a very long chain (latency budget eaten
 /// + amplified upstream pressure if many of them fail). 8 is generous in
-/// practice — Hadrian's documented examples top out at 3-4.
+///   practice — Hadrian's documented examples top out at 3-4.
 pub const MAX_FALLBACK_CHAIN_LENGTH: usize = 8;
 
 /// Builds the fallback chain for a request.

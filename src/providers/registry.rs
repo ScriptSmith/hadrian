@@ -6,11 +6,11 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use parking_lot::RwLock;
 use serde::Serialize;
 
 use super::circuit_breaker::{CircuitBreaker, CircuitState};
 use crate::{
+    compat::RwLock,
     config::{CircuitBreakerConfig, ProvidersConfig},
     events::EventBus,
 };

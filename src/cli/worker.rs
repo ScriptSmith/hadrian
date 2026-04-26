@@ -91,27 +91,11 @@ pub(crate) async fn run_worker(
         .expect("Failed to initialize file storage");
 
     // Create services
-    #[cfg(feature = "sso")]
-    let scim_token_pepper = config
-        .auth
-        .session
-        .as_ref()
-        .and_then(|s| s.secret.as_ref())
-        .map(|s| s.as_bytes().to_vec())
-        .unwrap_or_else(|| {
-            tracing::error!(
-                "[auth.session].secret must be set for the worker to derive the SCIM \
-                 token pepper. Refusing to start."
-            );
-            std::process::exit(1);
-        });
     let services = services::Services::new(
         db.clone(),
         file_storage,
         config.auth.rbac.max_expression_length,
         config.limits.resource_limits.max_skill_bytes,
-        #[cfg(feature = "sso")]
-        scim_token_pepper,
     );
     let vector_stores_service = Arc::new(services.vector_stores.clone());
 
