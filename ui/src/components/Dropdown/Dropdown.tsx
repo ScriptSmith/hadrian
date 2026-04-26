@@ -28,6 +28,11 @@ interface DropdownContextValue {
   menuId: string;
   registerItem: () => number;
   itemCount: number;
+  /** Most recent input modality. `mouseenter` only steals focus when the
+   * user was already using the mouse — otherwise arrow keys would lose
+   * the highlight as soon as the cursor drifted across an item. */
+  inputModalityRef: React.RefObject<"keyboard" | "mouse">;
+  setInputModality: (modality: "keyboard" | "mouse") => void;
 }
 
 const DropdownContext = createContext<DropdownContextValue | null>(null);
@@ -52,6 +57,7 @@ export function Dropdown({ children }: DropdownProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
   const itemCounterRef = useRef(0);
+  const inputModalityRef = useRef<"keyboard" | "mouse">("mouse");
 
   // Wrapper to reset state when opening
   const setOpen = useCallback((value: boolean) => {
@@ -69,6 +75,10 @@ export function Dropdown({ children }: DropdownProps) {
     return index;
   }, []);
 
+  const setInputModality = useCallback((modality: "keyboard" | "mouse") => {
+    inputModalityRef.current = modality;
+  }, []);
+
   return (
     <DropdownContext.Provider
       value={{
@@ -81,6 +91,8 @@ export function Dropdown({ children }: DropdownProps) {
         menuId,
         registerItem,
         itemCount,
+        inputModalityRef,
+        setInputModality,
       }}
     >
       <div className="relative inline-block">{children}</div>
@@ -247,8 +259,16 @@ export function DropdownContent({
   sideOffset = 4,
   ...props
 }: DropdownContentProps) {
-  const { open, setOpen, triggerRef, menuId, highlightedIndex, setHighlightedIndex, itemCount } =
-    useDropdownContext();
+  const {
+    open,
+    setOpen,
+    triggerRef,
+    menuId,
+    highlightedIndex,
+    setHighlightedIndex,
+    itemCount,
+    setInputModality,
+  } = useDropdownContext();
   const localContentRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
 
@@ -308,18 +328,22 @@ export function DropdownContent({
           break;
         case "ArrowDown":
           e.preventDefault();
+          setInputModality("keyboard");
           setHighlightedIndex(highlightedIndex < itemCount - 1 ? highlightedIndex + 1 : 0);
           break;
         case "ArrowUp":
           e.preventDefault();
+          setInputModality("keyboard");
           setHighlightedIndex(highlightedIndex > 0 ? highlightedIndex - 1 : itemCount - 1);
           break;
         case "Home":
           e.preventDefault();
+          setInputModality("keyboard");
           setHighlightedIndex(0);
           break;
         case "End":
           e.preventDefault();
+          setInputModality("keyboard");
           setHighlightedIndex(itemCount - 1);
           break;
         case "Tab":
@@ -338,7 +362,7 @@ export function DropdownContent({
       document.removeEventListener("mousedown", handleClickOutside);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [open, setOpen, triggerRef, highlightedIndex, setHighlightedIndex, itemCount]);
+  }, [open, setOpen, triggerRef, highlightedIndex, setHighlightedIndex, itemCount, setInputModality]);
 
   if (!open) return null;
 
@@ -381,8 +405,15 @@ export function DropdownItem({
   onClick,
   ...props
 }: DropdownItemProps) {
-  const { setOpen, triggerRef, highlightedIndex, registerItem, setHighlightedIndex } =
-    useDropdownContext();
+  const {
+    setOpen,
+    triggerRef,
+    highlightedIndex,
+    registerItem,
+    setHighlightedIndex,
+    inputModalityRef,
+    setInputModality,
+  } = useDropdownContext();
   const itemRef = useRef<HTMLButtonElement>(null);
   const [itemIndex, setItemIndex] = useState<number>(-1);
 
@@ -430,7 +461,17 @@ export function DropdownItem({
         setOpen(false);
       }}
       onKeyDown={handleKeyDown}
-      onMouseEnter={() => setHighlightedIndex(itemIndex)}
+      onMouseMove={() => setInputModality("mouse")}
+      onMouseEnter={() => {
+        // Only steal focus on hover when the user is actually using the
+        // mouse. Without this, an arrow-key navigator would lose their
+        // selection any time the cursor happened to be sitting on a
+        // different item — a common trigger when the dropdown opens
+        // beneath the cursor.
+        if (inputModalityRef.current === "mouse") {
+          setHighlightedIndex(itemIndex);
+        }
+      }}
       {...props}
     >
       {selected && <Check className="mr-2 h-4 w-4 text-primary" />}
