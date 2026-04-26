@@ -462,8 +462,25 @@ pub struct SecurityHeadersConfig {
 
     /// Content-Security-Policy header value.
     /// Controls resource loading to prevent XSS attacks.
-    #[serde(default = "default_csp")]
+    ///
+    /// When unset, the policy is rendered from `csp_preset`. Setting an explicit
+    /// string here always wins.
+    #[serde(default)]
     pub content_security_policy: Option<String>,
+
+    /// Built-in CSP preset to use when `content_security_policy` is not set.
+    ///
+    /// - `strict` (default): no `'unsafe-eval'`, `connect-src 'self'`. Suitable
+    ///   for headless gateway deployments and any deployment that does not
+    ///   serve the bundled UI's WASM features (Pyodide / Vega charts /
+    ///   user-configured MCP server URLs).
+    /// - `permissive`: enables `'unsafe-eval'` (Pyodide bytecode + Vega
+    ///   `Function()` evaluation), `script-src https://cdn.jsdelivr.net`
+    ///   (Pyodide / DuckDB WASM CDN), and `connect-src https: http: wss: ws:`
+    ///   (MCP servers configured at runtime). Required when serving the
+    ///   bundled UI with WASM-mode features enabled.
+    #[serde(default)]
+    pub csp_preset: CspPreset,
 
     /// X-XSS-Protection header value.
     /// Legacy header for older browsers. Disabled by default as CSP provides protection.
@@ -491,12 +508,71 @@ impl Default for SecurityHeadersConfig {
             content_type_options: default_content_type_options(),
             frame_options: default_frame_options(),
             hsts: HstsConfig::default(),
-            content_security_policy: default_csp(),
+            content_security_policy: None,
+            csp_preset: CspPreset::default(),
             xss_protection: default_xss_protection(),
             referrer_policy: default_referrer_policy(),
             permissions_policy: None,
         }
     }
+}
+
+impl SecurityHeadersConfig {
+    /// Resolve the effective CSP header value.
+    ///
+    /// An explicit `content_security_policy` string always wins; otherwise the
+    /// `csp_preset` is rendered. Returns `None` to disable the header entirely.
+    pub fn resolved_csp(&self) -> Option<String> {
+        if self.content_security_policy.is_some() {
+            return self.content_security_policy.clone();
+        }
+        Some(self.csp_preset.render())
+    }
+}
+
+/// Built-in CSP presets selectable via `[server.security_headers].csp_preset`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum CspPreset {
+    /// Locked-down CSP. No `'unsafe-eval'`, `connect-src 'self'`. Default.
+    #[default]
+    Strict,
+    /// Allows the bundled UI's WASM features (Pyodide, Vega chart eval,
+    /// CDN-loaded modules) and runtime-configured MCP server URLs.
+    Permissive,
+}
+
+impl CspPreset {
+    fn render(self) -> String {
+        match self {
+            CspPreset::Strict => default_csp_strict(),
+            CspPreset::Permissive => default_csp_permissive(),
+        }
+    }
+}
+
+/// Strict CSP — safe default for API-only / headless deployments.
+fn default_csp_strict() -> String {
+    "default-src 'self'; \
+     script-src 'self'; \
+     style-src 'self' 'unsafe-inline'; \
+     img-src 'self' data: blob:; \
+     font-src 'self' data:; \
+     media-src 'self'; \
+     connect-src 'self'; \
+     worker-src 'self'; \
+     frame-src 'self'; \
+     object-src 'none'; \
+     base-uri 'self'; \
+     form-action 'self'; \
+     frame-ancestors 'none'"
+        .to_string()
+}
+
+/// Permissive CSP for deployments serving the bundled UI's WASM features.
+fn default_csp_permissive() -> String {
+    default_csp().expect("permissive CSP is always Some")
 }
 
 fn default_security_headers_enabled() -> bool {
