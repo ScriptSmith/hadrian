@@ -810,12 +810,36 @@ fn get_services(state: &AppState) -> Result<&Services, ApiError> {
     })
 }
 
+/// Per-route body size limits (audio uploads, file uploads).
+///
+/// Pulled from `[server]` config and threaded through router composition so
+/// individual routes can opt into a higher cap than the global
+/// `RequestBodyLimitLayer` would otherwise impose.
+#[cfg(any(feature = "server", feature = "wasm"))]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ApiBodyLimits {
+    pub audio: usize,
+    pub files: usize,
+}
+
+#[cfg(any(feature = "server", feature = "wasm"))]
+impl Default for ApiBodyLimits {
+    fn default() -> Self {
+        // Generous WASM-side defaults; the server overrides from config.
+        Self {
+            audio: 100 * 1024 * 1024,
+            files: 512 * 1024 * 1024,
+        }
+    }
+}
+
 /// Route definitions for the OpenAI-compatible API.
 ///
 /// Shared between server and WASM builds. The server wraps these with auth/rate-limit
 /// middleware in [`get_api_routes`]; the WASM build uses them directly.
 #[cfg(any(feature = "server", feature = "wasm"))]
-pub(crate) fn api_v1_routes() -> Router<AppState> {
+pub(crate) fn api_v1_routes(limits: ApiBodyLimits) -> Router<AppState> {
+    use axum::extract::DefaultBodyLimit;
     let router = Router::new()
         .route("/v1/chat/completions", post(api_v1_chat_completions))
         .route("/v1/responses", post(api_v1_responses))
@@ -832,20 +856,28 @@ pub(crate) fn api_v1_routes() -> Router<AppState> {
         .route("/v1/images/edits", post(api_v1_images_edits))
         .route("/v1/images/variations", post(api_v1_images_variations));
     let router = router
-        // Audio API (OpenAI-compatible)
+        // Audio API (OpenAI-compatible). speech is text-only (small payload), so
+        // it stays on the global limit; transcription/translation receive raw
+        // audio uploads and get the larger per-route cap below.
         .route("/v1/audio/speech", post(api_v1_audio_speech));
     #[cfg(feature = "server")]
     let router = router
         .route(
             "/v1/audio/transcriptions",
-            post(api_v1_audio_transcriptions),
+            post(api_v1_audio_transcriptions).layer(DefaultBodyLimit::max(limits.audio)),
         )
-        .route("/v1/audio/translations", post(api_v1_audio_translations));
-    // Files API (OpenAI-compatible)
+        .route(
+            "/v1/audio/translations",
+            post(api_v1_audio_translations).layer(DefaultBodyLimit::max(limits.audio)),
+        );
+    // Files API (OpenAI-compatible). Uploads need the largest cap; list/get
+    // are unaffected.
     #[cfg(feature = "server")]
     let router = router.route(
         "/v1/files",
-        post(api_v1_files_upload).merge(get(api_v1_files_list)),
+        post(api_v1_files_upload)
+            .layer(DefaultBodyLimit::max(limits.files))
+            .merge(get(api_v1_files_list)),
     );
     #[cfg(not(feature = "server"))]
     let router = router.route("/v1/files", get(api_v1_files_list));
@@ -903,7 +935,11 @@ pub(crate) fn api_v1_routes() -> Router<AppState> {
 /// Server-only: wraps [`api_v1_routes`] with auth, rate-limit, and authz middleware.
 #[cfg(feature = "server")]
 pub fn get_api_routes(state: AppState) -> Router<AppState> {
-    api_v1_routes()
+    let limits = ApiBodyLimits {
+        audio: state.config.server.audio_body_limit_bytes,
+        files: state.config.server.files_body_limit_bytes,
+    };
+    api_v1_routes(limits)
         // Apply middleware layers in order (ServiceBuilder runs top-to-bottom):
         // 1. Rate limiting - reject requests early before auth overhead
         // 2. Auth, budget, usage - authenticates and sets AuthenticatedRequest

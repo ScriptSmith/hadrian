@@ -2173,10 +2173,25 @@ pub fn build_app(config: &config::GatewayConfig, state: AppState) -> Router {
         app = app.layer(cors_layer);
     }
 
-    app.layer(axum::extract::DefaultBodyLimit::disable())
-        .layer(TraceLayer::new_for_http())
-        .layer(RequestBodyLimitLayer::new(config.server.body_limit_bytes))
-        .with_state(state)
+    // Body limits are layered:
+    //   * Per-route `DefaultBodyLimit::max(N)` (e.g. audio / files) overrides
+    //     the global axum extractor default for those routes.
+    //   * `DefaultBodyLimit::max(body_limit_bytes)` provides the default cap
+    //     enforced by axum extractors for everything else.
+    //   * `RequestBodyLimitLayer` is the hard tower-level cap, sized to the
+    //     largest configured route limit so the route-level caps are not
+    //     stomped on by an outer layer.
+    let max_body_limit = config
+        .server
+        .body_limit_bytes
+        .max(config.server.audio_body_limit_bytes)
+        .max(config.server.files_body_limit_bytes);
+    app.layer(axum::extract::DefaultBodyLimit::max(
+        config.server.body_limit_bytes,
+    ))
+    .layer(TraceLayer::new_for_http())
+    .layer(RequestBodyLimitLayer::new(max_body_limit))
+    .with_state(state)
 }
 
 /// Returns the OpenAPI spec as JSON

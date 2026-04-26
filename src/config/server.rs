@@ -18,9 +18,25 @@ pub struct ServerConfig {
     #[serde(default = "default_port")]
     pub port: u16,
 
-    /// Request body size limit in bytes.
+    /// Request body size limit in bytes (the *global* cap, applied to every
+    /// request that doesn't have a more specific override). The audio and file
+    /// upload routes get a higher per-route limit because their payloads are
+    /// inherently larger than chat completions.
     #[serde(default = "default_body_limit")]
     pub body_limit_bytes: usize,
+
+    /// Request body size limit in bytes for audio routes
+    /// (`/v1/audio/transcriptions`, `/v1/audio/translations`).
+    /// Whisper-style transcription requests can carry tens of megabytes of
+    /// audio. Defaults to 100 MB.
+    #[serde(default = "default_audio_body_limit")]
+    pub audio_body_limit_bytes: usize,
+
+    /// Request body size limit in bytes for `/v1/files` uploads.
+    /// Defaults to 512 MB so multi-document RAG ingest works without manual
+    /// tuning. Operators that don't use file uploads should drop this.
+    #[serde(default = "default_files_body_limit")]
+    pub files_body_limit_bytes: usize,
 
     /// Maximum response body size for buffering provider responses (in bytes).
     /// This prevents OOM from malicious or malformed provider responses.
@@ -102,6 +118,8 @@ impl Default for ServerConfig {
             host: default_host(),
             port: default_port(),
             body_limit_bytes: default_body_limit(),
+            audio_body_limit_bytes: default_audio_body_limit(),
+            files_body_limit_bytes: default_files_body_limit(),
             max_response_body_bytes: default_max_response_body(),
             timeout_secs: default_timeout(),
             streaming_idle_timeout_secs: default_streaming_idle_timeout(),
@@ -128,6 +146,14 @@ fn default_port() -> u16 {
 
 fn default_body_limit() -> usize {
     10 * 1024 * 1024 // 10 MB
+}
+
+fn default_audio_body_limit() -> usize {
+    100 * 1024 * 1024 // 100 MB — enough for ~1h of compressed audio
+}
+
+fn default_files_body_limit() -> usize {
+    512 * 1024 * 1024 // 512 MB — multi-document RAG ingest
 }
 
 fn default_max_response_body() -> usize {
