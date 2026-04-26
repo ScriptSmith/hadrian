@@ -295,10 +295,7 @@ function ChatMessageComponent({
           <div role="status" aria-live="polite" className="sr-only">
             {isStreaming ? "Assistant is responding" : ""}
           </div>
-          <div
-            className="break-words text-sm leading-relaxed"
-            aria-busy={isStreaming}
-          >
+          <div className="break-words text-sm leading-relaxed" aria-busy={isStreaming}>
             {isUser ? (
               isEditing ? (
                 <div className="flex flex-col gap-2 min-w-[300px] sm:min-w-[400px]">

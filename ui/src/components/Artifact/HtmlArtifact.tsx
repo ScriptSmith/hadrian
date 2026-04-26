@@ -88,11 +88,22 @@ function HtmlArtifactComponent({ artifact, className }: HtmlArtifactProps) {
   }
 
   const handleOpenInNewTab = () => {
-    const blob = new Blob([wrapHtml(html)], { type: "text/html" });
-    const url = URL.createObjectURL(blob);
-    window.open(url, "_blank");
-    // Clean up after a delay
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    // Open a host tab whose body contains a sandboxed iframe. A blob URL
+    // would inherit our origin and let the model HTML touch cookies,
+    // storage, and same-origin APIs. The sandboxed iframe (no
+    // allow-same-origin) puts the model HTML in a unique origin instead.
+    const newWindow = window.open("about:blank", "_blank");
+    if (!newWindow) return;
+    newWindow.opener = null;
+    const doc = newWindow.document;
+    doc.title = artifact.title || "HTML Preview";
+    doc.documentElement.style.height = "100%";
+    doc.body.style.cssText = "margin:0;padding:0;height:100vh;background:#fff";
+    const iframe = doc.createElement("iframe");
+    iframe.setAttribute("sandbox", "allow-scripts");
+    iframe.style.cssText = "border:0;width:100%;height:100%;display:block";
+    iframe.srcdoc = wrapHtml(html);
+    doc.body.appendChild(iframe);
   };
 
   return (
