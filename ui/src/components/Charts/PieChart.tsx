@@ -1,4 +1,5 @@
 import { PieChart as RechartsPieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
+import type { PieLabelRenderProps } from "recharts";
 import { CHART_COLORS } from "./constants";
 
 export interface PieChartProps {
@@ -35,8 +36,8 @@ export function PieChart({
           dataKey="value"
           label={
             showLabel
-              ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                (props: any) => `${props.name ?? ""} (${((props.percent ?? 0) * 100).toFixed(0)}%)`
+              ? (props: PieLabelRenderProps) =>
+                  `${props.name ?? ""} (${((props.percent ?? 0) * 100).toFixed(0)}%)`
               : undefined
           }
           labelLine={showLabel}

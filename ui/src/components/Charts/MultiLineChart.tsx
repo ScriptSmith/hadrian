@@ -1,4 +1,7 @@
-import type { TooltipProps as RechartsTooltipProps } from "recharts";
+import type {
+  TooltipProps as RechartsTooltipProps,
+  TooltipPayloadEntry as RechartsTooltipPayloadEntry,
+} from "recharts";
 import {
   LineChart as RechartsLineChart,
   Line,
@@ -13,8 +16,7 @@ import { CHART_COLORS } from "./constants";
 
 interface ChartTooltipProps {
   active?: boolean;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  payload?: any[];
+  payload?: ReadonlyArray<RechartsTooltipPayloadEntry<number, string>>;
   label?: string;
   formatter?: (value: number) => string;
   xFormatter?: (value: string) => string;
