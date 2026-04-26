@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import { useAuth } from "@/auth";
 import { SseParser } from "@/utils/sseParser";
@@ -296,6 +296,20 @@ export function useChat({
     abortControllersRef.current = [];
     streamingStore.stopStreaming();
   }, [streamingStore]);
+
+  // Abort any in-flight streams when the user switches conversations.
+  // Without this, an in-progress stream from conversation A would commit its
+  // assistant message into conversation B's store after the switch.
+  // Per-send epoch checks below also drop any results that race the abort.
+  const previousConversationIdRef = useRef(conversationId);
+  useEffect(() => {
+    if (previousConversationIdRef.current === conversationId) return;
+    previousConversationIdRef.current = conversationId;
+    abortControllersRef.current.forEach((controller) => controller.abort());
+    abortControllersRef.current = [];
+    streamingStore.stopStreaming();
+    streamingStore.clearStreams();
+  }, [conversationId, streamingStore]);
 
   /**
    * Stream a response from a model using the Responses API
@@ -1820,6 +1834,12 @@ export function useChat({
     async (content: string, files: ChatFile[]) => {
       if (models.length === 0) return;
 
+      // Snapshot the conversation we're sending into. If the user switches
+      // conversations before the stream completes, the stored ref will diverge
+      // and we drop the results below instead of writing them into the new
+      // conversation's message list.
+      const sendEpoch = conversationIdRef.current;
+
       // Add user message to conversation store (with the current historyMode)
       addUserMessage(content, files.length > 0 ? files : undefined, historyMode);
 
@@ -1958,7 +1978,9 @@ export function useChat({
         }
       }
 
-      if (allResponses.length > 0) {
+      // Drop results if the user switched conversations during the stream —
+      // committing them now would attach them to the wrong conversation.
+      if (sendEpoch === conversationIdRef.current && allResponses.length > 0) {
         addAssistantMessages(allResponses);
       }
 
@@ -1996,6 +2018,8 @@ export function useChat({
       const userMessage = messages[userMessageIndex];
       if (userMessage.role !== "user") return;
 
+      const sendEpoch = conversationIdRef.current;
+
       // Get all messages up to and including the user message, filtered by the history mode
       // that was stored on that user message (use current historyMode as fallback for old messages)
       const messageHistoryMode = userMessage.historyMode ?? historyMode;
@@ -2024,7 +2048,7 @@ export function useChat({
         debugMessageId
       );
 
-      if (result !== null) {
+      if (result !== null && sendEpoch === conversationIdRef.current) {
         const stream = useStreamingStore.getState().streams.get(model);
         replaceAssistantMessage(userMessageId, model, {
           content: result.content,
@@ -2067,6 +2091,8 @@ export function useChat({
       // If it's a user message, delete subsequent messages and re-run to get new responses
       // For assistant messages, we only update the content (no deletion of sibling responses)
       if (message.role === "user") {
+        const sendEpoch = conversationIdRef.current;
+
         // Delete all messages after the edited user message
         deleteMessagesAfter(messageId);
 
@@ -2157,7 +2183,7 @@ export function useChat({
           }
         }
 
-        if (allResponses.length > 0) {
+        if (sendEpoch === conversationIdRef.current && allResponses.length > 0) {
           addAssistantMessages(allResponses);
         }
 
