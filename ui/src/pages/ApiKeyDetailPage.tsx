@@ -34,6 +34,7 @@ import { formatDateTime, formatCurrency, formatRelativeTime } from "@/utils/form
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/Tooltip/Tooltip";
 import UsageDashboard from "@/components/UsageDashboard/UsageDashboard";
 
+import { formatApiError } from "@/utils/formatApiError";
 type TabId = "overview" | "usage";
 
 const tabs: Tab<TabId>[] = [
@@ -65,7 +66,7 @@ export default function ApiKeyDetailPage() {
       toast({ title: "API key revoked", type: "success" });
     },
     onError: (err) => {
-      toast({ title: "Failed to revoke API key", description: String(err), type: "error" });
+      toast({ title: "Failed to revoke API key", description: formatApiError(err), type: "error" });
     },
   });
 
@@ -81,7 +82,7 @@ export default function ApiKeyDetailPage() {
       toast({ title: "API key rotated", type: "success" });
     },
     onError: (err) => {
-      toast({ title: "Failed to rotate API key", description: String(err), type: "error" });
+      toast({ title: "Failed to rotate API key", description: formatApiError(err), type: "error" });
     },
   });
 

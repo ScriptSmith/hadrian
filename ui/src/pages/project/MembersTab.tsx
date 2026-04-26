@@ -18,6 +18,7 @@ import { AddMemberModal } from "@/components/Admin";
 import { useToast } from "@/components/Toast/Toast";
 import { useConfirm } from "@/components/ConfirmDialog/ConfirmDialog";
 
+import { formatApiError } from "@/utils/formatApiError";
 const columnHelper = createColumnHelper<User>();
 
 interface MembersTabProps {
@@ -50,7 +51,7 @@ export function MembersTab({ orgSlug, projectSlug }: MembersTabProps) {
       toast({ title: "Member added", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to add member", description: String(error), type: "error" });
+      toast({ title: "Failed to add member", description: formatApiError(error), type: "error" });
     },
   });
 
@@ -61,7 +62,11 @@ export function MembersTab({ orgSlug, projectSlug }: MembersTabProps) {
       toast({ title: "Member removed", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to remove member", description: String(error), type: "error" });
+      toast({
+        title: "Failed to remove member",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 

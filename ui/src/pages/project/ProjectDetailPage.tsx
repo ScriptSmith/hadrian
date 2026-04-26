@@ -39,6 +39,7 @@ import { TemplatesTab } from "./TemplatesTab";
 import { SkillsTab } from "./SkillsTab";
 import { UsageTab } from "./UsageTab";
 
+import { formatApiError } from "@/utils/formatApiError";
 type TabId = "members" | "api-keys" | "providers" | "pricing" | "templates" | "skills" | "usage";
 
 const tabs: Tab<TabId>[] = [
@@ -90,7 +91,11 @@ export default function ProjectDetailPage() {
       toast({ title: "Project updated", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to update project", description: String(error), type: "error" });
+      toast({
+        title: "Failed to update project",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 

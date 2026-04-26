@@ -42,6 +42,7 @@ import { DetailPageHeader, StatCard, StatValue, EMBEDDING_MODELS } from "@/compo
 import { ChunkViewer, SearchPreview } from "@/components/VectorStores";
 import { formatDateTime, formatBytes } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 const fileColumnHelper = createColumnHelper<VectorStoreFile>();
 
 /** Status badge for file processing status */
@@ -188,7 +189,7 @@ function AddFileModal({
   const uploadMutation = useMutation({
     ...fileUploadMutation(),
     onError: (error) => {
-      toast({ title: "Failed to upload file", description: String(error), type: "error" });
+      toast({ title: "Failed to upload file", description: formatApiError(error), type: "error" });
     },
   });
 
@@ -201,7 +202,7 @@ function AddFileModal({
       handleClose();
     },
     onError: (error) => {
-      toast({ title: "Failed to add file", description: String(error), type: "error" });
+      toast({ title: "Failed to add file", description: formatApiError(error), type: "error" });
     },
   });
 
@@ -532,7 +533,7 @@ export default function VectorStoreDetailPage() {
       toast({ title: "File removed from knowledge base", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to remove file", description: String(error), type: "error" });
+      toast({ title: "Failed to remove file", description: formatApiError(error), type: "error" });
     },
   });
 

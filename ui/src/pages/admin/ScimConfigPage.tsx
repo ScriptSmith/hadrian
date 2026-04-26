@@ -35,6 +35,7 @@ import { useConfirm } from "@/components/ConfirmDialog/ConfirmDialog";
 import { ScimConfigFormModal, ScimTokenCreatedModal } from "@/components/ScimConfig";
 import { formatDateTime } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 export default function ScimConfigPage() {
   const { orgSlug } = useParams<{ orgSlug: string }>();
   const navigate = useNavigate();
@@ -78,7 +79,7 @@ export default function ScimConfigPage() {
     onError: (error) => {
       toast({
         title: "Failed to create SCIM configuration",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -95,7 +96,7 @@ export default function ScimConfigPage() {
     onError: (error) => {
       toast({
         title: "Failed to update SCIM configuration",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -111,7 +112,7 @@ export default function ScimConfigPage() {
     onError: (error) => {
       toast({
         title: "Failed to delete SCIM configuration",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -128,7 +129,7 @@ export default function ScimConfigPage() {
     onError: (error) => {
       toast({
         title: "Failed to rotate SCIM token",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },

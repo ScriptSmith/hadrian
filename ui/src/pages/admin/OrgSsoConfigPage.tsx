@@ -39,6 +39,7 @@ import {
 } from "@/components/DomainVerification";
 import { formatDateTime } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 export default function OrgSsoConfigPage() {
   const { orgSlug } = useParams<{ orgSlug: string }>();
   const navigate = useNavigate();
@@ -82,7 +83,7 @@ export default function OrgSsoConfigPage() {
     onError: (error) => {
       toast({
         title: "Failed to create SSO configuration",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -99,7 +100,7 @@ export default function OrgSsoConfigPage() {
     onError: (error) => {
       toast({
         title: "Failed to update SSO configuration",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -115,7 +116,7 @@ export default function OrgSsoConfigPage() {
     onError: (error) => {
       toast({
         title: "Failed to delete SSO configuration",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },

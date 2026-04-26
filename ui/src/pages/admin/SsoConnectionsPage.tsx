@@ -6,6 +6,7 @@ import { SsoConnectionCard } from "@/components/SsoConnections";
 import { Card, CardContent } from "@/components/Card/Card";
 import { Skeleton } from "@/components/Skeleton/Skeleton";
 
+import { formatApiError } from "@/utils/formatApiError";
 export default function SsoConnectionsPage() {
   const { data, isLoading, error } = useQuery(ssoConnectionsListOptions());
 
@@ -57,7 +58,7 @@ export default function SsoConnectionsPage() {
             <AlertCircle className="h-5 w-5 text-destructive" />
             <div>
               <p className="font-medium">Failed to load SSO connections</p>
-              <p className="text-sm text-muted-foreground">{String(error)}</p>
+              <p className="text-sm text-muted-foreground">{formatApiError(error)}</p>
             </div>
           </CardContent>
         </Card>

@@ -21,6 +21,7 @@ import { useToast } from "@/components/Toast/Toast";
 import { useConfirm } from "@/components/ConfirmDialog/ConfirmDialog";
 import { formatDateTime } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 interface RbacPolicyVersionHistoryModalProps {
   open: boolean;
   onClose: () => void;
@@ -165,7 +166,7 @@ export function RbacPolicyVersionHistoryModal({
     onError: (error) => {
       toast({
         title: "Failed to rollback policy",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
       setRollbackVersion(null);

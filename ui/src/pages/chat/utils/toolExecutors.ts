@@ -44,6 +44,7 @@ import { skillExecutor } from "./skillExecutor";
 import type { ToolContent } from "@/services/mcp";
 import safeRegex from "safe-regex";
 
+import { formatApiError } from "@/utils/formatApiError";
 /**
  * Context provided to tool executors
  */
@@ -733,7 +734,7 @@ export const codeInterpreterExecutor: ToolExecutor = async (
     // Unsubscribe from status updates on error
     unsubscribe?.();
 
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
     // Still show the code that was attempted, plus the error
     const artifacts: Artifact[] = [
       {
@@ -912,7 +913,7 @@ export const jsInterpreterExecutor: ToolExecutor = async (
     // Unsubscribe from status updates on error
     unsubscribe?.();
 
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
     // Still show the code that was attempted, plus the error
     const artifacts: Artifact[] = [
       {
@@ -1411,7 +1412,7 @@ export const wikipediaExecutor: ToolExecutor = async (
       };
     }
 
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
     return {
       success: false,
       error: errorMsg,
@@ -1784,7 +1785,7 @@ export const wikidataExecutor: ToolExecutor = async (
       };
     }
 
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
     return {
       success: false,
       error: errorMsg,
@@ -1895,7 +1896,7 @@ export const chartRenderExecutor: ToolExecutor = async (
     const { compile } = await import("vega-lite");
     compile(spec as unknown as Parameters<typeof compile>[0]);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = err instanceof Error ? err.message : formatApiError(err);
     return {
       success: false,
       error: message,
@@ -2099,7 +2100,7 @@ export const sqlQueryExecutor: ToolExecutor = async (
     // Unsubscribe from status updates on error
     unsubscribe?.();
 
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
     // Still show the SQL that was attempted, plus the error
     const artifacts: Artifact[] = [
       {
@@ -2465,7 +2466,7 @@ export const subAgentExecutor: ToolExecutor = async (
     // Clear status message on error
     context.onStatusMessage?.(toolId, "");
 
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
 
     // Check for abort
     if (error instanceof Error && error.name === "AbortError") {
@@ -2650,7 +2651,7 @@ const mcpToolExecutor: ToolExecutor = async (toolCall, context) => {
     // Clear status message on error
     context.onStatusMessage?.(toolCall.id, "");
 
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
 
     return {
       success: false,

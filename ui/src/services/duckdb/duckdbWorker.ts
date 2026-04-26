@@ -12,6 +12,7 @@
 
 import * as duckdb from "@duckdb/duckdb-wasm";
 
+import { formatApiError } from "@/utils/formatApiError";
 /** Message types from main thread to worker */
 interface ExecuteMessage {
   type: "execute";
@@ -199,7 +200,7 @@ async function initDuckDB(): Promise<duckdb.AsyncDuckDB> {
     sendMessage({ type: "ready" });
     return db;
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
     sendMessage({ type: "error", error: `Failed to load DuckDB: ${errorMsg}` });
     throw error;
   } finally {
@@ -255,7 +256,7 @@ async function executeQuery(sql: string): Promise<{
       rowCount: rows.length,
     };
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
     return {
       success: false,
       columns: [],
@@ -327,7 +328,7 @@ async function registerFile(
     registeredFiles.add(name);
     return { success: true };
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
     return { success: false, error: errorMsg };
   }
 }
@@ -361,7 +362,7 @@ async function registerDatabaseHandle(
     attachedDatabases.set(name, alias);
     return { success: true, dbAlias: alias };
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
     return { success: false, error: errorMsg };
   }
 }
@@ -386,7 +387,7 @@ async function unregisterFile(name: string): Promise<{ success: boolean; error?:
     registeredFiles.delete(name);
     return { success: true };
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
     return { success: false, error: errorMsg };
   }
 }
@@ -424,7 +425,7 @@ async function listTables(): Promise<{
 
     return { success: true, tables };
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
     return { success: false, tables: [], error: errorMsg };
   }
 }
@@ -462,7 +463,7 @@ async function describeTable(tableName: string): Promise<{
 
     return { success: true, columns };
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
     return { success: false, columns: [], error: errorMsg };
   }
 }
@@ -483,7 +484,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
           ...result,
         });
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
+        const errorMsg = error instanceof Error ? error.message : formatApiError(error);
         sendMessage({
           type: "error",
           id: message.id,
@@ -502,7 +503,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
           ...result,
         });
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
+        const errorMsg = error instanceof Error ? error.message : formatApiError(error);
         sendMessage({
           type: "error",
           id: message.id,
@@ -521,7 +522,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
           ...result,
         });
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
+        const errorMsg = error instanceof Error ? error.message : formatApiError(error);
         sendMessage({
           type: "error",
           id: message.id,
@@ -540,7 +541,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
           ...result,
         });
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
+        const errorMsg = error instanceof Error ? error.message : formatApiError(error);
         sendMessage({
           type: "error",
           id: message.id,
@@ -559,7 +560,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
           ...result,
         });
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
+        const errorMsg = error instanceof Error ? error.message : formatApiError(error);
         sendMessage({
           type: "error",
           id: message.id,
@@ -578,7 +579,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
           ...result,
         });
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
+        const errorMsg = error instanceof Error ? error.message : formatApiError(error);
         sendMessage({
           type: "error",
           id: message.id,

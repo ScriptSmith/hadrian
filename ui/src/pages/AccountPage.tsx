@@ -19,6 +19,7 @@ import { useToast } from "@/components/Toast/Toast";
 import { useConfirm } from "@/components/ConfirmDialog/ConfirmDialog";
 import { exportAllIndexedDBData, deleteIndexedDBDatabase } from "@/hooks/useIndexedDB";
 
+import { formatApiError } from "@/utils/formatApiError";
 // localStorage keys used by the app
 const LOCAL_STORAGE_KEYS = ["hadrian-auth", "hadrian-mcp-servers", "hadrian-preferences"] as const;
 
@@ -118,7 +119,7 @@ export default function AccountPage() {
       });
       toast({
         title: "Failed to revoke session",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -154,7 +155,7 @@ export default function AccountPage() {
     onError: (error) => {
       toast({
         title: "Failed to delete account",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -200,7 +201,7 @@ export default function AccountPage() {
     } catch (error) {
       toast({
         title: "Failed to export data",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     }
@@ -234,7 +235,7 @@ export default function AccountPage() {
       } catch (error) {
         toast({
           title: "Failed to clear local data",
-          description: String(error),
+          description: formatApiError(error),
           type: "error",
         });
       }

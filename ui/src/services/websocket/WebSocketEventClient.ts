@@ -1,3 +1,4 @@
+import { formatApiError } from "@/utils/formatApiError";
 /**
  * WebSocket Event Client
  *
@@ -103,7 +104,7 @@ export class WebSocketEventClient {
       this.ws.onclose = this.handleClose.bind(this);
       this.ws.onerror = this.handleError.bind(this);
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorMsg = err instanceof Error ? err.message : formatApiError(err);
       this.setStatus("error", `Failed to create WebSocket: ${errorMsg}`);
     }
   }

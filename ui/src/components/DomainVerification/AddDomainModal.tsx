@@ -18,6 +18,7 @@ import { Input } from "@/components/Input/Input";
 import { Label } from "@/components/Label/Label";
 import { useToast } from "@/components/Toast/Toast";
 
+import { formatApiError } from "@/utils/formatApiError";
 const domainSchema = z.object({
   domain: z
     .string()
@@ -65,7 +66,7 @@ export function AddDomainModal({ open, onClose, orgSlug }: AddDomainModalProps) 
     onError: (error) => {
       toast({
         title: "Failed to add domain",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },

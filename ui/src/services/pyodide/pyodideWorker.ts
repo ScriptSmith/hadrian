@@ -1,3 +1,4 @@
+import { formatApiError } from "@/utils/formatApiError";
 /**
  * Pyodide Web Worker
  *
@@ -183,7 +184,7 @@ def __hadrian_get_figures():
     sendMessage({ type: "ready" });
     return py;
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
     sendMessage({ type: "error", error: `Failed to load Pyodide: ${errorMsg}` });
     throw error;
   } finally {
@@ -321,7 +322,7 @@ plt.close('all')
       figures,
     };
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
     return {
       success: false,
       stdout: stdout.trim(),
@@ -348,7 +349,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
           ...result,
         });
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
+        const errorMsg = error instanceof Error ? error.message : formatApiError(error);
         sendMessage({
           type: "error",
           id: message.id,
@@ -367,7 +368,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
           packages: loaded,
         });
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
+        const errorMsg = error instanceof Error ? error.message : formatApiError(error);
         sendMessage({
           type: "error",
           id: message.id,

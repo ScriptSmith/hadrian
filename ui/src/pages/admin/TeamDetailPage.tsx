@@ -40,6 +40,7 @@ import { formatDateTime } from "@/utils/formatters";
 import UsageDashboard from "@/components/UsageDashboard/UsageDashboard";
 import { createTemplateColumns } from "./promptColumns";
 
+import { formatApiError } from "@/utils/formatApiError";
 type TabId = "members" | "templates" | "usage";
 
 const tabs: Tab<TabId>[] = [
@@ -112,7 +113,7 @@ export default function TeamDetailPage() {
       toast({ title: "Team updated", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to update team", description: String(error), type: "error" });
+      toast({ title: "Failed to update team", description: formatApiError(error), type: "error" });
     },
   });
 
@@ -125,7 +126,7 @@ export default function TeamDetailPage() {
       toast({ title: "Member added", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to add member", description: String(error), type: "error" });
+      toast({ title: "Failed to add member", description: formatApiError(error), type: "error" });
     },
   });
 
@@ -137,7 +138,11 @@ export default function TeamDetailPage() {
       toast({ title: "Member removed", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to remove member", description: String(error), type: "error" });
+      toast({
+        title: "Failed to remove member",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -149,7 +154,11 @@ export default function TeamDetailPage() {
       toast({ title: "Template deleted", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to delete template", description: String(error), type: "error" });
+      toast({
+        title: "Failed to delete template",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 

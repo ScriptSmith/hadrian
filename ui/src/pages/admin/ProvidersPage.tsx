@@ -54,6 +54,7 @@ import {
 import { getProviderTypeLabel, TestResultDisplay } from "@/pages/providers/shared";
 import { formatDateTime } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 // -- Provider Card --
 
 function ProviderCard({
@@ -269,7 +270,11 @@ export default function ProvidersPage() {
       toast({ title: "Provider created", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to create provider", description: String(error), type: "error" });
+      toast({
+        title: "Failed to create provider",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -282,7 +287,11 @@ export default function ProvidersPage() {
       toast({ title: "Provider updated", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to update provider", description: String(error), type: "error" });
+      toast({
+        title: "Failed to update provider",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -293,7 +302,11 @@ export default function ProvidersPage() {
       toast({ title: "Provider deleted", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to delete provider", description: String(error), type: "error" });
+      toast({
+        title: "Failed to delete provider",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -312,7 +325,7 @@ export default function ProvidersPage() {
       const id = variables.path.id;
       setTestResults((prev) => ({
         ...prev,
-        [id]: { status: "error", message: String(error), latency_ms: null },
+        [id]: { status: "error", message: formatApiError(error), latency_ms: null },
       }));
       setTestingIds((prev) => {
         const next = new Set(prev);

@@ -25,6 +25,7 @@ import {
 } from "./githubImport";
 import { walkFilesForSkills } from "./filesystemImport";
 
+import { formatApiError } from "@/utils/formatApiError";
 type ImportTab = "github" | "filesystem";
 
 export interface SkillImportModalProps {
@@ -113,7 +114,7 @@ export function SkillImportModal({
       }
       setSelected(valid);
     } catch (err) {
-      setScanError(err instanceof Error ? err.message : String(err));
+      setScanError(err instanceof Error ? err.message : formatApiError(err));
     } finally {
       setIsScanning(false);
       setScanProgress("");
@@ -138,7 +139,7 @@ export function SkillImportModal({
       }
       setSelected(valid);
     } catch (err) {
-      setScanError(err instanceof Error ? err.message : String(err));
+      setScanError(err instanceof Error ? err.message : formatApiError(err));
     } finally {
       setIsScanning(false);
     }
@@ -202,7 +203,7 @@ export function SkillImportModal({
             }));
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = err instanceof Error ? err.message : formatApiError(err);
           results.push({ name: s.name, ok: false, error: message });
           setImportStatus((prev) => ({
             ...prev,

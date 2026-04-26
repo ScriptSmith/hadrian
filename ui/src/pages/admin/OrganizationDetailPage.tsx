@@ -67,6 +67,7 @@ import { formatDateTime, formatCurrency } from "@/utils/formatters";
 import UsageDashboard from "@/components/UsageDashboard/UsageDashboard";
 import { createTemplateColumns } from "./promptColumns";
 
+import { formatApiError } from "@/utils/formatApiError";
 type TabId =
   | "projects"
   | "teams"
@@ -185,7 +186,11 @@ export default function OrganizationDetailPage() {
       toast({ title: "Organization updated", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to update organization", description: String(error), type: "error" });
+      toast({
+        title: "Failed to update organization",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -198,7 +203,7 @@ export default function OrganizationDetailPage() {
       toast({ title: "Member added", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to add member", description: String(error), type: "error" });
+      toast({ title: "Failed to add member", description: formatApiError(error), type: "error" });
     },
   });
 
@@ -210,7 +215,11 @@ export default function OrganizationDetailPage() {
       toast({ title: "Member removed", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to remove member", description: String(error), type: "error" });
+      toast({
+        title: "Failed to remove member",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -222,7 +231,11 @@ export default function OrganizationDetailPage() {
       toast({ title: "Template deleted", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to delete template", description: String(error), type: "error" });
+      toast({
+        title: "Failed to delete template",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 

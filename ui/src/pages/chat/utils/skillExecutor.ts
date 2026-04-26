@@ -4,6 +4,7 @@ import { getFullSkill, getSkillByName, setFullSkill } from "./skillCache";
 import type { ParsedToolCall } from "./toolCallParser";
 import type { Artifact, ToolExecutionResult, ToolExecutor } from "./toolExecutors";
 
+import { formatApiError } from "@/utils/formatApiError";
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
@@ -172,7 +173,7 @@ export const skillExecutor: ToolExecutor = async (
     } catch (err) {
       return {
         success: false,
-        error: `Failed to load skill "${command}": ${err instanceof Error ? err.message : String(err)}`,
+        error: `Failed to load skill "${command}": ${err instanceof Error ? err.message : formatApiError(err)}`,
       };
     }
   }

@@ -46,6 +46,7 @@ import type {
 } from "@/services/mcpRegistry/types";
 import type { FavoriteMcpServer } from "@/config/types";
 
+import { formatApiError } from "@/utils/formatApiError";
 const PAGE_SIZE = 30;
 
 export interface CatalogPrefill {
@@ -196,7 +197,7 @@ export function MCPCatalog({ onPick, onAddManual, onCancel, favorites = [] }: MC
       .catch((err: unknown) => {
         if (ctrl.signal.aborted || (err instanceof DOMException && err.name === "AbortError"))
           return;
-        setError(err instanceof Error ? err.message : String(err));
+        setError(err instanceof Error ? err.message : formatApiError(err));
       })
       .finally(() => {
         if (!ctrl.signal.aborted) setLoading(false);
@@ -240,7 +241,7 @@ export function MCPCatalog({ onPick, onAddManual, onCancel, favorites = [] }: MC
     } catch (err) {
       if (ctrl?.signal.aborted || (err instanceof DOMException && err.name === "AbortError"))
         return;
-      setError(err instanceof Error ? err.message : String(err));
+      setError(err instanceof Error ? err.message : formatApiError(err));
     } finally {
       // Always clear, even on abort — otherwise a new search cancelling an
       // in-flight load-more would leave the button stuck in its loading state.

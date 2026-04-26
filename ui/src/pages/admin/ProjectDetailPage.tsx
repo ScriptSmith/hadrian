@@ -85,6 +85,7 @@ import { formatDateTime, formatCurrency } from "@/utils/formatters";
 import UsageDashboard from "@/components/UsageDashboard/UsageDashboard";
 import { createTemplateColumns } from "./promptColumns";
 
+import { formatApiError } from "@/utils/formatApiError";
 type TabId = "members" | "api-keys" | "providers" | "pricing" | "templates" | "usage";
 
 const tabs: Tab<TabId>[] = [
@@ -418,7 +419,11 @@ export default function ProjectDetailPage() {
       toast({ title: "Project updated", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to update project", description: String(error), type: "error" });
+      toast({
+        title: "Failed to update project",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -431,7 +436,7 @@ export default function ProjectDetailPage() {
       toast({ title: "Member added", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to add member", description: String(error), type: "error" });
+      toast({ title: "Failed to add member", description: formatApiError(error), type: "error" });
     },
   });
 
@@ -443,7 +448,11 @@ export default function ProjectDetailPage() {
       toast({ title: "Member removed", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to remove member", description: String(error), type: "error" });
+      toast({
+        title: "Failed to remove member",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -456,7 +465,11 @@ export default function ProjectDetailPage() {
       toast({ title: "Provider created", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to create provider", description: String(error), type: "error" });
+      toast({
+        title: "Failed to create provider",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -469,7 +482,11 @@ export default function ProjectDetailPage() {
       toast({ title: "Provider updated", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to update provider", description: String(error), type: "error" });
+      toast({
+        title: "Failed to update provider",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -480,7 +497,11 @@ export default function ProjectDetailPage() {
       toast({ title: "Provider deleted", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to delete provider", description: String(error), type: "error" });
+      toast({
+        title: "Failed to delete provider",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -499,7 +520,7 @@ export default function ProjectDetailPage() {
       const id = variables.path.id;
       setTestResults((prev) => ({
         ...prev,
-        [id]: { status: "error", message: String(error), latency_ms: null },
+        [id]: { status: "error", message: formatApiError(error), latency_ms: null },
       }));
       setTestingIds((prev) => {
         const next = new Set(prev);
@@ -517,7 +538,11 @@ export default function ProjectDetailPage() {
       toast({ title: "Template deleted", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to delete template", description: String(error), type: "error" });
+      toast({
+        title: "Failed to delete template",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 

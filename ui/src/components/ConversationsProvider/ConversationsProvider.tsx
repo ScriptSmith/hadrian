@@ -25,6 +25,7 @@ import type { ChatMessage, Conversation } from "@/components/chat-types";
 import { usePreferences } from "@/preferences/PreferencesProvider";
 import { generateSimpleTitle, generateTitleWithLLM } from "@/utils/generateTitle";
 
+import { formatApiError } from "@/utils/formatApiError";
 const STORAGE_KEY = "hadrian-conversations";
 const BROADCAST_CHANNEL = "hadrian-conversations-sync";
 
@@ -160,7 +161,7 @@ async function withRetry<T>(
     try {
       return await fn();
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
+      lastError = error instanceof Error ? error : new Error(formatApiError(error));
       if (attempt < maxAttempts - 1) {
         const delay = baseDelay * Math.pow(2, attempt);
         await new Promise((resolve) => setTimeout(resolve, delay));

@@ -18,6 +18,7 @@ import { VectorStoreFormModal } from "@/components/Admin";
 import { useToast } from "@/components/Toast/Toast";
 import { formatDateTime, formatBytes } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 function StatusBadge({ status }: { status: string }) {
   const variants: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
     completed: "default",
@@ -148,7 +149,7 @@ export default function KnowledgeBasesPage() {
     onError: (error) => {
       toast({
         title: "Failed to create knowledge base",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },

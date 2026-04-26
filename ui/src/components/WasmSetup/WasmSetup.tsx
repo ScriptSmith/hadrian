@@ -35,6 +35,7 @@ import { HadrianIcon } from "@/components/HadrianIcon/HadrianIcon";
 import { startOpenRouterOAuth, isInIframe } from "./openrouter-oauth";
 import { cn } from "@/utils/cn";
 
+import { formatApiError } from "@/utils/formatApiError";
 interface ProviderTemplate {
   id: string;
   label: string;
@@ -201,7 +202,7 @@ export function WasmSetup({
       } catch (err) {
         updateEntry(key, {
           isTesting: false,
-          testResult: { status: "error", message: String(err) },
+          testResult: { status: "error", message: formatApiError(err) },
         });
       }
     },
@@ -228,7 +229,7 @@ export function WasmSetup({
         queryClient.invalidateQueries({ queryKey: apiV1ModelsQueryKey() });
         updateEntry(key, { isSaving: false, saved: true });
       } catch (err) {
-        updateEntry(key, { isSaving: false, error: String(err) });
+        updateEntry(key, { isSaving: false, error: formatApiError(err) });
       }
     },
     [entries, createMutation, queryClient, updateEntry]

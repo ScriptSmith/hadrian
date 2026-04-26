@@ -31,6 +31,7 @@ import { useConfirm } from "@/components/ConfirmDialog/ConfirmDialog";
 import { PageHeader, ResourceTable, OrganizationSelect } from "@/components/Admin";
 import { formatDateTime } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 const columnHelper = createColumnHelper<ServiceAccount>();
 
 const createServiceAccountSchema = z.object({
@@ -118,7 +119,7 @@ export default function ServiceAccountsPage() {
     onError: (error) => {
       toast({
         title: "Failed to create service account",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -133,7 +134,7 @@ export default function ServiceAccountsPage() {
     onError: (error) => {
       toast({
         title: "Failed to delete service account",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -150,7 +151,7 @@ export default function ServiceAccountsPage() {
     onError: (error) => {
       toast({
         title: "Failed to update service account",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },

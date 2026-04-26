@@ -19,6 +19,7 @@ import {
   type DataFileTable,
 } from "@/stores/chatUIStore";
 import { cn } from "@/utils/cn";
+import { formatApiError } from "@/utils/formatApiError";
 import {
   Modal,
   ModalHeader,
@@ -191,7 +192,7 @@ export function DataFileUpload({
             updateDataFileStatus(fileId, false, result.error || "Registration failed");
           }
         } catch (error) {
-          const errorMsg = error instanceof Error ? error.message : String(error);
+          const errorMsg = error instanceof Error ? error.message : formatApiError(error);
           updateDataFileStatus(fileId, false, errorMsg);
         }
       }

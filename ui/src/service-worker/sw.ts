@@ -22,6 +22,7 @@ import "./sqlite-bridge";
 // The WASM module is served from public/wasm/ at runtime.
 import wasmInit, { HadrianGateway } from "/wasm/hadrian.js";
 
+import { formatApiError } from "@/utils/formatApiError";
 let gateway: HadrianGateway | null = null;
 let initPromise: Promise<void> | null = null;
 
@@ -75,7 +76,7 @@ async function handleRequest(request: Request): Promise<Response> {
       return new Response(
         JSON.stringify({
           error: {
-            message: `Gateway initialization failed: ${String(error)}`,
+            message: `Gateway initialization failed: ${formatApiError(error)}`,
             type: "server_error",
             code: 503,
           },
@@ -95,7 +96,7 @@ async function handleRequest(request: Request): Promise<Response> {
     return new Response(
       JSON.stringify({
         error: {
-          message: String(error),
+          message: formatApiError(error),
           type: "server_error",
           code: 500,
         },
