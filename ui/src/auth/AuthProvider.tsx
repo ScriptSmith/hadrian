@@ -224,13 +224,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       token: null,
     });
 
-    // For OIDC, we might want to redirect to the logout endpoint
-    if (state.method === "oidc" && config?.auth.oidc) {
-      // Most OIDC providers have a logout endpoint
-      const logoutUrl = config.auth.oidc.authorization_url.replace("/auth", "/logout");
-      window.location.href = `${logoutUrl}?redirect_uri=${encodeURIComponent(window.location.origin)}`;
+    // For OIDC, hand off to the backend logout endpoint. The previous
+    // `authorization_url.replace("/auth", "/logout")` trick produced a wrong
+    // URL for any provider whose authorization endpoint isn't of the form
+    // `https://idp/.../auth` (Keycloak, dex, generic providers, etc). The
+    // backend already deletes the session, redirects to
+    // `end_session_endpoint` from OIDC discovery when configured, and falls
+    // back to "/", so we just navigate there.
+    if (state.method === "oidc") {
+      window.location.href = "/auth/logout";
     }
-  }, [config?.auth.oidc, setStoredAuth, state.method]);
+  }, [setStoredAuth, state.method]);
 
   const setApiKey = useCallback(
     (apiKey: string) => {
