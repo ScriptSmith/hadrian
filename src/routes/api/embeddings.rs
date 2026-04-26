@@ -177,10 +177,12 @@ pub async fn api_v1_embeddings(
     // Track cache status for response headers
     let mut cache_status = CacheStatus::None;
 
+    let cache_tenant = super::chat::tenant_scope_from_auth(auth.as_ref());
+
     // Check response cache (embeddings are fully deterministic - excellent for caching)
     if let Some(ref response_cache) = state.response_cache {
         match response_cache
-            .lookup_embeddings(&payload, &model_name, force_refresh)
+            .lookup_embeddings(&payload, &model_name, &cache_tenant, force_refresh)
             .await
         {
             CacheLookupResult::Hit(cached) => {
@@ -248,6 +250,7 @@ pub async fn api_v1_embeddings(
                     let provider_clone = provider_name.clone();
                     let content_type_clone = content_type;
                     let body_clone = body_vec.clone();
+                    let tenant_clone = cache_tenant.clone();
                     #[cfg(feature = "server")]
                     state.task_tracker.spawn(async move {
                         cache
@@ -255,6 +258,7 @@ pub async fn api_v1_embeddings(
                                 &payload_clone,
                                 &model_clone,
                                 &provider_clone,
+                                &tenant_clone,
                                 body_clone,
                                 &content_type_clone,
                             )

@@ -118,6 +118,36 @@ pub struct VectorSearchResult {
     pub similarity: f64,
 }
 
+/// Tenant scope used to filter semantic-cache search results so a tenant can
+/// never see another tenant's cached responses, even when their prompts are
+/// semantically equivalent. `None` means "match entries with no value for this
+/// field", so requests without an org/project don't fall through to scoped
+/// entries.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VectorTenantFilter<'a> {
+    pub organization_id: Option<&'a str>,
+    pub project_id: Option<&'a str>,
+}
+
+impl<'a> VectorTenantFilter<'a> {
+    pub fn new(organization_id: Option<&'a str>, project_id: Option<&'a str>) -> Self {
+        Self {
+            organization_id,
+            project_id,
+        }
+    }
+
+    pub fn unscoped() -> Self {
+        Self::default()
+    }
+
+    /// Returns true when the supplied metadata satisfies this filter.
+    pub fn matches(&self, metadata: &VectorMetadata) -> bool {
+        self.organization_id == metadata.organization_id.as_deref()
+            && self.project_id == metadata.project_id.as_deref()
+    }
+}
+
 // ============================================================================
 // RAG VectorStore Chunk Types
 // ============================================================================
@@ -283,6 +313,10 @@ pub trait VectorBackend: Send + Sync {
     /// * `limit` - Maximum number of results to return
     /// * `threshold` - Minimum similarity threshold (0.0 to 1.0)
     /// * `model_filter` - Optional model name to filter results (only return same-model matches)
+    /// * `tenant_filter` - Tenant scope to filter results by (org/project). Cross-tenant
+    ///   matches are dropped so two tenants with semantically equivalent prompts can't
+    ///   serve each other's cached responses. `None` fields match any value, so a tenant
+    ///   with no scope only sees entries that were also stored without scope.
     ///
     /// # Returns
     ///
@@ -294,6 +328,7 @@ pub trait VectorBackend: Send + Sync {
         limit: usize,
         threshold: f64,
         model_filter: Option<&str>,
+        tenant_filter: VectorTenantFilter<'_>,
     ) -> VectorStoreResult<Vec<VectorSearchResult>>;
 
     /// Delete an embedding by its ID.

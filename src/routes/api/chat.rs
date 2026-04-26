@@ -14,7 +14,7 @@ use crate::{
     AppState, api_types,
     auth::AuthenticatedRequest,
     authz::RequestContext,
-    cache::{CacheLookupResult, SemanticLookupResult, StoreParams},
+    cache::{CacheLookupResult, CacheTenantScope, SemanticLookupResult, StoreParams},
     middleware::{AuthzContext, ClientInfo, RequestId},
     models::UsageLogEntry,
     routes::execution::{
@@ -35,6 +35,23 @@ pub(super) enum CacheStatus {
     None,
     /// Cache miss - request is cacheable but not found
     Miss,
+}
+
+/// Build a tenant scope from the optional API-key auth, used to key cache
+/// entries so two tenants never share a response/embedding cache hit.
+pub(super) fn tenant_scope_from_auth(
+    auth: Option<&Extension<AuthenticatedRequest>>,
+) -> CacheTenantScope {
+    let api_key = auth.and_then(|a| a.api_key());
+    CacheTenantScope {
+        org_id: api_key.and_then(|k| k.org_id.map(|id| id.to_string())),
+        project_id: api_key.and_then(|k| k.project_id.map(|id| id.to_string())),
+        api_key_id: api_key.map(|k| k.key.id.to_string()),
+        user_id: api_key.and_then(|k| match &k.key.owner {
+            crate::models::ApiKeyOwner::User { user_id } => Some(user_id.to_string()),
+            _ => None,
+        }),
+    }
 }
 
 /// Apply output guardrails to a non-streaming response.
@@ -675,11 +692,19 @@ pub async fn api_v1_chat_completions(
         .as_ref()
         .map(|c| &c.key_components);
 
+    let cache_tenant = tenant_scope_from_auth(auth.as_ref());
+
     // Check semantic cache first (if available), then fall back to simple response cache
     if let Some(ref semantic_cache) = state.semantic_cache {
         let key_components = key_components.cloned().unwrap_or_default();
         match semantic_cache
-            .lookup(&payload, &model_name, &key_components, force_refresh)
+            .lookup(
+                &payload,
+                &model_name,
+                &key_components,
+                &cache_tenant,
+                force_refresh,
+            )
             .await
         {
             SemanticLookupResult::ExactHit(cached) => {
@@ -727,7 +752,7 @@ pub async fn api_v1_chat_completions(
     } else if let Some(ref response_cache) = state.response_cache {
         // Fall back to simple response cache if semantic cache is not configured
         match response_cache
-            .lookup(&payload, &model_name, force_refresh)
+            .lookup(&payload, &model_name, &cache_tenant, force_refresh)
             .await
         {
             CacheLookupResult::Hit(cached) => {
@@ -916,14 +941,7 @@ pub async fn api_v1_chat_completions(
                         .as_ref()
                         .map(|c| c.ttl_secs)
                         .unwrap_or(3600);
-                    let org_id = auth
-                        .as_ref()
-                        .and_then(|a| a.org_id())
-                        .map(|id| id.to_string());
-                    let project_id = auth
-                        .as_ref()
-                        .and_then(|a| a.project_id())
-                        .map(|id| id.to_string());
+                    let tenant_clone = cache_tenant.clone();
 
                     #[cfg(feature = "server")]
                     state.task_tracker.spawn(async move {
@@ -931,12 +949,11 @@ pub async fn api_v1_chat_completions(
                             payload: &payload_clone,
                             model: &model_clone,
                             provider: &provider_clone,
+                            tenant: &tenant_clone,
                             body: body_clone,
                             content_type: &content_type_clone,
                             key_components: &key_components_clone,
                             ttl: Duration::from_secs(ttl_secs),
-                            organization_id: org_id,
-                            project_id,
                         };
                         if !cache.store(params).await {
                             tracing::debug!(
@@ -951,6 +968,7 @@ pub async fn api_v1_chat_completions(
                     let provider_clone = provider_name.clone();
                     let content_type_clone = content_type;
                     let body_clone = body_vec.clone();
+                    let tenant_clone = cache_tenant.clone();
                     #[cfg(feature = "server")]
                     state.task_tracker.spawn(async move {
                         cache
@@ -958,6 +976,7 @@ pub async fn api_v1_chat_completions(
                                 &payload_clone,
                                 &model_clone,
                                 &provider_clone,
+                                &tenant_clone,
                                 body_clone,
                                 &content_type_clone,
                             )
@@ -1212,10 +1231,12 @@ pub async fn api_v1_responses(
     // Track cache status for response headers
     let mut cache_status = CacheStatus::None;
 
+    let cache_tenant = tenant_scope_from_auth(auth.as_ref());
+
     // Check response cache (simple cache only for now - semantic cache not yet supported for responses)
     if let Some(ref response_cache) = state.response_cache {
         match response_cache
-            .lookup_responses(&payload, &model_name, force_refresh)
+            .lookup_responses(&payload, &model_name, &cache_tenant, force_refresh)
             .await
         {
             CacheLookupResult::Hit(cached) => {
@@ -1615,6 +1636,7 @@ pub async fn api_v1_responses(
                     let provider_clone = provider_name.clone();
                     let content_type_clone = content_type;
                     let body_clone = body_vec.clone();
+                    let tenant_clone = cache_tenant.clone();
                     #[cfg(feature = "server")]
                     state.task_tracker.spawn(async move {
                         cache
@@ -1622,6 +1644,7 @@ pub async fn api_v1_responses(
                                 &payload_clone,
                                 &model_clone,
                                 &provider_clone,
+                                &tenant_clone,
                                 body_clone,
                                 &content_type_clone,
                             )
@@ -1935,10 +1958,12 @@ pub async fn api_v1_completions(
     // Track cache status for response headers
     let mut cache_status = CacheStatus::None;
 
+    let cache_tenant = tenant_scope_from_auth(auth.as_ref());
+
     // Check response cache (simple cache only - semantic cache not yet supported for completions)
     if let Some(ref response_cache) = state.response_cache {
         match response_cache
-            .lookup_completions(&payload, &model_name, force_refresh)
+            .lookup_completions(&payload, &model_name, &cache_tenant, force_refresh)
             .await
         {
             CacheLookupResult::Hit(cached) => {
@@ -2215,6 +2240,7 @@ pub async fn api_v1_completions(
                     let provider_clone = provider_name.clone();
                     let content_type_clone = content_type;
                     let body_clone = body_vec.clone();
+                    let tenant_clone = cache_tenant.clone();
                     #[cfg(feature = "server")]
                     state.task_tracker.spawn(async move {
                         cache
@@ -2222,6 +2248,7 @@ pub async fn api_v1_completions(
                                 &payload_clone,
                                 &model_clone,
                                 &provider_clone,
+                                &tenant_clone,
                                 body_clone,
                                 &content_type_clone,
                             )

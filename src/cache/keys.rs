@@ -13,6 +13,42 @@ use crate::{
     models::BudgetPeriod,
 };
 
+/// Tenant identifiers mixed into response/embedding/completion cache keys so
+/// two tenants that submit byte-identical requests do not share cache entries
+/// or semantic-cache vector matches.
+///
+/// All fields are optional because the gateway can serve unauthenticated or
+/// partially-scoped requests; whatever scope the caller has, we hash it. The
+/// `api_key_id` is the strongest isolator (every API key is tenant-bound),
+/// but the other fields are folded in too so admin-issued or proxy-issued
+/// requests stay scoped to the org/project/user that originated them.
+#[derive(Debug, Clone, Default)]
+pub struct CacheTenantScope {
+    pub org_id: Option<String>,
+    pub project_id: Option<String>,
+    pub api_key_id: Option<String>,
+    pub user_id: Option<String>,
+}
+
+impl CacheTenantScope {
+    pub fn unscoped() -> Self {
+        Self::default()
+    }
+
+    fn hash_into(&self, hasher: &mut Sha256) {
+        hasher.update(b"tenant:");
+        hasher.update(b"org=");
+        hasher.update(self.org_id.as_deref().unwrap_or("").as_bytes());
+        hasher.update(b"|proj=");
+        hasher.update(self.project_id.as_deref().unwrap_or("").as_bytes());
+        hasher.update(b"|key=");
+        hasher.update(self.api_key_id.as_deref().unwrap_or("").as_bytes());
+        hasher.update(b"|user=");
+        hasher.update(self.user_id.as_deref().unwrap_or("").as_bytes());
+        hasher.update(b"\x00");
+    }
+}
+
 pub struct CacheKeys;
 
 impl CacheKeys {
@@ -159,8 +195,13 @@ impl CacheKeys {
         payload: &CreateChatCompletionPayload,
         model: &str,
         key_components: &CacheKeyComponents,
+        tenant: &CacheTenantScope,
     ) -> String {
         let mut hasher = Sha256::new();
+
+        // Tenant scope first so cross-tenant collisions are impossible
+        // regardless of payload content.
+        tenant.hash_into(&mut hasher);
 
         // Model is always included in the cache key
         hasher.update(b"model:");
@@ -240,8 +281,11 @@ impl CacheKeys {
         payload: &CreateResponsesPayload,
         model: &str,
         key_components: &CacheKeyComponents,
+        tenant: &CacheTenantScope,
     ) -> String {
         let mut hasher = Sha256::new();
+
+        tenant.hash_into(&mut hasher);
 
         // Model is always included in the cache key
         hasher.update(b"model:");
@@ -302,8 +346,11 @@ impl CacheKeys {
         payload: &CreateCompletionPayload,
         model: &str,
         key_components: &CacheKeyComponents,
+        tenant: &CacheTenantScope,
     ) -> String {
         let mut hasher = Sha256::new();
+
+        tenant.hash_into(&mut hasher);
 
         // Model is always included in the cache key
         hasher.update(b"model:");
@@ -354,8 +401,14 @@ impl CacheKeys {
     /// making them excellent candidates for caching.
     ///
     /// Returns `gw:embeddings:{hash}` where hash is a SHA-256 digest of the key components.
-    pub fn embeddings_cache(payload: &CreateEmbeddingPayload, model: &str) -> String {
+    pub fn embeddings_cache(
+        payload: &CreateEmbeddingPayload,
+        model: &str,
+        tenant: &CacheTenantScope,
+    ) -> String {
         let mut hasher = Sha256::new();
+
+        tenant.hash_into(&mut hasher);
 
         // Model is always included in the cache key
         hasher.update(b"model:");
@@ -607,8 +660,18 @@ mod tests {
 
         let key_components = CacheKeyComponents::default();
 
-        let key1 = CacheKeys::response_cache(&payload, "gpt-4", &key_components);
-        let key2 = CacheKeys::response_cache(&payload, "gpt-4", &key_components);
+        let key1 = CacheKeys::response_cache(
+            &payload,
+            "gpt-4",
+            &key_components,
+            &CacheTenantScope::unscoped(),
+        );
+        let key2 = CacheKeys::response_cache(
+            &payload,
+            "gpt-4",
+            &key_components,
+            &CacheTenantScope::unscoped(),
+        );
 
         // Same input should produce same key
         assert_eq!(key1, key2);
@@ -656,8 +719,18 @@ mod tests {
             ..payload1.clone()
         };
 
-        let key1 = CacheKeys::response_cache(&payload1, "gpt-4", &key_components);
-        let key2 = CacheKeys::response_cache(&payload2, "gpt-4", &key_components);
+        let key1 = CacheKeys::response_cache(
+            &payload1,
+            "gpt-4",
+            &key_components,
+            &CacheTenantScope::unscoped(),
+        );
+        let key2 = CacheKeys::response_cache(
+            &payload2,
+            "gpt-4",
+            &key_components,
+            &CacheTenantScope::unscoped(),
+        );
 
         // Different messages should produce different keys
         assert_ne!(key1, key2);
@@ -706,8 +779,18 @@ mod tests {
             ..payload1.clone()
         };
 
-        let key1 = CacheKeys::response_cache(&payload1, "gpt-4", &key_components);
-        let key2 = CacheKeys::response_cache(&payload2, "gpt-4", &key_components);
+        let key1 = CacheKeys::response_cache(
+            &payload1,
+            "gpt-4",
+            &key_components,
+            &CacheTenantScope::unscoped(),
+        );
+        let key2 = CacheKeys::response_cache(
+            &payload2,
+            "gpt-4",
+            &key_components,
+            &CacheTenantScope::unscoped(),
+        );
 
         // Different temperatures should produce different keys when temperature is in key_components
         assert_ne!(key1, key2);
@@ -746,10 +829,69 @@ mod tests {
             sovereignty_requirements: None,
         };
 
-        let key1 = CacheKeys::response_cache(&payload, "gpt-4", &key_components);
-        let key2 = CacheKeys::response_cache(&payload, "claude-3", &key_components);
+        let tenant = CacheTenantScope::unscoped();
+        let key1 = CacheKeys::response_cache(&payload, "gpt-4", &key_components, &tenant);
+        let key2 = CacheKeys::response_cache(&payload, "claude-3", &key_components, &tenant);
 
         // Different models should produce different keys
         assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn test_response_cache_key_scoped_per_tenant() {
+        let key_components = CacheKeyComponents::default();
+        let payload = CreateChatCompletionPayload {
+            messages: vec![Message::User {
+                content: MessageContent::Text("Hello".to_string()),
+                name: None,
+            }],
+            model: Some("gpt-4".to_string()),
+            models: None,
+            temperature: Some(0.0),
+            seed: None,
+            response_format: None,
+            tools: None,
+            tool_choice: None,
+            frequency_penalty: None,
+            logit_bias: None,
+            logprobs: None,
+            top_logprobs: None,
+            max_completion_tokens: None,
+            max_tokens: None,
+            metadata: None,
+            presence_penalty: None,
+            reasoning: None,
+            stop: None,
+            stream: false,
+            stream_options: None,
+            top_p: None,
+            user: None,
+            sovereignty_requirements: None,
+        };
+
+        let tenant_a = CacheTenantScope {
+            org_id: Some("org-a".to_string()),
+            api_key_id: Some("key-1".to_string()),
+            ..Default::default()
+        };
+        let tenant_b = CacheTenantScope {
+            org_id: Some("org-b".to_string()),
+            api_key_id: Some("key-2".to_string()),
+            ..Default::default()
+        };
+
+        let key_a = CacheKeys::response_cache(&payload, "gpt-4", &key_components, &tenant_a);
+        let key_b = CacheKeys::response_cache(&payload, "gpt-4", &key_components, &tenant_b);
+        let key_unscoped = CacheKeys::response_cache(
+            &payload,
+            "gpt-4",
+            &key_components,
+            &CacheTenantScope::unscoped(),
+        );
+
+        // Identical payloads from different tenants must hash to distinct keys.
+        assert_ne!(key_a, key_b);
+        assert_ne!(key_a, key_unscoped);
+        assert_ne!(key_b, key_unscoped);
     }
 }
