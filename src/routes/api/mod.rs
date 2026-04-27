@@ -983,19 +983,24 @@ mod tests {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let db_id = COUNTER.fetch_add(1, Ordering::SeqCst);
 
+        #[cfg(feature = "sso")]
+        let session_section = r#"
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
+"#;
+        #[cfg(not(feature = "sso"))]
+        let session_section = "";
+
         let config_str = format!(
             r#"
 [database]
 type = "sqlite"
-path = "file:api_test_db_{}?mode=memory&cache=shared"
+path = "file:api_test_db_{db_id}?mode=memory&cache=shared"
 create_if_missing = true
 run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
-
-[auth.session]
-secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
-
+{session_section}
 [providers]
 default_provider = "test"
 
@@ -1006,8 +1011,7 @@ model_name = "test-model"
 [providers.secondary-test]
 type = "test"
 model_name = "secondary-model"
-"#,
-            db_id
+"#
         );
 
         let config =
@@ -2855,19 +2859,24 @@ model_name = "secondary-model"
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let db_id = COUNTER.fetch_add(1, Ordering::SeqCst);
 
+        #[cfg(feature = "sso")]
+        let session_section = r#"
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
+"#;
+        #[cfg(not(feature = "sso"))]
+        let session_section = "";
+
         let config_str = format!(
             r#"
 [database]
 type = "sqlite"
-path = "file:api_test_file_limit_db_{}?mode=memory&cache=shared"
+path = "file:api_test_file_limit_db_{db_id}?mode=memory&cache=shared"
 create_if_missing = true
 run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
-
-[auth.session]
-secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
-
+{session_section}
 [providers]
 default_provider = "test"
 
@@ -2876,9 +2885,8 @@ type = "test"
 model_name = "test-model"
 
 [features.file_processing]
-max_file_size_mb = {}
-"#,
-            db_id, max_file_size_mb
+max_file_size_mb = {max_file_size_mb}
+"#
         );
 
         let config =
@@ -2910,27 +2918,31 @@ max_file_size_mb = {}
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let db_id = COUNTER.fetch_add(1, Ordering::SeqCst);
 
+        #[cfg(feature = "sso")]
+        let session_section = r#"
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
+"#;
+        #[cfg(not(feature = "sso"))]
+        let session_section = "";
+
         let config_str = format!(
             r#"
 [database]
 type = "sqlite"
-path = "file:api_test_file_search_db_{}?mode=memory&cache=shared"
+path = "file:api_test_file_search_db_{db_id}?mode=memory&cache=shared"
 create_if_missing = true
 run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
-
-[auth.session]
-secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
-
+{session_section}
 [providers]
 default_provider = "test"
 
 [providers.test]
 type = "test"
 model_name = "test-model"
-"#,
-            db_id
+"#
         );
 
         let config =
@@ -2999,27 +3011,31 @@ model_name = "test-model"
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let db_id = COUNTER.fetch_add(1, Ordering::SeqCst);
 
+        #[cfg(feature = "sso")]
+        let session_section = r#"
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
+"#;
+        #[cfg(not(feature = "sso"))]
+        let session_section = "";
+
         let config_str = format!(
             r#"
 [database]
 type = "sqlite"
-path = "file:api_test_mockable_fs_db_{}?mode=memory&cache=shared"
+path = "file:api_test_mockable_fs_db_{db_id}?mode=memory&cache=shared"
 create_if_missing = true
 run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
-
-[auth.session]
-secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
-
+{session_section}
 [providers]
 default_provider = "test"
 
 [providers.test]
 type = "test"
 model_name = "test-model"
-"#,
-            db_id
+"#
         );
 
         let config =

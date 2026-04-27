@@ -884,25 +884,30 @@ output_per_1m_tokens = 2000000
         )
     };
 
+    #[cfg(feature = "sso")]
+    let session_section = r#"
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
+"#;
+    #[cfg(not(feature = "sso"))]
+    let session_section = "";
+
+    let extra_config = spec.extra_config;
     let config_str = format!(
         r#"
 [database]
 type = "sqlite"
-path = "file:provider_e2e_test_db_{}?mode=memory&cache=shared"
+path = "file:provider_e2e_test_db_{db_id}?mode=memory&cache=shared"
 create_if_missing = true
 run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
-
-[auth.session]
-secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
-
+{session_section}
 [providers]
 default_provider = "mock-provider"
-{}
-{}
-"#,
-        db_id, provider_config, spec.extra_config
+{provider_config}
+{extra_config}
+"#
     );
 
     let config = GatewayConfig::parse(&config_str).expect("Failed to parse test config");
@@ -2493,25 +2498,31 @@ async fn create_resilience_test_app(
     static COUNTER: AtomicU64 = AtomicU64::new(1000);
     let db_id = COUNTER.fetch_add(1, Ordering::SeqCst);
 
+    #[cfg(feature = "sso")]
+    let session_section = r#"
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
+"#;
+    #[cfg(not(feature = "sso"))]
+    let session_section = "";
+
+    let mock_uri = mock_server.uri();
     let config_str = format!(
         r#"
 [database]
 type = "sqlite"
-path = "file:resilience_test_db_{}?mode=memory&cache=shared"
+path = "file:resilience_test_db_{db_id}?mode=memory&cache=shared"
 create_if_missing = true
 run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
-
-[auth.session]
-secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
-
+{session_section}
 [providers]
 default_provider = "mock-provider"
 
 [providers.mock-provider]
 type = "open_ai"
-base_url = "{}"
+base_url = "{mock_uri}"
 api_key = "test-api-key"
 timeout_secs = 30
 supports_tools = true
@@ -2519,28 +2530,21 @@ supports_tools = true
 # Circuit breaker configuration
 [providers.mock-provider.circuit_breaker]
 enabled = true
-failure_threshold = {}
-open_timeout_secs = {}
-success_threshold = {}
+failure_threshold = {failure_threshold}
+open_timeout_secs = {open_timeout_secs}
+success_threshold = {success_threshold}
 failure_status_codes = [500, 502, 503, 504]
 
 # Retry configuration
 [providers.mock-provider.retry]
 enabled = true
-max_retries = {}
-initial_delay_ms = {}
+max_retries = {max_retries}
+initial_delay_ms = {initial_delay_ms}
 max_delay_ms = 1000
 backoff_multiplier = 2.0
 jitter = 0.0
 retryable_status_codes = [429, 500, 502, 503, 504]
-"#,
-        db_id,
-        mock_server.uri(),
-        failure_threshold,
-        open_timeout_secs,
-        success_threshold,
-        max_retries,
-        initial_delay_ms
+"#
     );
 
     let config = GatewayConfig::parse(&config_str).expect("Failed to parse test config");

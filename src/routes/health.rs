@@ -261,24 +261,28 @@ mod tests {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let db_id = COUNTER.fetch_add(1, Ordering::SeqCst);
 
+        #[cfg(feature = "sso")]
+        let session_section = r#"
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
+"#;
+        #[cfg(not(feature = "sso"))]
+        let session_section = "";
+
         let config_str = format!(
             r#"
 [database]
 type = "sqlite"
-path = "file:test_health_db_{}?mode=memory&cache=shared"
+path = "file:test_health_db_{db_id}?mode=memory&cache=shared"
 create_if_missing = true
 run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
-
-[auth.session]
-secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
-
+{session_section}
 [providers.test-openai]
 type = "open_ai"
 api_key = "sk-test-key"
-"#,
-            db_id
+"#
         );
 
         let config =

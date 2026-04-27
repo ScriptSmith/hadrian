@@ -363,14 +363,15 @@ pub async fn test_upsert(store: &dyn VectorBackend) {
         .await
         .expect("Failed to upsert embedding");
 
-    // Search should find the updated embedding
+    // Search should find the updated embedding. Scope the filter to match
+    // metadata2's tenant since upsert rewrote organization_id to "org-123".
     let results = store
         .search(
             &embedding2,
             5,
             0.9,
             Some("gpt-4"),
-            VectorTenantFilter::unscoped(),
+            VectorTenantFilter::new(Some("org-123"), None),
         )
         .await
         .expect("Failed to search");
