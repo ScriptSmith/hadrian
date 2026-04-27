@@ -80,6 +80,20 @@ export function runAdminApiCrudTests(getContext: () => AdminApiCrudContext) {
         );
       }
       userId = userRes.data.id;
+
+      // Stable project fixture used by downstream persistence checks (see
+      // shared/postgres-data.ts). The mutating "create a project" test below
+      // uses scratch slugs so it remains order-independent.
+      const projectRes = await projectCreate({
+        client,
+        path: { org_slug: orgSlug },
+        body: { slug: "test-project", name: "Test Project" },
+      });
+      if (!projectRes.data) {
+        throw new Error(
+          `beforeAll: projectCreate returned no body (status ${projectRes.response.status})`
+        );
+      }
     });
 
     /** Create a scratch team owned by the shared org for tests that mutate it. */

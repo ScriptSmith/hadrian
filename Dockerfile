@@ -91,19 +91,19 @@ COPY --from=frontend-builder /app/docs/out ./docs/out/
 # Fetch model catalog (embedded at compile time via include_str!)
 RUN mkdir -p data && curl -sSL https://models.dev/api.json -o data/models-dev-catalog.json
 
-# Force fresh build of the main crate by removing cached artifacts.
-# The --mount=type=cache for target/ persists across builds, but fingerprints
-# may not detect all source changes. Removing the crate's artifacts ensures
-# a full recompile of application code (dependencies remain cached).
-RUN touch src/main.rs && \
+# Build the actual application.
+# The --mount=type=cache for target/ persists across builds, but the dummy-source
+# fingerprints from the dependency-build layer can survive even after the real
+# sources are copied in, causing the bin to link against stale rmeta that lacks
+# modules from the real lib.rs. Wipe the hadrian crate's artifacts inside the
+# same RUN as the build (so the cache mount is actually active) to force a full
+# recompile of application code while keeping dependency caches intact.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/src/hadrian/target \
     rm -rf target/release/.fingerprint/hadrian-* \
            target/release/deps/hadrian-* \
            target/release/deps/libhadrian-* \
-           target/release/hadrian
-
-# Build the actual application
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/src/hadrian/target \
+           target/release/hadrian && \
     cargo build --release && \
     cp target/release/hadrian /usr/src/hadrian/hadrian-bin
 

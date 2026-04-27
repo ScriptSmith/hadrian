@@ -224,6 +224,19 @@ async fn try_bootstrap_auth(
         None => return Ok(None),
     };
 
+    // The throttle below is meant to deter brute-forcing the bootstrap key.
+    // Legitimate JWT bearer tokens and other-shaped API keys come through this
+    // function on every admin request, so counting *every* non-matching token
+    // would let a single user's normal traffic exhaust the throttle and lock
+    // their own IP out of bearer auth. Only tokens that are the same length as
+    // the configured bootstrap key could be a guess of it; anything else is
+    // trivially not the bootstrap key, so we silently fall through without
+    // touching the throttle or lockout state.
+    let could_be_bootstrap_guess = provided_key.len() == bootstrap_key.len();
+    if !could_be_bootstrap_guess {
+        return Ok(None);
+    }
+
     // Per-IP throttle: refuse further attempts when this source IP is locked out.
     //
     // We deliberately skip rate-limiting when no source IP is available: a single
