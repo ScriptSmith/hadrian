@@ -22,7 +22,7 @@ import "./sqlite-bridge";
 // The WASM module is served from public/wasm/ at runtime.
 import wasmInit, { HadrianGateway } from "/wasm/hadrian.js";
 
-import { formatApiError } from "@/utils/formatApiError";
+import { formatApiError } from "../utils/formatApiError";
 let gateway: HadrianGateway | null = null;
 let initPromise: Promise<void> | null = null;
 
