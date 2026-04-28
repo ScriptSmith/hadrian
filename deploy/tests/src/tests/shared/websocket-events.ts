@@ -12,6 +12,7 @@
  * - Receive: {"type": "subscribed", "topics": ["health"]}
  * - Receive events: {"type": "event", "topic": "health", ...event_data}
  */
+import { EventEmitter } from "node:events";
 import { describe, it, expect } from "vitest";
 import { WebSocket, type RawData } from "ws";
 import { trackedFetch } from "../../utils/tracked-fetch";
@@ -56,7 +57,26 @@ interface EventMessage extends ServerMessage {
 }
 
 /**
+ * Per-WebSocket FIFO of messages parsed by the synchronous collector installed
+ * in `createWebSocket`. Without this buffer, the server's `connected` reply
+ * (sent immediately on upgrade) races the test's `await waitForOpen` and gets
+ * dropped on the floor because no listener is registered yet.
+ *
+ * The collector is the *only* `message` listener; `waitForMessage` consumes
+ * from the FIFO and uses an inner emitter to be notified of new arrivals.
+ */
+interface WsState {
+  buffer: ServerMessage[];
+  emitter: EventEmitter;
+}
+const wsState = new WeakMap<WebSocket, WsState>();
+
+/**
  * Helper to create a WebSocket connection to the gateway.
+ *
+ * Installs a synchronous `message` listener at construction so that messages
+ * arriving between socket open and the first `waitForMessage` call are
+ * buffered rather than dropped.
  */
 function createWebSocket(
   gatewayUrl: string,
@@ -75,37 +95,80 @@ function createWebSocket(
   }
 
   const url = `${wsUrl}/ws/events${params.toString() ? `?${params}` : ""}`;
-  return new WebSocket(url);
+  const ws = new WebSocket(url);
+
+  const state: WsState = { buffer: [], emitter: new EventEmitter() };
+  // Unbounded subscribers are fine here — tests register at most one waiter
+  // at a time, but `setMaxListeners(0)` keeps node from warning if a future
+  // test adds parallel waiters.
+  state.emitter.setMaxListeners(0);
+  wsState.set(ws, state);
+  ws.on("message", (data: RawData) => {
+    try {
+      state.buffer.push(JSON.parse(data.toString()) as ServerMessage);
+      state.emitter.emit("message");
+    } catch {
+      // Non-JSON frames are ignored — same behavior as the previous handler.
+    }
+  });
+
+  return ws;
 }
 
 /**
  * Helper to wait for a WebSocket message matching a predicate.
+ *
+ * Consumes buffered messages first (see `wsState`) before subscribing to new
+ * arrivals, so callers can `await waitForOpen()` and then call this helper
+ * without racing the server's initial `connected` frame.
  */
 function waitForMessage<T extends ServerMessage>(
   ws: WebSocket,
   predicate: (msg: ServerMessage) => msg is T,
   timeoutMs = 10000
 ): Promise<T> {
+  const state = wsState.get(ws);
+  if (!state) {
+    return Promise.reject(
+      new Error("waitForMessage: WebSocket was not created via createWebSocket")
+    );
+  }
+
+  // Scan the buffer for a matching message, removing it on hit so a follow-up
+  // call doesn't re-deliver the same frame.
+  const drain = (): T | undefined => {
+    for (let i = 0; i < state.buffer.length; i++) {
+      const msg = state.buffer[i];
+      if (predicate(msg)) {
+        state.buffer.splice(i, 1);
+        return msg;
+      }
+    }
+    return undefined;
+  };
+
   return new Promise((resolve, reject) => {
+    const found = drain();
+    if (found) {
+      resolve(found);
+      return;
+    }
+
     const timeout = setTimeout(() => {
-      ws.removeListener("message", handler);
+      state.emitter.removeListener("message", onMessage);
       reject(new Error("Timeout waiting for WebSocket message"));
     }, timeoutMs);
 
-    const handler = (data: RawData) => {
-      try {
-        const msg = JSON.parse(data.toString()) as ServerMessage;
-        if (predicate(msg)) {
-          clearTimeout(timeout);
-          ws.removeListener("message", handler);
-          resolve(msg);
-        }
-      } catch {
-        // Ignore parse errors, keep waiting
+    const onMessage = () => {
+      const found = drain();
+      if (found) {
+        clearTimeout(timeout);
+        state.emitter.removeListener("message", onMessage);
+        resolve(found);
       }
     };
 
-    ws.on("message", handler);
+    state.emitter.on("message", onMessage);
   });
 }
 
