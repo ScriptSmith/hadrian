@@ -311,6 +311,17 @@ jobs:
           cluster_name: helm-test
           wait: 120s
 
+      # `helm/kind-action`'s `wait` only waits for the control plane to be
+      # Ready. CoreDNS / kube-proxy can still be coming up at that point, and
+      # kicking off `helm install` against a half-warm API server has shown up
+      # as `client rate limiter Wait returned an error: context deadline
+      # exceeded` — helm's discovery calls saturate client-go's QPS budget
+      # while the apiserver is sluggish, then time out.
+      - name: Wait for cluster system pods
+        run: |
+          kubectl wait --for=condition=Ready pods --all -n kube-system --timeout=180s
+          kubectl get pods -A
+
       - name: Add Bitnami repo
         run: helm repo add bitnami https://charts.bitnami.com/bitnami
 
@@ -368,10 +379,15 @@ jobs:
 
       - name: Install chart
         run: |
+          # `--burst-limit` raises client-go's burst from the default 100; the
+          # kind apiserver in CI is slow enough that helm's discovery + readiness
+          # polling can otherwise hit the limiter and fail with
+          # `client rate limiter Wait returned an error: context deadline exceeded`.
           helm install hadrian helm/hadrian \
             -f /tmp/kind-test-values.yaml \
             --wait \
-            --timeout 5m
+            --timeout 5m \
+            --burst-limit 300
 
       - name: Check deployment status
         run: |
