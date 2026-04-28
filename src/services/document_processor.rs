@@ -2162,9 +2162,26 @@ async fn extract_text(
 
         // Build Kreuzberg extraction config from our config
         let config = build_kreuzberg_config(extraction_config);
-        let result = kreuzberg::extract_bytes(&data, mime_type, &config)
-            .await
-            .map_err(|e| DocumentProcessorError::DocumentExtraction(e.to_string()))?;
+        let extraction = kreuzberg::extract_bytes(&data, mime_type, &config);
+
+        // Bound how long any single document may tie up an extraction worker.
+        // Kreuzberg has no internal hard limit, so a 5,000-page OCR job (or a
+        // pathological/malicious input) would otherwise run unbounded.
+        let result = if extraction_config.extraction_timeout_secs > 0 {
+            let timeout = std::time::Duration::from_secs(extraction_config.extraction_timeout_secs);
+            match tokio::time::timeout(timeout, extraction).await {
+                Ok(r) => r,
+                Err(_) => {
+                    return Err(DocumentProcessorError::DocumentExtraction(format!(
+                        "Document extraction exceeded {}s timeout",
+                        extraction_config.extraction_timeout_secs
+                    )));
+                }
+            }
+        } else {
+            extraction.await
+        }
+        .map_err(|e| DocumentProcessorError::DocumentExtraction(e.to_string()))?;
 
         Ok(result.content)
     }

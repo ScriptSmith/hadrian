@@ -37,6 +37,11 @@ podAnnotations: {}
 # -- Pod labels
 podLabels: {}
 
+# -- Pod termination grace period in seconds. Must exceed the gateway's
+#    `[server.shutdown]` drain budget (default 35s) so in-flight requests
+#    finish and the OTLP/usage buffers flush before SIGKILL.
+terminationGracePeriodSeconds: 60
+
 # -- Pod security context
 podSecurityContext:
   fsGroup: 1000
@@ -269,9 +274,12 @@ resources:
     memory: 256Mi
 
 # -- Liveness probe configuration
+# `/health/live` is a cheap "process is up" check. The full `/health` aggregates
+# downstream subsystems (DB, cache, providers) and would cause every pod to
+# restart on any transient downstream blip — never use it for liveness.
 livenessProbe:
   httpGet:
-    path: /health
+    path: /health/live
     port: http
   initialDelaySeconds: 10
   periodSeconds: 30
@@ -279,9 +287,11 @@ livenessProbe:
   failureThreshold: 3
 
 # -- Readiness probe configuration
+# `/health/ready` checks DB connectivity, which is the right gate for accepting
+# traffic.
 readinessProbe:
   httpGet:
-    path: /health
+    path: /health/ready
     port: http
   initialDelaySeconds: 5
   periodSeconds: 10

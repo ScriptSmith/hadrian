@@ -17,7 +17,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use super::AuthError;
-use crate::config::JwtAuthConfig;
+use crate::{
+    config::JwtAuthConfig,
+    validation::{UrlValidationOptions, pinned_reqwest_client, validate_base_url_opts},
+};
 
 /// Claims extracted from a validated JWT.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,41 +110,56 @@ struct CachedJwks {
 /// JWT validator that fetches and caches JWKS.
 pub struct JwtValidator {
     config: JwtAuthConfig,
-    http_client: reqwest::Client,
     jwks_cache: RwLock<Option<CachedJwks>>,
+    /// SSRF/DNS-pinning options applied each time the JWKS URL is fetched.
+    /// The JWKS URL comes from OIDC discovery (or admin-supplied SSO config),
+    /// so we re-validate and pin DNS per fetch to close the rebinding window
+    /// between discovery-time validation and the actual key fetch.
+    url_validation_opts: UrlValidationOptions,
 }
 
 impl JwtValidator {
     /// Create a new JWT validator.
     #[allow(dead_code)] // Auth infrastructure
     pub fn new(config: JwtAuthConfig) -> Result<Self, AuthError> {
-        if config.allowed_algorithms.is_empty() {
-            return Err(AuthError::Internal(
-                "JWT allowed_algorithms must not be empty".into(),
-            ));
-        }
+        Self::with_options(config, UrlValidationOptions::default())
+    }
+
+    /// Create a new JWT validator with explicit SSRF/DNS-pinning options.
+    pub fn with_options(
+        config: JwtAuthConfig,
+        url_validation_opts: UrlValidationOptions,
+    ) -> Result<Self, AuthError> {
+        Self::check_config(&config)?;
         Ok(Self {
             config,
-            http_client: reqwest::Client::new(),
             jwks_cache: RwLock::new(None),
+            url_validation_opts,
         })
     }
 
-    /// Create a new JWT validator with a custom HTTP client.
-    pub fn with_client(
-        config: JwtAuthConfig,
-        http_client: reqwest::Client,
-    ) -> Result<Self, AuthError> {
+    fn check_config(config: &JwtAuthConfig) -> Result<(), AuthError> {
         if config.allowed_algorithms.is_empty() {
             return Err(AuthError::Internal(
                 "JWT allowed_algorithms must not be empty".into(),
             ));
         }
-        Ok(Self {
-            config,
-            http_client,
-            jwks_cache: RwLock::new(None),
-        })
+        // `jsonwebtoken::Validation::set_audience(&[""])` accepts a token whose
+        // `aud` claim equals the empty string, silently disabling the audience
+        // check. Reject empty entries here so the validator always enforces a
+        // real expected audience.
+        let entries = config.audience.to_vec();
+        if entries.is_empty() {
+            return Err(AuthError::Internal("JWT audience must not be empty".into()));
+        }
+        for entry in entries {
+            if entry.trim().is_empty() {
+                return Err(AuthError::Internal(
+                    "JWT audience entries must not be empty".into(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Validate a JWT and return the claims.
@@ -246,11 +264,43 @@ impl JwtValidator {
     }
 
     /// Fetch and cache the JWKS from the configured URL.
+    ///
+    /// Re-validates the JWKS URL against SSRF and pins reqwest's DNS resolution
+    /// to the resolved addresses for this fetch. This closes the DNS-rebinding
+    /// window between discovery-time validation and the actual JWKS fetch:
+    /// without per-fetch pinning an attacker controlling an IdP with short
+    /// DNS TTLs could re-point `jwks_uri` at an internal/metadata address
+    /// after discovery passed validation.
     async fn refresh_jwks(&self) -> Result<(), AuthError> {
         tracing::debug!(url = %self.config.jwks_url, "Fetching JWKS");
 
-        let response = self
-            .http_client
+        let client = match validate_base_url_opts(&self.config.jwks_url, self.url_validation_opts) {
+            Ok(validated) => match pinned_reqwest_client(&validated) {
+                Ok(client) => client,
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        url = %self.config.jwks_url,
+                        "Failed to build pinned HTTP client for JWKS fetch",
+                    );
+                    return Err(AuthError::Internal(
+                        "Failed to build pinned HTTP client for JWKS fetch".to_string(),
+                    ));
+                }
+            },
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    url = %self.config.jwks_url,
+                    "JWKS URL failed SSRF validation",
+                );
+                return Err(AuthError::Internal(format!(
+                    "JWKS URL failed SSRF validation: {e}"
+                )));
+            }
+        };
+
+        let response = client
             .get(&self.config.jwks_url)
             .send()
             .await

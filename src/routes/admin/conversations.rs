@@ -12,12 +12,28 @@ use crate::{
     AppState,
     middleware::AuthzContext,
     models::{
-        AppendMessages, Conversation, ConversationWithProject, CreateConversation, Message,
-        SetPinOrder, UpdateConversation,
+        AppendMessages, Conversation, ConversationOwnerType, ConversationWithProject,
+        CreateConversation, Message, SetPinOrder, UpdateConversation,
     },
     openapi::PaginationMeta,
     services::Services,
 };
+
+/// Scope tuple for `authz.require` derived from a conversation's owner.
+struct ConversationAuthzScope {
+    project: Option<String>,
+}
+
+fn conversation_authz_scope(c: &Conversation) -> ConversationAuthzScope {
+    let id = c.owner_id.to_string();
+    match c.owner_type {
+        ConversationOwnerType::Project => ConversationAuthzScope { project: Some(id) },
+        // User-owned conversations have no project/team/org context; the
+        // policy compares owner_id against the caller's subject via
+        // resource_id.
+        ConversationOwnerType::User => ConversationAuthzScope { project: None },
+    }
+}
 
 /// Paginated list of conversations
 #[derive(Debug, Serialize, Deserialize)]
@@ -50,8 +66,26 @@ pub async fn create(
     Extension(authz): Extension<AuthzContext>,
     Valid(Json(input)): Valid<Json<CreateConversation>>,
 ) -> Result<(StatusCode, Json<Conversation>), AdminError> {
-    authz.require("conversation", "create", None, None, None, None)?;
     let services = get_services(&state)?;
+
+    // Pass the requested owner scope into authz so the policy can reject
+    // creating a conversation under a project the caller does not own.
+    // User-owned conversations carry no project scope; the policy must
+    // compare the request's user_id (resource_id) against the subject.
+    let (owner_resource, owner_project) = match &input.owner {
+        crate::models::ConversationOwner::Project { project_id } => {
+            (None, Some(project_id.to_string()))
+        }
+        crate::models::ConversationOwner::User { user_id } => (Some(user_id.to_string()), None),
+    };
+    authz.require(
+        "conversation",
+        "create",
+        owner_resource.as_deref(),
+        None,
+        None,
+        owner_project.as_deref(),
+    )?;
 
     // Verify the owner exists
     match &input.owner {
@@ -112,14 +146,27 @@ pub async fn get(
     Extension(authz): Extension<AuthzContext>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Conversation>, AdminError> {
-    authz.require("conversation", "read", None, None, None, None)?;
     let services = get_services(&state)?;
 
+    // Pre-fetch the row so authz sees the conversation's project scope;
+    // otherwise every read is evaluated against an all-None scope and a
+    // permissive policy could leak conversations cross-project.
     let conversation = services
         .conversations
         .get_by_id(id)
         .await?
         .ok_or_else(|| AdminError::NotFound(format!("Conversation '{}' not found", id)))?;
+
+    let id_str = id.to_string();
+    let scope = conversation_authz_scope(&conversation);
+    authz.require(
+        "conversation",
+        "read",
+        Some(&id_str),
+        None,
+        None,
+        scope.project.as_deref(),
+    )?;
 
     Ok(Json(conversation))
 }
@@ -219,7 +266,8 @@ pub async fn list_by_user(
     Path(user_id): Path<Uuid>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<ConversationListResponse>, AdminError> {
-    authz.require("conversation", "list", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("conversation", "list", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
 
     // Verify user exists
@@ -290,7 +338,8 @@ pub async fn list_accessible_for_user(
     Path(user_id): Path<Uuid>,
     Query(query): Query<ListAccessibleQuery>,
 ) -> Result<Json<ConversationWithProjectListResponse>, AdminError> {
-    authz.require("conversation", "list", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require("conversation", "list", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
 
     // Verify user exists
@@ -342,8 +391,26 @@ pub async fn update(
     Path(id): Path<Uuid>,
     Valid(Json(input)): Valid<Json<UpdateConversation>>,
 ) -> Result<Json<Conversation>, AdminError> {
-    authz.require("conversation", "update", None, None, None, None)?;
     let services = get_services(&state)?;
+
+    // Pre-fetch the existing conversation so authz sees the current owner
+    // scope (a permissive policy with all-None would otherwise allow
+    // editing across projects).
+    let existing = services
+        .conversations
+        .get_by_id(id)
+        .await?
+        .ok_or_else(|| AdminError::NotFound(format!("Conversation '{}' not found", id)))?;
+    let id_str = id.to_string();
+    let scope = conversation_authz_scope(&existing);
+    authz.require(
+        "conversation",
+        "update",
+        Some(&id_str),
+        None,
+        None,
+        scope.project.as_deref(),
+    )?;
 
     // Verify the new owner exists if one is provided
     if let Some(ref owner) = input.owner {
@@ -390,8 +457,23 @@ pub async fn append_messages(
     Path(id): Path<Uuid>,
     Valid(Json(input)): Valid<Json<AppendMessages>>,
 ) -> Result<Json<Vec<Message>>, AdminError> {
-    authz.require("conversation", "update", None, None, None, None)?;
     let services = get_services(&state)?;
+
+    let conversation = services
+        .conversations
+        .get_by_id(id)
+        .await?
+        .ok_or_else(|| AdminError::NotFound(format!("Conversation '{}' not found", id)))?;
+    let id_str = id.to_string();
+    let scope = conversation_authz_scope(&conversation);
+    authz.require(
+        "conversation",
+        "update",
+        Some(&id_str),
+        None,
+        None,
+        scope.project.as_deref(),
+    )?;
 
     let messages = services.conversations.append_messages(id, input).await?;
     Ok(Json(messages))
@@ -414,8 +496,23 @@ pub async fn delete(
     Extension(authz): Extension<AuthzContext>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<()>, AdminError> {
-    authz.require("conversation", "delete", None, None, None, None)?;
     let services = get_services(&state)?;
+
+    let conversation = services
+        .conversations
+        .get_by_id(id)
+        .await?
+        .ok_or_else(|| AdminError::NotFound(format!("Conversation '{}' not found", id)))?;
+    let id_str = id.to_string();
+    let scope = conversation_authz_scope(&conversation);
+    authz.require(
+        "conversation",
+        "delete",
+        Some(&id_str),
+        None,
+        None,
+        scope.project.as_deref(),
+    )?;
 
     services.conversations.delete(id).await?;
     Ok(Json(()))
@@ -443,8 +540,23 @@ pub async fn set_pin(
     Path(id): Path<Uuid>,
     Valid(Json(input)): Valid<Json<SetPinOrder>>,
 ) -> Result<Json<Conversation>, AdminError> {
-    authz.require("conversation", "update", None, None, None, None)?;
     let services = get_services(&state)?;
+
+    let conversation = services
+        .conversations
+        .get_by_id(id)
+        .await?
+        .ok_or_else(|| AdminError::NotFound(format!("Conversation '{}' not found", id)))?;
+    let id_str = id.to_string();
+    let scope = conversation_authz_scope(&conversation);
+    authz.require(
+        "conversation",
+        "update",
+        Some(&id_str),
+        None,
+        None,
+        scope.project.as_deref(),
+    )?;
 
     let updated = services
         .conversations

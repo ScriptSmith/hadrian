@@ -124,6 +124,10 @@ pub struct CostInjectionParams<'a> {
     pub usage_entry: Option<crate::models::UsageLogEntry>,
     #[cfg(feature = "server")]
     pub task_tracker: Option<&'a TaskTracker>,
+    /// Handle to the usage-drain channel; used by `UsageTrackingStream` to
+    /// log partial usage from `Drop` without spawning a task there directly.
+    #[cfg(feature = "server")]
+    pub usage_drain: Option<&'a crate::streaming::UsageDrainHandle>,
     pub max_response_body_bytes: usize,
     /// Idle timeout for streaming responses in seconds.
     /// If a streaming response doesn't receive a chunk within this timeout,
@@ -164,23 +168,45 @@ impl From<ProviderError> for StatusCode {
 
 impl IntoResponse for ProviderError {
     fn into_response(self) -> Response {
-        let (status, error_code) = match &self {
-            ProviderError::Request(_) => (StatusCode::BAD_GATEWAY, "request_failed"),
-            ProviderError::ResponseBuilder(_) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "response_builder")
-            }
-            ProviderError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
-            ProviderError::CircuitBreakerOpen(_) => {
-                (StatusCode::SERVICE_UNAVAILABLE, "circuit_breaker_open")
-            }
+        // CircuitBreakerOpen is a curated message we own (no upstream detail
+        // mixed in), so it's safe to expose. The other variants wrap reqwest
+        // / http / arbitrary internal strings that may include hostnames,
+        // file paths, or stack-trace fragments — keep those in logs only.
+        let (status, error_code, public_message) = match &self {
+            ProviderError::Request(_) => (
+                StatusCode::BAD_GATEWAY,
+                "request_failed",
+                "Upstream provider request failed".to_string(),
+            ),
+            ProviderError::ResponseBuilder(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "response_builder",
+                "Failed to build response".to_string(),
+            ),
+            ProviderError::Internal(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                "Internal provider error".to_string(),
+            ),
+            ProviderError::CircuitBreakerOpen(e) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "circuit_breaker_open",
+                e.to_string(),
+            ),
         };
+
+        tracing::error!(
+            error_code = %error_code,
+            error = %self,
+            "Provider error returned to client"
+        );
 
         // Record provider error metric
         // Note: Provider name is tracked via llm_requests_total with status="error"
         // This counter provides unified error categorization across all error types
         metrics::record_gateway_error("provider_error", error_code, None);
 
-        (status, self.to_string()).into_response()
+        (status, public_message).into_response()
     }
 }
 
@@ -548,6 +574,8 @@ async fn build_response(
 pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Response {
     #[cfg(feature = "server")]
     let task_tracker = params.task_tracker;
+    #[cfg(feature = "server")]
+    let usage_drain = params.usage_drain;
     let CostInjectionParams {
         response,
         provider,
@@ -595,7 +623,9 @@ pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Respo
         #[cfg(feature = "server")]
         {
             // For streaming responses, wrap the body to track tokens as they arrive
-            if let (Some(db_pool), Some(entry), Some(tracker)) = (db, usage_entry, task_tracker) {
+            if let (Some(db_pool), Some(entry), Some(tracker), Some(drain)) =
+                (db, usage_entry, task_tracker, usage_drain)
+            {
                 use futures_util::StreamExt;
 
                 let (parts, body) = response.into_parts();
@@ -647,6 +677,7 @@ pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Respo
                     provider.to_string(),
                     model.to_string(),
                     tracker.clone(),
+                    drain.clone(),
                 );
 
                 let new_body = axum::body::Body::from_stream(tracking_stream);
@@ -797,16 +828,24 @@ pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Respo
                 .map(|(_, s)| s)
                 .unwrap_or(crate::pricing::CostPricingSource::None);
 
-            // Inject cost (in dollars) into the usage object in the response body
+            // Inject cost (in dollars) into the usage object in the response body.
+            // Only re-serialize when we actually mutate the JSON; otherwise we'd
+            // change the body length (whitespace, key order) and have to strip
+            // Content-Length unnecessarily.
+            let mut body_modified = false;
             if let Some(cost) = cost_microcents {
                 let cost_dollars = crate::pricing::microcents_to_dollars(cost);
                 if let Some(usage_obj) = json.get_mut("usage").and_then(|u| u.as_object_mut()) {
                     usage_obj.insert("cost".to_string(), serde_json::Value::from(cost_dollars));
+                    body_modified = true;
                 }
             }
 
-            // Re-serialize the (possibly modified) JSON
-            let body_bytes = serde_json::to_vec(&json).unwrap_or_else(|_| bytes.to_vec());
+            let body_bytes = if body_modified {
+                serde_json::to_vec(&json).unwrap_or_else(|_| bytes.to_vec())
+            } else {
+                bytes.to_vec()
+            };
 
             (
                 Some(input),
@@ -817,6 +856,7 @@ pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Respo
                 finish_reason,
                 body_bytes,
                 pricing_source,
+                body_modified,
             )
         }
         Err(_) => (
@@ -828,6 +868,7 @@ pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Respo
             None,
             bytes.to_vec(),
             crate::pricing::CostPricingSource::None,
+            false,
         ),
     };
 
@@ -840,6 +881,7 @@ pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Respo
         finish_reason,
         body_bytes,
         pricing_source,
+        body_modified,
     ) = extracted;
 
     // Rebuild response with headers
@@ -880,8 +922,11 @@ pub async fn inject_cost_into_response(params: CostInjectionParams<'_>) -> Respo
         new_parts.headers.insert("X-Pricing-Source", value);
     }
 
-    // Remove Content-Length since body size may have changed after cost injection
-    new_parts.headers.remove(CONTENT_LENGTH);
+    // Only strip Content-Length when we re-serialized the body. If the body is
+    // passed through untouched, the upstream length is still authoritative.
+    if body_modified {
+        new_parts.headers.remove(CONTENT_LENGTH);
+    }
 
     Response::from_parts(new_parts, Body::from(body_bytes))
 }

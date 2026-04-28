@@ -32,6 +32,10 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "hadrian.serviceAccountName" . }}
+      # Match the gateway's drain budget. Default drain is 35s (see
+      # `[server.shutdown]`), so the pod must be allowed at least that long
+      # plus a margin for OTLP/usage-buffer flushes after SIGTERM.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 60 }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- if or .Values.initContainers.waitForDb.enabled .Values.initContainers.migrate.enabled .Values.extraInitContainers }}

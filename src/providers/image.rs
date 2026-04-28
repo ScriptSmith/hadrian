@@ -31,6 +31,12 @@ pub struct ImageFetchConfig {
     pub timeout: Duration,
     /// Allowed content types (empty = allow all image types)
     pub allowed_content_types: Vec<String>,
+    /// Skip preprocessing for `https://` URLs (default: false). Set this for
+    /// providers that natively support HTTPS image URLs (e.g. Anthropic), so
+    /// we don't waste bandwidth fetching and re-encoding images the upstream
+    /// can pull itself. `http://` URLs are still preprocessed because most
+    /// providers reject plain HTTP.
+    pub pass_through_https: bool,
 }
 
 impl Default for ImageFetchConfig {
@@ -45,6 +51,7 @@ impl Default for ImageFetchConfig {
                 "image/gif".to_string(),
                 "image/webp".to_string(),
             ],
+            pass_through_https: false,
         }
     }
 }
@@ -58,6 +65,8 @@ pub enum ImageError {
     TooLarge { size: usize, limit: usize },
     #[error("Unsupported content type: {0}")]
     UnsupportedContentType(String),
+    #[error("Image URL is not permitted: {0}")]
+    BlockedUrl(String),
     #[error("Failed to fetch image: {0}")]
     FetchError(String),
     #[error("Image URL timeout after {0:?}")]
@@ -177,6 +186,24 @@ pub async fn fetch_image_url(
         )));
     }
 
+    // SSRF guard: reject loopback/private/cloud-metadata/RFC1918 addresses,
+    // and pin reqwest's DNS resolution to the addresses we just resolved so a
+    // fresh lookup between validation and fetch can't redirect us to a
+    // re-bound blocked range. We deliberately do not enable `allow_loopback`
+    // — image URLs from chat content are untrusted.
+    let validated = crate::validation::validate_base_url_opts(
+        url,
+        crate::validation::UrlValidationOptions::default(),
+    )
+    .map_err(|e| ImageError::BlockedUrl(e.to_string()))?;
+    let pinned_client = crate::validation::pinned_reqwest_client(&validated)
+        .map_err(|e| ImageError::FetchError(format!("Failed to pin DNS resolution: {e}")))?;
+    // Use the caller-supplied `client` only for connection-pool tuning; for
+    // the actual outbound request we want our IP-pinned client. We don't
+    // reuse the caller's pool because the pin is per-host.
+    let _ = client;
+    let client = &pinned_client;
+
     // Build request with timeout
     let response = client
         .get(url)
@@ -228,22 +255,30 @@ pub async fn fetch_image_url(
         });
     }
 
-    // Fetch the body
-    let bytes = response.bytes().await.map_err(|e| {
-        if e.is_timeout() {
-            ImageError::Timeout(config.timeout)
-        } else {
-            ImageError::FetchError(e.to_string())
+    // Stream the body and abort as soon as we cross `max_size_bytes`, instead
+    // of buffering the whole response and discovering the limit was breached
+    // after the fact (which lets a malicious upstream burn server memory
+    // proportional to whatever the server is willing to wait through).
+    use futures::StreamExt;
+    let mut bytes = bytes::BytesMut::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| {
+            if e.is_timeout() {
+                ImageError::Timeout(config.timeout)
+            } else {
+                ImageError::FetchError(e.to_string())
+            }
+        })?;
+        if bytes.len() + chunk.len() > config.max_size_bytes {
+            return Err(ImageError::TooLarge {
+                size: bytes.len() + chunk.len(),
+                limit: config.max_size_bytes,
+            });
         }
-    })?;
-
-    // Check actual size
-    if bytes.len() > config.max_size_bytes {
-        return Err(ImageError::TooLarge {
-            size: bytes.len(),
-            limit: config.max_size_bytes,
-        });
+        bytes.extend_from_slice(&chunk);
     }
+    let bytes = bytes.freeze();
 
     // Convert to base64
     let data = BASE64.encode(&bytes);
@@ -368,6 +403,14 @@ async fn preprocess_content_for_images(
                 if let ContentPart::ImageUrl { image_url, .. } = part {
                     // Skip if already a data URL
                     if image_url.url.starts_with("data:") {
+                        continue;
+                    }
+
+                    // Providers like Anthropic accept HTTPS URLs directly;
+                    // fetching and re-encoding them is wasted work.
+                    if image_url.url.starts_with("https://")
+                        && config.is_some_and(|c| c.pass_through_https)
+                    {
                         continue;
                     }
 

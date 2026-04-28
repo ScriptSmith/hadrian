@@ -95,9 +95,11 @@ data:
     # ==========================================================================
     # Authentication Configuration
     # ==========================================================================
-    [auth.gateway]
+    [auth.mode]
     type = {{ .Values.gateway.auth.gateway.type | quote }}
     {{- if eq .Values.gateway.auth.gateway.type "api_key" }}
+
+    [auth.api_key]
     header_name = {{ .Values.gateway.auth.gateway.headerName | quote }}
     key_prefix = {{ .Values.gateway.auth.gateway.keyPrefix | quote }}
     cache_ttl_secs = {{ .Values.gateway.auth.gateway.cacheTtlSecs }}

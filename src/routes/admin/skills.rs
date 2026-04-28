@@ -40,6 +40,43 @@ fn audit_owner(skill: &Skill) -> (Option<Uuid>, Option<Uuid>) {
     }
 }
 
+/// Authorization scope derived from a skill's owner. Mirrors the pattern in
+/// `create()`, which routes the request scope through `(owner_org, owner_team,
+/// owner_project)` so policies can deny cross-tenant operations.
+struct SkillAuthzScope {
+    org: Option<String>,
+    team: Option<String>,
+    project: Option<String>,
+}
+
+fn skill_authz_scope(skill: &Skill) -> SkillAuthzScope {
+    let id = skill.owner_id.to_string();
+    match skill.owner_type {
+        SkillOwnerType::Organization => SkillAuthzScope {
+            org: Some(id),
+            team: None,
+            project: None,
+        },
+        SkillOwnerType::Team => SkillAuthzScope {
+            org: None,
+            team: Some(id),
+            project: None,
+        },
+        SkillOwnerType::Project => SkillAuthzScope {
+            org: None,
+            team: None,
+            project: Some(id),
+        },
+        // User-owned skills carry no team/org scope; the policy compares
+        // owner_id against the caller subject via resource_id.
+        SkillOwnerType::User => SkillAuthzScope {
+            org: None,
+            team: None,
+            project: None,
+        },
+    }
+}
+
 /// Create a skill.
 #[cfg_attr(feature = "utoipa", utoipa::path(
     post,
@@ -65,7 +102,26 @@ pub async fn create(
     let services = get_services(&state)?;
     let actor = AuditActor::from(&admin_auth);
 
-    authz.require("skill", "create", None, None, None, None)?;
+    // Pass the requested owner scope into authz so the policy can reject
+    // creating a skill for a team / project / user the caller does not own.
+    let (owner_org, owner_team, owner_project) = match &input.owner {
+        crate::models::SkillOwner::Organization { organization_id } => {
+            (Some(organization_id.to_string()), None, None)
+        }
+        crate::models::SkillOwner::Team { team_id } => (None, Some(team_id.to_string()), None),
+        crate::models::SkillOwner::Project { project_id } => {
+            (None, None, Some(project_id.to_string()))
+        }
+        crate::models::SkillOwner::User { .. } => (None, None, None),
+    };
+    authz.require(
+        "skill",
+        "create",
+        None,
+        owner_org.as_deref(),
+        owner_team.as_deref(),
+        owner_project.as_deref(),
+    )?;
 
     // Enforce per-owner skill count limit.
     let max = state.config.limits.resource_limits.max_skills_per_owner;
@@ -129,13 +185,24 @@ pub async fn get(
 ) -> Result<Json<Skill>, AdminError> {
     let services = get_services(&state)?;
 
-    authz.require("skill", "read", None, None, None, None)?;
-
+    // Pre-fetch the skill so the authz check sees its owner scope; otherwise
+    // every "skill", "read" call is evaluated against an all-None scope and a
+    // permissive policy would happily return cross-tenant skills.
     let skill = services
         .skills
         .get_by_id(id)
         .await?
         .ok_or_else(|| AdminError::NotFound("Skill not found".to_string()))?;
+    let id_str = id.to_string();
+    let scope = skill_authz_scope(&skill);
+    authz.require(
+        "skill",
+        "read",
+        Some(&id_str),
+        scope.org.as_deref(),
+        scope.team.as_deref(),
+        scope.project.as_deref(),
+    )?;
 
     Ok(Json(skill))
 }
@@ -169,7 +236,23 @@ pub async fn update(
     let services = get_services(&state)?;
     let actor = AuditActor::from(&admin_auth);
 
-    authz.require("skill", "update", None, None, None, None)?;
+    // Resolve the existing skill's owner scope first so authz can deny
+    // cross-tenant updates before we touch storage or audit.
+    let existing = services
+        .skills
+        .get_by_id(id)
+        .await?
+        .ok_or_else(|| AdminError::NotFound("Skill not found".to_string()))?;
+    let id_str = id.to_string();
+    let scope = skill_authz_scope(&existing);
+    authz.require(
+        "skill",
+        "update",
+        Some(&id_str),
+        scope.org.as_deref(),
+        scope.team.as_deref(),
+        scope.project.as_deref(),
+    )?;
 
     // Capture a redacted change summary for the audit log (avoids logging
     // full file contents).
@@ -237,14 +320,23 @@ pub async fn delete(
     let services = get_services(&state)?;
     let actor = AuditActor::from(&admin_auth);
 
-    authz.require("skill", "delete", None, None, None, None)?;
-
-    // Capture details before deletion for the audit log.
+    // Capture details before deletion for the audit log, *and* derive the
+    // owner scope so authz sees the real tenant rather than all-None.
     let skill = services
         .skills
         .get_by_id(id)
         .await?
         .ok_or_else(|| AdminError::NotFound("Skill not found".to_string()))?;
+    let id_str = id.to_string();
+    let scope = skill_authz_scope(&skill);
+    authz.require(
+        "skill",
+        "delete",
+        Some(&id_str),
+        scope.org.as_deref(),
+        scope.team.as_deref(),
+        scope.project.as_deref(),
+    )?;
 
     let (org_id, project_id) = audit_owner(&skill);
     let name = skill.name.clone();
@@ -497,7 +589,10 @@ pub async fn list_by_user(
 ) -> Result<Json<SkillListResponse>, AdminError> {
     let services = get_services(&state)?;
 
-    authz.require("skill", "list", None, None, None, None)?;
+    // Pass the target user_id through `resource_id` so policies can compare
+    // against the calling subject and reject cross-user listing.
+    let user_id_str = user_id.to_string();
+    authz.require("skill", "list", Some(&user_id_str), None, None, None)?;
 
     let limit = query.limit.unwrap_or(100);
     let params = query.try_into_with_cursor()?;

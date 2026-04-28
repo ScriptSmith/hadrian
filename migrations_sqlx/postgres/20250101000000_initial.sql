@@ -684,36 +684,6 @@ CREATE INDEX IF NOT EXISTS idx_usage_records_model ON usage_records(model);
 CREATE INDEX IF NOT EXISTS idx_usage_records_request_id ON usage_records(request_id);
 
 -- ======================================================================
--- Daily Spend
--- ======================================================================
-
--- Materialized aggregates from usage_records, computed periodically
-CREATE TABLE IF NOT EXISTS daily_spend (
-    id UUID PRIMARY KEY NOT NULL,
-    -- Attribution context
-    api_key_id UUID REFERENCES api_keys(id) ON DELETE SET NULL,
-    -- Principal-based attribution (mirrors usage_records)
-    user_id UUID,
-    org_id UUID,
-    project_id UUID,
-    team_id UUID,
-    service_account_id UUID,
-    date DATE NOT NULL,
-    model VARCHAR(128) NOT NULL,
-    -- Total cost in microcents (1/1,000,000 of a dollar) for sub-cent precision
-    total_cost_microcents BIGINT NOT NULL DEFAULT 0,
-    total_tokens INTEGER NOT NULL DEFAULT 0,
-    request_count INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_daily_spend_date ON daily_spend(date);
-CREATE INDEX IF NOT EXISTS idx_daily_spend_api_key_date ON daily_spend(api_key_id, date) WHERE api_key_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_daily_spend_org_date ON daily_spend(org_id, date) WHERE org_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_daily_spend_user_date ON daily_spend(user_id, date) WHERE user_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_daily_spend_project_date ON daily_spend(project_id, date) WHERE project_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_daily_spend_team_date ON daily_spend(team_id, date) WHERE team_id IS NOT NULL;
-
--- ======================================================================
 -- Model Pricing
 -- ======================================================================
 
@@ -1103,10 +1073,15 @@ CREATE TABLE IF NOT EXISTS vector_store_files (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     -- Soft delete timestamp (NULL = not deleted)
-    deleted_at TIMESTAMPTZ,
-    -- A file can only be in a vector store once (among non-deleted entries)
-    UNIQUE(vector_store_id, file_id)
+    deleted_at TIMESTAMPTZ
 );
+
+-- A file can only be in a vector store once among *live* entries. Using a
+-- partial unique index instead of a plain UNIQUE constraint lets a soft-deleted
+-- row coexist with a fresh re-add of the same file.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vector_store_files_unique_live
+    ON vector_store_files(vector_store_id, file_id)
+    WHERE deleted_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_vector_store_files_vector_store ON vector_store_files(vector_store_id);
 CREATE INDEX IF NOT EXISTS idx_vector_store_files_file ON vector_store_files(file_id);

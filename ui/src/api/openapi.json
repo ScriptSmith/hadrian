@@ -7,7 +7,7 @@
       "name": "Apache-2.0 OR MIT",
       "url": "https://github.com/ScriptSmith/hadrian/blob/main/LICENSE-APACHE"
     },
-    "version": "0.1.0"
+    "version": "0.0.0-alpha.12"
   },
   "servers": [
     {
@@ -19318,6 +19318,90 @@
         ]
       }
     },
+    "/auth/discover": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Discover SSO configuration for an email address.",
+        "description": "This endpoint allows the frontend to determine which IdP to use for login\nbased on the user's email domain. If the email domain matches an organization\nwith SSO configured, the response includes the organization details and IdP info.\n\nSSO is only available when the email domain has been verified via DNS TXT record.\nThe response includes domain verification status to help users understand why\nSSO may not be available.",
+        "operationId": "auth_discover",
+        "parameters": [
+          {
+            "name": "email",
+            "in": "query",
+            "description": "Email address to discover SSO configuration for",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSO discovery result for the email domain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoverResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No SSO configuration found for the domain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error (database / config)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Get current user identity.",
+        "operationId": "auth_me",
+        "responses": {
+          "200": {
+            "description": "Authenticated user identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -24265,6 +24349,81 @@
           }
         }
       },
+      "DiscoverResponse": {
+        "type": "object",
+        "description": "Response for the /auth/discover endpoint.",
+        "required": [
+          "org_id",
+          "org_slug",
+          "org_name",
+          "has_sso",
+          "sso_required",
+          "enforcement_mode",
+          "provider_type",
+          "domain_verified"
+        ],
+        "properties": {
+          "domain_verification_status": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DomainVerificationStatus",
+                "description": "Current verification status of the domain (pending, verified, failed).\nNone if no verification record exists for this domain."
+              }
+            ]
+          },
+          "domain_verified": {
+            "type": "boolean",
+            "description": "Whether the email domain has been verified via DNS TXT record.\nSSO is only available for verified domains."
+          },
+          "enforcement_mode": {
+            "$ref": "#/components/schemas/SsoEnforcementMode",
+            "description": "The SSO enforcement mode for this organization.\n- \"optional\": SSO is available but not required\n- \"required\": SSO is required; non-SSO auth will be blocked\n- \"test\": SSO enforcement is being tested; non-SSO auth is logged but allowed"
+          },
+          "has_sso": {
+            "type": "boolean",
+            "description": "Whether the organization has SSO configured and the domain is verified.\nSSO is only available when both conditions are met."
+          },
+          "idp_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name for the identity provider (derived from issuer URL or IdP entity ID)"
+          },
+          "org_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Organization ID"
+          },
+          "org_name": {
+            "type": "string",
+            "description": "Organization display name"
+          },
+          "org_slug": {
+            "type": "string",
+            "description": "Organization slug (URL-friendly identifier)"
+          },
+          "provider_type": {
+            "$ref": "#/components/schemas/SsoProviderType",
+            "description": "The SSO provider type (oidc or saml).\nDetermines which auth flow the frontend should use."
+          },
+          "sso_required": {
+            "type": "boolean",
+            "description": "Whether SSO is required for this organization (enforcement_mode = \"required\").\nOnly true if has_sso is also true."
+          },
+          "verified_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the domain was successfully verified (if applicable)."
+          }
+        }
+      },
       "DlqEntryResponse": {
         "type": "object",
         "description": "DLQ entry response.",
@@ -26335,6 +26494,53 @@
           "and",
           "or"
         ]
+      },
+      "MeResponse": {
+        "type": "object",
+        "description": "Response for the /auth/me endpoint.",
+        "required": [
+          "external_id",
+          "roles",
+          "idp_groups"
+        ],
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "idp_groups": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Raw IdP groups from the authentication source.\nThese are the exact values from the IdP (e.g., OIDC groups claim),\nbefore any mapping or transformation. Useful for debugging SSO group mappings."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "User's roles (e.g., super_admin, org_admin, team_admin, user)"
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
       },
       "MembershipSource": {
         "type": "string",
@@ -34619,6 +34825,10 @@
     {
       "name": "health",
       "description": "Health check endpoints for monitoring and Kubernetes probes. Use `/health` for detailed status, `/health/live` for liveness probes, and `/health/ready` for readiness probes."
+    },
+    {
+      "name": "auth",
+      "description": "Browser-facing authentication endpoints (OIDC / SAML). The frontend calls `/auth/discover` to find the right SSO provider for an email domain, then `/auth/login` to redirect to the IdP; `/auth/me` returns the authenticated identity for whatever session cookie or bearer token is presented."
     }
   ],
   "x-tagGroups": [

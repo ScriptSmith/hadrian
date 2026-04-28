@@ -50,12 +50,9 @@ pub async fn security_headers_middleware(
         }
     }
 
-    // Content-Security-Policy
-    if let Some(value) = config
-        .content_security_policy
-        .as_deref()
-        .and_then(try_header_value)
-    {
+    // Content-Security-Policy. Falls back to the configured `csp_preset`
+    // (default: strict) when no explicit string is set.
+    if let Some(value) = config.resolved_csp().as_deref().and_then(try_header_value) {
         headers.insert("content-security-policy", value);
     }
 

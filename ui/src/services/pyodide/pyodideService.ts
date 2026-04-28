@@ -1,3 +1,4 @@
+import { formatApiError } from "@/utils/formatApiError";
 /**
  * Pyodide Service
  *
@@ -183,7 +184,7 @@ class PyodideService {
           reject(new Error(error.message));
         };
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
+        const errorMsg = error instanceof Error ? error.message : formatApiError(error);
         this.setStatus("error", errorMsg);
         reject(error);
       }
@@ -288,7 +289,7 @@ class PyodideService {
         const result = await this.executeInternal(item.code, item.options);
         item.resolve(result);
       } catch (error) {
-        item.reject(error instanceof Error ? error : new Error(String(error)));
+        item.reject(error instanceof Error ? error : new Error(formatApiError(error)));
       }
     }
 

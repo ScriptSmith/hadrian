@@ -102,9 +102,16 @@ export function ResponseActions({
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    // `clipboard.writeText` rejects on permission denial, lack of focus, or
+    // non-secure context. Without try/catch the rejection becomes an
+    // unhandled promise rejection and `setCopied(true)` silently never runs.
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.debug("Clipboard write failed", err);
+    }
   };
 
   // Primary actions - always visible

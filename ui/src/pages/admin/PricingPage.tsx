@@ -34,6 +34,7 @@ import {
 import { useCursorPagination } from "@/hooks";
 import { formatDateTime } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 const columnHelper = createColumnHelper<DbModelPricing>();
 
 export default function PricingPage() {
@@ -59,7 +60,11 @@ export default function PricingPage() {
       toast({ title: "Pricing created", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to create pricing", description: String(error), type: "error" });
+      toast({
+        title: "Failed to create pricing",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -70,7 +75,11 @@ export default function PricingPage() {
       toast({ title: "Pricing deleted", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to delete pricing", description: String(error), type: "error" });
+      toast({
+        title: "Failed to delete pricing",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -83,7 +92,11 @@ export default function PricingPage() {
       toast({ title: "Pricing updated", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to update pricing", description: String(error), type: "error" });
+      toast({
+        title: "Failed to update pricing",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 

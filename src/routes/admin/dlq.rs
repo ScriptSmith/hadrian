@@ -156,6 +156,74 @@ fn get_dlq(state: &AppState) -> Result<&std::sync::Arc<dyn DeadLetterQueue>, Adm
         .ok_or_else(|| AdminError::BadRequest("Dead letter queue is not configured".to_string()))
 }
 
+/// Per-entry tenant scope resolved from a `DlqEntry`'s payload. Used to
+/// authorise per-entry operations (retry/delete/get) against the tenant the
+/// queued work belongs to, instead of granting platform-wide access.
+#[derive(Default)]
+struct EntryScope {
+    org_id: Option<String>,
+    team_id: Option<String>,
+    project_id: Option<String>,
+    user_id: Option<String>,
+}
+
+/// Resolve a `DlqEntry`'s tenant scope by entry type. Every type that carries
+/// tenant fields must add an arm here so the caller cannot rely on platform-
+/// level `dlq:*` policy to bypass tenant scoping. Unknown types are rejected.
+fn entry_authz_scope(entry: &DlqEntry) -> Result<EntryScope, AdminError> {
+    match entry.entry_type.as_str() {
+        "usage_log" => {
+            let usage_entry: UsageLogEntry = serde_json::from_str(&entry.payload)
+                .map_err(|e| AdminError::BadRequest(format!("Invalid usage_log payload: {}", e)))?;
+            Ok(EntryScope {
+                org_id: usage_entry.org_id.map(|id| id.to_string()),
+                team_id: usage_entry.team_id.map(|id| id.to_string()),
+                project_id: usage_entry.project_id.map(|id| id.to_string()),
+                user_id: usage_entry.user_id.map(|id| id.to_string()),
+            })
+        }
+        // No other entry types ship with tenant fields today. Add an arm
+        // here when introducing one — falling through to platform-wide scope
+        // would be a tenant-isolation bug.
+        _ => Err(AdminError::BadRequest(format!(
+            "Unsupported entry type for tenant-scoped DLQ operation: {}",
+            entry.entry_type
+        ))),
+    }
+}
+
+/// Run an `authz.require` against the DLQ entry's tenant scope.
+///
+/// If the entry is missing or has an unknown type, this falls back to a
+/// platform-level `dlq:<action>` check so callers without any DLQ permission
+/// don't learn about an entry's existence — and so an unknown type can't
+/// silently bypass the tenant gate.
+async fn require_entry_authz(
+    authz: &AuthzContext,
+    action: &str,
+    entry: Option<&DlqEntry>,
+) -> Result<(), AdminError> {
+    match entry.map(entry_authz_scope) {
+        Some(Ok(scope)) => {
+            // `org/team/project/user` is the same shape as every other
+            // tenant-scoped admin handler, so existing policies just work.
+            authz.require(
+                "dlq",
+                action,
+                scope.org_id.as_deref(),
+                scope.team_id.as_deref(),
+                scope.project_id.as_deref(),
+                scope.user_id.as_deref(),
+            )?;
+            Ok(())
+        }
+        Some(Err(_)) | None => {
+            authz.require("dlq", action, None, None, None, None)?;
+            Ok(())
+        }
+    }
+}
+
 /// List DLQ entries.
 #[cfg_attr(feature = "utoipa", utoipa::path(
     get,
@@ -217,13 +285,17 @@ pub async fn get(
     Extension(authz): Extension<AuthzContext>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<DlqEntryResponse>, AdminError> {
-    authz.require("dlq", "read", None, None, None, None)?;
     let dlq = get_dlq(&state)?;
 
     let entry = dlq.get(id).await.map_err(|e| {
         tracing::error!(error = %e, entry_id = %id, "Failed to get DLQ entry");
         AdminError::Internal(e.to_string())
     })?;
+
+    // Authorize against the entry's tenant scope so a tenant admin can't
+    // read another tenant's queued payload. Missing entries fall back to the
+    // platform-level check so we don't leak existence to non-DLQ callers.
+    require_entry_authz(&authz, "read", entry.as_ref()).await?;
 
     match entry {
         Some(e) => Ok(Json(e.into())),
@@ -251,8 +323,19 @@ pub async fn delete(
     Extension(authz): Extension<AuthzContext>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AdminError> {
-    authz.require("dlq", "delete", None, None, None, None)?;
     let dlq = get_dlq(&state)?;
+
+    // Read the entry first so we can scope the delete authz against the
+    // entry's tenant. Without this, a tenant admin with `dlq:delete` could
+    // remove another tenant's queued work.
+    let entry = dlq.get(id).await.map_err(|e| {
+        tracing::error!(error = %e, entry_id = %id, "Failed to get DLQ entry for delete");
+        AdminError::Internal(e.to_string())
+    })?;
+    require_entry_authz(&authz, "delete", entry.as_ref()).await?;
+    if entry.is_none() {
+        return Err(AdminError::NotFound("DLQ entry".to_string()));
+    }
 
     let removed = dlq.remove(id).await.map_err(|e| {
         tracing::error!(error = %e, entry_id = %id, "Failed to delete DLQ entry");
@@ -287,7 +370,6 @@ pub async fn retry(
     Extension(authz): Extension<AuthzContext>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<DlqRetryResponse>, AdminError> {
-    authz.require("dlq", "update", None, None, None, None)?;
     let dlq = get_dlq(&state)?;
     let db = state
         .db
@@ -300,15 +382,20 @@ pub async fn retry(
         AdminError::Internal(e.to_string())
     })?;
 
+    // Always run authz against the entry's tenant scope first so missing /
+    // unknown entries don't leak existence and so a tenant admin with
+    // `dlq:update` can't retry another tenant's queued work.
+    require_entry_authz(&authz, "update", entry.as_ref()).await?;
+
     let entry = match entry {
         Some(e) => e,
         None => return Err(AdminError::NotFound("DLQ entry".to_string())),
     };
 
-    // Process based on entry type
+    // Process based on entry type. Every type that materialises tenant work
+    // back into the database must add an arm here.
     let result = match entry.entry_type.as_str() {
         "usage_log" => {
-            // Parse the usage log entry
             let usage_entry: UsageLogEntry = serde_json::from_str(&entry.payload)
                 .map_err(|e| AdminError::BadRequest(format!("Invalid usage_log payload: {}", e)))?;
 

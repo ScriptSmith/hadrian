@@ -566,6 +566,13 @@ impl UserRepo for PostgresUserRepo {
         Ok(row.get::<i64, _>("count"))
     }
 
+    async fn count_total_org_memberships(&self) -> DbResult<i64> {
+        let row = sqlx::query("SELECT COUNT(*) as count FROM org_memberships")
+            .fetch_one(&self.read_pool)
+            .await?;
+        Ok(row.get::<i64, _>("count"))
+    }
+
     async fn add_to_project(
         &self,
         user_id: Uuid,
@@ -737,6 +744,13 @@ impl UserRepo for PostgresUserRepo {
                 .bind(project_id)
                 .fetch_one(&self.read_pool)
                 .await?;
+        Ok(row.get::<i64, _>("count"))
+    }
+
+    async fn count_total_project_memberships(&self) -> DbResult<i64> {
+        let row = sqlx::query("SELECT COUNT(*) as count FROM project_memberships")
+            .fetch_one(&self.read_pool)
+            .await?;
         Ok(row.get::<i64, _>("count"))
     }
 

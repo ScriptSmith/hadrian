@@ -30,6 +30,7 @@ import {
 } from "@/components/RbacPolicy";
 import { formatDateTime } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 const columnHelper = createColumnHelper<OrgRbacPolicy>();
 
 export default function OrgRbacPoliciesPage() {
@@ -64,7 +65,7 @@ export default function OrgRbacPoliciesPage() {
     onError: (error) => {
       toast({
         title: "Failed to create policy",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -82,7 +83,7 @@ export default function OrgRbacPoliciesPage() {
     onError: (error) => {
       toast({
         title: "Failed to update policy",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -98,7 +99,7 @@ export default function OrgRbacPoliciesPage() {
     onError: (error) => {
       toast({
         title: "Failed to delete policy",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -113,7 +114,7 @@ export default function OrgRbacPoliciesPage() {
     onError: (error) => {
       toast({
         title: "Failed to update policy",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },

@@ -827,21 +827,28 @@ mod tests {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let db_id = COUNTER.fetch_add(1, Ordering::SeqCst);
 
+        #[cfg(feature = "sso")]
+        let session_section = r#"
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
+"#;
+        #[cfg(not(feature = "sso"))]
+        let session_section = "";
+
         let config_str = format!(
             r#"
 [database]
 type = "sqlite"
-path = "file:test_db_{}?mode=memory&cache=shared"
+path = "file:test_db_{db_id}?mode=memory&cache=shared"
 create_if_missing = true
 run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
-
+{session_section}
 [providers.test-openai]
 type = "open_ai"
 api_key = "sk-test-key"
-"#,
-            db_id
+"#
         );
 
         let config =
@@ -2434,20 +2441,21 @@ api_key = "sk-test-key"
     }
 
     #[tokio::test]
-    async fn test_get_api_key_usage_summary_nonexistent_returns_empty() {
+    async fn test_get_api_key_usage_summary_nonexistent_returns_not_found() {
         let app = test_app().await;
 
-        // Usage summary returns empty data for non-existent keys (by design)
+        // The usage helper now pre-fetches the key to derive its tenant scope
+        // (issue 2), so non-existent ids return 404 instead of an empty 200 —
+        // an empty 200 would let an attacker probe key ids and distinguish
+        // "exists in another tenant" (403) from "doesn't exist" (200).
         let (status, body) = get_json(
             &app,
             "/admin/v1/api-keys/00000000-0000-0000-0000-000000000000/usage",
         )
         .await;
 
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["total_cost"], 0.0);
-        assert_eq!(body["total_tokens"], 0);
-        assert_eq!(body["request_count"], 0);
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body["error"]["code"].is_string());
     }
 
     #[tokio::test]
@@ -4125,16 +4133,24 @@ api_key = "sk-test-key"
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let db_id = COUNTER.fetch_add(1, Ordering::SeqCst);
 
+        #[cfg(feature = "sso")]
+        let session_section = r#"
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
+"#;
+        #[cfg(not(feature = "sso"))]
+        let session_section = "";
+
         let config_str = format!(
             r#"
 [database]
 type = "sqlite"
-path = "file:test_dlq_db_{}?mode=memory&cache=shared"
+path = "file:test_dlq_db_{db_id}?mode=memory&cache=shared"
 create_if_missing = true
 run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
-
+{session_section}
 [providers.test-openai]
 type = "open_ai"
 api_key = "sk-test-key"
@@ -4144,8 +4160,7 @@ type = "database"
 table_name = "dead_letter_queue"
 max_entries = 1000
 ttl_secs = 86400
-"#,
-            db_id
+"#
         );
 
         let config =
@@ -5344,8 +5359,26 @@ ttl_secs = 86400
 
     /// Create a test application with a custom config string
     async fn test_app_with_config(config_str: &str) -> axum::Router {
-        let config =
+        #[cfg_attr(not(feature = "sso"), allow(unused_mut))]
+        let mut config =
             crate::config::GatewayConfig::parse(config_str).expect("Failed to parse test config");
+        // The SCIM token pepper is mandatory; tests that don't override
+        // [auth.session] still need a secret so AppState can construct.
+        #[cfg(feature = "sso")]
+        if config
+            .auth
+            .session
+            .as_ref()
+            .and_then(|s| s.secret.as_ref())
+            .is_none()
+        {
+            let session = config
+                .auth
+                .session
+                .get_or_insert_with(crate::config::SessionConfig::default);
+            session.secret =
+                Some("test-session-secret-must-be-long-enough-for-hmac-pepper-32b".to_string());
+        }
         let state = crate::AppState::new(config.clone())
             .await
             .expect("Failed to create AppState");
@@ -5726,6 +5759,7 @@ key_prefix = "gw_"
 type = "idp"
 
 [auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
 secure = true
 cookie_name = "__gw_session"
 "#,
@@ -5754,6 +5788,9 @@ cookie_name = "__gw_session"
 
 [server]
 host = "127.0.0.1"
+
+[server.trusted_proxies]
+cidrs = ["127.0.0.0/8"]
 
 [auth.mode]
 type = "iap"

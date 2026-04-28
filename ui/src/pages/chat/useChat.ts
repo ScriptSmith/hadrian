@@ -1,6 +1,7 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import { useAuth } from "@/auth";
+import { SseParser } from "@/utils/sseParser";
 import {
   useStreamingStore,
   useAllStreams,
@@ -283,8 +284,10 @@ export function useChat({
   projectIdRef.current = projectId;
   const conversationIdRef = useRef(conversationId);
   conversationIdRef.current = conversationId;
-  const streamingStore = useStreamingStore();
-  const debugStore = useDebugStore();
+  // Pull actions through getState() — subscribing to the entire store would
+  // re-render this hook on every streaming/debug update.
+  const streamingStore = useStreamingStore.getState();
+  const debugStore = useDebugStore.getState();
   const modelResponses = useAllStreams();
   const isStreaming = useIsStreaming();
 
@@ -293,6 +296,25 @@ export function useChat({
     abortControllersRef.current = [];
     streamingStore.stopStreaming();
   }, [streamingStore]);
+
+  // Abort any in-flight streams when the user switches conversations.
+  // Without this, an in-progress stream from conversation A would commit its
+  // assistant message into conversation B's store after the switch.
+  // Per-send epoch checks below also drop any results that race the abort.
+  // Skip the undefined → new-id transition: that's a brand-new conversation
+  // being created mid-send, and aborting would kill the very stream we just
+  // kicked off.
+  const previousConversationIdRef = useRef(conversationId);
+  useEffect(() => {
+    const previous = previousConversationIdRef.current;
+    if (previous === conversationId) return;
+    previousConversationIdRef.current = conversationId;
+    if (previous === undefined) return;
+    abortControllersRef.current.forEach((controller) => controller.abort());
+    abortControllersRef.current = [];
+    streamingStore.stopStreaming();
+    streamingStore.clearStreams();
+  }, [conversationId, streamingStore]);
 
   /**
    * Stream a response from a model using the Responses API
@@ -897,7 +919,10 @@ export function useChat({
         const decoder = new TextDecoder();
         let content = "";
         let reasoningContent = "";
-        let buffer = "";
+        // Spec-compliant SSE parser — handles `\r\n`/`\r`/`\n`, multi-line
+        // `data:` fields joined with `\n`, and dispatches events on blank
+        // lines instead of every `data:` line.
+        const sseParser = new SseParser();
         let usage: MessageUsage | undefined;
         // Fallback: extract tool calls from response.completed if not captured during streaming
         let completedToolCalls: ParsedToolCall[] = [];
@@ -905,316 +930,330 @@ export function useChat({
         // Capture response output for debugging
         let responseOutput: unknown[] | undefined;
 
+        // Iterate every event yielded by the parser through the existing
+        // event-handling logic. We parameterise as a generator so the same
+        // body runs for both `feed()` (during streaming) and `flush()` (at
+        // end-of-stream).
+        const handleEvents = function* (events: Iterable<{ data: string }>) {
+          for (const sseEvent of events) {
+            const data = sseEvent.data.trim();
+            if (!data || data === "[DONE]") continue;
+            yield data;
+          }
+        };
+
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) {
+            // End of stream: emit any trailing buffered event the producer
+            // didn't terminate with a blank line.
+            for (const data of handleEvents(sseParser.flush())) {
+              await processEventData(data);
+            }
+            break;
+          }
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          // Keep the last partial line in the buffer
-          buffer = lines.pop() || "";
+          const chunk = decoder.decode(value, { stream: true });
+          for (const data of handleEvents(sseParser.feed(chunk))) {
+            await processEventData(data);
+          }
+        }
 
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              const data = line.slice(6).trim();
-              if (!data || data === "[DONE]") continue;
+        async function processEventData(data: string) {
+          try {
+            const event = JSON.parse(data) as ResponsesStreamEvent;
 
-              try {
-                const event = JSON.parse(data) as ResponsesStreamEvent;
+            // Capture SSE event for debugging if callback provided
+            if (onSSEEvent) {
+              onSSEEvent({
+                type: event.type,
+                timestamp: Date.now(),
+                data: event,
+              });
+            }
 
-                // Capture SSE event for debugging if callback provided
-                if (onSSEEvent) {
-                  onSSEEvent({
-                    type: event.type,
-                    timestamp: Date.now(),
-                    data: event,
-                  });
-                }
-
-                // Track tool calls if enabled
-                if (toolTracker) {
-                  // Cast to BaseSSEEvent since parseToolCallFromEvent expects that type
-                  const parseResult = parseToolCallFromEvent(
-                    event as { type: string; [key: string]: unknown },
-                    toolTracker
-                  );
-                  if (parseResult.type === "tool_call_added") {
-                    // Update streaming store with new tool call
-                    streamingStore.addToolCall(storeKey, parseResult.toolCall);
-                  } else if (parseResult.type === "tool_call_arguments_delta") {
-                    streamingStore.updateToolCallArguments(
-                      storeKey,
-                      parseResult.id,
-                      parseResult.delta
-                    );
-                  } else if (parseResult.type === "tool_call_complete") {
-                    streamingStore.completeToolCall(
-                      storeKey,
-                      parseResult.toolCall.id,
-                      parseResult.toolCall.arguments as Record<string, unknown>
-                    );
-                  }
-                }
-
-                // Handle different Responses API event types
-                if (event.type === "response.output_text.delta" && event.delta) {
-                  hasOutputText = true;
-                  content += event.delta;
-                  streamingStore.appendContent(storeKey, event.delta);
-                } else if (
-                  (event.type === "response.reasoning_text.delta" ||
-                    event.type === "response.reasoning_summary_text.delta") &&
-                  event.delta
-                ) {
-                  // Stream reasoning content (extended thinking)
-                  reasoningContent += event.delta;
-                  streamingStore.appendReasoningContent(storeKey, event.delta);
-                } else if (
-                  (event.type === "response.reasoning_text.done" ||
-                    event.type === "response.reasoning_summary_text.done") &&
-                  event.text
-                ) {
-                  // Final reasoning text
-                  reasoningContent = event.text;
-                  streamingStore.setReasoningContent(storeKey, reasoningContent);
-                } else if (event.type === "response.output_text.done") {
-                  // Completion signal only — streamed deltas are authoritative.
-                } else if (event.type === "response.output_item.done" && event.item) {
-                  // Handle file_search_call output items (server-side file search)
-                  if (event.item.type === "file_search_call" && event.item.results) {
-                    // Convert file_search results to citations
-                    const citations: Citation[] = event.item.results.map(
-                      (
-                        result: {
-                          file_id: string;
-                          filename: string;
-                          score: number;
-                          content?: Array<{ type: string; text: string }>;
-                        },
-                        index: number
-                      ): ChunkCitation => ({
-                        id: `citation-${result.file_id}-${index}`,
-                        type: "chunk",
-                        fileId: result.file_id,
-                        filename: result.filename,
-                        score: result.score,
-                        chunkIndex: index,
-                        content: result.content?.[0]?.text ?? "",
-                      })
-                    );
-                    if (citations.length > 0) {
-                      streamingStore.addCitations(storeKey, citations);
-                    }
-                  } else if (event.item.type === "image_generation_call" && event.item.result) {
-                    // Image generation completed - create image artifact from data URL
-                    const artifact: Artifact = {
-                      id: event.item.id ?? `img_${Date.now()}`,
-                      type: "image",
-                      title: "Generated Image",
-                      data: event.item.result,
-                      mimeType: "image/png",
-                      role: "output",
-                    };
-                    streamingStore.addArtifacts(storeKey, [artifact]);
-                  }
-                } else if (event.type === "response.file_search_call.in_progress") {
-                  // Server-side file search starting - add tool call to streaming store
-                  const itemId = event.item_id ?? `fs_${Date.now()}`;
-                  streamingStore.addToolCall(storeKey, {
-                    id: itemId,
-                    callId: itemId,
-                    name: "file_search",
-                    outputIndex: event.output_index ?? 0,
-                    argumentsBuffer: "",
-                    status: "pending",
-                  });
-                } else if (event.type === "response.file_search_call.searching") {
-                  // Server-side file search actively searching - update status
-                  if (event.item_id) {
-                    streamingStore.updateToolCallArguments(storeKey, event.item_id, "");
-                  }
-                } else if (event.type === "response.file_search_call.completed") {
-                  // Server-side file search completed - remove the tool call indicator
-                  if (event.item_id) {
-                    streamingStore.completeToolCall(storeKey, event.item_id, {});
-                  }
-                } else if (event.type === "response.image_generation_call.in_progress") {
-                  // Image generation starting - show tool call indicator
-                  const itemId = event.item_id ?? `img_${Date.now()}`;
-                  streamingStore.addToolCall(storeKey, {
-                    id: itemId,
-                    callId: itemId,
-                    name: "image_generation",
-                    outputIndex: event.output_index ?? 0,
-                    argumentsBuffer: "",
-                    status: "pending",
-                  });
-                } else if (event.type === "response.image_generation_call.generating") {
-                  // Image generation in progress - update status
-                  if (event.item_id) {
-                    streamingStore.updateToolCallArguments(storeKey, event.item_id, "");
-                  }
-                } else if (event.type === "response.image_generation_call.partial_image") {
-                  // Progressive image preview
-                  if (event.partial_image_b64) {
-                    const dataUrl = `data:image/png;base64,${event.partial_image_b64}`;
-                    const artifact: Artifact = {
-                      id: event.item_id ?? `img_partial_${Date.now()}`,
-                      type: "image",
-                      title: "Generated Image",
-                      data: dataUrl,
-                      mimeType: "image/png",
-                      role: "output",
-                    };
-                    streamingStore.setArtifacts(storeKey, [artifact]);
-                  }
-                } else if (event.type === "response.image_generation_call.completed") {
-                  // Image generation completed - remove tool call indicator
-                  if (event.item_id) {
-                    streamingStore.completeToolCall(storeKey, event.item_id, {});
-                  }
-                } else if (event.type === "response.completed" && event.response) {
-                  // Extract final text from completed response
-                  // First try output_text, then message content, then reasoning content as fallback
-                  const outputText =
-                    event.response.output_text ||
-                    event.response.output
-                      ?.flatMap(
-                        (item) =>
-                          item.content
-                            ?.filter((c) => c.type === "output_text")
-                            .map((c) => c.text || "") ?? []
-                      )
-                      .join("\n\n---\n\n");
-
-                  // If no output_text, try to extract from reasoning content (for reasoning models)
-                  // This is useful for modes like "elected" where we need to parse a vote number
-                  // from reasoning-only responses.
-                  const reasoningText =
-                    event.response.output
-                      ?.filter((item) => item.type === "reasoning")
-                      .flatMap((item) => {
-                        // Extract from content (reasoning_text items)
-                        const fromContent =
-                          item.content
-                            ?.filter((c) => c.type === "reasoning_text")
-                            .map((c) => c.text || "") || [];
-                        // Extract from summary (summary_text items)
-                        const fromSummary =
-                          item.summary
-                            ?.filter((s) => s.type === "summary_text")
-                            .map((s) => s.text || "") || [];
-                        return [...fromContent, ...fromSummary];
-                      })
-                      .join("") || "";
-
-                  // Store reasoning content if present
-                  if (reasoningText && !reasoningContent) {
-                    reasoningContent = reasoningText;
-                    streamingStore.setReasoningContent(storeKey, reasoningContent);
-                  }
-
-                  // Only use response object text as fallback when no streamed deltas were received
-                  if (!hasOutputText) {
-                    content = outputText || reasoningText || content;
-                  }
-
-                  // Extract usage data if present
-                  if (event.response.usage) {
-                    const u = event.response.usage;
-                    const completedTime = Date.now();
-
-                    // Get timing data from streaming store (use hook.getState() for imperative access)
-                    const streamState = useStreamingStore.getState().streams.get(storeKey);
-                    const startTime = streamState?.startTime;
-                    const firstTokenTime = streamState?.firstTokenTime;
-
-                    // Calculate timing stats
-                    const firstTokenMs =
-                      startTime && firstTokenTime ? firstTokenTime - startTime : undefined;
-                    const totalDurationMs = startTime ? completedTime - startTime : undefined;
-                    const tokensPerSecond =
-                      totalDurationMs && totalDurationMs > 0 && u.output_tokens > 0
-                        ? (u.output_tokens / totalDurationMs) * 1000
-                        : undefined;
-
-                    // Extract provider from model string (format: "provider/model-name")
-                    const responseModel = event.response.model;
-                    const provider = responseModel?.includes("/")
-                      ? responseModel.split("/")[0]
-                      : undefined;
-
-                    usage = {
-                      inputTokens: u.input_tokens,
-                      outputTokens: u.output_tokens,
-                      totalTokens: u.total_tokens,
-                      cost: u.cost,
-                      cachedTokens: u.input_tokens_details?.cached_tokens,
-                      reasoningTokens: u.output_tokens_details?.reasoning_tokens,
-                      reasoningContent: reasoningContent || undefined,
-                      // Timing stats
-                      firstTokenMs,
-                      totalDurationMs,
-                      tokensPerSecond,
-                      // Response metadata
-                      finishReason: event.response.status,
-                      modelId: responseModel,
-                      provider,
-                    };
-                  }
-
-                  // Capture full response output for debugging
-                  if (event.response.output) {
-                    responseOutput = event.response.output;
-                  }
-
-                  // Extract function calls from output (fallback for when streaming events don't include them)
-                  if (trackToolCalls && event.response.output) {
-                    const functionCalls = event.response.output.filter(
-                      (item: { type: string }) => item.type === "function_call"
-                    ) as Array<{ type: string; call_id: string; name: string; arguments: string }>;
-                    if (functionCalls.length > 0) {
-                      completedToolCalls = functionCalls.map((fc) => ({
-                        id: fc.call_id, // Use call_id as id since that's what we have
-                        callId: fc.call_id,
-                        name: fc.name,
-                        status: "completed" as const,
-                        arguments: JSON.parse(fc.arguments || "{}"),
-                      }));
-                    }
-                  }
-
-                  // Extract image_generation_call items as fallback
-                  // (for providers that don't emit output_item.done per item)
-                  if (event.response.output) {
-                    const imageItems = event.response.output.filter(
-                      (item) => item.type === "image_generation_call" && item.result
-                    );
-                    if (imageItems.length > 0) {
-                      // Get existing artifact IDs to avoid duplicates
-                      const existingArtifacts =
-                        useStreamingStore.getState().streams.get(storeKey)?.artifacts ?? [];
-                      const existingIds = new Set(existingArtifacts.map((a) => a.id));
-                      const newArtifacts: Artifact[] = imageItems
-                        .filter((item) => !existingIds.has(item.id ?? ""))
-                        .map((item) => ({
-                          id: item.id ?? `img_${Date.now()}`,
-                          type: "image" as const,
-                          title: "Generated Image",
-                          data: item.result!,
-                          mimeType: "image/png",
-                          role: "output" as const,
-                        }));
-                      if (newArtifacts.length > 0) {
-                        streamingStore.addArtifacts(storeKey, newArtifacts);
-                      }
-                    }
-                  }
-                }
-              } catch {
-                // Ignore parse errors for partial JSON
+            // Track tool calls if enabled
+            if (toolTracker) {
+              // Cast to BaseSSEEvent since parseToolCallFromEvent expects that type
+              const parseResult = parseToolCallFromEvent(
+                event as { type: string; [key: string]: unknown },
+                toolTracker
+              );
+              if (parseResult.type === "tool_call_added") {
+                // Update streaming store with new tool call
+                streamingStore.addToolCall(storeKey, parseResult.toolCall);
+              } else if (parseResult.type === "tool_call_arguments_delta") {
+                streamingStore.updateToolCallArguments(storeKey, parseResult.id, parseResult.delta);
+              } else if (parseResult.type === "tool_call_complete") {
+                streamingStore.completeToolCall(
+                  storeKey,
+                  parseResult.toolCall.id,
+                  parseResult.toolCall.arguments as Record<string, unknown>
+                );
               }
             }
+
+            // Handle different Responses API event types
+            if (event.type === "response.output_text.delta" && event.delta) {
+              hasOutputText = true;
+              content += event.delta;
+              streamingStore.appendContent(storeKey, event.delta);
+            } else if (
+              (event.type === "response.reasoning_text.delta" ||
+                event.type === "response.reasoning_summary_text.delta") &&
+              event.delta
+            ) {
+              // Stream reasoning content (extended thinking)
+              reasoningContent += event.delta;
+              streamingStore.appendReasoningContent(storeKey, event.delta);
+            } else if (
+              (event.type === "response.reasoning_text.done" ||
+                event.type === "response.reasoning_summary_text.done") &&
+              event.text
+            ) {
+              // Final reasoning text
+              reasoningContent = event.text;
+              streamingStore.setReasoningContent(storeKey, reasoningContent);
+            } else if (event.type === "response.output_text.done") {
+              // Completion signal only — streamed deltas are authoritative.
+            } else if (event.type === "response.output_item.done" && event.item) {
+              // Handle file_search_call output items (server-side file search)
+              if (event.item.type === "file_search_call" && event.item.results) {
+                // Convert file_search results to citations
+                const citations: Citation[] = event.item.results.map(
+                  (
+                    result: {
+                      file_id: string;
+                      filename: string;
+                      score: number;
+                      content?: Array<{ type: string; text: string }>;
+                    },
+                    index: number
+                  ): ChunkCitation => ({
+                    id: `citation-${result.file_id}-${index}`,
+                    type: "chunk",
+                    fileId: result.file_id,
+                    filename: result.filename,
+                    score: result.score,
+                    chunkIndex: index,
+                    content: result.content?.[0]?.text ?? "",
+                  })
+                );
+                if (citations.length > 0) {
+                  streamingStore.addCitations(storeKey, citations);
+                }
+              } else if (event.item.type === "image_generation_call" && event.item.result) {
+                // Image generation completed - create image artifact from data URL
+                const artifact: Artifact = {
+                  id: event.item.id ?? `img_${Date.now()}`,
+                  type: "image",
+                  title: "Generated Image",
+                  data: event.item.result,
+                  mimeType: "image/png",
+                  role: "output",
+                };
+                streamingStore.addArtifacts(storeKey, [artifact]);
+              }
+            } else if (event.type === "response.file_search_call.in_progress") {
+              // Server-side file search starting - add tool call to streaming store
+              const itemId = event.item_id ?? `fs_${Date.now()}`;
+              streamingStore.addToolCall(storeKey, {
+                id: itemId,
+                callId: itemId,
+                name: "file_search",
+                outputIndex: event.output_index ?? 0,
+                argumentsBuffer: "",
+                status: "pending",
+              });
+            } else if (event.type === "response.file_search_call.searching") {
+              // Server-side file search actively searching - update status
+              if (event.item_id) {
+                streamingStore.updateToolCallArguments(storeKey, event.item_id, "");
+              }
+            } else if (event.type === "response.file_search_call.completed") {
+              // Server-side file search completed - remove the tool call indicator
+              if (event.item_id) {
+                streamingStore.completeToolCall(storeKey, event.item_id, {});
+              }
+            } else if (event.type === "response.image_generation_call.in_progress") {
+              // Image generation starting - show tool call indicator
+              const itemId = event.item_id ?? `img_${Date.now()}`;
+              streamingStore.addToolCall(storeKey, {
+                id: itemId,
+                callId: itemId,
+                name: "image_generation",
+                outputIndex: event.output_index ?? 0,
+                argumentsBuffer: "",
+                status: "pending",
+              });
+            } else if (event.type === "response.image_generation_call.generating") {
+              // Image generation in progress - update status
+              if (event.item_id) {
+                streamingStore.updateToolCallArguments(storeKey, event.item_id, "");
+              }
+            } else if (event.type === "response.image_generation_call.partial_image") {
+              // Progressive image preview
+              if (event.partial_image_b64) {
+                const dataUrl = `data:image/png;base64,${event.partial_image_b64}`;
+                const artifact: Artifact = {
+                  id: event.item_id ?? `img_partial_${Date.now()}`,
+                  type: "image",
+                  title: "Generated Image",
+                  data: dataUrl,
+                  mimeType: "image/png",
+                  role: "output",
+                };
+                streamingStore.setArtifacts(storeKey, [artifact]);
+              }
+            } else if (event.type === "response.image_generation_call.completed") {
+              // Image generation completed - remove tool call indicator
+              if (event.item_id) {
+                streamingStore.completeToolCall(storeKey, event.item_id, {});
+              }
+            } else if (event.type === "response.completed" && event.response) {
+              // Extract final text from completed response
+              // First try output_text, then message content, then reasoning content as fallback
+              const outputText =
+                event.response.output_text ||
+                event.response.output
+                  ?.flatMap(
+                    (item) =>
+                      item.content
+                        ?.filter((c) => c.type === "output_text")
+                        .map((c) => c.text || "") ?? []
+                  )
+                  .join("\n\n---\n\n");
+
+              // If no output_text, try to extract from reasoning content (for reasoning models)
+              // This is useful for modes like "elected" where we need to parse a vote number
+              // from reasoning-only responses.
+              const reasoningText =
+                event.response.output
+                  ?.filter((item) => item.type === "reasoning")
+                  .flatMap((item) => {
+                    // Extract from content (reasoning_text items)
+                    const fromContent =
+                      item.content
+                        ?.filter((c) => c.type === "reasoning_text")
+                        .map((c) => c.text || "") || [];
+                    // Extract from summary (summary_text items)
+                    const fromSummary =
+                      item.summary
+                        ?.filter((s) => s.type === "summary_text")
+                        .map((s) => s.text || "") || [];
+                    return [...fromContent, ...fromSummary];
+                  })
+                  .join("") || "";
+
+              // Store reasoning content if present
+              if (reasoningText && !reasoningContent) {
+                reasoningContent = reasoningText;
+                streamingStore.setReasoningContent(storeKey, reasoningContent);
+              }
+
+              // Only use response object text as fallback when no streamed deltas were received
+              if (!hasOutputText) {
+                content = outputText || reasoningText || content;
+              }
+
+              // Extract usage data if present
+              if (event.response.usage) {
+                const u = event.response.usage;
+                const completedTime = Date.now();
+
+                // Get timing data from streaming store (use hook.getState() for imperative access)
+                const streamState = useStreamingStore.getState().streams.get(storeKey);
+                const startTime = streamState?.startTime;
+                const firstTokenTime = streamState?.firstTokenTime;
+
+                // Calculate timing stats
+                const firstTokenMs =
+                  startTime && firstTokenTime ? firstTokenTime - startTime : undefined;
+                const totalDurationMs = startTime ? completedTime - startTime : undefined;
+                const tokensPerSecond =
+                  totalDurationMs && totalDurationMs > 0 && u.output_tokens > 0
+                    ? (u.output_tokens / totalDurationMs) * 1000
+                    : undefined;
+
+                // Extract provider from model string (format: "provider/model-name")
+                const responseModel = event.response.model;
+                const provider = responseModel?.includes("/")
+                  ? responseModel.split("/")[0]
+                  : undefined;
+
+                usage = {
+                  inputTokens: u.input_tokens,
+                  outputTokens: u.output_tokens,
+                  totalTokens: u.total_tokens,
+                  cost: u.cost,
+                  cachedTokens: u.input_tokens_details?.cached_tokens,
+                  reasoningTokens: u.output_tokens_details?.reasoning_tokens,
+                  reasoningContent: reasoningContent || undefined,
+                  // Timing stats
+                  firstTokenMs,
+                  totalDurationMs,
+                  tokensPerSecond,
+                  // Response metadata
+                  finishReason: event.response.status,
+                  modelId: responseModel,
+                  provider,
+                };
+              }
+
+              // Capture full response output for debugging
+              if (event.response.output) {
+                responseOutput = event.response.output;
+              }
+
+              // Extract function calls from output (fallback for when streaming events don't include them)
+              if (trackToolCalls && event.response.output) {
+                const functionCalls = event.response.output.filter(
+                  (item: { type: string }) => item.type === "function_call"
+                ) as Array<{ type: string; call_id: string; name: string; arguments: string }>;
+                if (functionCalls.length > 0) {
+                  completedToolCalls = functionCalls.map((fc) => ({
+                    id: fc.call_id, // Use call_id as id since that's what we have
+                    callId: fc.call_id,
+                    name: fc.name,
+                    status: "completed" as const,
+                    arguments: JSON.parse(fc.arguments || "{}"),
+                  }));
+                }
+              }
+
+              // Extract image_generation_call items as fallback
+              // (for providers that don't emit output_item.done per item)
+              if (event.response.output) {
+                const imageItems = event.response.output.filter(
+                  (item) => item.type === "image_generation_call" && item.result
+                );
+                if (imageItems.length > 0) {
+                  // Get existing artifact IDs to avoid duplicates
+                  const existingArtifacts =
+                    useStreamingStore.getState().streams.get(storeKey)?.artifacts ?? [];
+                  const existingIds = new Set(existingArtifacts.map((a) => a.id));
+                  const newArtifacts: Artifact[] = imageItems
+                    .filter((item) => !existingIds.has(item.id ?? ""))
+                    .map((item) => ({
+                      id: item.id ?? `img_${Date.now()}`,
+                      type: "image" as const,
+                      title: "Generated Image",
+                      data: item.result!,
+                      mimeType: "image/png",
+                      role: "output" as const,
+                    }));
+                  if (newArtifacts.length > 0) {
+                    streamingStore.addArtifacts(storeKey, newArtifacts);
+                  }
+                }
+              }
+            }
+          } catch (err) {
+            // The SSE parser now joins multi-line `data:` fields and only
+            // dispatches on blank lines, so a partial JSON shouldn't reach
+            // here. Surface failures at debug so producer/spec drift doesn't
+            // silently drop tool calls or citations.
+            console.debug("Failed to parse SSE event payload", { data, err });
           }
         }
 
@@ -1800,6 +1839,12 @@ export function useChat({
     async (content: string, files: ChatFile[]) => {
       if (models.length === 0) return;
 
+      // Snapshot the conversation we're sending into. If the user switches
+      // conversations before the stream completes, the stored ref will diverge
+      // and we drop the results below instead of writing them into the new
+      // conversation's message list.
+      const sendEpoch = conversationIdRef.current;
+
       // Add user message to conversation store (with the current historyMode)
       addUserMessage(content, files.length > 0 ? files : undefined, historyMode);
 
@@ -1938,7 +1983,14 @@ export function useChat({
         }
       }
 
-      if (allResponses.length > 0) {
+      // Drop results if the user switched conversations during the stream —
+      // committing them now would attach them to the wrong conversation.
+      // sendEpoch === undefined means there was no conversation when we kicked
+      // off (the send itself just created one), so we always commit those.
+      if (
+        (sendEpoch === undefined || sendEpoch === conversationIdRef.current) &&
+        allResponses.length > 0
+      ) {
         addAssistantMessages(allResponses);
       }
 
@@ -1976,6 +2028,8 @@ export function useChat({
       const userMessage = messages[userMessageIndex];
       if (userMessage.role !== "user") return;
 
+      const sendEpoch = conversationIdRef.current;
+
       // Get all messages up to and including the user message, filtered by the history mode
       // that was stored on that user message (use current historyMode as fallback for old messages)
       const messageHistoryMode = userMessage.historyMode ?? historyMode;
@@ -2004,7 +2058,7 @@ export function useChat({
         debugMessageId
       );
 
-      if (result !== null) {
+      if (result !== null && sendEpoch === conversationIdRef.current) {
         const stream = useStreamingStore.getState().streams.get(model);
         replaceAssistantMessage(userMessageId, model, {
           content: result.content,
@@ -2047,6 +2101,8 @@ export function useChat({
       // If it's a user message, delete subsequent messages and re-run to get new responses
       // For assistant messages, we only update the content (no deletion of sibling responses)
       if (message.role === "user") {
+        const sendEpoch = conversationIdRef.current;
+
         // Delete all messages after the edited user message
         deleteMessagesAfter(messageId);
 
@@ -2137,7 +2193,7 @@ export function useChat({
           }
         }
 
-        if (allResponses.length > 0) {
+        if (sendEpoch === conversationIdRef.current && allResponses.length > 0) {
           addAssistantMessages(allResponses);
         }
 

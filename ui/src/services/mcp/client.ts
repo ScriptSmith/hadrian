@@ -1,3 +1,4 @@
+import { formatApiError } from "@/utils/formatApiError";
 /**
  * MCP Client - Streamable HTTP Transport
  *
@@ -222,7 +223,7 @@ export class MCPClient {
 
       this.setStatus("connected");
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorMsg = err instanceof Error ? err.message : formatApiError(err);
       this.setStatus("error", errorMsg);
       throw err;
     }

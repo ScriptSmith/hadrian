@@ -14,6 +14,38 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::StreamingBufferConfig;
 
+/// Strip a known Anthropic ID prefix (`msg_`, `toolu_`, …) and return up to 24
+/// chars of the remainder. Falls back to the whole id if the prefix isn't
+/// present, which protects against panics on short ids or multibyte
+/// boundaries inside the prefix.
+pub(crate) fn strip_anthropic_prefix(id: &str, prefix: &str) -> String {
+    id.strip_prefix(prefix)
+        .unwrap_or(id)
+        .chars()
+        .take(24)
+        .collect()
+}
+
+/// Append `delta` to `buf` up to `max_bytes` total. Slices on a UTF-8
+/// character boundary so the buffer remains valid UTF-8. Once the cap is hit
+/// further deltas are dropped from the in-memory state — pass-through SSE
+/// chunks to the client are unaffected.
+fn bounded_push(buf: &mut String, delta: &str, max_bytes: usize) {
+    if buf.len() >= max_bytes {
+        return;
+    }
+    let remaining = max_bytes - buf.len();
+    if delta.len() <= remaining {
+        buf.push_str(delta);
+        return;
+    }
+    let mut end = remaining;
+    while end > 0 && !delta.is_char_boundary(end) {
+        end -= 1;
+    }
+    buf.push_str(&delta[..end]);
+}
+
 // ============================================================================
 // Anthropic Streaming Event Types
 // ============================================================================
@@ -234,7 +266,7 @@ pub struct AnthropicToOpenAIStream<S> {
     inner: S,
     state: StreamState,
     /// Output buffer for generated SSE chunks
-    output_buffer: Vec<Bytes>,
+    output_buffer: std::collections::VecDeque<Bytes>,
     /// Maximum input buffer size in bytes
     max_input_buffer_bytes: usize,
     /// Maximum output buffer chunks
@@ -246,7 +278,7 @@ impl<S> AnthropicToOpenAIStream<S> {
         Self {
             inner,
             state: StreamState::default(),
-            output_buffer: Vec::new(),
+            output_buffer: std::collections::VecDeque::new(),
             max_input_buffer_bytes: streaming_buffer.max_input_buffer_bytes,
             max_output_buffer_chunks: streaming_buffer.max_output_buffer_chunks,
         }
@@ -529,7 +561,8 @@ impl<S> AnthropicToOpenAIStream<S> {
                 self.emit_chunk(&chunk);
 
                 // Emit [DONE]
-                self.output_buffer.push(Bytes::from("data: [DONE]\n\n"));
+                self.output_buffer
+                    .push_back(Bytes::from("data: [DONE]\n\n"));
             }
 
             AnthropicStreamEvent::Ping => {
@@ -550,7 +583,7 @@ impl<S> AnthropicToOpenAIStream<S> {
     fn emit_chunk(&mut self, chunk: &OpenAIStreamChunk) {
         if let Ok(json) = serde_json::to_string(chunk) {
             let sse = format!("data: {}\n\n", json);
-            self.output_buffer.push(Bytes::from(sse));
+            self.output_buffer.push_back(Bytes::from(sse));
         }
     }
 
@@ -619,44 +652,40 @@ where
         }
 
         // First, return any buffered output
-        if !self.output_buffer.is_empty() {
-            return Poll::Ready(Some(Ok(self.output_buffer.remove(0))));
+        if let Some(out) = self.output_buffer.pop_front() {
+            return Poll::Ready(Some(Ok(out)));
         }
 
-        // Poll the inner stream
-        let inner = Pin::new(&mut self.inner);
-        match inner.poll_next(cx) {
-            Poll::Ready(Some(Ok(bytes))) => {
-                // Process the Anthropic SSE bytes
-                self.process_bytes(&bytes);
+        // Drain the inner stream until we either produce output, hit a real
+        // Pending, or end. The previous implementation woke itself with
+        // `wake_by_ref` after consuming an empty chunk, which busy-loops the
+        // executor; an inline loop avoids that.
+        loop {
+            match Pin::new(&mut self.inner).poll_next(cx) {
+                Poll::Ready(Some(Ok(bytes))) => {
+                    self.process_bytes(&bytes);
 
-                // Check for buffer overflow after processing
-                if self.state.buffer_overflow {
-                    return Poll::Ready(Some(Err(io::Error::new(
-                        io::ErrorKind::OutOfMemory,
-                        "SSE buffer overflow",
-                    ))));
-                }
+                    if self.state.buffer_overflow {
+                        return Poll::Ready(Some(Err(io::Error::new(
+                            io::ErrorKind::OutOfMemory,
+                            "SSE buffer overflow",
+                        ))));
+                    }
 
-                // Return first buffered output if any
-                if !self.output_buffer.is_empty() {
-                    Poll::Ready(Some(Ok(self.output_buffer.remove(0))))
-                } else {
-                    // No output yet, need to poll again
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
+                    if let Some(out) = self.output_buffer.pop_front() {
+                        return Poll::Ready(Some(Ok(out)));
+                    }
+                    // No output produced yet — keep draining.
                 }
-            }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
-            Poll::Ready(None) => {
-                // Stream ended - flush any remaining buffer
-                if !self.output_buffer.is_empty() {
-                    Poll::Ready(Some(Ok(self.output_buffer.remove(0))))
-                } else {
-                    Poll::Ready(None)
+                Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
+                Poll::Ready(None) => {
+                    return match self.output_buffer.pop_front() {
+                        Some(out) => Poll::Ready(Some(Ok(out))),
+                        None => Poll::Ready(None),
+                    };
                 }
+                Poll::Pending => return Poll::Pending,
             }
-            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -712,11 +741,13 @@ pub struct AnthropicToResponsesStream<S> {
     inner: S,
     state: ResponsesStreamState,
     /// Output buffer for generated SSE chunks
-    output_buffer: Vec<Bytes>,
+    output_buffer: std::collections::VecDeque<Bytes>,
     /// Maximum input buffer size in bytes
     max_input_buffer_bytes: usize,
     /// Maximum output buffer chunks
     max_output_buffer_chunks: usize,
+    /// Maximum total bytes of accumulated text+reasoning state
+    max_response_state_bytes: usize,
 }
 
 impl<S> AnthropicToResponsesStream<S> {
@@ -731,9 +762,10 @@ impl<S> AnthropicToResponsesStream<S> {
                 echo_fields,
                 ..ResponsesStreamState::default()
             },
-            output_buffer: Vec::new(),
+            output_buffer: std::collections::VecDeque::new(),
             max_input_buffer_bytes: streaming_buffer.max_input_buffer_bytes,
             max_output_buffer_chunks: streaming_buffer.max_output_buffer_chunks,
+            max_response_state_bytes: streaming_buffer.max_response_state_bytes,
         }
     }
 
@@ -820,10 +852,8 @@ impl<S> AnthropicToResponsesStream<S> {
         match event {
             AnthropicStreamEvent::MessageStart { message } => {
                 self.state.response_id = message.id.clone();
-                self.state.message_id = format!(
-                    "msg_{}",
-                    &message.id[4..].chars().take(24).collect::<String>()
-                );
+                self.state.message_id =
+                    format!("msg_{}", strip_anthropic_prefix(&message.id, "msg_"));
                 self.state.model = message.model;
                 if let Some(usage) = message.usage {
                     self.state.input_tokens = usage.input_tokens;
@@ -904,7 +934,7 @@ impl<S> AnthropicToResponsesStream<S> {
                                 "output_index": output_index,
                                 "item": {
                                     "type": "function_call",
-                                    "id": format!("fc_{}", &id[6..].chars().take(24).collect::<String>()),
+                                    "id": format!("fc_{}", strip_anthropic_prefix(&id, "toolu_")),
                                     "call_id": id,
                                     "name": name,
                                     "arguments": "",
@@ -927,7 +957,7 @@ impl<S> AnthropicToResponsesStream<S> {
                                     "output_index": 0,
                                     "item": {
                                         "type": "reasoning",
-                                        "id": format!("rs_{}", &self.state.response_id[4..].chars().take(24).collect::<String>()),
+                                        "id": format!("rs_{}", strip_anthropic_prefix(&self.state.response_id, "msg_")),
                                         "summary": []
                                     }
                                 }),
@@ -939,7 +969,11 @@ impl<S> AnthropicToResponsesStream<S> {
 
             AnthropicStreamEvent::ContentBlockDelta { index, delta } => match delta {
                 ContentDelta::TextDelta { text } => {
-                    self.state.text_content.push_str(&text);
+                    bounded_push(
+                        &mut self.state.text_content,
+                        &text,
+                        self.max_response_state_bytes,
+                    );
 
                     // Emit text delta
                     let msg_output_index = self.message_output_index();
@@ -976,8 +1010,7 @@ impl<S> AnthropicToResponsesStream<S> {
                         let output_index = self.tool_output_index(tool_index);
 
                         // Emit function call arguments delta
-                        let fc_id =
-                            format!("fc_{}", &tool_id[6..].chars().take(24).collect::<String>());
+                        let fc_id = format!("fc_{}", strip_anthropic_prefix(&tool_id, "toolu_"));
                         self.emit_event(
                             "response.function_call_arguments.delta",
                             serde_json::json!({
@@ -991,15 +1024,16 @@ impl<S> AnthropicToResponsesStream<S> {
                 ContentDelta::ThinkingDelta { thinking } => {
                     // Emit thinking delta as reasoning content
                     if self.state.thinking_block_indices.contains(&index) {
-                        self.state.reasoning_content.push_str(&thinking);
+                        bounded_push(
+                            &mut self.state.reasoning_content,
+                            &thinking,
+                            self.max_response_state_bytes,
+                        );
 
                         // Emit reasoning summary delta
                         let reasoning_id = format!(
                             "rs_{}",
-                            &self.state.response_id[4..]
-                                .chars()
-                                .take(24)
-                                .collect::<String>()
+                            strip_anthropic_prefix(&self.state.response_id, "msg_")
                         );
                         self.emit_event(
                             "response.reasoning_summary_text.delta",
@@ -1036,10 +1070,7 @@ impl<S> AnthropicToResponsesStream<S> {
                 if self.state.emitted_reasoning_added {
                     let reasoning_id = format!(
                         "rs_{}",
-                        &self.state.response_id[4..]
-                            .chars()
-                            .take(24)
-                            .collect::<String>()
+                        strip_anthropic_prefix(&self.state.response_id, "msg_")
                     );
 
                     // Emit reasoning summary done
@@ -1142,7 +1173,7 @@ impl<S> AnthropicToResponsesStream<S> {
                 for (i, tool_id, tool_name, arguments) in tool_calls {
                     let output_index = self.tool_output_index(i);
                     let fc_id =
-                        format!("fc_{}", &tool_id[6..].chars().take(24).collect::<String>());
+                        format!("fc_{}", strip_anthropic_prefix(tool_id.as_str(), "toolu_"));
 
                     self.emit_event(
                         "response.function_call_arguments.done",
@@ -1176,10 +1207,7 @@ impl<S> AnthropicToResponsesStream<S> {
                 if self.state.emitted_reasoning_added {
                     let reasoning_id = format!(
                         "rs_{}",
-                        &self.state.response_id[4..]
-                            .chars()
-                            .take(24)
-                            .collect::<String>()
+                        strip_anthropic_prefix(&self.state.response_id, "msg_")
                     );
                     let mut reasoning_item = serde_json::json!({
                         "type": "reasoning",
@@ -1215,7 +1243,7 @@ impl<S> AnthropicToResponsesStream<S> {
                 // Tool calls come last
                 for (_, tool_id, tool_name, arguments) in &self.state.tool_calls {
                     let fc_id =
-                        format!("fc_{}", &tool_id[6..].chars().take(24).collect::<String>());
+                        format!("fc_{}", strip_anthropic_prefix(tool_id.as_str(), "toolu_"));
                     output.push(serde_json::json!({
                         "type": "function_call",
                         "id": fc_id,
@@ -1255,7 +1283,8 @@ impl<S> AnthropicToResponsesStream<S> {
                 );
 
                 // Emit [DONE] to signal end of stream (OpenAI Responses API convention)
-                self.output_buffer.push(Bytes::from("data: [DONE]\n\n"));
+                self.output_buffer
+                    .push_back(Bytes::from("data: [DONE]\n\n"));
             }
 
             AnthropicStreamEvent::Ping => {
@@ -1301,7 +1330,7 @@ impl<S> AnthropicToResponsesStream<S> {
         }
         if let Ok(json) = serde_json::to_string(&serde_json::Value::Object(event_obj)) {
             let sse = format!("data: {}\n\n", json);
-            self.output_buffer.push(Bytes::from(sse));
+            self.output_buffer.push_back(Bytes::from(sse));
         }
     }
 
@@ -1358,7 +1387,6 @@ where
     type Item = Result<Bytes, io::Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // Check for buffer overflow error
         if self.state.buffer_overflow {
             return Poll::Ready(Some(Err(io::Error::new(
                 io::ErrorKind::OutOfMemory,
@@ -1366,44 +1394,35 @@ where
             ))));
         }
 
-        // First, return any buffered output
-        if !self.output_buffer.is_empty() {
-            return Poll::Ready(Some(Ok(self.output_buffer.remove(0))));
+        if let Some(out) = self.output_buffer.pop_front() {
+            return Poll::Ready(Some(Ok(out)));
         }
 
-        // Poll the inner stream
-        let inner = Pin::new(&mut self.inner);
-        match inner.poll_next(cx) {
-            Poll::Ready(Some(Ok(bytes))) => {
-                // Process the Anthropic SSE bytes
-                self.process_bytes(&bytes);
+        loop {
+            match Pin::new(&mut self.inner).poll_next(cx) {
+                Poll::Ready(Some(Ok(bytes))) => {
+                    self.process_bytes(&bytes);
 
-                // Check for buffer overflow after processing
-                if self.state.buffer_overflow {
-                    return Poll::Ready(Some(Err(io::Error::new(
-                        io::ErrorKind::OutOfMemory,
-                        "SSE buffer overflow",
-                    ))));
-                }
+                    if self.state.buffer_overflow {
+                        return Poll::Ready(Some(Err(io::Error::new(
+                            io::ErrorKind::OutOfMemory,
+                            "SSE buffer overflow",
+                        ))));
+                    }
 
-                // Return buffered output or wake for more
-                if !self.output_buffer.is_empty() {
-                    Poll::Ready(Some(Ok(self.output_buffer.remove(0))))
-                } else {
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
+                    if let Some(out) = self.output_buffer.pop_front() {
+                        return Poll::Ready(Some(Ok(out)));
+                    }
                 }
-            }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
-            Poll::Ready(None) => {
-                // Stream ended - flush any remaining buffer
-                if !self.output_buffer.is_empty() {
-                    Poll::Ready(Some(Ok(self.output_buffer.remove(0))))
-                } else {
-                    Poll::Ready(None)
+                Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
+                Poll::Ready(None) => {
+                    return match self.output_buffer.pop_front() {
+                        Some(out) => Poll::Ready(Some(Ok(out))),
+                        None => Poll::Ready(None),
+                    };
                 }
+                Poll::Pending => return Poll::Pending,
             }
-            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -1411,6 +1430,37 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_push_under_cap_appends_full_delta() {
+        let mut buf = "hello".to_string();
+        bounded_push(&mut buf, " world", 100);
+        assert_eq!(buf, "hello world");
+    }
+
+    #[test]
+    fn bounded_push_clamps_at_cap() {
+        let mut buf = "abc".to_string();
+        bounded_push(&mut buf, "defghi", 5);
+        assert_eq!(buf, "abcde");
+    }
+
+    #[test]
+    fn bounded_push_drops_when_full() {
+        let mut buf = "abcde".to_string();
+        bounded_push(&mut buf, "fg", 5);
+        assert_eq!(buf, "abcde");
+    }
+
+    #[test]
+    fn bounded_push_respects_utf8_boundary() {
+        let mut buf = String::new();
+        // "aé" is 3 bytes (a=1, é=2). Cap=2: push "a", drop é to avoid
+        // splitting the multibyte char.
+        bounded_push(&mut buf, "aé", 2);
+        assert!(buf.is_char_boundary(buf.len()));
+        assert_eq!(buf, "a");
+    }
 
     #[test]
     fn test_parse_message_start() {

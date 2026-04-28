@@ -1,6 +1,7 @@
 import { parseSkillMd } from "./parseFrontmatter";
 import type { DiscoveredSkill } from "./githubImport";
 
+import { formatApiError } from "@/utils/formatApiError";
 const utf8Encoder = new TextEncoder();
 
 /**
@@ -63,7 +64,7 @@ export async function walkFilesForSkills(files: File[]): Promise<DiscoveredSkill
       try {
         text = await file.text();
       } catch (err) {
-        error = `Failed to read ${sub}: ${err instanceof Error ? err.message : String(err)}`;
+        error = `Failed to read ${sub}: ${err instanceof Error ? err.message : formatApiError(err)}`;
         continue;
       }
 

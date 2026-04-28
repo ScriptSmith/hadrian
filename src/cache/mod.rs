@@ -16,7 +16,7 @@ pub mod vector_store;
 ))]
 pub use embedding_service::EmbeddingError;
 pub use embedding_service::EmbeddingService;
-pub use keys::CacheKeys;
+pub use keys::{CacheKeys, CacheTenantScope};
 pub use memory::MemoryCache;
 #[cfg(feature = "redis")]
 pub use redis::RedisCache;

@@ -40,9 +40,15 @@ pub fn init_tracing(config: &ObservabilityConfig) -> Result<TracingGuard, Tracin
     let logging = &config.logging;
     let filter = build_env_filter(logging);
 
-    // Build the OpenTelemetry provider if enabled (requires otlp feature)
+    // Build the OpenTelemetry provider if enabled (requires otlp feature).
+    // Treat tracing as implicitly enabled when an OTLP endpoint is set via the
+    // standard OTel env vars (matches Helm chart behavior, which only sets env
+    // vars and never touches the TOML stanza).
     #[cfg(feature = "otlp")]
-    let otel_provider = if config.tracing.enabled {
+    let tracing_implicitly_enabled = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok()
+        || std::env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT").is_ok();
+    #[cfg(feature = "otlp")]
+    let otel_provider = if config.tracing.enabled || tracing_implicitly_enabled {
         Some(build_otel_provider(&config.tracing)?)
     } else {
         None
@@ -358,8 +364,30 @@ fn build_otel_provider(
     use opentelemetry::KeyValue;
     use opentelemetry_sdk::Resource;
 
+    use crate::config::{OtlpConfig, OtlpProtocol};
+
+    // The Helm chart (and most production deployments) drives OpenTelemetry
+    // through standard OTel env vars rather than a TOML stanza. Honor them so
+    // the chart's `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SERVICE_NAME` settings
+    // aren't no-ops:
+    //   * `OTEL_SERVICE_NAME` overrides the configured service name when the
+    //     config is still on the default ("hadrian").
+    //   * `OTEL_EXPORTER_OTLP_ENDPOINT` synthesizes an OtlpConfig when the
+    //     TOML didn't supply one.
+    //   * `OTEL_EXPORTER_OTLP_PROTOCOL` (`grpc` / `http/protobuf`) selects the
+    //     transport.
+    let env_service_name = std::env::var("OTEL_SERVICE_NAME").ok();
+    let env_otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
+    let env_otlp_traces_endpoint = std::env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT").ok();
+    let env_otlp_protocol = std::env::var("OTEL_EXPORTER_OTLP_PROTOCOL").ok();
+
+    let service_name = match env_service_name {
+        Some(s) if config.service_name == "hadrian" => s,
+        _ => config.service_name.clone(),
+    };
+
     // Build resource attributes
-    let mut resource_attrs = vec![KeyValue::new("service.name", config.service_name.clone())];
+    let mut resource_attrs = vec![KeyValue::new("service.name", service_name)];
 
     if let Some(version) = &config.service_version {
         resource_attrs.push(KeyValue::new("service.version", version.clone()));
@@ -379,8 +407,33 @@ fn build_otel_provider(
     // Build sampler
     let sampler = build_sampler(&config.sampling);
 
+    // Resolve the OTLP exporter config: prefer TOML; otherwise synthesize one
+    // from the OTEL env vars if any endpoint is set.
+    let otlp_from_env = config.otlp.is_none()
+        && (env_otlp_endpoint.is_some() || env_otlp_traces_endpoint.is_some());
+    let synthesized_otlp = if otlp_from_env {
+        let endpoint = env_otlp_traces_endpoint
+            .or(env_otlp_endpoint)
+            .expect("checked above");
+        let protocol = match env_otlp_protocol.as_deref() {
+            Some("http/protobuf") | Some("http") => OtlpProtocol::Http,
+            // Default and `grpc` both map to gRPC.
+            _ => OtlpProtocol::Grpc,
+        };
+        Some(OtlpConfig {
+            endpoint,
+            protocol,
+            headers: Default::default(),
+            timeout_secs: 10,
+            compression: true,
+        })
+    } else {
+        None
+    };
+    let effective_otlp = config.otlp.as_ref().or(synthesized_otlp.as_ref());
+
     // Build tracer provider
-    let provider = if let Some(otlp) = &config.otlp {
+    let provider = if let Some(otlp) = effective_otlp {
         let exporter = build_otlp_exporter(otlp)?;
         SdkTracerProvider::builder()
             .with_resource(resource)

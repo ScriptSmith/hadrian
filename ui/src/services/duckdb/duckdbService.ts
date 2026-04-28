@@ -1,3 +1,4 @@
+import { formatApiError } from "@/utils/formatApiError";
 /**
  * DuckDB Service
  *
@@ -201,7 +202,7 @@ class DuckDBService {
           reject(new Error(error.message));
         };
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
+        const errorMsg = error instanceof Error ? error.message : formatApiError(error);
         this.setStatus("error", errorMsg);
         reject(error);
       }

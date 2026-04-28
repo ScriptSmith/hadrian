@@ -4,7 +4,13 @@
 //! Validators are cached across requests so the JWKS cache is reused, fixing the
 //! per-request `JwtValidator` creation that previously discarded the JWKS cache.
 
-use std::{collections::HashMap, sync::Arc, time::Instant};
+#[cfg(feature = "sso")]
+use std::net::IpAddr;
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+    time::Instant,
+};
 
 #[cfg(feature = "sso")]
 use tokio::sync::Mutex;
@@ -25,6 +31,22 @@ const NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(6
 #[cfg(feature = "sso")]
 const MAX_NEGATIVE_CACHE_ENTRIES: usize = 1_000;
 
+/// Per-IP rate limit on JWT lazy-loads (cache misses that hit the DB / OIDC discovery).
+/// An attacker rotating issuer strings per request would otherwise bypass the negative
+/// cache and amplify each request into a DB query + JWKS fetch.
+#[cfg(feature = "sso")]
+const LAZY_LOAD_RATE_LIMIT: u32 = 30;
+#[cfg(feature = "sso")]
+const LAZY_LOAD_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+
+/// Per-IP rate limit context for `find_or_load_by_issuer`. Optional — when omitted,
+/// no rate limit is applied (used by tests and call sites where the IP is unknown).
+#[cfg(feature = "sso")]
+pub struct LazyLoadRateLimit<'a> {
+    pub cache: &'a Arc<dyn crate::cache::Cache>,
+    pub ip: IpAddr,
+}
+
 /// Internal state behind the single `RwLock`.
 struct RegistryInner {
     /// org_id → Arc<JwtValidator> (validators persist JWKS cache across requests)
@@ -32,7 +54,10 @@ struct RegistryInner {
     /// issuer → Vec<org_id> index for fast token routing
     issuer_index: HashMap<String, Vec<Uuid>>,
     /// Issuers that had no matching SSO config in the DB, cached to avoid repeated queries.
+    /// `negative_cache` is the lookup map; `negative_cache_order` maintains insertion order
+    /// for O(1) LRU eviction (we never refresh on read so FIFO == LRU here).
     negative_cache: HashMap<String, Instant>,
+    negative_cache_order: VecDeque<String>,
 }
 
 /// Registry of per-org `JwtValidator`s, indexed by issuer for fast token routing.
@@ -58,6 +83,7 @@ impl GatewayJwtRegistry {
                 validators: HashMap::new(),
                 issuer_index: HashMap::new(),
                 negative_cache: HashMap::new(),
+                negative_cache_order: VecDeque::new(),
             }),
             #[cfg(feature = "sso")]
             load_mutex: Mutex::new(()),
@@ -94,7 +120,13 @@ impl GatewayJwtRegistry {
             super::fetch_jwks_uri(discovery_url, http_client, allow_loopback, allow_private)
                 .await?;
         let jwt_config = build_jwt_config_from_sso(issuer, client_id, &jwks_url, config);
-        let validator = Arc::new(JwtValidator::with_client(jwt_config, http_client.clone())?);
+        let validator = Arc::new(JwtValidator::with_options(
+            jwt_config,
+            crate::validation::UrlValidationOptions {
+                allow_loopback,
+                allow_private,
+            },
+        )?);
 
         // Single write lock: remove old issuer index, insert validator, update index
         let mut inner = self.inner.write().await;
@@ -138,6 +170,8 @@ impl GatewayJwtRegistry {
     ///
     /// Deduplicates concurrent loads via `load_mutex` and caches negative results
     /// (unknown issuers) for [`NEGATIVE_CACHE_TTL`] to prevent DB query amplification.
+    /// When `rate_limit` is provided, lazy-loads are additionally rate-limited
+    /// per-IP so attackers rotating issuer strings can't bypass the negative cache.
     #[cfg(feature = "sso")]
     pub async fn find_or_load_by_issuer(
         &self,
@@ -146,6 +180,7 @@ impl GatewayJwtRegistry {
         http_client: &reqwest::Client,
         allow_loopback: bool,
         allow_private: bool,
+        rate_limit: Option<LazyLoadRateLimit<'_>>,
     ) -> Result<Vec<(Uuid, Arc<JwtValidator>)>, super::AuthError> {
         // Fast path: already cached
         let validators = self.find_validators_by_issuer(issuer).await;
@@ -160,6 +195,40 @@ impl GatewayJwtRegistry {
                 && cached_at.elapsed() < NEGATIVE_CACHE_TTL
             {
                 return Ok(Vec::new());
+            }
+        }
+
+        // Per-IP rate limit on cache miss (before DB / load_mutex contention).
+        // Failure to talk to the cache must not block legitimate logins, so an
+        // error from the cache is logged and treated as "allow".
+        if let Some(rl) = &rate_limit {
+            let key = format!("gw:jwt:lazy_load:{}", rl.ip);
+            match rl
+                .cache
+                .check_and_incr_rate_limit(
+                    &key,
+                    LAZY_LOAD_RATE_LIMIT,
+                    LAZY_LOAD_RATE_LIMIT_WINDOW_SECS,
+                )
+                .await
+            {
+                Ok(result) if !result.allowed => {
+                    tracing::warn!(
+                        ip = %rl.ip,
+                        issuer = %issuer,
+                        limit = LAZY_LOAD_RATE_LIMIT,
+                        "JWT lazy-load rate limit exceeded; treating issuer as unknown"
+                    );
+                    return Ok(Vec::new());
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::debug!(
+                        ip = %rl.ip,
+                        error = %e,
+                        "JWT lazy-load rate limit cache call failed; allowing"
+                    );
+                }
             }
         }
 
@@ -194,22 +263,7 @@ impl GatewayJwtRegistry {
         if configs.is_empty() {
             // Cache negative result to avoid repeated DB queries
             let mut inner = self.inner.write().await;
-            // Evict expired entries if at capacity
-            if inner.negative_cache.len() >= MAX_NEGATIVE_CACHE_ENTRIES {
-                inner
-                    .negative_cache
-                    .retain(|_, cached_at| cached_at.elapsed() < NEGATIVE_CACHE_TTL);
-            }
-            // If still at capacity after expiry cleanup, drop oldest half
-            if inner.negative_cache.len() >= MAX_NEGATIVE_CACHE_ENTRIES {
-                let mut entries: Vec<_> = inner.negative_cache.drain().collect();
-                entries.sort_by_key(|(_, instant)| *instant);
-                let half = entries.len() / 2;
-                inner.negative_cache = entries.into_iter().skip(half).collect();
-            }
-            inner
-                .negative_cache
-                .insert(issuer.to_string(), Instant::now());
+            insert_negative_entry(&mut inner, issuer);
             return Ok(Vec::new());
         }
 
@@ -236,7 +290,9 @@ impl GatewayJwtRegistry {
     /// for that issuer aren't blocked by a stale negative cache entry.
     pub async fn invalidate_negative_cache(&self, issuer: &str) {
         let mut inner = self.inner.write().await;
-        inner.negative_cache.remove(issuer);
+        if inner.negative_cache.remove(issuer).is_some() {
+            inner.negative_cache_order.retain(|k| k != issuer);
+        }
     }
 
     /// Number of registered validators.
@@ -257,6 +313,31 @@ fn remove_from_issuer_index(inner: &mut RegistryInner, org_id: Uuid) {
         ids.retain(|id| *id != org_id);
         !ids.is_empty()
     });
+}
+
+/// Insert a negative-cache entry, evicting the LRU entry first if at capacity.
+/// Re-inserting an existing issuer refreshes both its timestamp and its LRU position
+/// so an issuer queried in a tight loop doesn't churn through eviction.
+#[cfg(feature = "sso")]
+fn insert_negative_entry(inner: &mut RegistryInner, issuer: &str) {
+    if inner.negative_cache.contains_key(issuer) {
+        inner.negative_cache_order.retain(|k| k != issuer);
+    } else if inner.negative_cache.len() >= MAX_NEGATIVE_CACHE_ENTRIES {
+        // Evict expired entries from the front of the order until we drop one
+        // that is still live, or until we're back under capacity.
+        while let Some(oldest) = inner.negative_cache_order.front() {
+            let oldest = oldest.clone();
+            inner.negative_cache_order.pop_front();
+            let was_present = inner.negative_cache.remove(&oldest).is_some();
+            if was_present && inner.negative_cache.len() < MAX_NEGATIVE_CACHE_ENTRIES {
+                break;
+            }
+        }
+    }
+    inner
+        .negative_cache
+        .insert(issuer.to_string(), Instant::now());
+    inner.negative_cache_order.push_back(issuer.to_string());
 }
 
 /// Build a `JwtAuthConfig` from per-org SSO config fields with secure defaults.
@@ -394,30 +475,91 @@ mod tests {
         assert_eq!(found[0].0, org2);
     }
 
+    #[cfg(feature = "sso")]
     #[tokio::test]
     async fn test_negative_cache_invalidation() {
         let registry = GatewayJwtRegistry::new();
         let issuer = "https://unknown-idp.example.com";
 
-        // Manually insert a negative cache entry
+        // Insert via the helper so the order index stays in sync
         {
             let mut inner = registry.inner.write().await;
-            inner
-                .negative_cache
-                .insert(issuer.to_string(), Instant::now());
+            insert_negative_entry(&mut inner, issuer);
         }
 
-        // Verify the entry is present
+        // Verify the entry is present in both maps
         {
             let inner = registry.inner.read().await;
             assert!(inner.negative_cache.contains_key(issuer));
+            assert!(inner.negative_cache_order.iter().any(|k| k == issuer));
         }
 
-        // Invalidate and verify removal
+        // Invalidate and verify removal from both
         registry.invalidate_negative_cache(issuer).await;
         {
             let inner = registry.inner.read().await;
             assert!(!inner.negative_cache.contains_key(issuer));
+            assert!(!inner.negative_cache_order.iter().any(|k| k == issuer));
+        }
+    }
+
+    #[cfg(feature = "sso")]
+    #[tokio::test]
+    async fn test_negative_cache_lru_eviction() {
+        let registry = GatewayJwtRegistry::new();
+
+        // Fill past capacity; the oldest issuer should get evicted.
+        {
+            let mut inner = registry.inner.write().await;
+            for i in 0..MAX_NEGATIVE_CACHE_ENTRIES {
+                insert_negative_entry(&mut inner, &format!("https://idp{i}.example.com"));
+            }
+            assert_eq!(inner.negative_cache.len(), MAX_NEGATIVE_CACHE_ENTRIES);
+            assert!(
+                inner
+                    .negative_cache
+                    .contains_key("https://idp0.example.com")
+            );
+
+            insert_negative_entry(&mut inner, "https://overflow.example.com");
+            assert_eq!(inner.negative_cache.len(), MAX_NEGATIVE_CACHE_ENTRIES);
+            // Oldest gone, newest present.
+            assert!(
+                !inner
+                    .negative_cache
+                    .contains_key("https://idp0.example.com")
+            );
+            assert!(
+                inner
+                    .negative_cache
+                    .contains_key("https://overflow.example.com")
+            );
+            // Order list still bounded.
+            assert_eq!(inner.negative_cache_order.len(), MAX_NEGATIVE_CACHE_ENTRIES);
+        }
+    }
+
+    #[cfg(feature = "sso")]
+    #[tokio::test]
+    async fn test_negative_cache_reinsert_refreshes_position() {
+        let registry = GatewayJwtRegistry::new();
+
+        {
+            let mut inner = registry.inner.write().await;
+            insert_negative_entry(&mut inner, "https://a.example.com");
+            insert_negative_entry(&mut inner, "https://b.example.com");
+            // Re-insert "a"; it should move to the back of the eviction queue.
+            insert_negative_entry(&mut inner, "https://a.example.com");
+            assert_eq!(inner.negative_cache.len(), 2);
+            // "b" is now the oldest in the order index.
+            assert_eq!(
+                inner.negative_cache_order.front().map(String::as_str),
+                Some("https://b.example.com")
+            );
+            assert_eq!(
+                inner.negative_cache_order.back().map(String::as_str),
+                Some("https://a.example.com")
+            );
         }
     }
 

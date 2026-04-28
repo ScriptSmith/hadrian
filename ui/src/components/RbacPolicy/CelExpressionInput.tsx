@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { CheckCircle2, XCircle, Loader2, Info } from "lucide-react";
 import { useDebouncedCallback } from "use-debounce";
@@ -50,6 +50,12 @@ export function CelExpressionInput({
   }>({ valid: null, error: null, checking: false });
 
   const [showHelp, setShowHelp] = useState(false);
+  // Newer keystrokes abort older in-flight validations so out-of-order
+  // responses can't paint stale state, and unmount cancels everything.
+  const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    return () => abortRef.current?.abort();
+  }, []);
 
   const validateMutation = useMutation({
     ...orgRbacPolicyValidateMutation(),
@@ -60,7 +66,10 @@ export function CelExpressionInput({
         checking: false,
       });
     },
-    onError: () => {
+    onError: (error) => {
+      // Suppress aborted-request errors: they only mean a newer keystroke
+      // superseded this validation, not that the expression is invalid.
+      if (error instanceof DOMException && error.name === "AbortError") return;
       setValidationState({
         valid: null,
         error: "Failed to validate expression",
@@ -75,7 +84,12 @@ export function CelExpressionInput({
       return;
     }
     setValidationState((prev) => ({ ...prev, checking: true }));
-    validateMutation.mutate({ body: { condition } });
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+    validateMutation.mutate({
+      body: { condition },
+      signal: abortRef.current.signal,
+    });
   }, 500);
 
   useEffect(() => {

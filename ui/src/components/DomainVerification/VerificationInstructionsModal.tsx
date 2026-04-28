@@ -22,6 +22,7 @@ import { Skeleton } from "@/components/Skeleton/Skeleton";
 import { Badge, type BadgeVariant } from "@/components/Badge/Badge";
 import { useToast } from "@/components/Toast/Toast";
 
+import { formatApiError } from "@/utils/formatApiError";
 const statusVariantMap: Record<DomainVerificationStatus, BadgeVariant> = {
   pending: "warning",
   verified: "success",
@@ -81,7 +82,7 @@ export function VerificationInstructionsModal({
     onError: (error) => {
       toast({
         title: "Verification failed",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },

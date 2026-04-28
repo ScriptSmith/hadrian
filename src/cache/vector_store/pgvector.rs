@@ -13,7 +13,7 @@ use uuid::Uuid;
 use super::{
     ChunkFilter, ChunkSearchResult, ChunkWithEmbedding, HybridSearchConfig, StoredChunk,
     VectorBackend, VectorMetadata, VectorSearchResult, VectorStoreError, VectorStoreResult,
-    fusion::fuse_results_limited,
+    VectorTenantFilter, fusion::fuse_results_limited,
 };
 use crate::{
     config::{DistanceMetric, PgvectorIndexType},
@@ -685,6 +685,7 @@ impl VectorBackend for PgvectorStore {
         limit: usize,
         threshold: f64,
         model_filter: Option<&str>,
+        tenant_filter: VectorTenantFilter<'_>,
     ) -> VectorStoreResult<Vec<VectorSearchResult>> {
         if embedding.len() != self.dimensions {
             warn!(
@@ -724,50 +725,68 @@ impl VectorBackend for PgvectorStore {
         let distance_threshold = self.similarity_to_distance_threshold(threshold);
         let op = self.distance_metric.pgvector_operator();
 
-        // Build query with optional model filter
-        // We select the raw distance and convert to similarity in Rust
-        let query = if model_filter.is_some() {
-            format!(
-                r#"
-                SELECT
-                    id,
-                    cache_key,
-                    model,
-                    organization_id,
-                    project_id,
-                    created_at,
-                    ttl_secs,
-                    (embedding {op} $1::vector) as distance
-                FROM {}
-                WHERE expires_at > $2
-                  AND model = $3
-                  AND (embedding {op} $1::vector) < $4
-                ORDER BY embedding {op} $1::vector
-                LIMIT $5
-                "#,
-                self.table_name
-            )
-        } else {
-            format!(
-                r#"
-                SELECT
-                    id,
-                    cache_key,
-                    model,
-                    organization_id,
-                    project_id,
-                    created_at,
-                    ttl_secs,
-                    (embedding {op} $1::vector) as distance
-                FROM {}
-                WHERE expires_at > $2
-                  AND (embedding {op} $1::vector) < $3
-                ORDER BY embedding {op} $1::vector
-                LIMIT $4
-                "#,
-                self.table_name
-            )
-        };
+        // Build query with optional model + tenant filters. Parameter indices
+        // match the order we bind below ($1=embedding, $2=now, then optional
+        // model/org/project, then distance threshold, then limit).
+        let mut where_clauses: Vec<String> = vec![
+            "expires_at > $2".to_string(),
+            format!("(embedding {op} $1::vector) < ${{distance}}"),
+        ];
+        let mut next_param: usize = 3;
+        let mut model_idx: Option<usize> = None;
+        let mut org_idx: Option<usize> = None;
+        let mut project_idx: Option<usize> = None;
+        if model_filter.is_some() {
+            where_clauses.push(format!("model = ${}", next_param));
+            model_idx = Some(next_param);
+            next_param += 1;
+        }
+        match tenant_filter.organization_id {
+            Some(_) => {
+                where_clauses.push(format!("organization_id = ${}", next_param));
+                org_idx = Some(next_param);
+                next_param += 1;
+            }
+            None => {
+                where_clauses.push("organization_id IS NULL".to_string());
+            }
+        }
+        match tenant_filter.project_id {
+            Some(_) => {
+                where_clauses.push(format!("project_id = ${}", next_param));
+                project_idx = Some(next_param);
+                next_param += 1;
+            }
+            None => {
+                where_clauses.push("project_id IS NULL".to_string());
+            }
+        }
+        let distance_idx = next_param;
+        next_param += 1;
+        let limit_idx = next_param;
+
+        let where_sql = where_clauses
+            .join(" AND ")
+            .replace("${distance}", &format!("${}", distance_idx));
+
+        let query = format!(
+            r#"
+            SELECT
+                id,
+                cache_key,
+                model,
+                organization_id,
+                project_id,
+                created_at,
+                ttl_secs,
+                (embedding {op} $1::vector) as distance
+            FROM {table}
+            WHERE {where_sql}
+            ORDER BY embedding {op} $1::vector
+            LIMIT ${limit_idx}
+            "#,
+            table = self.table_name,
+        );
 
         #[derive(sqlx::FromRow)]
         struct SearchRow {
@@ -780,24 +799,23 @@ impl VectorBackend for PgvectorStore {
             distance: f64,
         }
 
-        let result: Result<Vec<SearchRow>, _> = if let Some(model) = model_filter {
-            sqlx::query_as(&query)
-                .bind(&embedding_str)
-                .bind(now)
-                .bind(model)
-                .bind(distance_threshold)
-                .bind(limit as i32)
-                .fetch_all(&self.pool)
-                .await
-        } else {
-            sqlx::query_as(&query)
-                .bind(&embedding_str)
-                .bind(now)
-                .bind(distance_threshold)
-                .bind(limit as i32)
-                .fetch_all(&self.pool)
-                .await
-        };
+        let mut q = sqlx::query_as::<_, SearchRow>(&query)
+            .bind(&embedding_str)
+            .bind(now);
+        if let (Some(_), Some(model)) = (model_idx, model_filter) {
+            q = q.bind(model);
+        }
+        if let (Some(_), Some(org)) = (org_idx, tenant_filter.organization_id) {
+            q = q.bind(org);
+        }
+        if let (Some(_), Some(proj)) = (project_idx, tenant_filter.project_id) {
+            q = q.bind(proj);
+        }
+        let result = q
+            .bind(distance_threshold)
+            .bind(limit as i32)
+            .fetch_all(&self.pool)
+            .await;
 
         let duration = start.elapsed().as_secs_f64();
         let duration_ms = (duration * 1000.0) as u64;

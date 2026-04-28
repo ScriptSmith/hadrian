@@ -342,7 +342,15 @@ impl LeefVersion {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Tracing configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+///
+/// Note: `Default` is implemented manually rather than derived because the
+/// auto-derived `String::default()` for `service_name` would be empty, which
+/// silently disables the `OTEL_SERVICE_NAME` env-var override path in
+/// `tracing_init` (it only honors the env var when `service_name` still equals
+/// the documented default "hadrian"). Keeping this default in sync with
+/// [`default_service_name`] makes the env override work whether the config is
+/// constructed via TOML (serde) or `Default::default()`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct TracingConfig {
@@ -381,6 +389,21 @@ pub struct TracingConfig {
 
 fn default_service_name() -> String {
     "hadrian".to_string()
+}
+
+impl Default for TracingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            otlp: None,
+            service_name: default_service_name(),
+            service_version: None,
+            environment: None,
+            sampling: SamplingConfig::default(),
+            resource_attributes: HashMap::new(),
+            propagation: PropagationFormat::default(),
+        }
+    }
 }
 
 /// OTLP exporter configuration.

@@ -80,6 +80,11 @@
       "additionalProperties": { "type": "string" },
       "description": "Pod labels"
     },
+    "terminationGracePeriodSeconds": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Pod termination grace period in seconds. Must exceed [server.shutdown] drain budget."
+    },
     "podSecurityContext": {
       "type": "object",
       "properties": {

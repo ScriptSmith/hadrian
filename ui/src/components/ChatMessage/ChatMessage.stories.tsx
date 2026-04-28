@@ -311,7 +311,7 @@ export const Conversation: Story = {
 };
 
 /**
- * Test: Non-streaming state does NOT have aria-live or aria-busy
+ * Test: Non-streaming state has an empty status region and no aria-busy
  */
 export const NotStreamingNoAriaLive: Story = {
   args: {
@@ -319,9 +319,11 @@ export const NotStreamingNoAriaLive: Story = {
     isStreaming: false,
   },
   play: async ({ canvasElement }) => {
-    // When not streaming, aria-live should not be set
+    // The hidden status region is always present, but should be empty when
+    // not streaming so screen readers don't announce anything.
     const ariaLiveElement = canvasElement.querySelector('[aria-live="polite"]');
-    await expect(ariaLiveElement).not.toBeInTheDocument();
+    await expect(ariaLiveElement).toBeInTheDocument();
+    await expect(ariaLiveElement).toBeEmptyDOMElement();
 
     // aria-busy should not be set
     const busyElement = canvasElement.querySelector('[aria-busy="true"]');

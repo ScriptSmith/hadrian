@@ -121,7 +121,7 @@ pub struct VertexToOpenAIStream<S> {
     pub inner: S,
     pub state: StreamState,
     /// Output buffer for generated SSE chunks
-    pub output_buffer: Vec<Bytes>,
+    pub output_buffer: std::collections::VecDeque<Bytes>,
     /// Maximum input buffer size in bytes
     pub max_input_buffer_bytes: usize,
     /// Maximum output buffer chunks
@@ -136,7 +136,7 @@ impl<S> VertexToOpenAIStream<S> {
                 model,
                 ..StreamState::default()
             },
-            output_buffer: Vec::new(),
+            output_buffer: std::collections::VecDeque::new(),
             max_input_buffer_bytes: streaming_buffer.max_input_buffer_bytes,
             max_output_buffer_chunks: streaming_buffer.max_output_buffer_chunks,
         }
@@ -353,7 +353,8 @@ impl<S> VertexToOpenAIStream<S> {
                 self.emit_chunk(&usage_chunk);
 
                 // Emit [DONE]
-                self.output_buffer.push(Bytes::from("data: [DONE]\n\n"));
+                self.output_buffer
+                    .push_back(Bytes::from("data: [DONE]\n\n"));
             }
         }
     }
@@ -361,7 +362,7 @@ impl<S> VertexToOpenAIStream<S> {
     fn emit_chunk(&mut self, chunk: &OpenAIStreamChunk) {
         if let Ok(json) = serde_json::to_string(chunk) {
             let sse = format!("data: {}\n\n", json);
-            self.output_buffer.push(Bytes::from(sse));
+            self.output_buffer.push_back(Bytes::from(sse));
         }
     }
 
@@ -421,7 +422,6 @@ where
     type Item = Result<Bytes, io::Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // Check for buffer overflow error
         if self.state.buffer_overflow {
             return Poll::Ready(Some(Err(io::Error::new(
                 io::ErrorKind::OutOfMemory,
@@ -429,45 +429,35 @@ where
             ))));
         }
 
-        // First, return any buffered output
-        if !self.output_buffer.is_empty() {
-            return Poll::Ready(Some(Ok(self.output_buffer.remove(0))));
+        if let Some(out) = self.output_buffer.pop_front() {
+            return Poll::Ready(Some(Ok(out)));
         }
 
-        // Poll the inner stream
-        let inner = Pin::new(&mut self.inner);
-        match inner.poll_next(cx) {
-            Poll::Ready(Some(Ok(bytes))) => {
-                // Process the Vertex SSE bytes
-                self.process_bytes(&bytes);
+        loop {
+            match Pin::new(&mut self.inner).poll_next(cx) {
+                Poll::Ready(Some(Ok(bytes))) => {
+                    self.process_bytes(&bytes);
 
-                // Check for buffer overflow after processing
-                if self.state.buffer_overflow {
-                    return Poll::Ready(Some(Err(io::Error::new(
-                        io::ErrorKind::OutOfMemory,
-                        "SSE buffer overflow",
-                    ))));
-                }
+                    if self.state.buffer_overflow {
+                        return Poll::Ready(Some(Err(io::Error::new(
+                            io::ErrorKind::OutOfMemory,
+                            "SSE buffer overflow",
+                        ))));
+                    }
 
-                // Return first buffered output if any
-                if !self.output_buffer.is_empty() {
-                    Poll::Ready(Some(Ok(self.output_buffer.remove(0))))
-                } else {
-                    // No output yet, need to poll again
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
+                    if let Some(out) = self.output_buffer.pop_front() {
+                        return Poll::Ready(Some(Ok(out)));
+                    }
                 }
-            }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
-            Poll::Ready(None) => {
-                // Stream ended - flush any remaining buffer
-                if !self.output_buffer.is_empty() {
-                    Poll::Ready(Some(Ok(self.output_buffer.remove(0))))
-                } else {
-                    Poll::Ready(None)
+                Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
+                Poll::Ready(None) => {
+                    return match self.output_buffer.pop_front() {
+                        Some(out) => Poll::Ready(Some(Ok(out))),
+                        None => Poll::Ready(None),
+                    };
                 }
+                Poll::Pending => return Poll::Pending,
             }
-            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -517,7 +507,7 @@ pub struct VertexToResponsesStream<S> {
     inner: S,
     state: ResponsesStreamState,
     /// Output buffer for generated SSE chunks
-    output_buffer: Vec<Bytes>,
+    output_buffer: std::collections::VecDeque<Bytes>,
     /// Maximum input buffer size in bytes
     max_input_buffer_bytes: usize,
     /// Maximum output buffer chunks
@@ -541,7 +531,7 @@ impl<S> VertexToResponsesStream<S> {
                 echo_fields,
                 ..ResponsesStreamState::default()
             },
-            output_buffer: Vec::new(),
+            output_buffer: std::collections::VecDeque::new(),
             max_input_buffer_bytes: streaming_buffer.max_input_buffer_bytes,
             max_output_buffer_chunks: streaming_buffer.max_output_buffer_chunks,
         }
@@ -583,7 +573,8 @@ impl<S> VertexToResponsesStream<S> {
 
             // Pass through [DONE] marker
             if json_str == "[DONE]" {
-                self.output_buffer.push(Bytes::from("data: [DONE]\n\n"));
+                self.output_buffer
+                    .push_back(Bytes::from("data: [DONE]\n\n"));
                 return;
             }
 
@@ -1021,7 +1012,7 @@ impl<S> VertexToResponsesStream<S> {
         }
         if let Ok(json) = serde_json::to_string(&serde_json::Value::Object(event_obj)) {
             let sse = format!("data: {}\n\n", json);
-            self.output_buffer.push(Bytes::from(sse));
+            self.output_buffer.push_back(Bytes::from(sse));
         }
     }
 
@@ -1088,7 +1079,10 @@ where
 
         // First, return any buffered output
         if !self.output_buffer.is_empty() {
-            return Poll::Ready(Some(Ok(self.output_buffer.remove(0))));
+            return Poll::Ready(Some(Ok(self
+                .output_buffer
+                .pop_front()
+                .expect("non-empty checked above"))));
         }
 
         // Poll the inner stream
@@ -1108,7 +1102,10 @@ where
 
                 // Return buffered output or wake for more
                 if !self.output_buffer.is_empty() {
-                    Poll::Ready(Some(Ok(self.output_buffer.remove(0))))
+                    Poll::Ready(Some(Ok(self
+                        .output_buffer
+                        .pop_front()
+                        .expect("non-empty checked above"))))
                 } else {
                     cx.waker().wake_by_ref();
                     Poll::Pending
@@ -1118,7 +1115,10 @@ where
             Poll::Ready(None) => {
                 // Stream ended - flush any remaining buffer
                 if !self.output_buffer.is_empty() {
-                    Poll::Ready(Some(Ok(self.output_buffer.remove(0))))
+                    Poll::Ready(Some(Ok(self
+                        .output_buffer
+                        .pop_front()
+                        .expect("non-empty checked above"))))
                 } else {
                     Poll::Ready(None)
                 }

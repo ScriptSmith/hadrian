@@ -7,12 +7,22 @@
 
 import { memo, useState, useRef, useEffect } from "react";
 import { Copy, Check, AlertCircle, Loader2 } from "lucide-react";
-import embed, { type VisualizationSpec } from "vega-embed";
+import type { VisualizationSpec } from "vega-embed";
 
 import type { Artifact, ChartArtifactData } from "@/components/chat-types";
 import { Button } from "@/components/Button/Button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/Tooltip/Tooltip";
 import { cn } from "@/utils/cn";
+
+// vega-embed pulls in the full vega + vega-lite runtime (~600KB gzipped). Loading
+// it on demand keeps it out of the initial bundle for users who never open a chart
+// artifact (login, settings, account, dashboards, etc.). The promise is cached so
+// stacked artifacts share one chunk.
+let vegaEmbedPromise: Promise<typeof import("vega-embed").default> | null = null;
+function loadVegaEmbed() {
+  vegaEmbedPromise ??= import("vega-embed").then((m) => m.default);
+  return vegaEmbedPromise;
+}
 
 export interface ChartArtifactProps {
   artifact: Artifact;
@@ -51,37 +61,43 @@ function ChartArtifactComponent({ artifact, className }: ChartArtifactProps) {
     setIsLoading(true);
     setError(null);
 
-    // Use vega-embed to render the chart
-    embed(container, spec as VisualizationSpec, {
-      // Responsive width
-      width: container.clientWidth - 40,
-      // Enable actions menu (export, view source, etc.)
-      actions: {
-        export: true,
-        source: false, // We have our own source viewer
-        compiled: false,
-        editor: true,
-      },
-      // Use a theme that works well in both light and dark modes
-      config: {
-        background: "transparent",
-        axis: {
-          labelColor: "currentColor",
-          titleColor: "currentColor",
-          tickColor: "currentColor",
-          domainColor: "currentColor",
-          gridColor: "#e5e7eb",
-        },
-        legend: {
-          labelColor: "currentColor",
-          titleColor: "currentColor",
-        },
-        title: {
-          color: "currentColor",
-        },
-      },
-    })
+    let cancelled = false;
+
+    loadVegaEmbed()
+      .then((embed) => {
+        if (cancelled) return;
+        return embed(container, spec as VisualizationSpec, {
+          // Responsive width
+          width: container.clientWidth - 40,
+          // Enable actions menu (export, view source, etc.)
+          actions: {
+            export: true,
+            source: false, // We have our own source viewer
+            compiled: false,
+            editor: true,
+          },
+          // Use a theme that works well in both light and dark modes
+          config: {
+            background: "transparent",
+            axis: {
+              labelColor: "currentColor",
+              titleColor: "currentColor",
+              tickColor: "currentColor",
+              domainColor: "currentColor",
+              gridColor: "#e5e7eb",
+            },
+            legend: {
+              labelColor: "currentColor",
+              titleColor: "currentColor",
+            },
+            title: {
+              color: "currentColor",
+            },
+          },
+        });
+      })
       .then(() => {
+        if (cancelled) return;
         // Vega-embed renders a <details>/<summary> action menu with an SVG-only
         // <summary> that lacks an accessible name. Patch it post-render.
         const summary = container.querySelector("summary");
@@ -102,6 +118,7 @@ function ChartArtifactComponent({ artifact, className }: ChartArtifactProps) {
         setIsLoading(false);
       })
       .catch((err) => {
+        if (cancelled) return;
         console.error("Failed to render Vega-Lite chart:", err);
         setError(err instanceof Error ? err.message : "Failed to render chart");
         setIsLoading(false);
@@ -109,6 +126,7 @@ function ChartArtifactComponent({ artifact, className }: ChartArtifactProps) {
 
     // Cleanup on unmount
     return () => {
+      cancelled = true;
       container.innerHTML = "";
     };
   }, [spec]);

@@ -36,6 +36,7 @@ use crate::{
     config::{OidcAuthConfig, ProvisioningConfig, SessionConfig},
     secrets::SecretManager,
     services::{OrgSsoConfigError, OrgSsoConfigService, OrgSsoConfigWithClientSecret},
+    validation::UrlValidationOptions,
 };
 
 /// Error type for registry operations.
@@ -71,6 +72,8 @@ pub struct OidcAuthenticatorRegistry {
     default_session_config: SessionConfig,
     /// Default redirect URI used when org config doesn't specify one
     default_redirect_uri: Option<String>,
+    /// SSRF validation options applied to OIDC discovery / endpoint URLs.
+    url_validation_opts: UrlValidationOptions,
 }
 
 impl OidcAuthenticatorRegistry {
@@ -79,12 +82,14 @@ impl OidcAuthenticatorRegistry {
         session_store: SharedSessionStore,
         default_session_config: SessionConfig,
         default_redirect_uri: Option<String>,
+        url_validation_opts: UrlValidationOptions,
     ) -> Self {
         Self {
             authenticators: Arc::new(RwLock::new(HashMap::new())),
             session_store,
             default_session_config,
             default_redirect_uri,
+            url_validation_opts,
         }
     }
 
@@ -97,8 +102,14 @@ impl OidcAuthenticatorRegistry {
         session_store: SharedSessionStore,
         default_session_config: SessionConfig,
         default_redirect_uri: Option<String>,
+        url_validation_opts: UrlValidationOptions,
     ) -> Result<Self, RegistryError> {
-        let registry = Self::new(session_store, default_session_config, default_redirect_uri);
+        let registry = Self::new(
+            session_store,
+            default_session_config,
+            default_redirect_uri,
+            url_validation_opts,
+        );
 
         // Load only OIDC SSO configs (not SAML — those use SamlAuthenticatorRegistry)
         let configs = service
@@ -138,6 +149,7 @@ impl OidcAuthenticatorRegistry {
         Ok(OidcAuthenticator::new(
             oidc_config,
             self.session_store.clone(),
+            self.url_validation_opts,
         ))
     }
 
@@ -374,8 +386,12 @@ mod tests {
     #[tokio::test]
     async fn test_registry_register_and_get() {
         let session_store = create_test_session_store();
-        let registry =
-            OidcAuthenticatorRegistry::new(session_store.clone(), SessionConfig::default(), None);
+        let registry = OidcAuthenticatorRegistry::new(
+            session_store.clone(),
+            SessionConfig::default(),
+            None,
+            UrlValidationOptions::default(),
+        );
 
         let org_id = Uuid::new_v4();
         let config = create_test_config(org_id);
@@ -395,8 +411,12 @@ mod tests {
     #[tokio::test]
     async fn test_registry_remove() {
         let session_store = create_test_session_store();
-        let registry =
-            OidcAuthenticatorRegistry::new(session_store.clone(), SessionConfig::default(), None);
+        let registry = OidcAuthenticatorRegistry::new(
+            session_store.clone(),
+            SessionConfig::default(),
+            None,
+            UrlValidationOptions::default(),
+        );
 
         let org_id = Uuid::new_v4();
         let config = create_test_config(org_id);
@@ -415,8 +435,12 @@ mod tests {
     #[tokio::test]
     async fn test_registry_list_orgs() {
         let session_store = create_test_session_store();
-        let registry =
-            OidcAuthenticatorRegistry::new(session_store.clone(), SessionConfig::default(), None);
+        let registry = OidcAuthenticatorRegistry::new(
+            session_store.clone(),
+            SessionConfig::default(),
+            None,
+            UrlValidationOptions::default(),
+        );
 
         let org1 = Uuid::new_v4();
         let org2 = Uuid::new_v4();
@@ -439,8 +463,12 @@ mod tests {
     #[tokio::test]
     async fn test_registry_len_and_is_empty() {
         let session_store = create_test_session_store();
-        let registry =
-            OidcAuthenticatorRegistry::new(session_store.clone(), SessionConfig::default(), None);
+        let registry = OidcAuthenticatorRegistry::new(
+            session_store.clone(),
+            SessionConfig::default(),
+            None,
+            UrlValidationOptions::default(),
+        );
 
         assert!(registry.is_empty().await);
         assert_eq!(registry.len().await, 0);

@@ -31,6 +31,7 @@ import {
 import { useOpenAIPagination } from "@/hooks";
 import { formatDateTime, formatBytes } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 const columnHelper = createColumnHelper<VectorStore>();
 
 /** Status badge for vector store status */
@@ -99,7 +100,7 @@ export default function VectorStoresPage() {
     onError: (error) => {
       toast({
         title: "Failed to create knowledge base",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -114,7 +115,7 @@ export default function VectorStoresPage() {
     onError: (error) => {
       toast({
         title: "Failed to delete knowledge base",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -131,7 +132,7 @@ export default function VectorStoresPage() {
     onError: (error) => {
       toast({
         title: "Failed to update knowledge base",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },

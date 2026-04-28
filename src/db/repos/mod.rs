@@ -132,6 +132,23 @@ pub struct ListParams {
     pub include_deleted: bool,
 }
 
+/// Hard upper bound on `ListParams.limit`. A client passing a giant value
+/// would otherwise scan an entire table and DoS the gateway. Every list
+/// endpoint that materialises rows must clamp through `ListParams::clamp`
+/// before passing the params to a repo.
+pub const MAX_LIST_LIMIT: i64 = 1000;
+
+impl ListParams {
+    /// Clamp `limit` to `[1, MAX_LIST_LIMIT]`, leaving `None` as `None`.
+    /// Idempotent — safe to call multiple times.
+    pub fn clamp(mut self) -> Self {
+        if let Some(limit) = self.limit {
+            self.limit = Some(limit.clamp(1, MAX_LIST_LIMIT));
+        }
+        self
+    }
+}
+
 /// Result of a paginated list query.
 ///
 /// Contains items and pagination metadata for cursor-based pagination.

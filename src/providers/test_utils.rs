@@ -643,11 +643,20 @@ pub mod validators {
     pub fn assert_error(body: &Value) {
         let error = &body["error"];
         assert!(error.is_object(), "Response should have 'error' object");
+        let message = error["message"]
+            .as_str()
+            .expect("error should have 'message' string field");
         assert!(
-            error["message"].is_string(),
-            "error should have 'message' field"
+            !message.is_empty(),
+            "error.message must be non-empty so clients can surface a reason"
         );
-        assert!(error["type"].is_string(), "error should have 'type' field");
+        let ty = error["type"]
+            .as_str()
+            .expect("error should have 'type' string field");
+        assert!(
+            !ty.is_empty(),
+            "error.type must be non-empty so clients can branch on the error class"
+        );
     }
 
     /// Parse SSE streaming response and return validated chunks.
@@ -676,8 +685,21 @@ pub mod validators {
     }
 
     /// Assert streaming Chat Completions chunks are valid.
+    ///
+    /// Beyond the per-chunk schema (object/id/created/choices/delta), this also
+    /// reassembles the deltas to ensure something *content-bearing* arrived: at
+    /// least one chunk must produce textual content OR tool_calls, exactly one
+    /// chunk must carry a `finish_reason`, and any tool-call arguments emitted
+    /// across chunks must concatenate into a parseable JSON object so we catch
+    /// upstream-string-fragmentation regressions.
     pub fn assert_streaming_chat_completion(body: &str) -> Vec<Value> {
         let chunks = parse_streaming_chunks(body);
+
+        let mut reassembled_text = String::new();
+        // tool-call index -> concatenated `arguments` string fragments.
+        let mut tool_call_args: std::collections::BTreeMap<u64, String> =
+            std::collections::BTreeMap::new();
+        let mut finish_reasons: Vec<String> = Vec::new();
 
         for chunk in &chunks {
             assert_eq!(
@@ -699,6 +721,49 @@ pub mod validators {
                     choice["delta"].is_object(),
                     "choice should have 'delta' object"
                 );
+
+                if let Some(text) = choice["delta"]["content"].as_str() {
+                    reassembled_text.push_str(text);
+                }
+
+                if let Some(tool_calls) = choice["delta"]["tool_calls"].as_array() {
+                    for tc in tool_calls {
+                        let idx = tc["index"].as_u64().unwrap_or(0);
+                        if let Some(args) = tc["function"]["arguments"].as_str() {
+                            tool_call_args.entry(idx).or_default().push_str(args);
+                        }
+                    }
+                }
+
+                if let Some(reason) = choice["finish_reason"].as_str() {
+                    finish_reasons.push(reason.to_string());
+                }
+            }
+        }
+
+        let had_text = !reassembled_text.trim().is_empty();
+        let had_tools = !tool_call_args.is_empty();
+        assert!(
+            had_text || had_tools,
+            "Stream must produce content or tool_calls, got neither (chunks: {})",
+            chunks.len()
+        );
+
+        assert!(
+            !finish_reasons.is_empty(),
+            "Stream must emit at least one finish_reason"
+        );
+
+        for (idx, args) in &tool_call_args {
+            // Empty args (e.g. parameterless function) are legal — only validate when
+            // the model actually streamed something.
+            if !args.is_empty() {
+                serde_json::from_str::<Value>(args).unwrap_or_else(|e| {
+                    panic!(
+                        "Reassembled tool_calls[{idx}].function.arguments must be valid JSON, \
+                         got error {e}, payload: {args:?}"
+                    )
+                });
             }
         }
 
@@ -706,16 +771,59 @@ pub mod validators {
     }
 
     /// Assert streaming Responses API events are valid.
+    ///
+    /// Beyond the per-chunk `type` schema, this asserts the stream actually
+    /// completes (a terminal `response.completed` / `response.failed` /
+    /// `response.error` event arrives) and, when text deltas are streamed,
+    /// that they reassemble into non-empty content so a regression that emits
+    /// only metadata events is caught.
     pub fn assert_streaming_responses(body: &str) -> Vec<Value> {
         let chunks = parse_streaming_chunks(body);
 
-        // Responses API uses event types in the chunks
+        let mut reassembled_text = String::new();
+        let mut saw_terminal_event = false;
+        let terminal_types = [
+            "response.completed",
+            "response.failed",
+            "response.error",
+            "response.incomplete",
+        ];
+
         for chunk in &chunks {
-            // Each chunk should have a type field
+            let ty = chunk["type"]
+                .as_str()
+                .unwrap_or_else(|| panic!("Responses API chunk missing 'type', got: {:?}", chunk));
+
+            if terminal_types.contains(&ty) {
+                saw_terminal_event = true;
+            }
+
+            // Text deltas land on `response.output_text.delta` events with `delta`.
+            if ty == "response.output_text.delta"
+                && let Some(text) = chunk["delta"].as_str()
+            {
+                reassembled_text.push_str(text);
+            }
+        }
+
+        assert!(
+            saw_terminal_event,
+            "Responses stream must end with a terminal event ({:?}), saw types: {:?}",
+            terminal_types,
+            chunks
+                .iter()
+                .filter_map(|c| c["type"].as_str())
+                .collect::<Vec<_>>()
+        );
+
+        // Many Responses-API streams emit only structural events (no output_text.delta
+        // for tool-only or reasoning-only flows), so an empty reassembled text isn't
+        // by itself a failure — we just verify that *if* deltas arrived, the
+        // concatenation isn't pure whitespace.
+        if !reassembled_text.is_empty() {
             assert!(
-                chunk["type"].is_string(),
-                "Responses API chunk should have 'type' field, got: {:?}",
-                chunk
+                !reassembled_text.trim().is_empty(),
+                "output_text deltas must concatenate to non-empty content"
             );
         }
 

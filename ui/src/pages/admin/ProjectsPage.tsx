@@ -31,6 +31,7 @@ import { useConfirm } from "@/components/ConfirmDialog/ConfirmDialog";
 import { PageHeader, ResourceTable, OrganizationSelect, TeamSelect } from "@/components/Admin";
 import { formatDateTime } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 const columnHelper = createColumnHelper<Project>();
 
 const createProjectSchema = z.object({
@@ -104,7 +105,11 @@ export default function ProjectsPage() {
       toast({ title: "Project created", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to create project", description: String(error), type: "error" });
+      toast({
+        title: "Failed to create project",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -115,7 +120,11 @@ export default function ProjectsPage() {
       toast({ title: "Project deleted", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to delete project", description: String(error), type: "error" });
+      toast({
+        title: "Failed to delete project",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -128,7 +137,11 @@ export default function ProjectsPage() {
       toast({ title: "Project updated", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to update project", description: String(error), type: "error" });
+      toast({
+        title: "Failed to update project",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 

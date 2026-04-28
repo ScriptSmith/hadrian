@@ -188,6 +188,52 @@ impl FilesystemFileStorage {
     fn file_path(&self, file_id: &str) -> std::path::PathBuf {
         self.config.file_path(file_id)
     }
+
+    /// Resolve a `file_id_or_path` from an upstream caller (database row, etc.)
+    /// to an on-disk path that is guaranteed to live under `config.path`.
+    ///
+    /// Reject anything that escapes the configured root via `..`, absolute
+    /// paths outside the root, or symlinks. This is the single chokepoint for
+    /// all read/delete/exists operations so that a tampered DB row cannot be
+    /// used to read or delete arbitrary files on the host.
+    fn resolve_path(&self, file_id_or_path: &str) -> FileStorageResult<std::path::PathBuf> {
+        let candidate = if file_id_or_path.contains(std::path::MAIN_SEPARATOR)
+            || file_id_or_path.contains('/')
+        {
+            std::path::PathBuf::from(file_id_or_path)
+        } else {
+            self.file_path(file_id_or_path)
+        };
+
+        let root = std::path::Path::new(&self.config.path);
+        let root_canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+
+        // Resolve symlinks if the file exists; otherwise resolve the parent
+        // and re-attach the file name so callers can pre-check pending paths.
+        let resolved = match candidate.canonicalize() {
+            Ok(p) => p,
+            Err(_) => {
+                let parent = candidate
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new(""));
+                let canonical_parent = parent
+                    .canonicalize()
+                    .unwrap_or_else(|_| parent.to_path_buf());
+                match candidate.file_name() {
+                    Some(name) => canonical_parent.join(name),
+                    None => canonical_parent,
+                }
+            }
+        };
+
+        if !resolved.starts_with(&root_canonical) {
+            return Err(FileStorageError::NotFound(format!(
+                "Path '{}' is outside the configured storage root",
+                file_id_or_path
+            )));
+        }
+        Ok(resolved)
+    }
 }
 
 #[cfg(feature = "server")]
@@ -224,16 +270,7 @@ impl FileStorage for FilesystemFileStorage {
 
     #[instrument(skip(self))]
     async fn retrieve(&self, file_id_or_path: &str) -> FileStorageResult<Vec<u8>> {
-        // If the input looks like a path (contains separator), use it directly
-        // Otherwise, treat it as a file ID and construct the path
-        let path = if file_id_or_path.contains(std::path::MAIN_SEPARATOR)
-            || file_id_or_path.contains('/')
-        {
-            std::path::PathBuf::from(file_id_or_path)
-        } else {
-            self.file_path(file_id_or_path)
-        };
-
+        let path = self.resolve_path(file_id_or_path)?;
         debug!(path = %path.display(), "Retrieving file from filesystem");
 
         match tokio::fs::read(&path).await {
@@ -247,14 +284,7 @@ impl FileStorage for FilesystemFileStorage {
 
     #[instrument(skip(self))]
     async fn delete(&self, file_id_or_path: &str) -> FileStorageResult<()> {
-        let path = if file_id_or_path.contains(std::path::MAIN_SEPARATOR)
-            || file_id_or_path.contains('/')
-        {
-            std::path::PathBuf::from(file_id_or_path)
-        } else {
-            self.file_path(file_id_or_path)
-        };
-
+        let path = self.resolve_path(file_id_or_path)?;
         debug!(path = %path.display(), "Deleting file from filesystem");
 
         match tokio::fs::remove_file(&path).await {
@@ -272,14 +302,9 @@ impl FileStorage for FilesystemFileStorage {
 
     #[instrument(skip(self))]
     async fn exists(&self, file_id_or_path: &str) -> FileStorageResult<bool> {
-        let path = if file_id_or_path.contains(std::path::MAIN_SEPARATOR)
-            || file_id_or_path.contains('/')
-        {
-            std::path::PathBuf::from(file_id_or_path)
-        } else {
-            self.file_path(file_id_or_path)
+        let Ok(path) = self.resolve_path(file_id_or_path) else {
+            return Ok(false);
         };
-
         Ok(tokio::fs::metadata(&path).await.is_ok())
     }
 

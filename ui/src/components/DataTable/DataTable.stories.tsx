@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react";
 import type { ColumnDef } from "@tanstack/react-table";
+import { MemoryRouter } from "react-router-dom";
 import { DataTable } from "./DataTable";
 import { Badge } from "../Badge/Badge";
 
@@ -9,6 +10,13 @@ const meta = {
   parameters: {
     layout: "padded",
   },
+  decorators: [
+    (Story) => (
+      <MemoryRouter>
+        <Story />
+      </MemoryRouter>
+    ),
+  ],
 } satisfies Meta<typeof DataTable>;
 
 export default meta;

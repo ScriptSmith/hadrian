@@ -30,6 +30,7 @@ import { PageHeader, ResourceTable } from "@/components/Admin";
 import { useCursorPagination } from "@/hooks";
 import { formatDateTime } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 const columnHelper = createColumnHelper<Organization>();
 
 const createOrganizationSchema = z.object({
@@ -73,7 +74,11 @@ export default function OrganizationsPage() {
       toast({ title: "Organization created", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to create organization", description: String(error), type: "error" });
+      toast({
+        title: "Failed to create organization",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -84,7 +89,11 @@ export default function OrganizationsPage() {
       toast({ title: "Organization deleted", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to delete organization", description: String(error), type: "error" });
+      toast({
+        title: "Failed to delete organization",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 

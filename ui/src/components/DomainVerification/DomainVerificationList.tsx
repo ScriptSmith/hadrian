@@ -16,6 +16,7 @@ import { useToast } from "@/components/Toast/Toast";
 import { useConfirm } from "@/components/ConfirmDialog/ConfirmDialog";
 import { formatDateTime } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 const statusVariantMap: Record<DomainVerificationStatus, BadgeVariant> = {
   pending: "warning",
   verified: "success",
@@ -58,7 +59,7 @@ export function DomainVerificationList({
     onError: (error) => {
       toast({
         title: "Failed to remove domain",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -83,7 +84,7 @@ export function DomainVerificationList({
       setVerifyingDomainId(null);
       toast({
         title: "Verification failed",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },

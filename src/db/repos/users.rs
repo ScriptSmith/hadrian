@@ -45,6 +45,8 @@ pub trait UserRepo: Send + Sync {
         params: ListParams,
     ) -> DbResult<ListResult<User>>;
     async fn count_org_members(&self, org_id: Uuid, include_deleted: bool) -> DbResult<i64>;
+    /// Count every row in `org_memberships`. Used by access-review summaries.
+    async fn count_total_org_memberships(&self) -> DbResult<i64>;
 
     // Project memberships
     async fn add_to_project(
@@ -76,6 +78,8 @@ pub trait UserRepo: Send + Sync {
     ) -> DbResult<ListResult<User>>;
     async fn count_project_members(&self, project_id: Uuid, include_deleted: bool)
     -> DbResult<i64>;
+    /// Count every row in `project_memberships`. Used by access-review summaries.
+    async fn count_total_project_memberships(&self) -> DbResult<i64>;
 
     // ==================== GDPR Export Methods ====================
 

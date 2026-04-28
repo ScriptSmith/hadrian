@@ -162,8 +162,18 @@ pub(super) async fn check_owner_create_authz(
                 Some(&project_id.to_string()),
             )?;
         }
-        crate::models::ApiKeyOwner::User { .. } => {
-            authz.require("api_key", "create", None, None, None, None)?;
+        crate::models::ApiKeyOwner::User { user_id } => {
+            // Surface the target user_id via `resource_id` so policies can
+            // reject cross-user key creation; `check_owner_modify_authz`
+            // already does the same for revoke/rotate.
+            authz.require(
+                "api_key",
+                "create",
+                Some(&user_id.to_string()),
+                None,
+                None,
+                None,
+            )?;
         }
         crate::models::ApiKeyOwner::ServiceAccount { service_account_id } => {
             let sa = services
@@ -180,6 +190,88 @@ pub(super) async fn check_owner_create_authz(
                 "api_key",
                 "create",
                 None,
+                Some(&sa.org_id.to_string()),
+                None,
+                None,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Run the owner-scoped RBAC check that gates modification of an existing key
+/// (revoke, rotate, etc). Mirrors `check_owner_create_authz` but for an
+/// already-known key with a concrete id, so authorisation is scoped to the
+/// owner's org/team/project rather than checking only the bare resource id.
+pub(super) async fn check_owner_modify_authz(
+    services: &crate::services::Services,
+    authz: &crate::middleware::AuthzContext,
+    action: &str,
+    key_id: uuid::Uuid,
+    owner: &crate::models::ApiKeyOwner,
+) -> Result<(), AdminError> {
+    let resource_id = key_id.to_string();
+    match owner {
+        crate::models::ApiKeyOwner::Organization { org_id } => {
+            authz.require(
+                "api_key",
+                action,
+                Some(&resource_id),
+                Some(&org_id.to_string()),
+                None,
+                None,
+            )?;
+        }
+        crate::models::ApiKeyOwner::Team { team_id } => {
+            let team = services
+                .teams
+                .get_by_id(*team_id)
+                .await?
+                .ok_or_else(|| AdminError::NotFound(format!("Team '{}' not found", team_id)))?;
+            authz.require(
+                "api_key",
+                action,
+                Some(&resource_id),
+                Some(&team.org_id.to_string()),
+                Some(&team_id.to_string()),
+                None,
+            )?;
+        }
+        crate::models::ApiKeyOwner::Project { project_id } => {
+            let project = services
+                .projects
+                .get_by_id(*project_id)
+                .await?
+                .ok_or_else(|| {
+                    AdminError::NotFound(format!("Project '{}' not found", project_id))
+                })?;
+            authz.require(
+                "api_key",
+                action,
+                Some(&resource_id),
+                Some(&project.org_id.to_string()),
+                None,
+                Some(&project_id.to_string()),
+            )?;
+        }
+        crate::models::ApiKeyOwner::User { .. } => {
+            authz.require("api_key", action, Some(&resource_id), None, None, None)?;
+        }
+        crate::models::ApiKeyOwner::ServiceAccount { service_account_id } => {
+            let sa = services
+                .service_accounts
+                .get_by_id(*service_account_id)
+                .await?
+                .ok_or_else(|| {
+                    AdminError::NotFound(format!(
+                        "Service account '{}' not found",
+                        service_account_id
+                    ))
+                })?;
+            authz.require(
+                "api_key",
+                action,
+                Some(&resource_id),
                 Some(&sa.org_id.to_string()),
                 None,
                 None,
@@ -683,7 +775,10 @@ pub async fn list_by_user(
     Path(user_id): Path<Uuid>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<ApiKeyListResponse>, AdminError> {
-    authz.require("api_key", "list", None, None, None, None)?;
+    // Pass the target user_id through `resource_id` so policies can compare
+    // it against the calling subject and reject cross-user listing.
+    let user_id_str = user_id.to_string();
+    authz.require("api_key", "list", Some(&user_id_str), None, None, None)?;
     let services = get_services(&state)?;
 
     let limit = query.limit.unwrap_or(100);
@@ -800,20 +895,38 @@ pub async fn revoke(
     Extension(client_info): Extension<ClientInfo>,
     Path(key_id): Path<Uuid>,
 ) -> Result<Json<()>, AdminError> {
-    authz.require(
-        "api_key",
-        "delete",
-        Some(&key_id.to_string()),
-        None,
-        None,
-        None,
-    )?;
-
     let services = get_services(&state)?;
     let actor = AuditActor::from(&admin_auth);
 
-    // Get API key info for audit log before revoking
-    let key_info = services.api_keys.get_by_id(key_id).await?;
+    // Fetch the key first so authz can scope the check by owner. Without
+    // this, the key id alone is insufficient — RBAC needs the org/team/
+    // project to distinguish org-admins of different tenants.
+    //
+    // If the key isn't found, we still need to gate before returning
+    // NotFound — otherwise an attacker probing key ids could distinguish
+    // "key exists but you don't have permission" (Forbidden) from "key
+    // doesn't exist" (NotFound). Run an unscoped authz check first; only
+    // callers with unscoped (system-level) permission see NotFound, every
+    // other caller gets the same Forbidden as a cross-tenant key.
+    let key_info = match services.api_keys.get_by_id(key_id).await? {
+        Some(k) => k,
+        None => {
+            authz.require(
+                "api_key",
+                "delete",
+                Some(&key_id.to_string()),
+                None,
+                None,
+                None,
+            )?;
+            return Err(AdminError::NotFound(format!(
+                "API key '{}' not found",
+                key_id
+            )));
+        }
+    };
+    check_owner_modify_authz(services, &authz, "delete", key_id, &key_info.owner).await?;
+    let key_info = Some(key_info);
 
     services.api_keys.revoke(key_id).await?;
 
@@ -956,17 +1069,30 @@ pub async fn rotate(
     Path(key_id): Path<Uuid>,
     Json(request): Json<RotateApiKeyRequest>,
 ) -> Result<(StatusCode, Json<CreatedApiKey>), AdminError> {
-    authz.require(
-        "api_key",
-        "update",
-        Some(&key_id.to_string()),
-        None,
-        None,
-        None,
-    )?;
-
     let services = get_services(&state)?;
     let actor = AuditActor::from(&admin_auth);
+
+    // Fetch first so authz can scope by owner; see `revoke` for rationale.
+    // Missing-key path runs an unscoped authz check first so non-system
+    // callers can't tell whether the id exists.
+    let old_key_for_authz = match services.api_keys.get_by_id(key_id).await? {
+        Some(k) => k,
+        None => {
+            authz.require(
+                "api_key",
+                "update",
+                Some(&key_id.to_string()),
+                None,
+                None,
+                None,
+            )?;
+            return Err(AdminError::NotFound(format!(
+                "API key '{}' not found",
+                key_id
+            )));
+        }
+    };
+    check_owner_modify_authz(services, &authz, "update", key_id, &old_key_for_authz.owner).await?;
 
     // Validate grace period
     let grace_period_seconds = request
@@ -989,8 +1115,7 @@ pub async fn rotate(
     // Get the key generation prefix from config
     let prefix = state.config.auth.api_key_config().generation_prefix();
 
-    // Get old key info for audit log before rotating
-    let old_key = services.api_keys.get_by_id(key_id).await?;
+    let old_key = Some(old_key_for_authz);
 
     // Perform the rotation
     let created = services

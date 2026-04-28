@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use super::{
     ChunkFilter, ChunkWithEmbedding, HybridSearchConfig, VectorBackend, VectorMetadata,
-    VectorStoreError,
+    VectorStoreError, VectorTenantFilter,
 };
 
 // ============================================================================
@@ -73,7 +73,13 @@ pub async fn test_store_and_search(store: &dyn VectorBackend) {
 
     // Search with the same embedding should return exact match
     let results = store
-        .search(&embedding, 5, 0.9, Some("gpt-4"))
+        .search(
+            &embedding,
+            5,
+            0.9,
+            Some("gpt-4"),
+            VectorTenantFilter::unscoped(),
+        )
         .await
         .expect("Failed to search");
 
@@ -102,7 +108,13 @@ pub async fn test_search_with_similar_embedding(store: &dyn VectorBackend) {
     // Search with a similar embedding
     let similar = create_similar_embedding(&original, 0.05);
     let results = store
-        .search(&similar, 5, 0.9, Some("gpt-4"))
+        .search(
+            &similar,
+            5,
+            0.9,
+            Some("gpt-4"),
+            VectorTenantFilter::unscoped(),
+        )
         .await
         .expect("Failed to search");
 
@@ -132,7 +144,13 @@ pub async fn test_search_threshold_filtering(store: &dyn VectorBackend) {
     // Search with a very different embedding
     let different = create_test_embedding(dimensions, 100.0);
     let results = store
-        .search(&different, 5, 0.99, Some("gpt-4"))
+        .search(
+            &different,
+            5,
+            0.99,
+            Some("gpt-4"),
+            VectorTenantFilter::unscoped(),
+        )
         .await
         .expect("Failed to search");
 
@@ -175,7 +193,13 @@ pub async fn test_model_filter(store: &dyn VectorBackend) {
 
     // Search for gpt-4 only
     let results = store
-        .search(&embedding, 10, 0.9, Some("gpt-4"))
+        .search(
+            &embedding,
+            10,
+            0.9,
+            Some("gpt-4"),
+            VectorTenantFilter::unscoped(),
+        )
         .await
         .expect("Failed to search");
 
@@ -189,7 +213,13 @@ pub async fn test_model_filter(store: &dyn VectorBackend) {
 
     // Search for claude only
     let results = store
-        .search(&embedding, 10, 0.9, Some("claude-3"))
+        .search(
+            &embedding,
+            10,
+            0.9,
+            Some("claude-3"),
+            VectorTenantFilter::unscoped(),
+        )
         .await
         .expect("Failed to search");
 
@@ -215,7 +245,13 @@ pub async fn test_delete(store: &dyn VectorBackend) {
         .expect("Failed to store embedding");
 
     let results = store
-        .search(&embedding, 5, 0.9, Some("gpt-4"))
+        .search(
+            &embedding,
+            5,
+            0.9,
+            Some("gpt-4"),
+            VectorTenantFilter::unscoped(),
+        )
         .await
         .expect("Failed to search");
     assert!(!results.is_empty(), "Should find embedding before delete");
@@ -327,9 +363,16 @@ pub async fn test_upsert(store: &dyn VectorBackend) {
         .await
         .expect("Failed to upsert embedding");
 
-    // Search should find the updated embedding
+    // Search should find the updated embedding. Scope the filter to match
+    // metadata2's tenant since upsert rewrote organization_id to "org-123".
     let results = store
-        .search(&embedding2, 5, 0.9, Some("gpt-4"))
+        .search(
+            &embedding2,
+            5,
+            0.9,
+            Some("gpt-4"),
+            VectorTenantFilter::new(Some("org-123"), None),
+        )
         .await
         .expect("Failed to search");
 

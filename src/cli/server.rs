@@ -52,8 +52,13 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
 
     // Initialize observability (tracing, metrics)
     // Keep the guard alive to ensure proper OpenTelemetry shutdown
-    let _tracing_guard =
-        observability::init_tracing(&config.observability).expect("Failed to initialize tracing");
+    let _tracing_guard = match observability::init_tracing(&config.observability) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("Failed to initialize tracing: {e}");
+            std::process::exit(1);
+        }
+    };
 
     if let Err(e) = observability::metrics::init_metrics(&config.observability.metrics) {
         tracing::warn!(error = %e, "Failed to initialize metrics: {e}");
@@ -100,9 +105,33 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         );
     }
 
-    let state = AppState::new(config.clone())
-        .await
-        .expect("Failed to initialize application state");
+    if let Some(tls) = config.server.tls.as_ref() {
+        if !tls.acknowledge_unsupported {
+            tracing::error!(
+                "[server.tls] is set but the gateway does not yet terminate TLS \
+                 itself. Refusing to start to avoid serving the gateway on plain \
+                 HTTP while the operator believes TLS is active. Terminate TLS \
+                 upstream (reverse proxy / load balancer) and remove the \
+                 [server.tls] section, or set \
+                 `[server.tls].acknowledge_unsupported = true` to opt in to the \
+                 plaintext-listener behaviour while native TLS support is built out."
+            );
+            std::process::exit(1);
+        }
+        tracing::warn!(
+            "[server.tls] is set with acknowledge_unsupported = true; the \
+             gateway will continue to listen on plain HTTP because native \
+             TLS is not yet implemented. Terminate TLS upstream."
+        );
+    }
+
+    let state = match AppState::new(config.clone()).await {
+        Ok(state) => state,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to initialize application state");
+            std::process::exit(1);
+        }
+    };
 
     // Check for RBAC configuration mismatches with database state
     if !config.auth.rbac.enabled
@@ -148,6 +177,7 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         let http_client = state.http_client.clone();
         let allow_loopback = config.server.allow_loopback_urls;
         let allow_private = config.server.allow_private_urls;
+        let jwt_loader_concurrency = config.server.jwt_loader_concurrency;
         state.task_tracker.spawn(async move {
             let configs = match db.org_sso_configs().list_enabled().await {
                 Ok(c) => c,
@@ -199,7 +229,7 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
                         }
                     }
                 })
-                .buffer_unordered(10)
+                .buffer_unordered(jwt_loader_concurrency)
                 .collect()
                 .await;
 
@@ -236,9 +266,11 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
             .file_search_service
             .as_ref()
             .map(|fs| fs.vector_store());
+        let file_storage = state.services.as_ref().map(|s| s.files.storage());
 
         tokio::spawn(async move {
-            jobs::start_vector_store_cleanup_worker(db, vector_store, cleanup_config).await;
+            jobs::start_vector_store_cleanup_worker(db, vector_store, file_storage, cleanup_config)
+                .await;
         });
     }
 
@@ -363,14 +395,35 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
     }
 
     let task_tracker = state.task_tracker.clone();
+    let static_cache_enabled = state.config.features.static_models_cache.enabled();
+    let warm_state = if static_cache_enabled {
+        Some(state.clone())
+    } else {
+        None
+    };
     let app = build_app(&config, state);
 
     let bind_addr = format!("{}:{}", config.server.host, config.server.port);
-    let listener = tokio::net::TcpListener::bind(&bind_addr)
-        .await
-        .expect("Failed to bind to address");
+    let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
+        Ok(listener) => listener,
+        Err(e) => {
+            tracing::error!(error = %e, bind_addr = %bind_addr, "Failed to bind to address");
+            std::process::exit(1);
+        }
+    };
 
     tracing::info!("Server listening on http://{}", bind_addr);
+
+    // Warm the static models cache on a background task. With many providers
+    // (including slow/dead ones holding open connections until they time out)
+    // the warm can take tens of seconds; doing it inline would delay the
+    // listener bind, the readiness probe, and any rolling deploy gated on
+    // `/health/ready`.
+    if let Some(warm_state) = warm_state {
+        task_tracker.spawn(async move {
+            warm_state.warm_static_models_cache().await;
+        });
+    }
 
     if config.server.allow_loopback_urls || config.server.allow_private_urls {
         tracing::info!(
@@ -400,11 +453,26 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
     #[cfg(not(feature = "wizard"))]
     let _ = no_browser;
 
-    // Graceful shutdown: wait for SIGINT/SIGTERM, then wait for all background tasks
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(task_tracker, usage_buffer_handle))
-        .await
-        .unwrap();
+    let shutdown_config = config.server.shutdown.clone();
+
+    // Graceful shutdown: wait for SIGINT/SIGTERM, then wait for all background tasks.
+    // `into_make_service_with_connect_info` is required so middleware can read the
+    // connecting peer address via `ConnectInfo<SocketAddr>` for IP-based rate limits,
+    // API-key IP allowlists, and audit logging.
+    if let Err(e) = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal(
+        task_tracker,
+        usage_buffer_handle,
+        shutdown_config,
+    ))
+    .await
+    {
+        tracing::error!(error = %e, "Server error");
+        std::process::exit(1);
+    }
 }
 
 async fn shutdown_signal(
@@ -413,19 +481,25 @@ async fn shutdown_signal(
         Arc<usage_buffer::UsageLogBuffer>,
         tokio::task::JoinHandle<()>,
     )>,
+    shutdown_config: crate::config::ShutdownConfig,
 ) {
     let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::error!(error = %e, "Failed to install Ctrl+C handler");
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install signal handler")
-            .recv()
-            .await;
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to install SIGTERM handler");
+                std::future::pending::<()>().await;
+            }
+        }
     };
 
     #[cfg(not(unix))]
@@ -444,7 +518,12 @@ async fn shutdown_signal(
     // Shutdown usage buffer worker and wait for it to flush
     if let Some((buffer, handle)) = usage_buffer_handle {
         buffer.shutdown();
-        if let Err(e) = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
+        if let Err(e) = tokio::time::timeout(
+            std::time::Duration::from_secs(shutdown_config.usage_buffer_flush_secs),
+            handle,
+        )
+        .await
+        {
             tracing::warn!(error = %e, "Timeout waiting for usage buffer to flush");
         } else {
             tracing::info!("Usage buffer flushed successfully");
@@ -452,8 +531,11 @@ async fn shutdown_signal(
     }
 
     // Wait for all in-flight tasks to complete (with timeout)
-    let wait_result =
-        tokio::time::timeout(std::time::Duration::from_secs(30), task_tracker.wait()).await;
+    let wait_result = tokio::time::timeout(
+        std::time::Duration::from_secs(shutdown_config.drain_secs),
+        task_tracker.wait(),
+    )
+    .await;
 
     match wait_result {
         Ok(()) => tracing::info!("All background tasks completed"),

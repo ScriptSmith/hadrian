@@ -92,8 +92,11 @@ function ChatMessageComponent({
   const isUser = message.role === "user";
   const isAnyStreaming = useIsStreaming();
 
-  // Inline editing state
-  const isEditing = useIsEditing(message.id);
+  // Inline editing state. Namespace the key so a user-message id can never
+  // collide with the `<groupId>:<instanceId>` composite that
+  // MultiModelResponse writes into the same global slot.
+  const editingKey = `chat:${message.id}`;
+  const isEditing = useIsEditing(editingKey);
   const [editContent, setEditContent] = useState(message.content);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { startEditing, stopEditing } = useChatUIStore();
@@ -108,8 +111,8 @@ function ChatMessageComponent({
   }, [isEditing, message.content]);
 
   const handleStartEdit = useCallback(() => {
-    startEditing(message.id);
-  }, [startEditing, message.id]);
+    startEditing(editingKey);
+  }, [startEditing, editingKey]);
 
   const handleRegenerate = useCallback(() => {
     onRegenerate?.(message.id);
@@ -141,9 +144,13 @@ function ChatMessageComponent({
   );
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(message.content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.debug("Clipboard write failed", err);
+    }
   };
 
   // Quote selection state
@@ -285,11 +292,13 @@ function ChatMessageComponent({
             </div>
           )}
 
-          <div
-            className="break-words text-sm leading-relaxed"
-            aria-live={isStreaming ? "polite" : undefined}
-            aria-busy={isStreaming}
-          >
+          {/* Streaming status announcement. Marking the whole content div as
+              `aria-live="polite"` floods screen readers with every token —
+              this hidden status region instead announces start/finish only. */}
+          <div role="status" aria-live="polite" className="sr-only">
+            {isStreaming ? "Assistant is responding" : ""}
+          </div>
+          <div className="break-words text-sm leading-relaxed" aria-busy={isStreaming}>
             {isUser ? (
               isEditing ? (
                 <div className="flex flex-col gap-2 min-w-[300px] sm:min-w-[400px]">

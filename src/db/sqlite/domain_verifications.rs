@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::Utc;
 use uuid::Uuid;
 
 use super::{
@@ -246,6 +247,7 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
     }
 
     async fn find_verified_by_domain(&self, domain: &str) -> DbResult<Option<DomainVerification>> {
+        let now = truncate_to_millis(Utc::now());
         let result = query(
             r#"
             SELECT dv.id, dv.org_sso_config_id, dv.domain, dv.verification_token, dv.status,
@@ -256,11 +258,12 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
             WHERE dv.domain = ?
               AND dv.status = 'verified'
               AND osc.enabled = 1
-              AND (dv.expires_at IS NULL OR dv.expires_at > datetime('now'))
+              AND (dv.expires_at IS NULL OR dv.expires_at > ?)
             LIMIT 1
             "#,
         )
         .bind(domain)
+        .bind(now)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -274,6 +277,7 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
         &self,
         org_sso_config_id: Uuid,
     ) -> DbResult<Vec<DomainVerification>> {
+        let now = truncate_to_millis(Utc::now());
         let rows = query(
             r#"
             SELECT id, org_sso_config_id, domain, verification_token, status,
@@ -282,11 +286,12 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
             FROM domain_verifications
             WHERE org_sso_config_id = ?
               AND status = 'verified'
-              AND (expires_at IS NULL OR expires_at > datetime('now'))
+              AND (expires_at IS NULL OR expires_at > ?)
             ORDER BY domain ASC
             "#,
         )
         .bind(org_sso_config_id.to_string())
+        .bind(now)
         .fetch_all(&self.pool)
         .await?;
 
@@ -296,17 +301,19 @@ impl DomainVerificationRepo for SqliteDomainVerificationRepo {
     }
 
     async fn has_verified_domain(&self, org_sso_config_id: Uuid) -> DbResult<bool> {
+        let now = truncate_to_millis(Utc::now());
         let row = query(
             r#"
             SELECT EXISTS(
                 SELECT 1 FROM domain_verifications
                 WHERE org_sso_config_id = ?
                   AND status = 'verified'
-                  AND (expires_at IS NULL OR expires_at > datetime('now'))
+                  AND (expires_at IS NULL OR expires_at > ?)
             ) as has_verified
             "#,
         )
         .bind(org_sso_config_id.to_string())
+        .bind(now)
         .fetch_one(&self.pool)
         .await?;
 

@@ -31,6 +31,7 @@ import { useConfirm } from "@/components/ConfirmDialog/ConfirmDialog";
 import { PageHeader, ResourceTable, OrganizationSelect } from "@/components/Admin";
 import { formatDateTime } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 const columnHelper = createColumnHelper<Team>();
 
 const createTeamSchema = z.object({
@@ -96,7 +97,7 @@ export default function TeamsPage() {
       toast({ title: "Team created", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to create team", description: String(error), type: "error" });
+      toast({ title: "Failed to create team", description: formatApiError(error), type: "error" });
     },
   });
 
@@ -107,7 +108,7 @@ export default function TeamsPage() {
       toast({ title: "Team deleted", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to delete team", description: String(error), type: "error" });
+      toast({ title: "Failed to delete team", description: formatApiError(error), type: "error" });
     },
   });
 
@@ -120,7 +121,7 @@ export default function TeamsPage() {
       toast({ title: "Team updated", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to update team", description: String(error), type: "error" });
+      toast({ title: "Failed to update team", description: formatApiError(error), type: "error" });
     },
   });
 

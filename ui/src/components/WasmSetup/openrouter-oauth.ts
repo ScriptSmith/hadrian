@@ -43,7 +43,7 @@ export function isInIframe(): boolean {
  */
 export async function startOpenRouterOAuth() {
   if (isInIframe()) {
-    window.open(window.location.origin + window.location.pathname, "_blank");
+    window.open(window.location.origin + window.location.pathname, "_blank", "noopener,noreferrer");
     return;
   }
 

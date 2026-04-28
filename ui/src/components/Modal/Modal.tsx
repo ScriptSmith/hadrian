@@ -24,6 +24,40 @@ function useModalContext() {
   return useContext(ModalContext);
 }
 
+// Shared stack of open modal contents. Only the top entry is interactive —
+// stacked dialogs (e.g. a confirm-modal opened over a form-modal) used to
+// share Escape/Tab handlers and could let focus tab into the dialog
+// underneath. Tracking the stack lets us route keyboard events to the
+// topmost dialog only and apply `inert` to everything beneath it.
+const modalStack: HTMLElement[] = [];
+
+function refreshInertState() {
+  const top = modalStack[modalStack.length - 1] ?? null;
+
+  // Background app: inert when any modal is open, otherwise interactive.
+  const root = document.getElementById("root");
+  if (root) {
+    if (modalStack.length > 0) {
+      root.setAttribute("inert", "");
+      root.setAttribute("aria-hidden", "true");
+    } else {
+      root.removeAttribute("inert");
+      root.removeAttribute("aria-hidden");
+    }
+  }
+
+  // Stacked modals: every dialog except the top one is inert.
+  for (const node of modalStack) {
+    if (node === top) {
+      node.removeAttribute("inert");
+      node.removeAttribute("aria-hidden");
+    } else {
+      node.setAttribute("inert", "");
+      node.setAttribute("aria-hidden", "true");
+    }
+  }
+}
+
 export interface ModalProps {
   open: boolean;
   onClose: () => void;
@@ -37,61 +71,87 @@ export function Modal({ open, onClose, children, className }: ModalProps) {
   const titleId = useId();
   const descriptionId = useId();
 
+  const isTopModal = useCallback(() => {
+    const node = contentRef.current;
+    return node !== null && modalStack[modalStack.length - 1] === node;
+  }, []);
+
   const handleEscape = useCallback(
     (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onClose();
-      }
+      if (e.key !== "Escape") return;
+      // Stacked modals share a window-level keydown listener; only the
+      // topmost dialog should react, otherwise Escape closes everything.
+      if (!isTopModal()) return;
+      onClose();
     },
-    [onClose]
+    [onClose, isTopModal]
   );
 
   // Focus trap - keep focus within modal
-  const handleTabKey = useCallback((e: KeyboardEvent) => {
-    if (e.key !== "Tab" || !contentRef.current) return;
+  const handleTabKey = useCallback(
+    (e: KeyboardEvent) => {
+      if (e.key !== "Tab" || !contentRef.current) return;
+      if (!isTopModal()) return;
 
-    const focusableElements = contentRef.current.querySelectorAll<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    );
-    const firstElement = focusableElements[0];
-    const lastElement = focusableElements[focusableElements.length - 1];
+      const focusableElements = contentRef.current.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      const firstElement = focusableElements[0];
+      const lastElement = focusableElements[focusableElements.length - 1];
 
-    if (e.shiftKey && document.activeElement === firstElement) {
-      e.preventDefault();
-      lastElement?.focus();
-    } else if (!e.shiftKey && document.activeElement === lastElement) {
-      e.preventDefault();
-      firstElement?.focus();
-    }
-  }, []);
+      if (e.shiftKey && document.activeElement === firstElement) {
+        e.preventDefault();
+        lastElement?.focus();
+      } else if (!e.shiftKey && document.activeElement === lastElement) {
+        e.preventDefault();
+        firstElement?.focus();
+      }
+    },
+    [isTopModal]
+  );
 
   // Handle initial focus when modal opens (only runs when `open` changes)
   useEffect(() => {
-    if (open) {
-      // Store currently focused element
-      previousActiveElement.current = document.activeElement as HTMLElement;
-      document.body.style.overflow = "hidden";
+    if (!open) return;
+    // Store currently focused element
+    previousActiveElement.current = document.activeElement as HTMLElement;
+    document.body.style.overflow = "hidden";
 
-      // Focus the first input if available, otherwise the modal content
-      requestAnimationFrame(() => {
-        const firstInput =
-          contentRef.current?.querySelector<HTMLElement>("input, select, textarea");
-        if (firstInput) {
-          firstInput.focus();
-        } else {
-          const firstFocusable = contentRef.current?.querySelector<HTMLElement>(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-          );
-          if (firstFocusable) {
-            firstFocusable.focus();
-          } else {
-            contentRef.current?.focus();
-          }
-        }
-      });
+    const node = contentRef.current;
+    if (node) {
+      modalStack.push(node);
+      refreshInertState();
     }
+
+    // Focus the first input if available, otherwise the modal content
+    requestAnimationFrame(() => {
+      const firstInput = node?.querySelector<HTMLElement>("input, select, textarea");
+      if (firstInput) {
+        firstInput.focus();
+      } else {
+        const firstFocusable = node?.querySelector<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (firstFocusable) {
+          firstFocusable.focus();
+        } else {
+          node?.focus();
+        }
+      }
+    });
+
     return () => {
-      document.body.style.overflow = "";
+      if (node) {
+        const idx = modalStack.lastIndexOf(node);
+        if (idx !== -1) modalStack.splice(idx, 1);
+      }
+      // Only release the body scroll lock when the last modal closes, so a
+      // background page doesn't briefly start scrolling between stacked
+      // dialogs.
+      if (modalStack.length === 0) {
+        document.body.style.overflow = "";
+      }
+      refreshInertState();
       // Restore focus to previously focused element
       if (previousActiveElement.current) {
         previousActiveElement.current.focus();

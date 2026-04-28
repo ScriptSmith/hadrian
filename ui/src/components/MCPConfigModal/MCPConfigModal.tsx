@@ -66,6 +66,7 @@ import {
 import type { MCPToolDefinition, JSONSchema } from "@/services/mcp";
 import { MCPCatalog, type CatalogPrefill } from "./MCPCatalog";
 
+import { formatApiError } from "@/utils/formatApiError";
 // =============================================================================
 // Types
 // =============================================================================
@@ -274,7 +275,7 @@ function ServerCard({ server, onEdit, onDelete }: ServerCardProps) {
         // Connection error stored in server state
       }
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : String(err));
+      setAuthError(err instanceof Error ? err.message : formatApiError(err));
     } finally {
       setIsAuthorizing(false);
     }
@@ -631,7 +632,7 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
       setOauthStatus("authorized");
     } catch (err) {
       setOauthStatus("error");
-      setOauthError(err instanceof Error ? err.message : String(err));
+      setOauthError(err instanceof Error ? err.message : formatApiError(err));
     }
   }, [form]);
 
@@ -695,7 +696,7 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
       setTestMessage(info ? `${info.name} v${info.version}` : "Connection successful");
     } catch (err) {
       setTestStatus("error");
-      setTestMessage(err instanceof Error ? err.message : String(err));
+      setTestMessage(err instanceof Error ? err.message : formatApiError(err));
     } finally {
       try {
         await client.disconnect();

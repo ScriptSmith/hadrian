@@ -18,9 +18,25 @@ pub struct ServerConfig {
     #[serde(default = "default_port")]
     pub port: u16,
 
-    /// Request body size limit in bytes.
+    /// Request body size limit in bytes (the *global* cap, applied to every
+    /// request that doesn't have a more specific override). The audio and file
+    /// upload routes get a higher per-route limit because their payloads are
+    /// inherently larger than chat completions.
     #[serde(default = "default_body_limit")]
     pub body_limit_bytes: usize,
+
+    /// Request body size limit in bytes for audio routes
+    /// (`/v1/audio/transcriptions`, `/v1/audio/translations`).
+    /// Whisper-style transcription requests can carry tens of megabytes of
+    /// audio. Defaults to 100 MB.
+    #[serde(default = "default_audio_body_limit")]
+    pub audio_body_limit_bytes: usize,
+
+    /// Request body size limit in bytes for `/v1/files` uploads.
+    /// Defaults to 512 MB so multi-document RAG ingest works without manual
+    /// tuning. Operators that don't use file uploads should drop this.
+    #[serde(default = "default_files_body_limit")]
+    pub files_body_limit_bytes: usize,
 
     /// Maximum response body size for buffering provider responses (in bytes).
     /// This prevents OOM from malicious or malformed provider responses.
@@ -67,6 +83,16 @@ pub struct ServerConfig {
     #[serde(default)]
     pub http_client: HttpClientConfig,
 
+    /// Graceful shutdown timing.
+    #[serde(default)]
+    pub shutdown: ShutdownConfig,
+
+    /// Maximum number of per-issuer JWKS endpoints fetched in parallel when
+    /// warming the gateway JWT validator registry on startup. Higher values
+    /// speed up startup but risk overwhelming individual IdPs.
+    #[serde(default = "default_jwt_loader_concurrency")]
+    pub jwt_loader_concurrency: usize,
+
     /// Allow loopback addresses (127.0.0.1, ::1, localhost) in user-supplied URLs.
     ///
     /// When false (default), URLs targeting loopback addresses are blocked to prevent SSRF.
@@ -92,6 +118,8 @@ impl Default for ServerConfig {
             host: default_host(),
             port: default_port(),
             body_limit_bytes: default_body_limit(),
+            audio_body_limit_bytes: default_audio_body_limit(),
+            files_body_limit_bytes: default_files_body_limit(),
             max_response_body_bytes: default_max_response_body(),
             timeout_secs: default_timeout(),
             streaming_idle_timeout_secs: default_streaming_idle_timeout(),
@@ -100,6 +128,8 @@ impl Default for ServerConfig {
             cors: CorsConfig::default(),
             security_headers: SecurityHeadersConfig::default(),
             http_client: HttpClientConfig::default(),
+            shutdown: ShutdownConfig::default(),
+            jwt_loader_concurrency: default_jwt_loader_concurrency(),
             allow_loopback_urls: false,
             allow_private_urls: false,
         }
@@ -118,6 +148,14 @@ fn default_body_limit() -> usize {
     10 * 1024 * 1024 // 10 MB
 }
 
+fn default_audio_body_limit() -> usize {
+    100 * 1024 * 1024 // 100 MB — enough for ~1h of compressed audio
+}
+
+fn default_files_body_limit() -> usize {
+    512 * 1024 * 1024 // 512 MB — multi-document RAG ingest
+}
+
 fn default_max_response_body() -> usize {
     100 * 1024 * 1024 // 100 MB
 }
@@ -130,7 +168,55 @@ fn default_streaming_idle_timeout() -> u64 {
     120 // 2 minutes between chunks
 }
 
+/// Graceful shutdown timing.
+///
+/// These values were previously hardcoded constants. They control how long the
+/// server waits for in-flight work to drain before exiting. The defaults match
+/// the prior hardcoded values; deployments with longer-running tasks (or with
+/// shorter `terminationGracePeriodSeconds`) should override them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ShutdownConfig {
+    /// Seconds to wait for the usage-buffer worker to flush its final batch.
+    #[serde(default = "default_usage_buffer_flush_secs")]
+    pub usage_buffer_flush_secs: u64,
+
+    /// Seconds to wait for outstanding background tasks (request handlers,
+    /// usage logging, etc.) to complete after the close signal.
+    #[serde(default = "default_drain_secs")]
+    pub drain_secs: u64,
+}
+
+impl Default for ShutdownConfig {
+    fn default() -> Self {
+        Self {
+            usage_buffer_flush_secs: default_usage_buffer_flush_secs(),
+            drain_secs: default_drain_secs(),
+        }
+    }
+}
+
+fn default_usage_buffer_flush_secs() -> u64 {
+    5
+}
+
+fn default_drain_secs() -> u64 {
+    30
+}
+
+fn default_jwt_loader_concurrency() -> usize {
+    10
+}
+
 /// TLS configuration.
+///
+/// Native TLS termination is not yet implemented. Until it is, the gateway
+/// listens on plain HTTP and operators must terminate TLS upstream (reverse
+/// proxy / load balancer). Setting `[server.tls]` without
+/// `acknowledge_unsupported = true` is treated as a misconfiguration and
+/// refuses startup, so an operator following stale documentation can't
+/// silently expose plaintext.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -140,6 +226,14 @@ pub struct TlsConfig {
 
     /// Path to the private key file (PEM format).
     pub key_path: String,
+
+    /// Set to `true` to acknowledge that native TLS termination is not yet
+    /// implemented and the gateway will continue to listen on plain HTTP.
+    /// When unset, the gateway refuses to start to avoid an operator
+    /// accidentally exposing plaintext after copying TLS config from
+    /// stale documentation.
+    #[serde(default)]
+    pub acknowledge_unsupported: bool,
 }
 
 /// Configuration for trusted reverse proxies.
@@ -409,8 +503,25 @@ pub struct SecurityHeadersConfig {
 
     /// Content-Security-Policy header value.
     /// Controls resource loading to prevent XSS attacks.
-    #[serde(default = "default_csp")]
+    ///
+    /// When unset, the policy is rendered from `csp_preset`. Setting an explicit
+    /// string here always wins.
+    #[serde(default)]
     pub content_security_policy: Option<String>,
+
+    /// Built-in CSP preset to use when `content_security_policy` is not set.
+    ///
+    /// - `strict` (default): no `'unsafe-eval'`, `connect-src 'self'`. Suitable
+    ///   for headless gateway deployments and any deployment that does not
+    ///   serve the bundled UI's WASM features (Pyodide / Vega charts /
+    ///   user-configured MCP server URLs).
+    /// - `permissive`: enables `'unsafe-eval'` (Pyodide bytecode + Vega
+    ///   `Function()` evaluation), `script-src https://cdn.jsdelivr.net`
+    ///   (Pyodide / DuckDB WASM CDN), and `connect-src https: http: wss: ws:`
+    ///   (MCP servers configured at runtime). Required when serving the
+    ///   bundled UI with WASM-mode features enabled.
+    #[serde(default)]
+    pub csp_preset: CspPreset,
 
     /// X-XSS-Protection header value.
     /// Legacy header for older browsers. Disabled by default as CSP provides protection.
@@ -438,12 +549,71 @@ impl Default for SecurityHeadersConfig {
             content_type_options: default_content_type_options(),
             frame_options: default_frame_options(),
             hsts: HstsConfig::default(),
-            content_security_policy: default_csp(),
+            content_security_policy: None,
+            csp_preset: CspPreset::default(),
             xss_protection: default_xss_protection(),
             referrer_policy: default_referrer_policy(),
             permissions_policy: None,
         }
     }
+}
+
+impl SecurityHeadersConfig {
+    /// Resolve the effective CSP header value.
+    ///
+    /// An explicit `content_security_policy` string always wins; otherwise the
+    /// `csp_preset` is rendered. Returns `None` to disable the header entirely.
+    pub fn resolved_csp(&self) -> Option<String> {
+        if self.content_security_policy.is_some() {
+            return self.content_security_policy.clone();
+        }
+        Some(self.csp_preset.render())
+    }
+}
+
+/// Built-in CSP presets selectable via `[server.security_headers].csp_preset`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum CspPreset {
+    /// Locked-down CSP. No `'unsafe-eval'`, `connect-src 'self'`. Default.
+    #[default]
+    Strict,
+    /// Allows the bundled UI's WASM features (Pyodide, Vega chart eval,
+    /// CDN-loaded modules) and runtime-configured MCP server URLs.
+    Permissive,
+}
+
+impl CspPreset {
+    fn render(self) -> String {
+        match self {
+            CspPreset::Strict => default_csp_strict(),
+            CspPreset::Permissive => default_csp_permissive(),
+        }
+    }
+}
+
+/// Strict CSP — safe default for API-only / headless deployments.
+fn default_csp_strict() -> String {
+    "default-src 'self'; \
+     script-src 'self'; \
+     style-src 'self' 'unsafe-inline'; \
+     img-src 'self' data: blob:; \
+     font-src 'self' data:; \
+     media-src 'self'; \
+     connect-src 'self'; \
+     worker-src 'self'; \
+     frame-src 'self'; \
+     object-src 'none'; \
+     base-uri 'self'; \
+     form-action 'self'; \
+     frame-ancestors 'none'"
+        .to_string()
+}
+
+/// Permissive CSP for deployments serving the bundled UI's WASM features.
+fn default_csp_permissive() -> String {
+    default_csp().expect("permissive CSP is always Some")
 }
 
 fn default_security_headers_enabled() -> bool {

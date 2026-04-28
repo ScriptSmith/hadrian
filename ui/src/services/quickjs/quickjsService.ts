@@ -1,3 +1,4 @@
+import { formatApiError } from "@/utils/formatApiError";
 /**
  * QuickJS Service
  *
@@ -158,7 +159,7 @@ class QuickJSService {
           reject(new Error(error.message));
         };
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
+        const errorMsg = error instanceof Error ? error.message : formatApiError(error);
         this.setStatus("error", errorMsg);
         reject(error);
       }

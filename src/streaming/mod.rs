@@ -12,11 +12,73 @@ use std::{
 use bytes::Bytes;
 use futures_util::stream::Stream;
 use serde_json::Value;
+#[cfg(feature = "server")]
+use tokio::sync::mpsc;
 use tokio::time::Sleep;
 #[cfg(feature = "server")]
 use tokio_util::task::TaskTracker;
 
 use crate::{db::DbPool, models::UsageLogEntry, observability::metrics, pricing::PricingConfig};
+
+/// Default capacity for the usage-drain channel.
+///
+/// Each pending job holds two `Arc`s, so memory pressure is small. The cap is
+/// here to bound the worst case if the drainer falls behind — under normal
+/// operation it stays empty.
+#[cfg(feature = "server")]
+pub const USAGE_DRAIN_CAPACITY: usize = 4096;
+
+/// A handle to the usage-drain background task.
+///
+/// `UsageTrackingStream::Drop` runs synchronously and is not guaranteed to be
+/// called from within a Tokio runtime context (clients can disconnect on a
+/// thread that's tearing down, or the future can be cancelled in
+/// `poll_cancel`). Spawning a task directly from `Drop` therefore risks a
+/// `there is no reactor running` panic and also unbounded fan-out under heavy
+/// disconnect storms.
+///
+/// Instead, drops push a job into a bounded mpsc channel; a single drainer
+/// task spawned at startup (owned by the existing `TaskTracker` so graceful
+/// shutdown awaits it) pulls jobs and runs `UsageLogger::log_usage` from
+/// inside the runtime where spawning is safe.
+#[cfg(feature = "server")]
+#[derive(Clone)]
+pub struct UsageDrainHandle {
+    tx: mpsc::Sender<UsageDrainJob>,
+}
+
+#[cfg(feature = "server")]
+struct UsageDrainJob {
+    logger: Arc<UsageLogger>,
+    tokens: Arc<TokenAccumulator>,
+}
+
+#[cfg(feature = "server")]
+impl UsageDrainHandle {
+    /// Spawn the drainer task and return a clonable handle for sending jobs.
+    pub fn spawn(task_tracker: &TaskTracker, capacity: usize) -> Self {
+        let (tx, mut rx) = mpsc::channel::<UsageDrainJob>(capacity);
+        task_tracker.spawn(async move {
+            while let Some(job) = rx.recv().await {
+                job.logger.log_usage(&job.tokens).await;
+            }
+            tracing::debug!("Usage drain channel closed; drainer exiting");
+        });
+        Self { tx }
+    }
+
+    /// Sync-send a usage log job. Safe to call from any thread/context,
+    /// including `Drop`. Drops the job (with a warning) if the channel is
+    /// full or closed — this is preferable to panicking from a destructor.
+    fn try_log(&self, logger: Arc<UsageLogger>, tokens: Arc<TokenAccumulator>) {
+        if let Err(err) = self.tx.try_send(UsageDrainJob { logger, tokens }) {
+            tracing::warn!(
+                error = %err,
+                "Usage drain channel rejected job; partial usage will not be recorded"
+            );
+        }
+    }
+}
 
 /// Sentinel value indicating an optional field is not set
 const NONE_SENTINEL: i64 = i64::MIN;
@@ -45,13 +107,13 @@ pub struct IdleTimeoutError(Duration);
 /// The timeout resets after each successful chunk, so long-running streams
 /// that are actively producing data will not timeout.
 pub struct IdleTimeoutStream<S> {
-    inner: S,
+    /// `None` once the stream has terminated, dropping the inner stream so any
+    /// upstream resources (sockets, channels) are released immediately.
+    inner: Option<S>,
     timeout: Duration,
     /// Sleep future for the current timeout period.
     /// Pinned because Sleep requires pinning.
     sleep: Pin<Box<Sleep>>,
-    /// Whether the stream has already timed out or ended
-    terminated: bool,
 }
 
 impl<S> IdleTimeoutStream<S>
@@ -63,10 +125,9 @@ where
     /// If `timeout` is zero, the wrapper is effectively a no-op pass-through.
     pub fn new(inner: S, timeout: Duration) -> Self {
         Self {
-            inner,
+            inner: Some(inner),
             timeout,
             sleep: Box::pin(tokio::time::sleep(timeout)),
-            terminated: false,
         }
     }
 
@@ -84,17 +145,18 @@ where
     type Item = Result<T, E>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.terminated {
+        if self.inner.is_none() {
             return Poll::Ready(None);
         }
 
         // If timeout is disabled (zero), just pass through
         if !self.timeout_enabled() {
-            return Pin::new(&mut self.inner).poll_next(cx);
+            return Pin::new(self.inner.as_mut().expect("checked above")).poll_next(cx);
         }
 
         // Poll the inner stream first
-        match Pin::new(&mut self.inner).poll_next(cx) {
+        let inner = self.inner.as_mut().expect("checked above");
+        match Pin::new(inner).poll_next(cx) {
             Poll::Ready(Some(Ok(item))) => {
                 // Got a chunk - reset the timeout
                 let new_deadline = tokio::time::Instant::now() + self.timeout;
@@ -102,20 +164,20 @@ where
                 Poll::Ready(Some(Ok(item)))
             }
             Poll::Ready(Some(Err(e))) => {
-                self.terminated = true;
+                self.inner = None;
                 Poll::Ready(Some(Err(e)))
             }
             Poll::Ready(None) => {
-                // Stream ended normally
-                self.terminated = true;
+                self.inner = None;
                 Poll::Ready(None)
             }
             Poll::Pending => {
                 // Stream is waiting for data - check if we've timed out
                 match self.sleep.as_mut().poll(cx) {
                     Poll::Ready(()) => {
-                        // Timeout elapsed!
-                        self.terminated = true;
+                        // Timeout elapsed - drop the inner stream so its
+                        // socket/connection releases instead of lingering.
+                        self.inner = None;
                         tracing::warn!(
                             timeout_secs = self.timeout.as_secs(),
                             "Streaming response idle timeout - terminating stalled stream"
@@ -229,8 +291,10 @@ impl SseParser {
                         .and_then(|delta| delta.get("content"))
                         .and_then(|c| c.as_str())
                     {
-                        // Rough approximation: 1 token ≈ 4 characters
-                        let estimated_tokens = (content.len() as i64 + 3) / 4;
+                        // Rough approximation: 1 token ≈ 4 characters.
+                        // Use chars() instead of len() so multibyte content
+                        // (CJK, emoji) isn't over-counted as a token-per-byte.
+                        let estimated_tokens = (content.chars().count() as i64 + 3) / 4;
                         return Some(SseChunk::Delta {
                             tokens: estimated_tokens,
                         });
@@ -276,7 +340,11 @@ fn inject_cost_into_sse_chunk(chunk: &[u8], cost_dollars: f64) -> Bytes {
     };
 
     let mut output = String::with_capacity(chunk_str.len() + 32);
-    for line in chunk_str.split('\n') {
+    for raw in chunk_str.split_inclusive('\n') {
+        let (line, terminator) = match raw.strip_suffix('\n') {
+            Some(without) => (without, "\n"),
+            None => (raw, ""),
+        };
         if let Some(json_str) = line.strip_prefix("data: ") {
             if let Ok(mut json) = serde_json::from_str::<Value>(json_str) {
                 // Try root-level usage (Chat Completions format)
@@ -308,13 +376,7 @@ fn inject_cost_into_sse_chunk(chunk: &[u8], cost_dollars: f64) -> Bytes {
         } else {
             output.push_str(line);
         }
-        output.push('\n');
-    }
-
-    // The split('\n') + push('\n') loop adds one extra trailing newline;
-    // remove it to match original chunk ending
-    if !chunk_str.ends_with('\n') {
-        output.pop();
+        output.push_str(terminator);
     }
 
     Bytes::from(output)
@@ -458,7 +520,7 @@ pub struct UsageTrackingStream<S> {
     usage_logger: Arc<UsageLogger>,
     stream_ended: bool,
     #[cfg(feature = "server")]
-    task_tracker: TaskTracker,
+    usage_drain: UsageDrainHandle,
     /// Streaming metrics tracking
     streaming_metrics: Arc<StreamingMetrics>,
 }
@@ -730,6 +792,7 @@ impl<S> UsageTrackingStream<S>
 where
     S: Stream<Item = Result<Bytes, io::Error>> + Unpin,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         stream: S,
         db: Arc<DbPool>,
@@ -738,6 +801,7 @@ where
         provider: String,
         model: String,
         #[cfg(feature = "server")] task_tracker: TaskTracker,
+        #[cfg(feature = "server")] usage_drain: UsageDrainHandle,
     ) -> Self {
         let logger = Arc::new(UsageLogger::new(
             db,
@@ -755,7 +819,7 @@ where
             usage_logger: logger,
             stream_ended: false,
             #[cfg(feature = "server")]
-            task_tracker: task_tracker.clone(),
+            usage_drain,
             streaming_metrics: Arc::new(StreamingMetrics::new(provider, model)),
         }
     }
@@ -816,18 +880,10 @@ where
                 // Stream ended normally - log usage and report metrics
                 if !self.stream_ended {
                     self.stream_ended = true;
-                    let logger = self.usage_logger.clone();
-                    let tokens = self.accumulated_tokens.clone();
-                    let streaming_metrics = self.streaming_metrics.clone();
-
-                    // Report streaming metrics (completed successfully)
-                    streaming_metrics.report("completed");
-
-                    // Use task_tracker to ensure usage logging completes during graceful shutdown
+                    self.streaming_metrics.report("completed");
                     #[cfg(feature = "server")]
-                    self.task_tracker.spawn(async move {
-                        logger.log_usage(&tokens).await;
-                    });
+                    self.usage_drain
+                        .try_log(self.usage_logger.clone(), self.accumulated_tokens.clone());
                 }
 
                 Poll::Ready(None)
@@ -836,19 +892,13 @@ where
                 // Error in stream - still try to log what we have
                 if !self.stream_ended {
                     self.stream_ended = true;
-                    let logger = self.usage_logger.clone();
-                    let tokens = self.accumulated_tokens.clone();
-                    let streaming_metrics = self.streaming_metrics.clone();
-
-                    // Report streaming metrics (ended with error)
-                    streaming_metrics.report("error");
-
-                    // Use task_tracker to ensure usage logging completes during graceful shutdown
+                    self.streaming_metrics.report("error");
                     #[cfg(feature = "server")]
-                    self.task_tracker.spawn(async move {
+                    {
                         tracing::warn!("Stream ended with error, logging partial usage");
-                        logger.log_usage(&tokens).await;
-                    });
+                        self.usage_drain
+                            .try_log(self.usage_logger.clone(), self.accumulated_tokens.clone());
+                    }
                 }
 
                 Poll::Ready(Some(Err(e)))
@@ -868,26 +918,21 @@ impl<S> Drop for UsageTrackingStream<S> {
         //
         // This is important for budget enforcement - without this, an attacker
         // could consume tokens without them being recorded by dropping connections.
+        //
+        // Drop runs synchronously and is not guaranteed to be inside a Tokio
+        // runtime context, so we hand the job to the bounded usage-drain
+        // channel instead of spawning a task here directly.
         if !self.stream_ended {
             self.stream_ended = true;
-
-            let logger = self.usage_logger.clone();
-            let tokens = self.accumulated_tokens.clone();
-            let streaming_metrics = self.streaming_metrics.clone();
-
-            // Report streaming metrics (dropped/cancelled)
-            streaming_metrics.report("dropped");
-
-            // Spawn async task to log usage
-            // Note: We can't await here since Drop is sync, so we spawn a task.
-            // The task_tracker ensures this completes during graceful shutdown.
+            self.streaming_metrics.report("dropped");
             #[cfg(feature = "server")]
-            self.task_tracker.spawn(async move {
+            {
                 tracing::warn!(
                     "Stream dropped without completing - logging partial usage for budget accuracy"
                 );
-                logger.log_usage(&tokens).await;
-            });
+                self.usage_drain
+                    .try_log(self.usage_logger.clone(), self.accumulated_tokens.clone());
+            }
         }
     }
 }
@@ -1022,6 +1067,42 @@ mod tests {
             }
             _ => panic!("Expected Usage chunk"),
         }
+    }
+
+    #[test]
+    fn test_parse_sse_delta_multibyte_content() {
+        // Four CJK chars = 12 bytes. len()/4 would estimate 3 tokens;
+        // chars().count()/4 estimates 1.
+        let chunk = r#"data: {"choices":[{"delta":{"content":"日本語😀"}}]}"#;
+        let result = SseParser::parse_chunk(chunk.as_bytes());
+        match result {
+            Some(SseChunk::Delta { tokens }) => {
+                assert_eq!(
+                    tokens, 1,
+                    "4 chars should estimate to 1 token, got {tokens}"
+                );
+            }
+            _ => panic!("Expected Delta chunk"),
+        }
+    }
+
+    #[test]
+    fn test_inject_cost_preserves_double_newline_terminator() {
+        let chunk = b"data: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2}}\n\n";
+        let injected = inject_cost_into_sse_chunk(chunk, 0.0042);
+        let s = std::str::from_utf8(&injected).unwrap();
+        assert!(s.ends_with("\n\n"), "must preserve SSE event terminator");
+        assert!(!s.ends_with("\n\n\n"), "must not add extra newline");
+        assert!(s.contains("\"cost\":0.0042"));
+    }
+
+    #[test]
+    fn test_inject_cost_no_trailing_newline() {
+        let chunk = b"data: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2}}";
+        let injected = inject_cost_into_sse_chunk(chunk, 0.0042);
+        let s = std::str::from_utf8(&injected).unwrap();
+        assert!(!s.ends_with('\n'), "must preserve absent terminator");
+        assert!(s.contains("\"cost\":0.0042"));
     }
 
     #[test]

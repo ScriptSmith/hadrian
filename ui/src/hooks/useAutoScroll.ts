@@ -140,7 +140,7 @@ export function useAutoScroll(options: UseAutoScrollOptions = {}): UseAutoScroll
     };
 
     // Use requestAnimationFrame to ensure layout is complete
-    requestAnimationFrame(checkInitialPosition);
+    const rafId = requestAnimationFrame(checkInitialPosition);
 
     // Also check when container resizes (content loaded)
     // Skip during streaming - content height changes constantly during streaming,
@@ -153,7 +153,10 @@ export function useAutoScroll(options: UseAutoScrollOptions = {}): UseAutoScroll
     });
     resizeObserver.observe(container);
 
-    return () => resizeObserver.disconnect();
+    return () => {
+      cancelAnimationFrame(rafId);
+      resizeObserver.disconnect();
+    };
   }, [checkIfAtBottom]);
 
   return {

@@ -50,6 +50,7 @@ import {
 import { useToast } from "@/components/Toast/Toast";
 import { useConfirm } from "@/components/ConfirmDialog/ConfirmDialog";
 import { formatDateTime } from "@/utils/formatters";
+import { formatApiError } from "@/utils/formatApiError";
 import {
   PROVIDER_TYPES,
   type ProviderTypeValue,
@@ -618,7 +619,11 @@ export function ProvidersTab({ orgSlug, projectSlug, projectId }: ProvidersTabPr
       });
     },
     onError: (error) => {
-      toast({ title: "Failed to create provider", description: String(error), type: "error" });
+      toast({
+        title: "Failed to create provider",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -636,7 +641,11 @@ export function ProvidersTab({ orgSlug, projectSlug, projectId }: ProvidersTabPr
       });
     },
     onError: (error) => {
-      toast({ title: "Failed to update provider", description: String(error), type: "error" });
+      toast({
+        title: "Failed to update provider",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -649,7 +658,11 @@ export function ProvidersTab({ orgSlug, projectSlug, projectId }: ProvidersTabPr
       toast({ title: "Provider deleted", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to delete provider", description: String(error), type: "error" });
+      toast({
+        title: "Failed to delete provider",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -668,7 +681,7 @@ export function ProvidersTab({ orgSlug, projectSlug, projectId }: ProvidersTabPr
       const id = variables.path.id;
       setTestResults((prev) => ({
         ...prev,
-        [id]: { status: "error", message: String(error), latency_ms: null },
+        [id]: { status: "error", message: formatApiError(error), latency_ms: null },
       }));
       setTestingIds((prev) => {
         const next = new Set(prev);

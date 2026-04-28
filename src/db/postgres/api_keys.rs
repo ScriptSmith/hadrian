@@ -785,6 +785,20 @@ impl ApiKeyRepo for PostgresApiKeyRepo {
         Ok(row.get::<i64, _>("count"))
     }
 
+    async fn count_total_active(&self) -> DbResult<i64> {
+        let row = sqlx::query(
+            r#"
+            SELECT COUNT(*) as count
+            FROM api_keys
+            WHERE revoked_at IS NULL
+              AND (expires_at IS NULL OR expires_at >= NOW())
+            "#,
+        )
+        .fetch_one(&self.read_pool)
+        .await?;
+        Ok(row.get::<i64, _>("count"))
+    }
+
     async fn revoke(&self, id: Uuid) -> DbResult<()> {
         sqlx::query(
             r#"

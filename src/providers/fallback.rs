@@ -161,11 +161,23 @@ pub struct FallbackTarget {
     pub model_name: String,
 }
 
+/// Hard cap on the number of fallback targets we'll try for a single request.
+///
+/// Without a cap, a misconfiguration where every provider lists every other
+/// provider as a fallback can produce a very long chain (latency budget eaten
+/// + amplified upstream pressure if many of them fail). 8 is generous in
+///   practice — Hadrian's documented examples top out at 3-4.
+pub const MAX_FALLBACK_CHAIN_LENGTH: usize = 8;
+
 /// Builds the fallback chain for a request.
 ///
 /// The chain is built in this order:
 /// 1. Model-specific fallbacks (if any) - tried first
 /// 2. Provider-level fallbacks - tried after model fallbacks are exhausted
+///
+/// `(provider, model)` pairs are deduplicated against the primary and against
+/// each other so we never call the same target twice in a row, and the chain
+/// is capped at `MAX_FALLBACK_CHAIN_LENGTH` entries.
 ///
 /// # Arguments
 ///
@@ -182,10 +194,44 @@ pub fn build_fallback_chain(
     providers_config: &crate::config::ProvidersConfig,
 ) -> Vec<FallbackTarget> {
     let mut chain = Vec::new();
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    // Seed with the primary so we never retry the same (provider, model)
+    // pair via a redundant model_fallbacks entry.
+    seen.insert((
+        primary_provider_name.to_string(),
+        primary_model_name.to_string(),
+    ));
 
     // Get the primary provider config
     let Some(primary_config) = providers_config.get(primary_provider_name) else {
         return chain;
+    };
+
+    let push_target = |chain: &mut Vec<FallbackTarget>,
+                       seen: &mut std::collections::HashSet<(String, String)>,
+                       provider: String,
+                       model: String|
+     -> bool {
+        if chain.len() >= MAX_FALLBACK_CHAIN_LENGTH {
+            tracing::warn!(
+                cap = MAX_FALLBACK_CHAIN_LENGTH,
+                "Fallback chain hit the per-request length cap; dropping further entries"
+            );
+            return false;
+        }
+        if !seen.insert((provider.clone(), model.clone())) {
+            tracing::debug!(
+                provider = %provider,
+                model = %model,
+                "Skipping duplicate fallback target"
+            );
+            return true;
+        }
+        chain.push(FallbackTarget {
+            provider_name: provider,
+            model_name: model,
+        });
+        true
     };
 
     // 1. Add model-specific fallbacks first
@@ -206,10 +252,14 @@ pub fn build_fallback_chain(
                 continue;
             }
 
-            chain.push(FallbackTarget {
-                provider_name: target_provider.to_string(),
-                model_name: fallback.model.clone(),
-            });
+            if !push_target(
+                &mut chain,
+                &mut seen,
+                target_provider.to_string(),
+                fallback.model.clone(),
+            ) {
+                return chain;
+            }
         }
     }
 
@@ -224,11 +274,15 @@ pub fn build_fallback_chain(
             continue;
         }
 
-        chain.push(FallbackTarget {
-            provider_name: fallback_provider_name.clone(),
+        if !push_target(
+            &mut chain,
+            &mut seen,
+            fallback_provider_name.clone(),
             // Use the original model name for provider fallbacks
-            model_name: primary_model_name.to_string(),
-        });
+            primary_model_name.to_string(),
+        ) {
+            return chain;
+        }
     }
 
     chain
@@ -479,6 +533,61 @@ mod tests {
         // Provider doesn't exist
         let chain = build_fallback_chain("nonexistent", "test-model", &config);
         assert!(chain.is_empty());
+    }
+
+    #[test]
+    fn test_build_fallback_chain_dedupes_pairs() {
+        let config: crate::config::ProvidersConfig = toml::from_str(
+            r#"
+            [primary]
+            type = "test"
+            fallback_providers = ["backup", "backup"]
+
+            [primary.model_fallbacks]
+            "gpt-4o" = [
+                { model = "gpt-4o-mini" },
+                { model = "gpt-4o-mini" },
+                { provider = "backup", model = "gpt-4o" },
+            ]
+
+            [backup]
+            type = "test"
+        "#,
+        )
+        .unwrap();
+
+        let chain = build_fallback_chain("primary", "gpt-4o", &config);
+        // Expected (post-dedup): primary/gpt-4o-mini, backup/gpt-4o (from
+        // model_fallbacks). The duplicate model entry is dropped, the second
+        // `backup` provider entry collides with the model_fallbacks entry, and
+        // the (primary, gpt-4o) pair is the seeded primary.
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].provider_name, "primary");
+        assert_eq!(chain[0].model_name, "gpt-4o-mini");
+        assert_eq!(chain[1].provider_name, "backup");
+        assert_eq!(chain[1].model_name, "gpt-4o");
+    }
+
+    #[test]
+    fn test_build_fallback_chain_caps_length() {
+        // Construct a primary with more model fallbacks than the cap allows.
+        let mut toml = String::from(
+            r#"
+            [primary]
+            type = "test"
+
+            [primary.model_fallbacks]
+            "gpt-4o" = [
+            "#,
+        );
+        for i in 0..(MAX_FALLBACK_CHAIN_LENGTH + 5) {
+            toml.push_str(&format!("                {{ model = \"m{}\" }},\n", i));
+        }
+        toml.push_str("            ]\n");
+
+        let config: crate::config::ProvidersConfig = toml::from_str(&toml).unwrap();
+        let chain = build_fallback_chain("primary", "gpt-4o", &config);
+        assert_eq!(chain.len(), MAX_FALLBACK_CHAIN_LENGTH);
     }
 
     #[test]

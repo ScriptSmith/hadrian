@@ -805,6 +805,96 @@ interface StreamingActions {
 
 export type StreamingStore = StreamingState & StreamingActions;
 
+/**
+ * Per-frame coalescing buffer for the high-frequency append paths.
+ *
+ * Token streaming can deliver 50–100+ tokens/sec per model. Each `set` call
+ * clones the entire `streams: Map` to satisfy Zustand's referential-equality
+ * change detection, so per-token writes produce O(N²·T) Map allocations where
+ * N is the number of concurrent models and T the token rate.
+ *
+ * Instead of mutating the store on every delta, we accumulate deltas in a
+ * module-level buffer and schedule a single `setState` per `requestAnimation
+ * Frame`. Components see the same content trajectory but at frame cadence,
+ * collapsing per-token Map clones into one per frame. Non-append operations
+ * (`setContent`, `pushCompletedRound`, `clearStreams`, …) flush the buffer
+ * synchronously before applying their authoritative update so a later
+ * `setContent` can never lose intermediate appends to the buffer.
+ */
+type PendingDelta = {
+  contentDelta: string;
+  reasoningDelta: string;
+  /** First-token capture time, recorded when the first delta arrives. */
+  firstTokenTime: number | null;
+};
+const pendingDeltas: Map<string, PendingDelta> = new Map();
+let rafHandle: number | null = null;
+
+function getOrCreatePending(instanceId: string): PendingDelta {
+  let entry = pendingDeltas.get(instanceId);
+  if (!entry) {
+    entry = { contentDelta: "", reasoningDelta: "", firstTokenTime: null };
+    pendingDeltas.set(instanceId, entry);
+  }
+  return entry;
+}
+
+function scheduleFlush() {
+  if (rafHandle !== null) return;
+  if (typeof requestAnimationFrame === "undefined") {
+    // Test/SSR environments — flush synchronously so callers see stable
+    // behaviour (no rAF available to fire the deferred update).
+    flushPendingDeltas();
+    return;
+  }
+  rafHandle = requestAnimationFrame(() => {
+    rafHandle = null;
+    flushPendingDeltas();
+  });
+}
+
+function flushPendingDeltas() {
+  if (pendingDeltas.size === 0) return;
+  // Snapshot and clear before mutating the store so any deltas that arrive
+  // during the setState callback land in the next flush.
+  const drained = new Map(pendingDeltas);
+  pendingDeltas.clear();
+
+  useStreamingStore.setState((state) => {
+    const newStreams = new Map(state.streams);
+    let changed = false;
+    for (const [instanceId, pending] of drained) {
+      const existing = newStreams.get(instanceId);
+      if (!existing) continue;
+      const isFirstToken = existing.content === "" && existing.reasoningContent === "";
+      newStreams.set(instanceId, {
+        ...existing,
+        content: existing.content + pending.contentDelta,
+        reasoningContent: existing.reasoningContent + pending.reasoningDelta,
+        firstTokenTime:
+          existing.firstTokenTime ??
+          (isFirstToken ? (pending.firstTokenTime ?? Date.now()) : undefined),
+      });
+      changed = true;
+    }
+    return changed ? { streams: newStreams } : state;
+  });
+}
+
+/**
+ * Drop pending deltas for `instanceId` (or all instances if undefined).
+ *
+ * Call this from authoritative-overwrite operations so a queued append
+ * doesn't get re-applied after a `setContent` resets the value.
+ */
+function discardPending(instanceId?: string): void {
+  if (instanceId === undefined) {
+    pendingDeltas.clear();
+  } else {
+    pendingDeltas.delete(instanceId);
+  }
+}
+
 export const useStreamingStore = create<StreamingStore>((set) => ({
   streams: new Map(),
   isStreaming: false,
@@ -812,6 +902,10 @@ export const useStreamingStore = create<StreamingStore>((set) => ({
 
   initStreaming: (instanceIds, modelMap) =>
     set(() => {
+      // Initialising a new round invalidates any pending coalesced deltas
+      // from a previous round; otherwise stale deltas could land on a fresh
+      // stream entry on the next rAF.
+      discardPending();
       const streams = new Map<string, StreamingResponse>();
       const startTime = Date.now();
       for (const instanceId of instanceIds) {
@@ -830,24 +924,19 @@ export const useStreamingStore = create<StreamingStore>((set) => ({
       return { streams, isStreaming: true };
     }),
 
-  appendContent: (model, delta) =>
-    set((state) => {
-      const existing = state.streams.get(model);
-      if (!existing) return state;
-
-      const newStreams = new Map(state.streams);
-      newStreams.set(model, {
-        ...existing,
-        content: existing.content + delta,
-        // Capture first token time on first content delta
-        firstTokenTime:
-          existing.firstTokenTime ?? (existing.content === "" ? Date.now() : undefined),
-      });
-      return { streams: newStreams };
-    }),
+  appendContent: (model, delta) => {
+    if (delta.length === 0) return;
+    const pending = getOrCreatePending(model);
+    pending.contentDelta += delta;
+    if (pending.firstTokenTime === null) pending.firstTokenTime = Date.now();
+    scheduleFlush();
+  },
 
   setContent: (model, content) =>
     set((state) => {
+      // Drop any pending deltas for this stream — the caller is overwriting
+      // the value with an authoritative final string.
+      discardPending(model);
       const existing = state.streams.get(model);
       if (!existing) return state;
 
@@ -859,24 +948,17 @@ export const useStreamingStore = create<StreamingStore>((set) => ({
       return { streams: newStreams };
     }),
 
-  appendReasoningContent: (model, delta) =>
-    set((state) => {
-      const existing = state.streams.get(model);
-      if (!existing) return state;
-
-      const newStreams = new Map(state.streams);
-      // For thinking models, reasoning may arrive before content - capture first token time
-      const isFirstToken = existing.content === "" && existing.reasoningContent === "";
-      newStreams.set(model, {
-        ...existing,
-        reasoningContent: existing.reasoningContent + delta,
-        firstTokenTime: existing.firstTokenTime ?? (isFirstToken ? Date.now() : undefined),
-      });
-      return { streams: newStreams };
-    }),
+  appendReasoningContent: (model, delta) => {
+    if (delta.length === 0) return;
+    const pending = getOrCreatePending(model);
+    pending.reasoningDelta += delta;
+    if (pending.firstTokenTime === null) pending.firstTokenTime = Date.now();
+    scheduleFlush();
+  },
 
   setReasoningContent: (model, content) =>
     set((state) => {
+      discardPending(model);
       const existing = state.streams.get(model);
       if (!existing) return state;
 
@@ -890,6 +972,10 @@ export const useStreamingStore = create<StreamingStore>((set) => ({
 
   pushCompletedRound: (model, round) =>
     set((state) => {
+      // Round boundaries reset content/reasoning, so any unflushed appends
+      // belong to the round being committed and must be applied first.
+      flushPendingDeltas();
+      discardPending(model);
       const existing = state.streams.get(model);
       if (!existing) return state;
 
@@ -917,6 +1003,9 @@ export const useStreamingStore = create<StreamingStore>((set) => ({
 
   completeStream: (model, usage) =>
     set((state) => {
+      // Apply any unflushed deltas before marking complete so the final
+      // content visible to consumers includes the trailing tokens.
+      flushPendingDeltas();
       const existing = state.streams.get(model);
       if (!existing) return state;
 

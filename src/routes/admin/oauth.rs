@@ -51,7 +51,21 @@ fn validate_callback_url(callback_url: &str, pkce: &OAuthPkceConfig) -> Result<S
         .ok_or_else(|| AdminError::Validation("callback_url must include a host".to_string()))?
         .to_ascii_lowercase();
 
-    let is_loopback = matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]" | "::1");
+    // Treat the entire 127.0.0.0/8 IPv4 loopback range and IPv6 loopback (incl.
+    // IPv4-mapped form) as loopback. `host` is already lowercased; `url::Host`
+    // gives us a parsed view that handles bracketed IPv6 correctly.
+    let is_loopback = match parsed.host() {
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => {
+            ip.is_loopback()
+                || ip
+                    .to_ipv4_mapped()
+                    .map(|v4| v4.is_loopback())
+                    .unwrap_or(false)
+        }
+        None => false,
+    };
     if scheme != "https" && !(scheme == "http" && is_loopback) {
         return Err(AdminError::Validation(
             "callback_url must use https (http is allowed only for loopback hosts)".to_string(),
@@ -68,11 +82,26 @@ fn validate_callback_url(callback_url: &str, pkce: &OAuthPkceConfig) -> Result<S
 }
 
 /// Append `?code=...` (or `&code=...`) to a callback URL. The URL is
-/// assumed to have already been through [`validate_callback_url`].
+/// assumed to have already been through [`validate_callback_url`]. Any
+/// pre-existing `code` query parameter is removed first to prevent an
+/// attacker who controls the registered callback from pre-seeding a code
+/// the OAuth client would then submit on exchange.
 fn build_redirect_url(callback_url: &str, code: &str) -> Result<String, AdminError> {
     let mut redirect = url::Url::parse(callback_url)
         .map_err(|_| AdminError::Validation("callback_url must be a valid URL".to_string()))?;
-    redirect.query_pairs_mut().append_pair("code", code);
+    let preserved: Vec<(String, String)> = redirect
+        .query_pairs()
+        .filter(|(k, _)| k != "code")
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    {
+        let mut pairs = redirect.query_pairs_mut();
+        pairs.clear();
+        for (k, v) in &preserved {
+            pairs.append_pair(k, v);
+        }
+        pairs.append_pair("code", code);
+    }
     Ok(redirect.to_string())
 }
 

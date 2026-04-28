@@ -11,6 +11,7 @@ import type { TotalUsageResult } from "@/stores/conversationStore";
 import { captureElementAsBlob } from "@/utils/exportScreenshot";
 import { formatCost, formatTokens } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 interface MessageGroup {
   id: string;
   userMessage: ChatMessageType;
@@ -74,7 +75,10 @@ export function ScreenshotRenderer({
           if (!cancelled) onCompleteRef.current(blob);
         } catch (err) {
           if (!cancelled)
-            onCompleteRef.current(undefined, err instanceof Error ? err : new Error(String(err)));
+            onCompleteRef.current(
+              undefined,
+              err instanceof Error ? err : new Error(formatApiError(err))
+            );
         }
       }, 500);
     });

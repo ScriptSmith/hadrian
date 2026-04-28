@@ -334,6 +334,10 @@ pub async fn create(
             crate::validation::validate_base_url_opts(discovery_url, url_opts)
                 .map_err(|e| AdminError::Validation(format!("Invalid discovery URL: {e}")))?;
         }
+        if let Some(ref redirect_uri) = input.redirect_uri {
+            crate::validation::validate_base_url_opts(redirect_uri, url_opts)
+                .map_err(|e| AdminError::Validation(format!("Invalid redirect URI: {e}")))?;
+        }
     }
 
     // Create the SSO config
@@ -550,6 +554,10 @@ pub async fn update(
             crate::validation::validate_base_url_opts(discovery_url, url_opts)
                 .map_err(|e| AdminError::Validation(format!("Invalid discovery URL: {e}")))?;
         }
+        if let Some(Some(ref redirect_uri)) = input.redirect_uri {
+            crate::validation::validate_base_url_opts(redirect_uri, url_opts)
+                .map_err(|e| AdminError::Validation(format!("Invalid redirect URI: {e}")))?;
+        }
     }
 
     // Update the SSO config
@@ -759,13 +767,23 @@ pub async fn parse_saml_metadata(
     crate::validation::require_https(&input.metadata_url)
         .map_err(|e| AdminError::Validation(format!("SAML metadata URL must use HTTPS: {e}")))?;
 
-    // Fetch and parse the metadata
-    let client = reqwest::Client::new();
+    // SSRF-validate, capture the resolved addresses, and pin reqwest's DNS to
+    // them so a fresh lookup between validation and fetch can't redirect us to
+    // a re-bound private/loopback/metadata address.
+    let validated = crate::validation::validate_base_url_opts(
+        &input.metadata_url,
+        crate::validation::UrlValidationOptions::default(),
+    )
+    .map_err(|e| AdminError::Validation(format!("SAML metadata URL is not permitted: {e}")))?;
+    let client = crate::validation::pinned_reqwest_client(&validated).map_err(|e| {
+        tracing::error!(error = %e, "Failed to build pinned reqwest client for SAML metadata");
+        AdminError::Internal("Failed to build pinned HTTP client".to_string())
+    })?;
     tracing::debug!(url = %input.metadata_url, "Fetching SAML IdP metadata");
 
     let response = client.get(&input.metadata_url).send().await.map_err(|e| {
         tracing::error!(error = %e, url = %input.metadata_url, "Failed to fetch SAML metadata");
-        AdminError::SamlMetadata(format!("Failed to fetch metadata: {}", e))
+        AdminError::SamlMetadata("Failed to fetch metadata".to_string())
     })?;
 
     if !response.status().is_success() {
@@ -779,14 +797,16 @@ pub async fn parse_saml_metadata(
 
     let metadata_xml = response.text().await.map_err(|e| {
         tracing::error!(error = %e, "Failed to read SAML metadata response");
-        AdminError::SamlMetadata(format!("Failed to read metadata: {}", e))
+        AdminError::SamlMetadata("Failed to read metadata".to_string())
     })?;
 
-    // Parse the XML using samael
+    // Parse the XML using samael — error strings can include parser internals
+    // and source-document fragments, so log the detail and surface a curated
+    // public message.
     let entity_descriptor: samael::metadata::EntityDescriptor =
         samael::metadata::de::from_str(&metadata_xml).map_err(|e| {
             tracing::error!(error = %e, "Failed to parse SAML metadata XML");
-            AdminError::SamlMetadata(format!("Failed to parse metadata: {}", e))
+            AdminError::SamlMetadata("Failed to parse metadata XML".to_string())
         })?;
 
     // Extract IdP configuration from the parsed metadata

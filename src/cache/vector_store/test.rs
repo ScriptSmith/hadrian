@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use super::{
     ChunkFilter, ChunkSearchResult, ChunkWithEmbedding, HybridSearchConfig, StoredChunk,
-    VectorBackend, VectorMetadata, VectorSearchResult, VectorStoreResult,
+    VectorBackend, VectorMetadata, VectorSearchResult, VectorStoreResult, VectorTenantFilter,
 };
 
 /// Test vector store that returns no-op/empty results for all operations.
@@ -54,6 +54,7 @@ impl VectorBackend for TestVectorStore {
         _limit: usize,
         _threshold: f64,
         _model_filter: Option<&str>,
+        _tenant_filter: VectorTenantFilter<'_>,
     ) -> VectorStoreResult<Vec<VectorSearchResult>> {
         Ok(vec![])
     }
@@ -248,6 +249,7 @@ impl VectorBackend for MockableTestVectorStore {
         _limit: usize,
         _threshold: f64,
         _model_filter: Option<&str>,
+        _tenant_filter: VectorTenantFilter<'_>,
     ) -> VectorStoreResult<Vec<VectorSearchResult>> {
         Ok(vec![])
     }
@@ -396,7 +398,10 @@ mod tests {
     #[tokio::test]
     async fn test_vector_store_search_returns_empty() {
         let store = TestVectorStore::new(1536);
-        let results = store.search(&[0.0; 1536], 10, 0.8, None).await.unwrap();
+        let results = store
+            .search(&[0.0; 1536], 10, 0.8, None, VectorTenantFilter::unscoped())
+            .await
+            .unwrap();
         assert!(results.is_empty());
     }
 

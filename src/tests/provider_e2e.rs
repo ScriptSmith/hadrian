@@ -483,8 +483,16 @@ pub static OLLAMA_SPEC: ProviderTestSpec = ProviderTestSpec {
 // =============================================================================
 
 /// Check if debug output is enabled via HADRIAN_TEST_DEBUG env var.
+/// Only `1`/`true` (case-insensitive) count — `HADRIAN_TEST_DEBUG=0` should
+/// not turn debug on.
 fn is_debug_enabled() -> bool {
-    std::env::var("HADRIAN_TEST_DEBUG").is_ok()
+    matches!(
+        std::env::var("HADRIAN_TEST_DEBUG")
+            .ok()
+            .as_deref()
+            .map(|v| v.trim().to_ascii_lowercase()),
+        Some(ref s) if s == "1" || s == "true"
+    )
 }
 
 /// Save a debug response to the debug output directory.
@@ -581,7 +589,12 @@ impl E2ETestHarness {
             save_debug_response(self.spec.name, name, status, &body_str);
         }
 
-        let json: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|e| {
+            panic!(
+                "Failed to parse response as JSON: {e}\nstatus: {status}\nbody: {}",
+                String::from_utf8_lossy(&body_bytes)
+            )
+        });
         (status, json)
     }
 
@@ -631,7 +644,12 @@ impl E2ETestHarness {
         let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let json: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|e| {
+            panic!(
+                "Failed to parse response as JSON: {e}\nstatus: {status}\nbody: {}",
+                String::from_utf8_lossy(&body_bytes)
+            )
+        });
         (status, json)
     }
 
@@ -655,7 +673,12 @@ impl E2ETestHarness {
         let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let json: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|e| {
+            panic!(
+                "Failed to parse response as JSON: {e}\nstatus: {status}\nbody: {}",
+                String::from_utf8_lossy(&body_bytes)
+            )
+        });
         (status, headers, json)
     }
 
@@ -861,22 +884,30 @@ output_per_1m_tokens = 2000000
         )
     };
 
+    #[cfg(feature = "sso")]
+    let session_section = r#"
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
+"#;
+    #[cfg(not(feature = "sso"))]
+    let session_section = "";
+
+    let extra_config = spec.extra_config;
     let config_str = format!(
         r#"
 [database]
 type = "sqlite"
-path = "file:provider_e2e_test_db_{}?mode=memory&cache=shared"
+path = "file:provider_e2e_test_db_{db_id}?mode=memory&cache=shared"
 create_if_missing = true
 run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
-
+{session_section}
 [providers]
 default_provider = "mock-provider"
-{}
-{}
-"#,
-        db_id, provider_config, spec.extra_config
+{provider_config}
+{extra_config}
+"#
     );
 
     let config = GatewayConfig::parse(&config_str).expect("Failed to parse test config");
@@ -1361,7 +1392,18 @@ async fn test_vision_base64_success(#[case] spec: &'static ProviderTestSpec) {
 
     assert_eq!(status, StatusCode::OK, "Expected OK for {}", spec.name);
     assert_eq!(body["object"], "chat.completion");
-    assert!(body["choices"][0]["message"]["content"].is_string());
+    let content = body["choices"][0]["message"]["content"]
+        .as_str()
+        .expect("vision response should have textual content");
+    assert!(
+        !content.trim().is_empty(),
+        "vision response content must be non-empty for {}",
+        spec.name
+    );
+    assert!(
+        body["choices"][0]["finish_reason"].is_string(),
+        "vision response should have finish_reason"
+    );
 
     // Vision requests typically have high prompt token counts due to image encoding
     if spec.min_vision_prompt_tokens > 0 {
@@ -1410,7 +1452,18 @@ async fn test_vision_url_success(#[case] spec: &'static ProviderTestSpec) {
 
     assert_eq!(status, StatusCode::OK, "Expected OK for {}", spec.name);
     assert_eq!(body["object"], "chat.completion");
-    assert!(body["choices"][0]["message"]["content"].is_string());
+    let content = body["choices"][0]["message"]["content"]
+        .as_str()
+        .expect("vision response should have textual content");
+    assert!(
+        !content.trim().is_empty(),
+        "vision response content must be non-empty for {}",
+        spec.name
+    );
+    assert!(
+        body["choices"][0]["finish_reason"].is_string(),
+        "vision response should have finish_reason"
+    );
 }
 
 // =============================================================================
@@ -2423,7 +2476,12 @@ impl ResilienceTestHarness {
         let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let json: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|e| {
+            panic!(
+                "Failed to parse response as JSON: {e}\nstatus: {status}\nbody: {}",
+                String::from_utf8_lossy(&body_bytes)
+            )
+        });
         (status, json)
     }
 }
@@ -2440,22 +2498,31 @@ async fn create_resilience_test_app(
     static COUNTER: AtomicU64 = AtomicU64::new(1000);
     let db_id = COUNTER.fetch_add(1, Ordering::SeqCst);
 
+    #[cfg(feature = "sso")]
+    let session_section = r#"
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
+"#;
+    #[cfg(not(feature = "sso"))]
+    let session_section = "";
+
+    let mock_uri = mock_server.uri();
     let config_str = format!(
         r#"
 [database]
 type = "sqlite"
-path = "file:resilience_test_db_{}?mode=memory&cache=shared"
+path = "file:resilience_test_db_{db_id}?mode=memory&cache=shared"
 create_if_missing = true
 run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
-
+{session_section}
 [providers]
 default_provider = "mock-provider"
 
 [providers.mock-provider]
 type = "open_ai"
-base_url = "{}"
+base_url = "{mock_uri}"
 api_key = "test-api-key"
 timeout_secs = 30
 supports_tools = true
@@ -2463,28 +2530,21 @@ supports_tools = true
 # Circuit breaker configuration
 [providers.mock-provider.circuit_breaker]
 enabled = true
-failure_threshold = {}
-open_timeout_secs = {}
-success_threshold = {}
+failure_threshold = {failure_threshold}
+open_timeout_secs = {open_timeout_secs}
+success_threshold = {success_threshold}
 failure_status_codes = [500, 502, 503, 504]
 
 # Retry configuration
 [providers.mock-provider.retry]
 enabled = true
-max_retries = {}
-initial_delay_ms = {}
+max_retries = {max_retries}
+initial_delay_ms = {initial_delay_ms}
 max_delay_ms = 1000
 backoff_multiplier = 2.0
 jitter = 0.0
 retryable_status_codes = [429, 500, 502, 503, 504]
-"#,
-        db_id,
-        mock_server.uri(),
-        failure_threshold,
-        open_timeout_secs,
-        success_threshold,
-        max_retries,
-        initial_delay_ms
+"#
     );
 
     let config = GatewayConfig::parse(&config_str).expect("Failed to parse test config");
@@ -3127,11 +3187,16 @@ async fn test_audio_speech_success(#[case] spec: &'static ProviderTestSpec) {
         content_type
     );
 
-    // Verify we got some audio bytes back
+    // Verify we got non-trivial audio bytes back (not just headers).
     let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    assert!(!body_bytes.is_empty(), "Audio response should not be empty");
+    assert!(
+        body_bytes.len() > 32,
+        "Audio response too small ({} bytes) for {}",
+        body_bytes.len(),
+        spec.name
+    );
 }
 
 #[rstest]
@@ -3181,9 +3246,14 @@ async fn test_audio_transcription_success(#[case] spec: &'static ProviderTestSpe
     let json: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
 
     assert_eq!(status, StatusCode::OK, "Expected OK for {}", spec.name);
+    let text = json
+        .get("text")
+        .and_then(|v| v.as_str())
+        .expect("Transcription response should have a string 'text' field");
     assert!(
-        json.get("text").is_some(),
-        "Transcription response should have 'text' field"
+        !text.trim().is_empty(),
+        "Transcription text must be non-empty for {}",
+        spec.name
     );
 }
 
@@ -3234,8 +3304,13 @@ async fn test_audio_translation_success(#[case] spec: &'static ProviderTestSpec)
     let json: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
 
     assert_eq!(status, StatusCode::OK, "Expected OK for {}", spec.name);
+    let text = json
+        .get("text")
+        .and_then(|v| v.as_str())
+        .expect("Translation response should have a string 'text' field");
     assert!(
-        json.get("text").is_some(),
-        "Translation response should have 'text' field"
+        !text.trim().is_empty(),
+        "Translation text must be non-empty for {}",
+        spec.name
     );
 }

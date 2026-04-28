@@ -181,6 +181,13 @@ pub const BOOTSTRAP_ROLE: &str = "_system_bootstrap";
 /// Roles starting with `_` are reserved for internal use and cannot be assigned by IdPs.
 pub const EMERGENCY_ADMIN_ROLE: &str = "_emergency_admin";
 
+/// Drop any role with the reserved `_` prefix from a list. IdPs and proxy
+/// headers must never be able to claim these roles, since the gateway grants
+/// extra trust to them (bootstrap / emergency break-glass).
+pub fn strip_reserved_roles(roles: Vec<String>) -> Vec<String> {
+    roles.into_iter().filter(|r| !r.starts_with('_')).collect()
+}
+
 /// Try to authenticate via bootstrap API key.
 ///
 /// Bootstrap authentication is only valid when:
@@ -199,6 +206,8 @@ async fn try_bootstrap_auth(
     connecting_ip: Option<IpAddr>,
     state: &AppState,
 ) -> Result<Option<Identity>, AuthError> {
+    use crate::cache::CacheKeys;
+
     // Check if bootstrap API key is configured
     let bootstrap_key = match &state.config.auth.bootstrap {
         Some(bootstrap) => match &bootstrap.api_key {
@@ -214,6 +223,40 @@ async fn try_bootstrap_auth(
         Some(key) => key,
         None => return Ok(None),
     };
+
+    // The throttle below is meant to deter brute-forcing the bootstrap key.
+    // Legitimate JWT bearer tokens and other-shaped API keys come through this
+    // function on every admin request, so counting *every* non-matching token
+    // would let a single user's normal traffic exhaust the throttle and lock
+    // their own IP out of bearer auth. Only tokens that are the same length as
+    // the configured bootstrap key could be a guess of it; anything else is
+    // trivially not the bootstrap key, so we silently fall through without
+    // touching the throttle or lockout state.
+    let could_be_bootstrap_guess = provided_key.len() == bootstrap_key.len();
+    if !could_be_bootstrap_guess {
+        return Ok(None);
+    }
+
+    // Per-IP throttle: refuse further attempts when this source IP is locked out.
+    //
+    // We deliberately skip rate-limiting when no source IP is available: a single
+    // shared "unknown" bucket would let one attacker lock out every other
+    // bootstrapper sharing that proxy. Bootstrap is also self-disabling once the
+    // first user is created, and the key compare is constant-time, so this
+    // degraded path is acceptable. Operators behind a proxy that strips the
+    // client IP should configure `trusted_proxies` to recover the throttle.
+    let ip_str = connecting_ip.map(|ip| ip.to_string());
+    if let (Some(ip_str), Some(cache)) = (ip_str.as_deref(), &state.cache) {
+        let lockout_key = CacheKeys::bootstrap_lockout(ip_str);
+        if let Ok(Some(_)) = cache.get_bytes(&lockout_key).await {
+            tracing::warn!(
+                ip = %ip_str,
+                event = "bootstrap_auth.locked_out",
+                "Bootstrap auth attempt blocked: IP is locked out"
+            );
+            return Err(AuthError::Forbidden("Bootstrap auth denied".to_string()));
+        }
+    }
 
     // Constant-time comparison to prevent timing attacks
     use subtle::ConstantTimeEq;
@@ -245,6 +288,9 @@ async fn try_bootstrap_auth(
                 })
                 .await;
         }
+        if let Some(ip_str) = ip_str.as_deref() {
+            increment_bootstrap_rate_limit(ip_str, state).await;
+        }
         return Ok(None);
     }
 
@@ -274,6 +320,10 @@ async fn try_bootstrap_auth(
             user_count = user_count,
             "Bootstrap auth rejected: database has users"
         );
+        // Treat post-bootstrap probing as a failed attempt to deter scanners.
+        if let Some(ip_str) = ip_str.as_deref() {
+            increment_bootstrap_rate_limit(ip_str, state).await;
+        }
         return Ok(None);
     }
 
@@ -291,6 +341,55 @@ async fn try_bootstrap_auth(
         team_ids: vec![],
         project_ids: vec![],
     }))
+}
+
+/// Per-IP throttle parameters for bootstrap auth failures.
+///
+/// Bootstrap is unauthenticated until the first user is created and is exposed
+/// on every admin route, so an attacker can make unlimited guesses. We cap
+/// failures and lock the source IP out for an hour after exceeding the
+/// threshold. Values are intentionally hardcoded — bootstrap auth is a narrow
+/// installer flow, so additional configuration would just be footgun surface.
+const BOOTSTRAP_MAX_ATTEMPTS: i64 = 10;
+const BOOTSTRAP_WINDOW_SECS: u64 = 900;
+const BOOTSTRAP_LOCKOUT_SECS: u64 = 3600;
+
+/// Increment the bootstrap auth rate-limit counter for an IP and lock the IP
+/// out once attempts exceed [`BOOTSTRAP_MAX_ATTEMPTS`].
+async fn increment_bootstrap_rate_limit(ip_str: &str, state: &AppState) {
+    use std::time::Duration;
+
+    use crate::cache::CacheKeys;
+
+    let Some(cache) = &state.cache else {
+        return;
+    };
+
+    let rate_limit_key = CacheKeys::bootstrap_rate_limit(ip_str);
+    let count = cache
+        .incr(&rate_limit_key, Duration::from_secs(BOOTSTRAP_WINDOW_SECS))
+        .await
+        .unwrap_or(1);
+
+    if count >= BOOTSTRAP_MAX_ATTEMPTS {
+        let lockout_key = CacheKeys::bootstrap_lockout(ip_str);
+        let _ = cache
+            .set_bytes(
+                &lockout_key,
+                b"1",
+                Duration::from_secs(BOOTSTRAP_LOCKOUT_SECS),
+            )
+            .await;
+
+        tracing::warn!(
+            ip = %ip_str,
+            attempts = count,
+            lockout_secs = BOOTSTRAP_LOCKOUT_SECS,
+            event = "bootstrap_auth.lockout_triggered",
+            "Bootstrap auth lockout triggered after {} failed attempts",
+            count
+        );
+    }
 }
 
 /// Try to authenticate via emergency access key.
@@ -860,8 +959,9 @@ async fn try_bearer_token_auth(
         (None, Vec::new(), Vec::new(), Vec::new())
     };
 
-    // Extract roles from token
-    let roles = claims.roles.clone().unwrap_or_default();
+    // Extract roles from token, stripping any `_`-prefixed reserved roles
+    // (bootstrap/emergency) — IdPs must never be able to claim these.
+    let roles = strip_reserved_roles(claims.roles.clone().unwrap_or_default());
 
     tracing::debug!(
         sub = %claims.sub,
@@ -1035,8 +1135,13 @@ async fn validate_bearer_token(
         ],
     };
 
-    let validator =
-        crate::auth::jwt::JwtValidator::with_client(jwt_config, state.http_client.clone())?;
+    let validator = crate::auth::jwt::JwtValidator::with_options(
+        jwt_config,
+        crate::validation::UrlValidationOptions {
+            allow_loopback: state.config.server.allow_loopback_urls,
+            allow_private: state.config.server.allow_private_urls,
+        },
+    )?;
 
     let claims = validator.validate(token).await?;
 
@@ -1076,34 +1181,33 @@ async fn try_proxy_auth_auth(
         None => return Ok(None),
     };
 
-    // SECURITY: Validate that the request comes from a trusted proxy before trusting headers.
-    // If trusted_proxies is configured, we MUST verify the connecting IP is trusted.
-    // If trusted_proxies is NOT configured, we trust all sources (for backwards compatibility
-    // and development environments where the gateway is behind a trusted network boundary).
+    // SECURITY: Identity headers may only be trusted when the request comes
+    // from a trusted proxy. Config validation refuses startup if IAP is
+    // enabled without `server.trusted_proxies` set, so by this point the
+    // section must be configured — anything here that isn't from a trusted
+    // source is dropped.
     let trusted_proxies = &state.config.server.trusted_proxies;
-    if trusted_proxies.is_configured() {
-        let parsed_cidrs = trusted_proxies.parsed_cidrs();
+    let parsed_cidrs = trusted_proxies.parsed_cidrs();
 
-        let is_trusted = match connecting_ip {
-            Some(ip) => trusted_proxies.is_trusted_ip(ip, &parsed_cidrs),
-            // No connecting IP available - only trust if dangerously_trust_all is explicitly set
-            None => trusted_proxies.dangerously_trust_all,
-        };
+    let is_trusted = match connecting_ip {
+        Some(ip) => trusted_proxies.is_trusted_ip(ip, &parsed_cidrs),
+        // No connecting IP available — only trust if `dangerously_trust_all`
+        // is explicitly set (e.g. unit tests or fully air-gapped envs).
+        None => trusted_proxies.dangerously_trust_all,
+    };
 
-        if !is_trusted {
-            // Request is not from a trusted proxy - do not trust identity headers
-            if let Some(ip) = connecting_ip
-                && headers.contains_key(&config.identity_header)
-            {
-                tracing::warn!(
-                    connecting_ip = %ip,
-                    identity_header = %config.identity_header,
-                    "Ignoring Proxy auth identity header from untrusted IP - \
-                     configure server.trusted_proxies to trust this source"
-                );
-            }
-            return Ok(None);
+    if !is_trusted {
+        if let Some(ip) = connecting_ip
+            && headers.contains_key(&config.identity_header)
+        {
+            tracing::warn!(
+                connecting_ip = %ip,
+                identity_header = %config.identity_header,
+                "Ignoring Proxy auth identity header from untrusted IP - \
+                 configure server.trusted_proxies to trust this source"
+            );
         }
+        return Ok(None);
     }
 
     // Check for identity header
@@ -1144,18 +1248,23 @@ async fn try_proxy_auth_auth(
         None
     };
 
-    // Extract roles from groups header if configured
-    let roles = config
-        .groups_header
-        .as_ref()
-        .and_then(|h| headers.get(h))
-        .and_then(|v| v.to_str().ok())
-        .map(|v| {
-            // Try JSON array first, then comma-separated
-            serde_json::from_str::<Vec<String>>(v)
-                .unwrap_or_else(|_| v.split(',').map(|s| s.trim().to_string()).collect())
-        })
-        .unwrap_or_default();
+    // Extract roles from groups header if configured. Strip any `_`-prefixed
+    // reserved roles — proxy headers can be spoofed if `trusted_proxies` is
+    // misconfigured, so even with that gate we never want to honour a claim
+    // for `_emergency_admin`/`_system_bootstrap`.
+    let roles = strip_reserved_roles(
+        config
+            .groups_header
+            .as_ref()
+            .and_then(|h| headers.get(h))
+            .and_then(|v| v.to_str().ok())
+            .map(|v| {
+                // Try JSON array first, then comma-separated
+                serde_json::from_str::<Vec<String>>(v)
+                    .unwrap_or_else(|_| v.split(',').map(|s| s.trim().to_string()).collect())
+            })
+            .unwrap_or_default(),
+    );
 
     // For proxy auth, the groups header contains both roles and raw groups
     // Store them in both fields for backwards compatibility and debugging
@@ -2348,6 +2457,10 @@ mod tests {
             circuit_breakers: crate::providers::CircuitBreakerRegistry::new(),
             provider_health: crate::jobs::ProviderHealthStateRegistry::new(),
             task_tracker: TaskTracker::new(),
+            usage_drain: {
+                let tracker = TaskTracker::new();
+                crate::streaming::UsageDrainHandle::spawn(&tracker, 16)
+            },
             #[cfg(feature = "sso")]
             oidc_registry: None,
             #[cfg(feature = "saml")]
@@ -2390,12 +2503,12 @@ mod tests {
         map
     }
 
-    // ========== No trusted_proxies configured (backwards compatibility) ==========
+    // ========== No trusted_proxies configured (now fails closed) ==========
 
     #[tokio::test]
-    async fn test_proxy_auth_no_proxy_config_trusts_headers() {
-        // When trusted_proxies is NOT configured, headers should be trusted
-        // (backwards compatibility for development/internal deployments)
+    async fn test_proxy_auth_no_proxy_config_drops_headers() {
+        // Config validation refuses startup in this case, but we still want
+        // the middleware itself to fail closed defensively if it ever runs.
         let state = create_test_state(
             "X-Forwarded-User",
             TrustedProxiesConfig::default(), // No proxy config
@@ -2406,20 +2519,21 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().external_id, "alice@example.com");
+        assert!(
+            result.is_none(),
+            "headers must be dropped when trusted_proxies is unset"
+        );
     }
 
     #[tokio::test]
     async fn test_proxy_auth_no_proxy_config_no_connecting_ip() {
-        // When no trusted_proxies and no connecting IP, still trust headers
+        // No trusted_proxies and no connecting IP — still fail closed.
         let state = create_test_state("X-Forwarded-User", TrustedProxiesConfig::default());
         let headers = make_headers(vec![("X-Forwarded-User", "bob@example.com")]);
 
         let result = try_proxy_auth_auth(&headers, None, &state).await.unwrap();
 
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().external_id, "bob@example.com");
+        assert!(result.is_none());
     }
 
     // ========== dangerously_trust_all mode ==========
@@ -2652,6 +2766,10 @@ mod tests {
             circuit_breakers: crate::providers::CircuitBreakerRegistry::new(),
             provider_health: crate::jobs::ProviderHealthStateRegistry::new(),
             task_tracker: TaskTracker::new(),
+            usage_drain: {
+                let tracker = TaskTracker::new();
+                crate::streaming::UsageDrainHandle::spawn(&tracker, 16)
+            },
             #[cfg(feature = "sso")]
             oidc_registry: None,
             #[cfg(feature = "saml")]

@@ -28,6 +28,9 @@ pub trait ApiKeyRepo: Send + Sync {
     async fn list_by_user(&self, user_id: Uuid, params: ListParams)
     -> DbResult<ListResult<ApiKey>>;
     async fn count_by_user(&self, user_id: Uuid, include_deleted: bool) -> DbResult<i64>;
+    /// Count every active API key in the system (not revoked, not expired). Used by
+    /// access-review summaries to avoid iterating users.
+    async fn count_total_active(&self) -> DbResult<i64>;
     async fn revoke(&self, id: Uuid) -> DbResult<()>;
     async fn update_last_used(&self, id: Uuid) -> DbResult<()>;
 

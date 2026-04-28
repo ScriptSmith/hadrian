@@ -12,10 +12,57 @@ use super::{AuditActor, error::AdminError, organizations::ListQuery};
 use crate::{
     AppState,
     middleware::{AdminAuth, AuthzContext, ClientInfo},
-    models::{CreateAuditLog, CreateModelPricing, DbModelPricing, UpdateModelPricing},
+    models::{
+        CreateAuditLog, CreateModelPricing, DbModelPricing, PricingOwner, UpdateModelPricing,
+    },
     openapi::PaginationMeta,
     services::Services,
 };
+
+/// Authorization scope derived from a pricing entry's owner. Maps the row's
+/// PricingOwner to the (resource_id, org_id, team_id, project_id) tuple that
+/// `authz.require` consumes.
+struct PricingAuthzScope {
+    resource_id: Option<String>,
+    org: Option<String>,
+    team: Option<String>,
+    project: Option<String>,
+}
+
+fn pricing_authz_scope(owner: &PricingOwner, fallback_id: &str) -> PricingAuthzScope {
+    match owner {
+        PricingOwner::Global => PricingAuthzScope {
+            resource_id: Some(fallback_id.to_string()),
+            org: None,
+            team: None,
+            project: None,
+        },
+        PricingOwner::Organization { org_id } => PricingAuthzScope {
+            resource_id: Some(fallback_id.to_string()),
+            org: Some(org_id.to_string()),
+            team: None,
+            project: None,
+        },
+        PricingOwner::Team { team_id } => PricingAuthzScope {
+            resource_id: Some(fallback_id.to_string()),
+            org: None,
+            team: Some(team_id.to_string()),
+            project: None,
+        },
+        PricingOwner::Project { project_id } => PricingAuthzScope {
+            resource_id: Some(fallback_id.to_string()),
+            org: None,
+            team: None,
+            project: Some(project_id.to_string()),
+        },
+        PricingOwner::User { user_id } => PricingAuthzScope {
+            resource_id: Some(user_id.to_string()),
+            org: None,
+            team: None,
+            project: None,
+        },
+    }
+}
 
 /// Paginated list of model pricing entries
 #[derive(Debug, Serialize, Deserialize)]
@@ -50,7 +97,18 @@ pub async fn create(
     Extension(client_info): Extension<ClientInfo>,
     Valid(Json(input)): Valid<Json<CreateModelPricing>>,
 ) -> Result<(StatusCode, Json<DbModelPricing>), AdminError> {
-    authz.require("model_pricing", "create", None, None, None, None)?;
+    // Authorize against the requested owner scope so a permissive policy
+    // can't be tricked into accepting a global write request from someone
+    // who only has org-scoped privileges.
+    let scope = pricing_authz_scope(&input.owner, "");
+    authz.require(
+        "model_pricing",
+        "create",
+        scope.resource_id.as_deref(),
+        scope.org.as_deref(),
+        scope.team.as_deref(),
+        scope.project.as_deref(),
+    )?;
     let services = get_services(&state)?;
     let actor = AuditActor::from(&admin_auth);
 
@@ -106,14 +164,26 @@ pub async fn get(
     Extension(authz): Extension<AuthzContext>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<DbModelPricing>, AdminError> {
-    authz.require("model_pricing", "read", None, None, None, None)?;
     let services = get_services(&state)?;
 
+    // Pre-fetch the row so authz can scope by the pricing entry's actual
+    // owner; `authz.require` with all-None lets a permissive policy expose
+    // every tenant's pricing through a single endpoint.
     let pricing = services
         .model_pricing
         .get_by_id(id)
         .await?
         .ok_or_else(|| AdminError::NotFound("Model pricing not found".to_string()))?;
+    let id_str = id.to_string();
+    let scope = pricing_authz_scope(&pricing.owner, &id_str);
+    authz.require(
+        "model_pricing",
+        "read",
+        scope.resource_id.as_deref(),
+        scope.org.as_deref(),
+        scope.team.as_deref(),
+        scope.project.as_deref(),
+    )?;
 
     Ok(Json(pricing))
 }
@@ -139,9 +209,26 @@ pub async fn update(
     Path(id): Path<Uuid>,
     Valid(Json(input)): Valid<Json<UpdateModelPricing>>,
 ) -> Result<Json<DbModelPricing>, AdminError> {
-    authz.require("model_pricing", "update", None, None, None, None)?;
     let services = get_services(&state)?;
     let actor = AuditActor::from(&admin_auth);
+
+    // Resolve the existing pricing row so authz sees its real owner before
+    // we mutate anything.
+    let existing = services
+        .model_pricing
+        .get_by_id(id)
+        .await?
+        .ok_or_else(|| AdminError::NotFound("Model pricing not found".to_string()))?;
+    let id_str = id.to_string();
+    let scope = pricing_authz_scope(&existing.owner, &id_str);
+    authz.require(
+        "model_pricing",
+        "update",
+        scope.resource_id.as_deref(),
+        scope.org.as_deref(),
+        scope.team.as_deref(),
+        scope.project.as_deref(),
+    )?;
 
     // Capture what's being changed for audit log
     let changes = json!({
@@ -207,16 +294,26 @@ pub async fn delete(
     Extension(client_info): Extension<ClientInfo>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<()>, AdminError> {
-    authz.require("model_pricing", "delete", None, None, None, None)?;
     let services = get_services(&state)?;
     let actor = AuditActor::from(&admin_auth);
 
-    // Fetch pricing details before deletion for audit log
+    // Pre-fetch the pricing row so authz scopes by its real owner; reuse the
+    // row for the audit log below.
     let pricing = services
         .model_pricing
         .get_by_id(id)
         .await?
         .ok_or_else(|| AdminError::NotFound("Model pricing not found".to_string()))?;
+    let id_str = id.to_string();
+    let scope = pricing_authz_scope(&pricing.owner, &id_str);
+    authz.require(
+        "model_pricing",
+        "delete",
+        scope.resource_id.as_deref(),
+        scope.org.as_deref(),
+        scope.team.as_deref(),
+        scope.project.as_deref(),
+    )?;
 
     // Extract org_id and project_id from owner for audit log context
     let (org_id, project_id) = match &pricing.owner {
@@ -444,7 +541,15 @@ pub async fn list_by_user(
     Path(user_id): Path<Uuid>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<ModelPricingListResponse>, AdminError> {
-    authz.require("model_pricing", "list", None, None, None, None)?;
+    let user_id_str = user_id.to_string();
+    authz.require(
+        "model_pricing",
+        "list",
+        Some(&user_id_str),
+        None,
+        None,
+        None,
+    )?;
     let services = get_services(&state)?;
 
     let limit = query.limit.unwrap_or(100);
@@ -486,7 +591,10 @@ pub async fn list_by_provider(
     Path(provider): Path<String>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<ModelPricingListResponse>, AdminError> {
-    authz.require("model_pricing", "list", None, None, None, None)?;
+    // Pass the provider name through `resource_id` so policies can scope by
+    // provider; with all-None a permissive policy would expose every
+    // tenant-scoped pricing row this endpoint surfaces.
+    authz.require("model_pricing", "list", Some(&provider), None, None, None)?;
     let services = get_services(&state)?;
 
     let limit = query.limit.unwrap_or(100);
@@ -528,7 +636,15 @@ pub async fn upsert(
     Extension(client_info): Extension<ClientInfo>,
     Valid(Json(input)): Valid<Json<CreateModelPricing>>,
 ) -> Result<Json<DbModelPricing>, AdminError> {
-    authz.require("model_pricing", "update", None, None, None, None)?;
+    let scope = pricing_authz_scope(&input.owner, "");
+    authz.require(
+        "model_pricing",
+        "update",
+        scope.resource_id.as_deref(),
+        scope.org.as_deref(),
+        scope.team.as_deref(),
+        scope.project.as_deref(),
+    )?;
     let services = get_services(&state)?;
     let actor = AuditActor::from(&admin_auth);
 
@@ -593,9 +709,22 @@ pub async fn bulk_upsert(
     Extension(client_info): Extension<ClientInfo>,
     Json(entries): Json<Vec<CreateModelPricing>>,
 ) -> Result<Json<BulkUpsertResponse>, AdminError> {
-    authz.require("model_pricing", "update", None, None, None, None)?;
+    // Bulk upserts span owners; require authz against every distinct owner
+    // in the payload so a caller scoped to one tenant can't smuggle global
+    // or cross-tenant pricing rows through this endpoint.
     let services = get_services(&state)?;
     let actor = AuditActor::from(&admin_auth);
+    for entry in &entries {
+        let scope = pricing_authz_scope(&entry.owner, "");
+        authz.require(
+            "model_pricing",
+            "update",
+            scope.resource_id.as_deref(),
+            scope.org.as_deref(),
+            scope.team.as_deref(),
+            scope.project.as_deref(),
+        )?;
+    }
 
     // Capture summary for audit log before bulk operation
     let entry_count = entries.len();

@@ -29,6 +29,7 @@ import { formatDateTime, formatCurrency } from "@/utils/formatters";
 import { SessionsPanel } from "@/components/Admin";
 import UsageDashboard from "@/components/UsageDashboard/UsageDashboard";
 
+import { formatApiError } from "@/utils/formatApiError";
 type TabId = "api-keys" | "providers" | "pricing" | "sessions" | "usage";
 
 const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
@@ -104,7 +105,7 @@ export default function UserDetailPage() {
       toast({ title: "User updated", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to update user", description: String(error), type: "error" });
+      toast({ title: "Failed to update user", description: formatApiError(error), type: "error" });
     },
   });
 

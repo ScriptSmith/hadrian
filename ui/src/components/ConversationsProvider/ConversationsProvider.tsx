@@ -25,6 +25,7 @@ import type { ChatMessage, Conversation } from "@/components/chat-types";
 import { usePreferences } from "@/preferences/PreferencesProvider";
 import { generateSimpleTitle, generateTitleWithLLM } from "@/utils/generateTitle";
 
+import { formatApiError } from "@/utils/formatApiError";
 const STORAGE_KEY = "hadrian-conversations";
 const BROADCAST_CHANNEL = "hadrian-conversations-sync";
 
@@ -121,15 +122,25 @@ function localToApiMessage(m: StoredConversation["messages"][0]): Message {
   };
 }
 
+// djb2 string hash. Plenty for content-change detection: collisions are
+// vanishingly rare in practice and we don't need cryptographic guarantees.
+function hashContent(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = (((h << 5) + h) ^ s.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0).toString(36);
+}
+
 // Compute a sync hash that includes actual content changes
 function computeSyncHash(conversations: StoredConversation[]): string {
   return JSON.stringify(
     conversations.map((c) => ({
       id: c.id,
       title: c.title,
-      // Include message content hash for detecting content changes
+      // Hash full content so edits past character 50 still invalidate the hash.
       msgHash: c.messages
-        .map((m) => `${m.role}:${m.content.length}:${m.content.slice(0, 50)}`)
+        .map((m) => `${m.role}:${m.content.length}:${hashContent(m.content)}`)
         .join("|"),
       models: c.models.join(","),
       updatedAt: c.updatedAt,
@@ -150,7 +161,7 @@ async function withRetry<T>(
     try {
       return await fn();
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
+      lastError = error instanceof Error ? error : new Error(formatApiError(error));
       if (attempt < maxAttempts - 1) {
         const delay = baseDelay * Math.pow(2, attempt);
         await new Promise((resolve) => setTimeout(resolve, delay));
@@ -232,13 +243,17 @@ export function ConversationsProvider({ children }: ConversationsProviderProps) 
     [storedConversations]
   );
 
+  // Track the live deserialized form so setConversations doesn't have to
+  // re-parse every Date on each update (was the dominant cost on hot paths
+  // like streaming token appends).
+  const conversationsRef = useRef<Conversation[]>(conversations);
+  conversationsRef.current = conversations;
+
   const setConversations = useCallback(
     (updater: (prev: Conversation[]) => Conversation[]) => {
-      setStoredConversations((prev) => {
-        const currentConvs = deserializeConversations(prev);
-        const newConvs = updater(currentConvs);
-        return serializeConversations(newConvs);
-      });
+      const next = updater(conversationsRef.current);
+      conversationsRef.current = next;
+      setStoredConversations(serializeConversations(next));
     },
     [setStoredConversations]
   );
@@ -382,8 +397,12 @@ export function ConversationsProvider({ children }: ConversationsProviderProps) 
         }
       }
 
-      // Apply all updates atomically via React state
+      // Apply all updates atomically via React state, and broadcast the
+      // *post-update* snapshot so other tabs see the new remoteId/syncedAt.
+      // Reading the closed-over `storedConversations` here would broadcast
+      // the pre-update state, leaving other tabs out of sync.
       if (updates.length > 0) {
+        let merged: StoredConversation[] = storedConversationsRef.current;
         setStoredConversations((prev) => {
           const updated = [...prev];
           for (const update of updates) {
@@ -396,13 +415,13 @@ export function ConversationsProvider({ children }: ConversationsProviderProps) 
               };
             }
           }
+          merged = updated;
           return updated;
         });
 
-        // Broadcast to other tabs
         broadcastChannelRef.current?.postMessage({
           type: "sync",
-          conversations: storedConversations,
+          conversations: merged,
         } satisfies SyncMessage);
       }
     } finally {
@@ -513,6 +532,13 @@ export function ConversationsProvider({ children }: ConversationsProviderProps) 
 
   // Track conversations that are pending LLM title generation to avoid duplicate calls
   const pendingTitleGenRef = useRef<Set<string>>(new Set());
+  // AbortController used to cancel any in-flight title generations on unmount.
+  const titleGenAbortRef = useRef<AbortController>(new AbortController());
+  useEffect(() => {
+    return () => {
+      titleGenAbortRef.current.abort();
+    };
+  }, []);
 
   const updateConversation = useCallback(
     (id: string, messages: ChatMessage[], models?: string[]) => {
@@ -550,7 +576,7 @@ export function ConversationsProvider({ children }: ConversationsProviderProps) 
       const titleModel = preferences.titleGenerationModel;
       if (needsLLMTitle && firstUserMessage && titleModel) {
         pendingTitleGenRef.current.add(id);
-        generateTitleWithLLM(firstUserMessage, titleModel)
+        generateTitleWithLLM(firstUserMessage, titleModel, titleGenAbortRef.current.signal)
           .then((result) => {
             // Only update if the title is different and better
             setConversations((prev) =>
@@ -710,6 +736,9 @@ export function ConversationsProvider({ children }: ConversationsProviderProps) 
 
   const reorderPinned = useCallback(
     (orderedIds: string[]) => {
+      // Snapshot current pin orders so we can roll back if any sync fails.
+      const previousOrders = new Map(storedConversations.map((c) => [c.id, c.pinOrder] as const));
+
       // Update local state with new pin orders
       setStoredConversations((prev) => {
         const updated = prev.map((c) => {
@@ -727,7 +756,18 @@ export function ConversationsProvider({ children }: ConversationsProviderProps) 
         orderedIds.forEach((id, index) => {
           const conv = storedConversations.find((c) => c.id === id);
           if (conv?.remoteId) {
-            pinMutation.mutate({ remoteId: conv.remoteId, pinOrder: index });
+            pinMutation.mutate(
+              { remoteId: conv.remoteId, pinOrder: index },
+              {
+                onError: () => {
+                  setStoredConversations((prev) =>
+                    prev.map((c) =>
+                      previousOrders.has(c.id) ? { ...c, pinOrder: previousOrders.get(c.id) } : c
+                    )
+                  );
+                },
+              }
+            );
           }
         });
       }

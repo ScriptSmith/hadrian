@@ -327,6 +327,7 @@ impl DbPool {
                         sqlx::sqlite::SqliteConnectOptions::new()
                             .filename(&cfg.path)
                             .create_if_missing(cfg.create_if_missing)
+                            .foreign_keys(true)
                             .journal_mode(if cfg.wal_mode {
                                 sqlx::sqlite::SqliteJournalMode::Wal
                             } else {
@@ -335,6 +336,13 @@ impl DbPool {
                             .busy_timeout(std::time::Duration::from_millis(cfg.busy_timeout_ms)),
                     )
                     .await?;
+
+                let fk_check: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+                    .fetch_one(&pool)
+                    .await?;
+                if fk_check != 1 {
+                    return Err(DbError::NotConfigured);
+                }
 
                 let repos = CachedRepos {
                     organizations: Arc::new(sqlite::SqliteOrganizationRepo::new(pool.clone())),
@@ -385,21 +393,34 @@ impl DbPool {
             }
             #[cfg(feature = "database-postgres")]
             DatabaseConfig::Postgres(cfg) => {
-                let write_pool = sqlx::postgres::PgPoolOptions::new()
-                    .min_connections(cfg.min_connections)
-                    .max_connections(cfg.max_connections)
-                    .connect(&cfg.url)
-                    .await?;
+                let ssl_mode = match cfg.ssl_mode {
+                    crate::config::PostgresSslMode::Disable => sqlx::postgres::PgSslMode::Disable,
+                    crate::config::PostgresSslMode::Prefer => sqlx::postgres::PgSslMode::Prefer,
+                    crate::config::PostgresSslMode::Require => sqlx::postgres::PgSslMode::Require,
+                    crate::config::PostgresSslMode::VerifyCa => sqlx::postgres::PgSslMode::VerifyCa,
+                    crate::config::PostgresSslMode::VerifyFull => {
+                        sqlx::postgres::PgSslMode::VerifyFull
+                    }
+                };
+                let connect_opts =
+                    |url: &str| -> Result<sqlx::postgres::PgConnectOptions, DbError> {
+                        let opts: sqlx::postgres::PgConnectOptions = url.parse().map_err(|e| {
+                            DbError::Validation(format!("Invalid Postgres URL: {e}"))
+                        })?;
+                        Ok(opts.ssl_mode(ssl_mode))
+                    };
+                let pool_opts = || {
+                    sqlx::postgres::PgPoolOptions::new()
+                        .min_connections(cfg.min_connections)
+                        .max_connections(cfg.max_connections)
+                        .acquire_timeout(std::time::Duration::from_secs(cfg.connect_timeout_secs))
+                        .idle_timeout(std::time::Duration::from_secs(cfg.idle_timeout_secs))
+                };
+                let write_pool = pool_opts().connect_with(connect_opts(&cfg.url)?).await?;
 
                 let read_pool = if let Some(read_url) = &cfg.read_url {
                     tracing::info!("Configuring read replica pool");
-                    Some(
-                        sqlx::postgres::PgPoolOptions::new()
-                            .min_connections(cfg.min_connections)
-                            .max_connections(cfg.max_connections)
-                            .connect(read_url)
-                            .await?,
-                    )
+                    Some(pool_opts().connect_with(connect_opts(read_url)?).await?)
                 } else {
                     None
                 };

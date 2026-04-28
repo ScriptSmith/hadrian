@@ -45,7 +45,6 @@ pub async fn list(
     Extension(authz): Extension<AuthzContext>,
     Query(query): Query<AuditLogQuery>,
 ) -> Result<Json<AuditLogListResponse>, AdminError> {
-    authz.require("audit_log", "list", None, None, None, None)?;
     let services = get_services(&state)?;
 
     let limit = query.limit.unwrap_or(100);
@@ -60,6 +59,47 @@ pub async fn list(
             dir
         )));
     }
+
+    // Cap unbounded scans: when no time range is supplied, default to the last
+    // 7 days. The audit log is append-only and grows fast; an unfiltered list
+    // hits the entire table with `ORDER BY ts DESC` which can DoS the gateway.
+    let mut query = query;
+    if query.from.is_none() && query.to.is_none() {
+        query.from = Some(chrono::Utc::now() - chrono::Duration::days(7));
+    }
+
+    // Constrain `org_id` to the caller's organization. Without this, anyone
+    // with the `audit_log:list` permission could read any tenant's logs by
+    // sending an arbitrary `?org_id=` query parameter. Subjects with no
+    // membership (e.g. super-admins) are allowed through unconstrained.
+    //
+    // Users in this codebase only ever belong to one organization, so
+    // `org_ids` is a single-element set in practice. We pin to that single
+    // org rather than aggregating across `org_ids` — multi-org membership
+    // would require a different model (and is unreachable today).
+    if let Some(membership) = authz.subject.org_ids.first() {
+        let scoped: Uuid = membership.parse().map_err(|_| {
+            AdminError::Internal(
+                "audit_log:list authz subject has a non-UUID org membership".to_string(),
+            )
+        })?;
+        match query.org_id {
+            Some(requested) if requested != scoped => {
+                return Err(AdminError::Forbidden(
+                    "audit_log:list scoped outside your organization".to_string(),
+                ));
+            }
+            _ => {
+                query.org_id = Some(scoped);
+            }
+        }
+    }
+
+    // Run authz with the effective org scope so policies see the tenant they
+    // need to allow/deny against. `authz.require` evaluated with all-None
+    // would let anyone with `audit_log:list` see logs across orgs.
+    let org_scope = query.org_id.map(|id| id.to_string());
+    authz.require("audit_log", "list", None, org_scope.as_deref(), None, None)?;
 
     let result = services.audit_logs.list(query).await?;
 
@@ -93,14 +133,28 @@ pub async fn get(
     Extension(authz): Extension<AuthzContext>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<AuditLog>, AdminError> {
-    authz.require("audit_log", "read", None, None, None, None)?;
     let services = get_services(&state)?;
 
+    // Pre-fetch the row so authz can see the entry's org/project rather than
+    // an all-None scope; otherwise a permissive policy would expose every
+    // tenant's audit history through this endpoint.
     let entry = services
         .audit_logs
         .get_by_id(id)
         .await?
         .ok_or_else(|| AdminError::NotFound("Audit log entry not found".to_string()))?;
+
+    let id_str = id.to_string();
+    let org_scope = entry.org_id.map(|o| o.to_string());
+    let project_scope = entry.project_id.map(|p| p.to_string());
+    authz.require(
+        "audit_log",
+        "read",
+        Some(&id_str),
+        org_scope.as_deref(),
+        None,
+        project_scope.as_deref(),
+    )?;
 
     Ok(Json(entry))
 }

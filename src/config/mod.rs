@@ -126,8 +126,9 @@ pub struct GatewayConfig {
 impl GatewayConfig {
     /// Load configuration from a TOML file.
     ///
-    /// Environment variables in the format `${VAR_NAME}` are expanded.
-    /// Missing required variables will cause an error.
+    /// Environment variables in the format `${VAR_NAME}` are expanded; missing
+    /// required variables cause an error. Use `${VAR_NAME:-default}` to fall
+    /// back to a default value when the variable is unset (default may be empty).
     #[cfg(feature = "server")]
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let contents = std::fs::read_to_string(path.as_ref())
@@ -166,26 +167,22 @@ impl GatewayConfig {
             ));
         }
 
-        // IAP without trusted_proxies is dangerous — anyone can spoof identity headers.
+        // IAP without trusted_proxies is fail-open: anyone who reaches the
+        // gateway can spoof identity headers. There is no safe fallback —
+        // refuse to start until the operator configures `server.trusted_proxies`.
         if matches!(self.auth.mode, AuthMode::Iap(_))
             && !self.server.trusted_proxies.is_configured()
         {
-            if !self.server.host.is_loopback() {
-                return Err(ConfigError::Validation(
-                    "IAP mode (auth.mode.type = \"iap\") is enabled and the server \
-                     binds to a non-localhost address, but server.trusted_proxies is not \
-                     configured. This allows any client to spoof identity headers. Either \
-                     configure server.trusted_proxies.cidrs with your proxy's IP ranges, \
-                     or bind to localhost (server.host = \"127.0.0.1\")."
-                        .into(),
-                ));
-            }
-            tracing::warn!(
-                "IAP mode is enabled without server.trusted_proxies configured. \
-                 Identity headers will be accepted from ANY source. This is safe only if \
-                 the gateway is exclusively accessible through a trusted reverse proxy. \
-                 Configure server.trusted_proxies.cidrs for production deployments."
-            );
+            return Err(ConfigError::Validation(
+                "IAP mode (auth.mode.type = \"iap\") is enabled but \
+                 server.trusted_proxies is not configured. Without trusted \
+                 proxies, identity headers can be spoofed by anyone able to \
+                 reach the gateway. Configure server.trusted_proxies.cidrs \
+                 with your proxy's IP ranges (or set \
+                 server.trusted_proxies.dangerously_trust_all = true \
+                 explicitly for isolated environments)."
+                    .into(),
+            ));
         }
 
         // Validate individual sections
@@ -474,7 +471,14 @@ fn check_auth_mode_feature(_raw: &toml::Value, _issues: &mut Vec<(String, &str)>
     }
 }
 
-/// Expand environment variables in the format `${VAR_NAME}`.
+/// Expand environment variables in the format `${VAR_NAME}` or
+/// `${VAR_NAME:-default}` (bash-style optional default).
+///
+/// `${VAR}` requires the variable to be set, returning [`ConfigError::EnvVarNotFound`]
+/// if it isn't. `${VAR:-default}` falls back to `default` (which may be empty)
+/// when the variable is unset, so optional credentials don't force startup
+/// failure on every fresh checkout.
+///
 /// Skips commented lines (lines where content before the variable is a comment).
 #[cfg(feature = "server")]
 fn expand_env_vars(input: &str) -> Result<String, ConfigError> {
@@ -502,10 +506,19 @@ fn expand_env_vars(input: &str) -> Result<String, ConfigError> {
             // Add text before this match
             line_result.push_str(&line[last_end..match_start]);
 
-            // Expand the variable
-            let var_name = &cap[1];
-            let value = std::env::var(var_name)
-                .map_err(|_| ConfigError::EnvVarNotFound(var_name.to_string()))?;
+            // Split on `:-` for optional defaults: `${VAR:-default}` expands
+            // to `default` when VAR is unset. Without `:-`, an unset VAR is
+            // an error so typos still surface.
+            let body = &cap[1];
+            let (var_name, default) = match body.split_once(":-") {
+                Some((name, def)) => (name, Some(def)),
+                None => (body, None),
+            };
+            let value = match (std::env::var(var_name), default) {
+                (Ok(v), _) => v,
+                (Err(_), Some(def)) => def.to_string(),
+                (Err(_), None) => return Err(ConfigError::EnvVarNotFound(var_name.to_string())),
+            };
             line_result.push_str(&value);
 
             last_end = cap.get(0).unwrap().end();
@@ -576,6 +589,45 @@ mod tests {
             let result = expand_env_vars("key = \"${TEST_API_KEY}\"").unwrap();
             assert_eq!(result, "key = \"sk-secret\"");
         });
+    }
+
+    #[test]
+    fn test_env_var_default_when_unset() {
+        // Ensure the variable really is unset
+        unsafe {
+            std::env::remove_var("HADRIAN_TEST_DEFAULT_UNSET");
+        }
+        let result = expand_env_vars("key = \"${HADRIAN_TEST_DEFAULT_UNSET:-fallback}\"").unwrap();
+        assert_eq!(result, "key = \"fallback\"");
+    }
+
+    #[test]
+    fn test_env_var_default_empty_when_unset() {
+        unsafe {
+            std::env::remove_var("HADRIAN_TEST_EMPTY_DEFAULT");
+        }
+        let result = expand_env_vars("key = \"${HADRIAN_TEST_EMPTY_DEFAULT:-}\"").unwrap();
+        assert_eq!(result, "key = \"\"");
+    }
+
+    #[test]
+    fn test_env_var_default_overridden_when_set() {
+        temp_env::with_var("HADRIAN_TEST_DEFAULT_SET", Some("real"), || {
+            let result =
+                expand_env_vars("key = \"${HADRIAN_TEST_DEFAULT_SET:-fallback}\"").unwrap();
+            assert_eq!(result, "key = \"real\"");
+        });
+    }
+
+    #[test]
+    fn test_env_var_without_default_still_errors_when_unset() {
+        unsafe {
+            std::env::remove_var("HADRIAN_TEST_REQUIRED");
+        }
+        let err = expand_env_vars("key = \"${HADRIAN_TEST_REQUIRED}\"").unwrap_err();
+        assert!(
+            matches!(err, ConfigError::EnvVarNotFound(name) if name == "HADRIAN_TEST_REQUIRED")
+        );
     }
 
     #[test]
@@ -809,9 +861,12 @@ key3 = "literal""#
 
     #[test]
     #[cfg(feature = "database-sqlite")]
-    fn test_iap_without_trusted_proxies_localhost_warns_but_ok() {
-        // IAP on localhost without trusted_proxies should succeed (just warn)
-        let result = GatewayConfig::parse(
+    fn test_iap_without_trusted_proxies_on_localhost_also_errors() {
+        // IAP on localhost without trusted_proxies must also fail; the
+        // localhost loopback compat path was removed (the proxy auth
+        // middleware no longer trusts headers when trusted_proxies is unset,
+        // so accepting this config would silently disable IAP).
+        let err = GatewayConfig::parse(
             r#"
             [server]
             host = "127.0.0.1"
@@ -828,12 +883,12 @@ key3 = "literal""#
             type = "open_ai"
             api_key = "sk-test"
         "#,
-        );
+        )
+        .unwrap_err();
 
         assert!(
-            result.is_ok(),
-            "IAP on localhost without trusted_proxies should be allowed: {:?}",
-            result.err()
+            err.to_string().contains("trusted_proxies"),
+            "should mention trusted_proxies: {err}"
         );
     }
 

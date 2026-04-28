@@ -352,8 +352,8 @@ impl ServiceAccountRepo for SqliteServiceAccountRepo {
 
         let revoked_uuids = revoked_ids
             .into_iter()
-            .filter_map(|s| parse_uuid(&s).ok())
-            .collect();
+            .map(|s| parse_uuid(&s))
+            .collect::<DbResult<Vec<_>>>()?;
         Ok(revoked_uuids)
     }
 }

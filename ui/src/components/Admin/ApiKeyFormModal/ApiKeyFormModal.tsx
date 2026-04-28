@@ -51,67 +51,20 @@ function validateModelPatterns(value: string | undefined): boolean {
   return patterns.every((p) => MODEL_PATTERN_REGEX.test(p));
 }
 
-// Validation for IP/CIDR notation
-const IPV4_REGEX = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
-
-function isValidIPv4(ip: string): boolean {
-  const cidrMatch = ip.match(/^(.+)\/(\d+)$/);
-  const address = cidrMatch ? cidrMatch[1] : ip;
-  const prefix = cidrMatch ? parseInt(cidrMatch[2], 10) : null;
-
-  // Check prefix range for IPv4 (0-32)
-  if (prefix !== null && (prefix < 0 || prefix > 32)) return false;
-
-  // Validate IPv4 format and octet ranges
-  if (!IPV4_REGEX.test(ip)) return false;
-  const octets = address.split(".").map((o) => parseInt(o, 10));
-  return octets.every((o) => o >= 0 && o <= 255);
-}
-
-function isValidIPv6(ip: string): boolean {
-  const cidrMatch = ip.match(/^(.+)\/(\d+)$/);
-  const address = cidrMatch ? cidrMatch[1] : ip;
-  const prefix = cidrMatch ? parseInt(cidrMatch[2], 10) : null;
-
-  // Check prefix range for IPv6 (0-128)
-  if (prefix !== null && (prefix < 0 || prefix > 128)) return false;
-
-  // Basic structure checks
-  if (!/^[0-9a-fA-F:]+$/.test(address)) return false;
-
-  // No triple colons allowed
-  if (address.includes(":::")) return false;
-
-  // Only one :: allowed
-  const doubleColonCount = (address.match(/::/g) || []).length;
-  if (doubleColonCount > 1) return false;
-
-  // Split and validate groups
-  const groups = address.split(":");
-
-  // Handle :: compression
-  if (address.includes("::")) {
-    // With ::, total groups after expansion must be <= 8
-    const nonEmptyGroupCount = groups.filter((g) => g !== "").length;
-    // :: can represent 1 to (8 - nonEmptyGroupCount) groups
-    if (nonEmptyGroupCount > 7) return false;
-  } else {
-    // Without ::, must have exactly 8 groups
-    if (groups.length !== 8) return false;
-  }
-
-  // Validate each group is valid hex (1-4 chars)
-  const nonEmptyGroups = groups.filter((g) => g !== "");
-  return nonEmptyGroups.every((g) => g.length >= 1 && g.length <= 4 && /^[0-9a-fA-F]+$/.test(g));
+// Lightweight shape check: catch obvious typos client-side, but rely on the
+// backend (which uses Rust's `IpNet`/`IpAddr` parsers) for authoritative
+// IP/CIDR validation. Duplicating that logic in the browser only invites drift.
+function looksLikeCidrEntry(entry: string): boolean {
+  return /^[0-9a-fA-F:.]+(\/\d{1,3})?$/.test(entry);
 }
 
 function validateCidrNotation(value: string | undefined): boolean {
   if (!value || value.trim() === "") return true;
-  const entries = value
+  return value
     .split("\n")
     .map((e) => e.trim())
-    .filter(Boolean);
-  return entries.every((entry) => isValidIPv4(entry) || isValidIPv6(entry));
+    .filter(Boolean)
+    .every(looksLikeCidrEntry);
 }
 
 const createApiKeySchema = z

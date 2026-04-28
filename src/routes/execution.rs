@@ -549,8 +549,15 @@ pub async fn execute_with_fallback<E: ProviderExecutor>(
     let mut last_provider = primary_provider_name.clone();
     let mut last_model = primary_model_name.clone();
 
-    // Try primary provider first
-    let mut current_payload = payload.clone();
+    // Hold a template clone for the fallback chain only when needed; the
+    // primary call takes the original payload by value to avoid one clone in
+    // the common no-fallback path.
+    let payload_for_fallbacks = if fallback_chain.is_empty() {
+        None
+    } else {
+        Some(payload.clone())
+    };
+    let mut current_payload = payload;
     current_payload.set_model(primary_model_name.clone());
 
     // Store the last response for chain exhaustion case
@@ -606,7 +613,11 @@ pub async fn execute_with_fallback<E: ProviderExecutor>(
         }
     }
 
-    // Try each fallback in order
+    // Try each fallback in order. `payload_for_fallbacks` is `Some` whenever
+    // `fallback_chain` is non-empty (which is the only case we reach this loop
+    // with work to do), so unwrapping is safe.
+    let payload_template = payload_for_fallbacks
+        .expect("payload_for_fallbacks is Some when fallback_chain is non-empty");
     let mut last_error: Option<ProviderError> = None;
 
     for (idx, fallback) in fallback_chain.iter().enumerate() {
@@ -620,6 +631,23 @@ pub async fn execute_with_fallback<E: ProviderExecutor>(
             );
             continue;
         };
+
+        // Re-check the circuit breaker right before we call this fallback.
+        // The chain was built once up front, but a provider may have tripped
+        // its breaker since then (often *because of* the failures that drove
+        // us into the fallback path). Skip provider+model combos whose breaker
+        // is open so we don't waste a hop poking a known-down upstream.
+        if let Some(breaker) = state.circuit_breakers.get(&fallback.provider_name)
+            && let Err(cb_err) = breaker.check()
+        {
+            tracing::info!(
+                provider = %fallback.provider_name,
+                model = %fallback.model_name,
+                error = %cb_err,
+                "Skipping fallback: circuit breaker is open"
+            );
+            continue;
+        }
 
         // Check sovereignty requirements for fallback provider/model
         if let Some(reqs) = sovereignty_requirements {
@@ -654,7 +682,7 @@ pub async fn execute_with_fallback<E: ProviderExecutor>(
         }
 
         // Update payload with fallback model
-        let mut fallback_payload = payload.clone();
+        let mut fallback_payload = payload_template.clone();
         fallback_payload.set_model(fallback.model_name.clone());
 
         tracing::debug!(
@@ -800,22 +828,40 @@ pub async fn execute_with_fallback<E: ProviderExecutor>(
 // Helper Functions
 // ============================================================================
 
-/// Convert a provider error to an API error.
+/// Convert a provider error to an API error. The full error string is logged
+/// for operator debugging (it can contain internal URLs/paths from upstream
+/// SDKs) while only a generic message is returned to the client.
+/// `CircuitBreakerOpen` is exposed verbatim because its display string is a
+/// curated message we control (provider name + retry-at hint).
 pub fn provider_error_to_api_error(e: ProviderError) -> ApiError {
     use http::StatusCode;
 
-    let message = e.to_string();
-    let (status, code) = match &e {
-        ProviderError::Request(_) => (StatusCode::BAD_GATEWAY, "provider_error"),
-        ProviderError::ResponseBuilder(_) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, "response_builder_error")
-        }
-        ProviderError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
-        ProviderError::CircuitBreakerOpen(_) => {
-            (StatusCode::SERVICE_UNAVAILABLE, "circuit_breaker_open")
-        }
+    let (status, code, public_message) = match &e {
+        ProviderError::Request(_) => (
+            StatusCode::BAD_GATEWAY,
+            "provider_error",
+            "Upstream provider request failed".to_string(),
+        ),
+        ProviderError::ResponseBuilder(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "response_builder_error",
+            "Failed to build response".to_string(),
+        ),
+        ProviderError::Internal(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "Internal provider error".to_string(),
+        ),
+        ProviderError::CircuitBreakerOpen(cb) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "circuit_breaker_open",
+            cb.to_string(),
+        ),
     };
-    ApiError::new(status, code, message)
+
+    tracing::error!(error_code = %code, error = %e, "Provider error converted to API error");
+
+    ApiError::new(status, code, public_message)
 }
 
 #[cfg(test)]
@@ -850,6 +896,10 @@ mod tests {
             circuit_breakers: CircuitBreakerRegistry::new(),
             provider_health: crate::jobs::ProviderHealthStateRegistry::new(),
             task_tracker: tokio_util::task::TaskTracker::new(),
+            usage_drain: {
+                let tracker = tokio_util::task::TaskTracker::new();
+                crate::streaming::UsageDrainHandle::spawn(&tracker, 16)
+            },
             #[cfg(feature = "sso")]
             oidc_registry: None,
             #[cfg(feature = "saml")]

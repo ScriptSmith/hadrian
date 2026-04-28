@@ -15,6 +15,7 @@ import { newQuickJSWASMModuleFromVariant } from "quickjs-emscripten-core";
 import variant from "@jitl/quickjs-singlefile-browser-release-sync";
 import type { QuickJSWASMModule, QuickJSContext } from "quickjs-emscripten-core";
 
+import { formatApiError } from "@/utils/formatApiError";
 /** Message types from main thread to worker */
 interface ExecuteMessage {
   type: "execute";
@@ -103,7 +104,7 @@ async function initQuickJS(): Promise<QuickJSWASMModule> {
     sendMessage({ type: "ready" });
     return quickjs;
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
     sendMessage({ type: "error", error: `Failed to load QuickJS: ${errorMsg}` });
     throw error;
   } finally {
@@ -216,7 +217,7 @@ async function executeCode(
       stderr: stderr.trim(),
     };
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = error instanceof Error ? error.message : formatApiError(error);
     return {
       success: false,
       stdout: stdout.trim(),
@@ -244,7 +245,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
           ...result,
         });
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
+        const errorMsg = error instanceof Error ? error.message : formatApiError(error);
         sendMessage({
           type: "error",
           id: message.id,

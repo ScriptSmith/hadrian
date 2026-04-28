@@ -49,6 +49,7 @@ import {
 import { useToast } from "@/components/Toast/Toast";
 import { useConfirm } from "@/components/ConfirmDialog/ConfirmDialog";
 import { formatDateTime } from "@/utils/formatters";
+import { formatApiError } from "@/utils/formatApiError";
 import {
   PROVIDER_TYPES,
   type ProviderTypeValue,
@@ -623,7 +624,7 @@ export default function MyProvidersPage() {
     onError: (error) => {
       toast({
         title: "Failed to create provider",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -643,7 +644,7 @@ export default function MyProvidersPage() {
     onError: (error) => {
       toast({
         title: "Failed to update provider",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -658,7 +659,7 @@ export default function MyProvidersPage() {
     onError: (error) => {
       toast({
         title: "Failed to delete provider",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -679,7 +680,7 @@ export default function MyProvidersPage() {
       const id = variables.path.id;
       setTestResults((prev) => ({
         ...prev,
-        [id]: { status: "error", message: String(error), latency_ms: null },
+        [id]: { status: "error", message: formatApiError(error), latency_ms: null },
       }));
       setTestingIds((prev) => {
         const next = new Set(prev);

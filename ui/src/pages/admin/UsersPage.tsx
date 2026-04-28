@@ -29,6 +29,7 @@ import { PageHeader, ResourceTable } from "@/components/Admin";
 import { useCursorPagination } from "@/hooks";
 import { formatDateTime } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 const columnHelper = createColumnHelper<User>();
 
 const createUserSchema = z.object({
@@ -87,7 +88,7 @@ export default function UsersPage() {
       toast({ title: "User created", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to create user", description: String(error), type: "error" });
+      toast({ title: "Failed to create user", description: formatApiError(error), type: "error" });
     },
   });
 
@@ -100,7 +101,7 @@ export default function UsersPage() {
       toast({ title: "User updated", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to update user", description: String(error), type: "error" });
+      toast({ title: "Failed to update user", description: formatApiError(error), type: "error" });
     },
   });
 

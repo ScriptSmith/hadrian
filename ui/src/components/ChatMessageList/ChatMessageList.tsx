@@ -351,9 +351,12 @@ export function ChatMessageList({
           ) : (
             <div
               className="relative"
-              style={{
-                height: Math.max(virtualizer.getTotalSize(), messageGroups.length * 200),
-              }}
+              // Trust the virtualizer's measurement. Forcing a minimum of
+              // `count * 200` defeats virtualization: items get absolute
+              // positions inside a container that can be either taller (so
+              // the bottom is empty) or shorter (so scroll-to-bottom math
+              // breaks) than what the items actually need.
+              style={{ height: virtualizer.getTotalSize() }}
             >
               {virtualizer.getVirtualItems().map((virtualItem) => {
                 const group = messageGroups[virtualItem.index];

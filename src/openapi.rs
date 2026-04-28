@@ -14,7 +14,7 @@ use crate::{
 #[openapi(
     info(
         title = "Hadrian Gateway API",
-        version = "0.1.0",
+        version = env!("CARGO_PKG_VERSION"),
         description = r#"**Hadrian Gateway** is an AI Gateway providing a unified OpenAI-compatible API for routing requests to multiple LLM providers.
 
 ## Overview
@@ -373,13 +373,17 @@ requests_per_minute = 120
         (name = "files", description = "Upload and manage files for use with vector stores. Files are uploaded via multipart form data and can be added to vector stores for RAG."),
         (name = "vector-stores", description = "Create and manage vector stores for RAG (Retrieval Augmented Generation). Vector stores contain files that are chunked and embedded for semantic search.\n\n## Hadrian Extensions\n\nThe Vector Stores API is based on OpenAI's Vector Stores API with the following extensions:\n\n### Multi-Tenancy\n- `owner_type`, `owner_id` fields for organization/project/user ownership\n- Required in create requests and included in responses\n\n### Additional Fields\n- `description`: Human-readable description for vector stores\n- `embedding_model`: Configurable embedding model (default: text-embedding-3-small)\n- `embedding_dimensions`: Configurable vector dimensions (default: 1536)\n- `updated_at`: Modification timestamp\n- `file_id`: Reference to Files API in vector store files\n\n### Extension Endpoints\n- `GET /v1/vector_stores/{id}/files/{file_id}/chunks`: List chunks for debugging\n\n### Search Extensions\n- Request: `threshold` (similarity threshold), `file_ids` (file filter)\n- Response: `chunk_id`, `vector_store_id`, `chunk_index` for debugging\n\n### Schema Differences\n- Timestamps use ISO 8601 format (OpenAI uses Unix timestamps)\n- List responses use `pagination` object (OpenAI uses root-level `first_id`, `last_id`, `has_more`)\n- Search `content` is a string (OpenAI uses `[{type, text}]` array)"),
         // Health & Infrastructure
-        (name = "health", description = "Health check endpoints for monitoring and Kubernetes probes. Use `/health` for detailed status, `/health/live` for liveness probes, and `/health/ready` for readiness probes.")
+        (name = "health", description = "Health check endpoints for monitoring and Kubernetes probes. Use `/health` for detailed status, `/health/live` for liveness probes, and `/health/ready` for readiness probes."),
+        (name = "auth", description = "Browser-facing authentication endpoints (OIDC / SAML). The frontend calls `/auth/discover` to find the right SSO provider for an email domain, then `/auth/login` to redirect to the IdP; `/auth/me` returns the authenticated identity for whatever session cookie or bearer token is presented."),
     ),
     paths(
         // Health check routes
         health::health_check,
         health::liveness,
         health::readiness,
+        // Browser auth routes
+        crate::routes::auth::discover,
+        crate::routes::auth::me,
         // Public API routes
         api::api_v1_chat_completions,
         api::api_v1_responses,
@@ -808,6 +812,9 @@ requests_per_minute = 120
         models::Project,
         models::CreateProject,
         models::UpdateProject,
+        // Browser auth response shapes
+        crate::routes::auth::MeResponse,
+        crate::routes::auth::DiscoverResponse,
         // Admin models - User
         models::User,
         models::CreateUser,

@@ -12,6 +12,7 @@ import {
 } from "../../fixtures";
 import { createConfig } from "../../client/client";
 import type { Client } from "../../client/client";
+import { dlqList, dlqPurge, dlqStats } from "../../client";
 import { runHealthCheckTests } from "../shared/health-checks";
 import { runAdminApiCrudTests } from "../shared/admin-api-crud";
 import { runChatCompletionsTests } from "../shared/chat-completions";
@@ -74,66 +75,63 @@ describe("DLQ (Dead Letter Queue) Deployment", () => {
     execInService: env.execInService,
   }));
 
-  // DLQ-specific tests
-  describe("Redis Streams DLQ", () => {
-    it("verifies Redis Streams support via XINFO command", async () => {
-      const result = await env.execInService("redis", [
-        "redis-cli",
-        "XINFO",
-        "HELP",
-      ]);
+  // DLQ-specific tests — exercise Hadrian's DLQ admin endpoints directly so we
+  // catch wiring regressions (route → service → backend) rather than just
+  // proving Redis itself supports streams (which is a Redis property, not a
+  // Hadrian one).
+  describe("Hadrian DLQ admin API", () => {
+    it("returns stats with the documented shape", async () => {
+      const response = await dlqStats({ client });
 
-      // XINFO HELP should return information about the XINFO subcommands
-      // This verifies that Redis Streams commands are available
-      expect(result.exitCode).toBe(0);
-      expect(result.output.toLowerCase()).toMatch(/xinfo|stream/i);
+      expect(response.response.status).toBe(200);
+      const data = response.data;
+      if (!data) throw new Error("dlqStats returned no body");
+
+      expect(typeof data.total_entries).toBe("number");
+      expect(data.total_entries).toBeGreaterThanOrEqual(0);
+      expect(typeof data.is_empty).toBe("boolean");
+      expect(data.is_empty).toBe(data.total_entries === 0);
+      // by_type / by_retry_count are populated lazily; just assert object shape.
+      expect(typeof data.by_type).toBe("object");
+      expect(typeof data.by_retry_count).toBe("object");
     });
 
-    it("DLQ stream exists or will be created on first use", async () => {
-      // Check if the DLQ stream exists
-      // Note: The stream may not exist until the first message is sent to it
-      const result = await env.execInService("redis", [
-        "redis-cli",
-        "EXISTS",
-        "dlq:stream",
-      ]);
+    it("returns a paginated list", async () => {
+      const response = await dlqList({
+        client,
+        query: { limit: 10 },
+      });
 
-      expect(result.exitCode).toBe(0);
-      // Result will be "0" (doesn't exist yet) or "1" (exists)
-      // Both are valid states - the stream is created on first use
-      const exists = result.output.trim();
-      expect(["0", "1"]).toContain(exists);
+      expect(response.response.status).toBe(200);
+      const data = response.data;
+      if (!data) throw new Error("dlqList returned no body");
+
+      expect(Array.isArray(data.data)).toBe(true);
+      expect(data.pagination).toBeDefined();
+      expect(typeof data.pagination?.limit).toBe("number");
+      expect(typeof data.pagination?.has_more).toBe("boolean");
     });
 
-    it("can create and read from a Redis Stream", async () => {
-      // Test that Redis Streams operations work correctly
-      // Add an entry to a test stream
-      const addResult = await env.execInService("redis", [
-        "redis-cli",
-        "XADD",
-        "test:dlq:stream",
-        "*",
-        "test",
-        "value",
-      ]);
+    it("rejects an invalid pagination cursor with a 400", async () => {
+      const response = await dlqList({
+        client,
+        query: { cursor: "not-a-real-cursor" },
+      });
 
-      expect(addResult.exitCode).toBe(0);
-      // XADD returns the stream entry ID (e.g., "1234567890123-0")
-      expect(addResult.output.trim()).toMatch(/^\d+-\d+$/);
+      // The route is documented to return 400 for bad cursors, not 500.
+      expect(response.response.status).toBe(400);
+    });
 
-      // Read from the stream to verify it was created
-      const readResult = await env.execInService("redis", [
-        "redis-cli",
-        "XLEN",
-        "test:dlq:stream",
-      ]);
+    it("purge succeeds (idempotent on an empty queue)", async () => {
+      // Purge is idempotent — even on an empty DLQ it should return 200 and
+      // a body documenting the result. Catches the route → cache wiring without
+      // needing to inject failures from outside the gateway.
+      const response = await dlqPurge({ client });
 
-      expect(readResult.exitCode).toBe(0);
-      const length = parseInt(readResult.output.trim(), 10);
-      expect(length).toBeGreaterThanOrEqual(1);
-
-      // Clean up the test stream
-      await env.execInService("redis", ["redis-cli", "DEL", "test:dlq:stream"]);
+      expect(response.response.status).toBe(200);
+      const after = await dlqStats({ client });
+      expect(after.response.status).toBe(200);
+      expect(after.data?.is_empty).toBe(true);
     });
   });
 });

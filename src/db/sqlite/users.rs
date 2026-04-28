@@ -570,6 +570,13 @@ impl UserRepo for SqliteUserRepo {
         Ok(row.col::<i64>("count"))
     }
 
+    async fn count_total_org_memberships(&self) -> DbResult<i64> {
+        let row = query("SELECT COUNT(*) as count FROM org_memberships")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.col::<i64>("count"))
+    }
+
     async fn add_to_project(
         &self,
         user_id: Uuid,
@@ -746,6 +753,13 @@ impl UserRepo for SqliteUserRepo {
     ) -> DbResult<i64> {
         let row = query("SELECT COUNT(*) as count FROM project_memberships WHERE project_id = ?")
             .bind(project_id.to_string())
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.col::<i64>("count"))
+    }
+
+    async fn count_total_project_memberships(&self) -> DbResult<i64> {
+        let row = query("SELECT COUNT(*) as count FROM project_memberships")
             .fetch_one(&self.pool)
             .await?;
         Ok(row.col::<i64>("count"))

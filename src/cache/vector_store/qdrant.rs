@@ -17,7 +17,7 @@ use uuid::Uuid;
 use super::{
     ChunkFilter, ChunkSearchResult, ChunkWithEmbedding, HybridSearchConfig, StoredChunk,
     VectorBackend, VectorMetadata, VectorSearchResult, VectorStoreError, VectorStoreResult,
-    fusion::fuse_results_limited,
+    VectorTenantFilter, fusion::fuse_results_limited,
 };
 use crate::{
     config::DistanceMetric,
@@ -794,6 +794,21 @@ impl VectorBackend for QdrantStore {
         limit: usize,
         threshold: f64,
         model_filter: Option<&str>,
+        // Qdrant doesn't ship `is_empty`/`is_null` in our minimal filter model,
+        // so tenant scoping is enforced via post-filter at the
+        // `SemanticCache::lookup` call site. We still take the parameter to
+        // satisfy the trait and to fold organization_id matching into the
+        // server-side `must` filter when a value is present.
+        //
+        // Known limitation (cache-hit rate, not security): when the caller is
+        // unscoped (`organization_id = None`) we cannot push the "match only
+        // entries with no organization_id" condition down to Qdrant. The
+        // post-filter still rejects scoped entries, but if the top_k window
+        // is exhausted by scoped neighbours, valid unscoped matches can fall
+        // outside the window and be missed. Fixing this would require either
+        // an `is_scoped` boolean payload field or a sentinel value in place
+        // of NULL, which would require migrating existing entries.
+        tenant_filter: VectorTenantFilter<'_>,
     ) -> VectorStoreResult<Vec<VectorSearchResult>> {
         if embedding.len() != self.dimensions {
             warn!(
@@ -840,6 +855,23 @@ impl VectorBackend for QdrantStore {
                 key: "model".to_string(),
                 condition: FilterMatch::Match {
                     value: serde_json::json!(model),
+                },
+            });
+        }
+
+        if let Some(org) = tenant_filter.organization_id {
+            must.push(FilterCondition {
+                key: "organization_id".to_string(),
+                condition: FilterMatch::Match {
+                    value: serde_json::json!(org),
+                },
+            });
+        }
+        if let Some(project) = tenant_filter.project_id {
+            must.push(FilterCondition {
+                key: "project_id".to_string(),
+                condition: FilterMatch::Match {
+                    value: serde_json::json!(project),
                 },
             });
         }

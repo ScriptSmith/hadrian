@@ -27,6 +27,8 @@ use tower_cookies::{
     Cookie, Cookies,
     cookie::{SameSite as CookieSameSite, time::Duration as CookieDuration},
 };
+#[cfg(feature = "utoipa")]
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 use validator::ValidateEmail;
 
@@ -134,6 +136,7 @@ pub struct SamlMetadataQuery {
 
 /// Response for the /auth/me endpoint.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "utoipa", derive(ToSchema))]
 pub struct MeResponse {
     pub external_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -152,6 +155,7 @@ pub struct MeResponse {
 
 /// Query parameters for the discover endpoint.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(IntoParams))]
 pub struct DiscoverQuery {
     /// Email address to discover SSO configuration for
     pub email: String,
@@ -159,6 +163,7 @@ pub struct DiscoverQuery {
 
 /// Response for the /auth/discover endpoint.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "utoipa", derive(ToSchema))]
 pub struct DiscoverResponse {
     /// Organization ID
     pub org_id: Uuid,
@@ -204,6 +209,18 @@ pub struct DiscoverResponse {
 /// SSO is only available when the email domain has been verified via DNS TXT record.
 /// The response includes domain verification status to help users understand why
 /// SSO may not be available.
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    get,
+    path = "/auth/discover",
+    tag = "auth",
+    operation_id = "auth_discover",
+    params(DiscoverQuery),
+    responses(
+        (status = 200, description = "SSO discovery result for the email domain", body = DiscoverResponse),
+        (status = 403, description = "No SSO configuration found for the domain", body = crate::openapi::ErrorResponse),
+        (status = 500, description = "Internal error (database / config)", body = crate::openapi::ErrorResponse),
+    )
+))]
 #[tracing::instrument(name = "auth.discover", skip(state))]
 pub async fn discover(
     State(state): State<AppState>,
@@ -686,6 +703,16 @@ pub async fn logout(
 }
 
 /// Get current user identity.
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    get,
+    path = "/auth/me",
+    tag = "auth",
+    operation_id = "auth_me",
+    responses(
+        (status = 200, description = "Authenticated user identity", body = MeResponse),
+        (status = 401, description = "Not authenticated", body = crate::openapi::ErrorResponse),
+    )
+))]
 #[tracing::instrument(name = "auth.me", skip(admin_auth))]
 pub async fn me(Extension(admin_auth): Extension<AdminAuth>) -> Json<MeResponse> {
     Json(MeResponse {
@@ -1415,10 +1442,15 @@ run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
 
+[server]
+allow_loopback_urls = true
+allow_private_urls = true
+
 [auth.mode]
 type = "idp"
 
 [auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
 secure = false
 cookie_name = "__test_session"
 
@@ -1666,6 +1698,9 @@ path = "file:auth_test_no_oidc_{}?mode=memory&cache=shared"
 create_if_missing = true
 run_migrations = true
 wal_mode = false
+
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
 
 [providers.test]
 type = "test"
@@ -2074,6 +2109,9 @@ create_if_missing = true
 run_migrations = true
 wal_mode = false
 
+[auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
+
 [providers.test]
 type = "test"
 "#,
@@ -2132,10 +2170,15 @@ run_migrations = true
 wal_mode = false
 busy_timeout_ms = 5000
 
+[server]
+allow_loopback_urls = true
+allow_private_urls = true
+
 [auth.mode]
 type = "idp"
 
 [auth.session]
+secret = "test-session-secret-must-be-long-enough-for-hmac-pepper-32b"
 secure = false
 cookie_name = "__test_session"
 

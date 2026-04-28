@@ -72,19 +72,49 @@ impl<T: Serialize> IntoResponse for ScimJsonWithStatus<T> {
 // =============================================================================
 
 /// Extract the SCIM base URL from the request.
-fn get_base_url(request: &Request<Body>) -> String {
+///
+/// Prefers the operator-configured `auth.oauth_pkce.public_url` so we don't
+/// trust forwarded headers from arbitrary callers — RFC 7644 endpoints are
+/// authenticated by a bearer token, but a misconfigured deployment could
+/// still let a client poison the `Location` URLs we mint by spoofing
+/// `X-Forwarded-Host`. The configured URL is authoritative when present;
+/// otherwise build from the server's bound host/port.
+fn get_base_url(state: &AppState, request: &Request<Body>) -> String {
+    if let Some(public_url) = state.config.auth.oauth_pkce.public_url.as_deref()
+        && !public_url.is_empty()
+    {
+        return format!("{}/scim/v2", public_url.trim_end_matches('/'));
+    }
+
+    // Fall back to whatever the request claims, then finally to localhost so
+    // a SCIM list response is at least syntactically valid in dev/test.
     let scheme = request
         .headers()
         .get("x-forwarded-proto")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("https");
+        .unwrap_or_else(|| {
+            if state.config.server.tls.is_some() {
+                "https"
+            } else {
+                "http"
+            }
+        });
 
     let host = request
         .headers()
         .get("x-forwarded-host")
         .or_else(|| request.headers().get(header::HOST))
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost");
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            let server = &state.config.server;
+            if (scheme == "https" && server.port == 443) || (scheme == "http" && server.port == 80)
+            {
+                server.host.to_string()
+            } else {
+                format!("{}:{}", server.host, server.port)
+            }
+        });
 
     format!("{}://{}/scim/v2", scheme, host)
 }
@@ -123,7 +153,7 @@ pub async fn list_users(
     Query(params): Query<ScimListParams>,
     request: Request<Body>,
 ) -> Response {
-    let base_url = get_base_url(&request);
+    let base_url = get_base_url(&state, &request);
     let service = match get_provisioning_service(&state) {
         Ok(s) => s,
         Err(e) => return e.into_response(),
@@ -150,7 +180,7 @@ pub async fn create_user(
     Extension(scim_auth): Extension<ScimAuth>,
     request: Request<Body>,
 ) -> Response {
-    let base_url = get_base_url(&request);
+    let base_url = get_base_url(&state, &request);
     let service = match get_provisioning_service(&state) {
         Ok(s) => s,
         Err(e) => return e.into_response(),
@@ -199,7 +229,7 @@ pub async fn get_user(
     Path(id): Path<Uuid>,
     request: Request<Body>,
 ) -> Response {
-    let base_url = get_base_url(&request);
+    let base_url = get_base_url(&state, &request);
     let service = match get_provisioning_service(&state) {
         Ok(s) => s,
         Err(e) => return e.into_response(),
@@ -228,7 +258,7 @@ pub async fn replace_user(
     Path(id): Path<Uuid>,
     request: Request<Body>,
 ) -> Response {
-    let base_url = get_base_url(&request);
+    let base_url = get_base_url(&state, &request);
     let service = match get_provisioning_service(&state) {
         Ok(s) => s,
         Err(e) => return e.into_response(),
@@ -286,7 +316,7 @@ pub async fn patch_user(
     Path(id): Path<Uuid>,
     request: Request<Body>,
 ) -> Response {
-    let base_url = get_base_url(&request);
+    let base_url = get_base_url(&state, &request);
     let service = match get_provisioning_service(&state) {
         Ok(s) => s,
         Err(e) => return e.into_response(),

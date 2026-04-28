@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration as StdDuration};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{Duration, Utc};
@@ -9,9 +9,22 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
+    cache::Cache,
     db::{DbPool, DbResult, NewAuthorizationCode},
     models::{OAuthAuthorizationCode, OAuthKeyOptions, PkceCodeChallengeMethod},
 };
+
+/// How many failed PKCE verifications a single authorization code may suffer
+/// before it is destroyed. The choice trades two attacks against each other:
+/// burning on the first failure lets a network attacker who can write any
+/// request DoS legitimate users; never burning lets an attacker who actually
+/// stole the code keep guessing the verifier offline. Three matches the OAuth
+/// security BCP guidance on "limited" retries.
+const MAX_PKCE_FAILURES_PER_CODE: i64 = 3;
+/// TTL for the failure counter. Authorization codes themselves live ~10 min,
+/// so the counter is forced to outlive any reasonable code lifetime — that
+/// way the count for a given code can't be reset by waiting it out.
+const PKCE_FAILURE_TTL: StdDuration = StdDuration::from_secs(900);
 
 /// Errors specific to the OAuth PKCE service. Mapped to HTTP status codes
 /// by the route handlers.
@@ -42,11 +55,21 @@ pub struct IssueCodeInput {
 #[derive(Clone)]
 pub struct OAuthPkceService {
     db: Arc<DbPool>,
+    /// Optional cache backing the per-code failure counter. When absent we
+    /// fall back to the legacy "never burn on failure" behaviour because we
+    /// have nowhere to track attempts; deployments that care about the
+    /// limited-retry guarantee should configure a cache backend.
+    cache: Option<Arc<dyn Cache>>,
 }
 
 impl OAuthPkceService {
     pub fn new(db: Arc<DbPool>) -> Self {
-        Self { db }
+        Self { db, cache: None }
+    }
+
+    pub fn with_cache(mut self, cache: Option<Arc<dyn Cache>>) -> Self {
+        self.cache = cache;
+        self
     }
 
     /// Generate and persist a new authorization code bound to `user_id` and
@@ -115,6 +138,12 @@ impl OAuthPkceService {
             .unwrap_u8()
             != 1
         {
+            // Bump the per-code failure counter. Once the threshold is hit
+            // we burn the code so an attacker who stole it can't keep
+            // probing verifiers. We still hand out the same `PkceMismatch`
+            // error either way so the attacker can't probe for "this code
+            // is now burned" vs "still alive".
+            self.record_pkce_failure(code).await;
             return Err(OAuthPkceError::PkceMismatch);
         }
 
@@ -123,6 +152,41 @@ impl OAuthPkceService {
         // rather than handing out a second key.
         repo.consume(code).await?.ok_or(OAuthPkceError::InvalidCode)
     }
+
+    /// Increment the per-code PKCE failure counter and burn the code once it
+    /// exceeds `MAX_PKCE_FAILURES_PER_CODE`. Cache errors are swallowed: if
+    /// the cache is unavailable we fall back to the original (no-burn)
+    /// behaviour rather than blocking authentication.
+    async fn record_pkce_failure(&self, code: &str) {
+        let Some(cache) = &self.cache else {
+            return;
+        };
+        let key = pkce_failure_key(code);
+        match cache.incr(&key, PKCE_FAILURE_TTL).await {
+            Ok(count) if count >= MAX_PKCE_FAILURES_PER_CODE => {
+                // Burn the code. Failures from a network attacker or a
+                // genuinely broken client both end up here; the legitimate
+                // user has had `MAX_PKCE_FAILURES_PER_CODE - 1` chances to
+                // retry, which is enough headroom for a transient bug.
+                if let Err(e) = self.db.oauth_authorization_codes().consume(code).await {
+                    tracing::warn!(error = %e, "Failed to burn PKCE code after repeated verifier failures");
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to record PKCE failure counter; not burning code");
+            }
+        }
+    }
+}
+
+/// Cache key for the per-code PKCE failure counter. The code itself is
+/// hashed so we never persist a raw authorization code in the cache.
+fn pkce_failure_key(code: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(code.as_bytes());
+    let digest = hasher.finalize();
+    format!("gw:oauth:pkce:fails:{:x}", digest)
 }
 
 /// Generate a 256-bit URL-safe base64 random code (~43 chars).
@@ -175,5 +239,200 @@ mod tests {
         assert_ne!(a, b);
         assert!(!a.contains('+') && !a.contains('/') && !a.contains('='));
         assert!(a.len() >= 40);
+    }
+
+    // ====================================================================
+    // Integration tests against an in-memory SQLite DbPool. These cover the
+    // full PKCE redeem path: code reuse, expiry, verifier mismatch, the
+    // 3-strikes burn rule, and the plain-method client/server gate.
+    // ====================================================================
+
+    #[cfg(feature = "database-sqlite")]
+    mod integration {
+        use super::*;
+        use crate::{
+            cache::MemoryCache,
+            config::MemoryCacheConfig,
+            db::{DbPool, tests::harness::create_sqlite_pool},
+            models::CreateUser,
+        };
+
+        async fn setup() -> (Arc<DbPool>, Uuid) {
+            let pool = create_sqlite_pool().await;
+            sqlx::migrate!("./migrations_sqlx/sqlite")
+                .run(&pool)
+                .await
+                .expect("Failed to run SQLite migrations");
+            let db = Arc::new(DbPool::from_sqlite(pool));
+            // Insert a real user via the repo so the auth-code FK is
+            // satisfied without us reaching into raw SQL.
+            let user = db
+                .users()
+                .create(CreateUser {
+                    external_id: format!("test-{}", Uuid::new_v4()),
+                    email: Some(format!("user-{}@example.test", Uuid::new_v4())),
+                    name: Some("Test User".to_string()),
+                })
+                .await
+                .expect("create test user");
+            (db, user.id)
+        }
+
+        fn issue_input(user_id: Uuid, challenge: &str, ttl_seconds: u64) -> IssueCodeInput {
+            IssueCodeInput {
+                user_id,
+                callback_url: "https://example.test/cb".to_string(),
+                code_challenge: challenge.to_string(),
+                code_challenge_method: PkceCodeChallengeMethod::S256,
+                app_name: Some("test app".to_string()),
+                key_options: OAuthKeyOptions::default(),
+                ttl_seconds,
+            }
+        }
+
+        fn s256(verifier: &str) -> String {
+            derive_challenge(verifier, PkceCodeChallengeMethod::S256)
+        }
+
+        #[tokio::test]
+        async fn redeem_succeeds_then_reuse_fails() {
+            let (db, user_id) = setup().await;
+            let svc = OAuthPkceService::new(db.clone());
+            let verifier = "verifier-12345678901234567890123456789012345678901234";
+            let issued = svc
+                .issue_code(issue_input(user_id, &s256(verifier), 600))
+                .await
+                .expect("issue code");
+
+            // First redeem succeeds.
+            svc.redeem_code(&issued.code, verifier, None)
+                .await
+                .expect("first redeem");
+
+            // Second redeem fails — code was consumed.
+            let err = svc
+                .redeem_code(&issued.code, verifier, None)
+                .await
+                .expect_err("second redeem must fail");
+            assert!(matches!(err, OAuthPkceError::InvalidCode));
+        }
+
+        #[tokio::test]
+        async fn expired_code_rejected_as_invalid() {
+            let (db, user_id) = setup().await;
+            let svc = OAuthPkceService::new(db.clone());
+            let verifier = "verifier-abcdefghijklmnopqrstuvwxyz0123456789ABCDEF01";
+            // TTL of zero means the row is immediately past expires_at.
+            let issued = svc
+                .issue_code(issue_input(user_id, &s256(verifier), 0))
+                .await
+                .expect("issue code");
+
+            // Sleep a hair so `expires_at < now` deterministically.
+            tokio::time::sleep(StdDuration::from_millis(50)).await;
+
+            let err = svc
+                .redeem_code(&issued.code, verifier, None)
+                .await
+                .expect_err("expired code must not redeem");
+            assert!(matches!(err, OAuthPkceError::InvalidCode));
+        }
+
+        #[tokio::test]
+        async fn verifier_mismatch_keeps_code_alive_without_cache() {
+            let (db, user_id) = setup().await;
+            let svc = OAuthPkceService::new(db.clone());
+            let verifier = "verifier-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            let issued = svc
+                .issue_code(issue_input(user_id, &s256(verifier), 600))
+                .await
+                .expect("issue code");
+
+            // Without a cache, repeated wrong verifiers must NOT burn the code
+            // (legitimate clients still need to be able to retry).
+            for _ in 0..5 {
+                let err = svc
+                    .redeem_code(&issued.code, "wrong-verifier", None)
+                    .await
+                    .expect_err("wrong verifier must fail");
+                assert!(matches!(err, OAuthPkceError::PkceMismatch));
+            }
+
+            // The original verifier still works.
+            svc.redeem_code(&issued.code, verifier, None)
+                .await
+                .expect("legitimate redeem after retries");
+        }
+
+        #[tokio::test]
+        async fn three_verifier_failures_burn_code_with_cache() {
+            let (db, user_id) = setup().await;
+            let cache: Arc<dyn Cache> = Arc::new(MemoryCache::new(&MemoryCacheConfig::default()));
+            let svc = OAuthPkceService::new(db.clone()).with_cache(Some(cache));
+            let verifier = "verifier-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+            let issued = svc
+                .issue_code(issue_input(user_id, &s256(verifier), 600))
+                .await
+                .expect("issue code");
+
+            // First two failures: PkceMismatch, code stays usable.
+            for _ in 0..2 {
+                let err = svc
+                    .redeem_code(&issued.code, "wrong", None)
+                    .await
+                    .expect_err("wrong verifier #1/#2 must fail with mismatch");
+                assert!(matches!(err, OAuthPkceError::PkceMismatch));
+            }
+
+            // Third failure: still PkceMismatch *to the caller* (so an
+            // attacker can't probe for the burn boundary), but the code is
+            // burned server-side.
+            let err = svc
+                .redeem_code(&issued.code, "wrong", None)
+                .await
+                .expect_err("wrong verifier #3 must fail with mismatch");
+            assert!(matches!(err, OAuthPkceError::PkceMismatch));
+
+            // After burn, the legitimate verifier no longer succeeds.
+            let err = svc
+                .redeem_code(&issued.code, verifier, None)
+                .await
+                .expect_err("legitimate redeem after burn must fail");
+            assert!(matches!(err, OAuthPkceError::InvalidCode));
+        }
+
+        #[tokio::test]
+        async fn client_method_must_match_stored() {
+            let (db, user_id) = setup().await;
+            let svc = OAuthPkceService::new(db.clone());
+            let verifier = "verifier-ccccccccccccccccccccccccccccccccccccccccccc";
+            let issued = svc
+                .issue_code(issue_input(user_id, &s256(verifier), 600))
+                .await
+                .expect("issue code (S256)");
+
+            // Client claims `plain` but server stored `S256` — reject before
+            // even running the SHA-256 comparison.
+            let err = svc
+                .redeem_code(&issued.code, verifier, Some(PkceCodeChallengeMethod::Plain))
+                .await
+                .expect_err("method mismatch must reject");
+            assert!(matches!(err, OAuthPkceError::PkceMismatch));
+        }
+
+        #[tokio::test]
+        async fn plain_method_works_when_explicitly_chosen() {
+            let (db, user_id) = setup().await;
+            let svc = OAuthPkceService::new(db.clone());
+            // Plain mode: challenge == verifier.
+            let verifier = "plain-verifier-9999999999999999999999999999999999999";
+            let mut input = issue_input(user_id, verifier, 600);
+            input.code_challenge_method = PkceCodeChallengeMethod::Plain;
+            let issued = svc.issue_code(input).await.expect("issue plain code");
+
+            svc.redeem_code(&issued.code, verifier, Some(PkceCodeChallengeMethod::Plain))
+                .await
+                .expect("plain redeem succeeds");
+        }
     }
 }

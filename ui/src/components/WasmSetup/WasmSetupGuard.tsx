@@ -15,6 +15,7 @@ import {
   apiV1ModelsQueryKey,
 } from "@/api/generated/@tanstack/react-query.gen";
 import { WasmSetup } from "./WasmSetup";
+import { formatApiError } from "@/utils/formatApiError";
 import {
   getOpenRouterCallbackCode,
   clearCallbackCode,
@@ -131,7 +132,7 @@ export function WasmSetupGuard({ children }: { children: ReactNode }) {
         setManualOpen(true);
       } catch (err) {
         console.error("OpenRouter OAuth failed:", err);
-        setOAuthError(String(err));
+        setOAuthError(formatApiError(err));
         setManualOpen(true);
       }
     })();

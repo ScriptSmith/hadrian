@@ -27,7 +27,8 @@ export function generateSimpleTitle(userMessage: string): string {
  */
 export async function generateTitleWithLLM(
   userMessage: string,
-  model: string
+  model: string,
+  signal?: AbortSignal
 ): Promise<TitleGenerationResult> {
   try {
     const response = await apiV1ChatCompletions({
@@ -46,6 +47,7 @@ export async function generateTitleWithLLM(
           },
         ],
       },
+      signal,
       throwOnError: true,
     });
 

@@ -34,6 +34,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
+import { formatApiError } from "@/utils/formatApiError";
 import {
   MCPClient,
   type MCPServerConfig,
@@ -386,7 +387,7 @@ export const useMCPStore = create<MCPStore>()(
             }),
           }));
         } catch (err) {
-          const errorMsg = err instanceof Error ? err.message : String(err);
+          const errorMsg = err instanceof Error ? err.message : formatApiError(err);
           get()._setServerStatus(serverId, "error", errorMsg);
           throw err;
         }

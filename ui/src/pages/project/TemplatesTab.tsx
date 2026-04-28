@@ -16,6 +16,7 @@ import { useToast } from "@/components/Toast/Toast";
 import { useConfirm } from "@/components/ConfirmDialog/ConfirmDialog";
 import { createTemplateColumns } from "@/pages/admin/promptColumns";
 
+import { formatApiError } from "@/utils/formatApiError";
 interface TemplatesTabProps {
   orgSlug: string;
   projectSlug: string;
@@ -42,7 +43,11 @@ export function TemplatesTab({ orgSlug, projectSlug, projectId }: TemplatesTabPr
       toast({ title: "Template deleted", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to delete template", description: String(error), type: "error" });
+      toast({
+        title: "Failed to delete template",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 

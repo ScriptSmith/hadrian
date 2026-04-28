@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { apiV1ModelsOptions } from "@/api/generated/@tanstack/react-query.gen";
 import { ChatView, type ChatFile } from "@/components/ChatView/ChatView";
+import { ErrorBoundary } from "@/components/ErrorBoundary/ErrorBoundary";
 import { useConversationsContext } from "@/components/ConversationsProvider/ConversationsProvider";
 import {
   ForkConversationModal,
@@ -190,7 +191,11 @@ export default function ChatPage() {
     captureRawSSEEvents,
     subAgentModel,
     projectId: currentConversation?.projectId ?? pendingProject.id ?? undefined,
-    conversationId,
+    // Use the stable local conversation id, not the URL param. After background
+    // sync assigns a remoteId, useConversationSync rewrites the URL from the
+    // local UUID to the remoteId — that URL flip would otherwise look like a
+    // conversation switch to useChat and abort the in-flight stream.
+    conversationId: currentConversation?.id ?? conversationId,
   });
 
   const { moveToProject } = useConversationsContext();
@@ -285,24 +290,33 @@ export default function ChatPage() {
 
   return (
     <>
-      <ChatView
-        availableModels={availableModels}
-        conversation={currentConversation}
-        isStreaming={isStreaming}
-        isLoadingModels={isLoadingModels}
-        onSendMessage={handleSendMessage}
-        onStopStreaming={stopStreaming}
-        onClearMessages={clearMessages}
-        onRegenerate={handleRegenerate}
-        onRegenerateAll={handleRegenerateAll}
-        onForkFromMessage={handleForkFromMessage}
-        onFork={handleForkConversation}
-        onProjectChange={handleProjectChange}
-        onPendingProjectChange={!currentConversation ? handlePendingProjectChange : undefined}
-        pendingProjectName={pendingProject.name}
-        pendingProjectId={pendingProject.id}
-        onEditAndRerun={editAndRerun}
-      />
+      {/*
+        Wrap the chat tree in an ErrorBoundary so a render-time crash inside
+        any descendant — message list, model card, artifact renderer — falls
+        back to a recoverable card instead of unmounting the whole shell. The
+        boundary covers ChatMessageList, MultiModelResponse, ChatMessage,
+        artifacts, etc. by virtue of sitting at the root of ChatView.
+      */}
+      <ErrorBoundary>
+        <ChatView
+          availableModels={availableModels}
+          conversation={currentConversation}
+          isStreaming={isStreaming}
+          isLoadingModels={isLoadingModels}
+          onSendMessage={handleSendMessage}
+          onStopStreaming={stopStreaming}
+          onClearMessages={clearMessages}
+          onRegenerate={handleRegenerate}
+          onRegenerateAll={handleRegenerateAll}
+          onForkFromMessage={handleForkFromMessage}
+          onFork={handleForkConversation}
+          onProjectChange={handleProjectChange}
+          onPendingProjectChange={!currentConversation ? handlePendingProjectChange : undefined}
+          pendingProjectName={pendingProject.name}
+          pendingProjectId={pendingProject.id}
+          onEditAndRerun={editAndRerun}
+        />
+      </ErrorBoundary>
       {currentConversation && (
         <ForkConversationModal
           open={forkModalOpen}

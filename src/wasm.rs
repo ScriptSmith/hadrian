@@ -218,7 +218,8 @@ fn build_wasm_router(
     // Merge public admin routes (ui config) into the admin router so we can nest once.
     let admin_routes = crate::routes::admin::admin_v1_routes()
         .merge(crate::routes::admin::public_admin_v1_routes());
-    let api_routes = crate::routes::api::api_v1_routes();
+    let api_routes =
+        crate::routes::api::api_v1_routes(crate::routes::api::ApiBodyLimits::default());
 
     Router::new()
         // WASM-specific handlers (genuinely different behavior)

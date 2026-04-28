@@ -17,8 +17,12 @@ use std::{sync::Arc, time::Instant};
 use chrono::{Duration, Utc};
 
 use crate::{
-    cache::vector_store::VectorBackend, config::VectorStoreCleanupConfig, db::DbPool,
+    cache::vector_store::VectorBackend,
+    config::VectorStoreCleanupConfig,
+    db::DbPool,
+    jobs::leader_lock::{self, LeadershipOutcome, keys},
     observability::metrics,
+    services::{FileStorage, FileStorageError},
 };
 
 /// Results from a single cleanup run.
@@ -55,6 +59,7 @@ impl CleanupRunResult {
 pub async fn start_vector_store_cleanup_worker(
     db: Arc<DbPool>,
     vector_store: Option<Arc<dyn VectorBackend>>,
+    file_storage: Option<Arc<dyn FileStorage>>,
     config: VectorStoreCleanupConfig,
 ) {
     if !config.enabled {
@@ -90,7 +95,20 @@ pub async fn start_vector_store_cleanup_worker(
     let interval = config.interval();
 
     loop {
-        match run_cleanup(&db, &vector_store, &config).await {
+        // Skip ticks where another replica already holds the cleanup lock —
+        // running deletes from two replicas would race on external storage
+        // (one replica deletes the file while the other is mid-delete).
+        let _guard = match leader_lock::try_acquire(&db, keys::VECTOR_STORE_CLEANUP).await {
+            LeadershipOutcome::Leader(g) => Some(g),
+            LeadershipOutcome::NotLeader => {
+                tracing::trace!("vector_store_cleanup: not leader this tick, skipping");
+                tokio::time::sleep(interval).await;
+                continue;
+            }
+            LeadershipOutcome::NoCoordination => None,
+        };
+
+        match run_cleanup(&db, &vector_store, file_storage.as_ref(), &config).await {
             Ok(result) => {
                 if result.has_deletions() {
                     tracing::info!(
@@ -122,6 +140,7 @@ pub async fn start_vector_store_cleanup_worker(
 async fn run_cleanup(
     db: &Arc<DbPool>,
     vector_store: &Arc<dyn VectorBackend>,
+    file_storage: Option<&Arc<dyn FileStorage>>,
     config: &VectorStoreCleanupConfig,
 ) -> Result<CleanupRunResult, Box<dyn std::error::Error + Send + Sync>> {
     let start = Instant::now();
@@ -329,10 +348,47 @@ async fn run_cleanup(
             // Check if file is referenced by other vector stores
             match db.files().count_file_references(file_id).await {
                 Ok(ref_count) if ref_count <= 1 => {
-                    // File is only referenced by this (deleted) vector store, delete it
-                    // First get the file to know its size
-                    if let Ok(Some(file)) = db.files().get_file(file_id).await {
+                    // File is only referenced by this (deleted) vector store, delete it.
+                    // Fetch metadata first so we can free both the on-disk/object
+                    // payload and the DB row in the right order: external first
+                    // (so a partial failure leaves the DB pointing at a valid
+                    // object that the next sweep will retry), then DB.
+                    let file_meta = match db.files().get_file(file_id).await {
+                        Ok(meta) => meta,
+                        Err(e) => {
+                            tracing::error!(
+                                file_id = %file_id,
+                                error = %e,
+                                "Failed to fetch orphaned file metadata"
+                            );
+                            None
+                        }
+                    };
+
+                    if let Some(file) = &file_meta {
                         result.storage_bytes_freed += file.size_bytes as u64;
+                        if let (Some(storage), Some(path)) = (file_storage, &file.storage_path)
+                            && file.storage_backend != crate::models::StorageBackend::Database
+                        {
+                            match storage.delete(path).await {
+                                Ok(()) => tracing::debug!(
+                                    file_id = %file_id,
+                                    path = %path,
+                                    "Deleted orphaned file from external storage"
+                                ),
+                                Err(FileStorageError::NotFound(_)) => {}
+                                Err(e) => {
+                                    tracing::error!(
+                                        file_id = %file_id,
+                                        path = %path,
+                                        error = %e,
+                                        "Failed to delete orphaned file from external storage; \
+                                         skipping DB row to retry next sweep"
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
                     }
 
                     if let Err(e) = db.files().delete_file(file_id).await {

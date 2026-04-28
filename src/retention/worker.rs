@@ -15,8 +15,6 @@ use crate::{config::RetentionConfig, db::DbPool, observability::metrics};
 pub struct RetentionRunResult {
     /// Number of usage records deleted.
     pub usage_records_deleted: u64,
-    /// Number of daily spend records deleted.
-    pub daily_spend_deleted: u64,
     /// Number of audit log entries deleted.
     pub audit_logs_deleted: u64,
     /// Number of conversations hard-deleted.
@@ -26,10 +24,7 @@ pub struct RetentionRunResult {
 impl RetentionRunResult {
     /// Total number of records deleted across all tables.
     pub fn total(&self) -> u64 {
-        self.usage_records_deleted
-            + self.daily_spend_deleted
-            + self.audit_logs_deleted
-            + self.conversations_deleted
+        self.usage_records_deleted + self.audit_logs_deleted + self.conversations_deleted
     }
 
     /// Check if any records were deleted.
@@ -62,7 +57,6 @@ pub async fn start_retention_worker(db: Arc<DbPool>, config: RetentionConfig) {
     tracing::info!(
         interval_hours = config.interval_hours,
         usage_records_days = config.periods.usage_records_days,
-        daily_spend_days = config.periods.daily_spend_days,
         audit_logs_days = config.periods.audit_logs_days,
         conversations_deleted_days = config.periods.conversations_deleted_days,
         dry_run = config.safety.dry_run,
@@ -78,7 +72,6 @@ pub async fn start_retention_worker(db: Arc<DbPool>, config: RetentionConfig) {
                 if result.has_deletions() {
                     tracing::info!(
                         usage_records = result.usage_records_deleted,
-                        daily_spend = result.daily_spend_deleted,
                         audit_logs = result.audit_logs_deleted,
                         conversations = result.conversations_deleted,
                         total = result.total(),
@@ -110,12 +103,6 @@ async fn run_retention(
     if config.periods.should_retain_usage_records() {
         let deleted = delete_usage_records(db, config).await?;
         result.usage_records_deleted = deleted;
-    }
-
-    // Delete daily spend records
-    if config.periods.should_retain_daily_spend() {
-        let deleted = delete_daily_spend(db, config).await?;
-        result.daily_spend_deleted = deleted;
     }
 
     // Delete audit logs
@@ -167,45 +154,6 @@ async fn delete_usage_records(
             "Deleted usage records"
         );
         metrics::record_retention_deletion("usage_records", deleted);
-    }
-
-    Ok(deleted)
-}
-
-/// Delete daily spend records older than the retention period.
-async fn delete_daily_spend(
-    db: &Arc<DbPool>,
-    config: &RetentionConfig,
-) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
-    let cutoff = Utc::now() - Duration::days(config.periods.daily_spend_days as i64);
-
-    if config.safety.dry_run {
-        tracing::info!(
-            cutoff = %cutoff,
-            "DRY RUN: Would delete daily spend records before {}",
-            cutoff
-        );
-        return Ok(0);
-    }
-
-    let max_deletes = if config.safety.max_deletes_per_run == 0 {
-        u64::MAX
-    } else {
-        config.safety.max_deletes_per_run
-    };
-
-    let deleted = db
-        .usage()
-        .delete_daily_spend_before(cutoff, config.safety.batch_size, max_deletes)
-        .await?;
-
-    if deleted > 0 {
-        tracing::debug!(
-            deleted = deleted,
-            cutoff = %cutoff,
-            "Deleted daily spend records"
-        );
-        metrics::record_retention_deletion("daily_spend", deleted);
     }
 
     Ok(deleted)
@@ -297,11 +245,10 @@ mod tests {
     fn test_retention_run_result_total() {
         let result = RetentionRunResult {
             usage_records_deleted: 100,
-            daily_spend_deleted: 50,
             audit_logs_deleted: 25,
             conversations_deleted: 10,
         };
-        assert_eq!(result.total(), 185);
+        assert_eq!(result.total(), 135);
     }
 
     #[test]
@@ -320,7 +267,6 @@ mod tests {
     fn test_retention_run_result_default() {
         let result = RetentionRunResult::default();
         assert_eq!(result.usage_records_deleted, 0);
-        assert_eq!(result.daily_spend_deleted, 0);
         assert_eq!(result.audit_logs_deleted, 0);
         assert_eq!(result.conversations_deleted, 0);
         assert_eq!(result.total(), 0);

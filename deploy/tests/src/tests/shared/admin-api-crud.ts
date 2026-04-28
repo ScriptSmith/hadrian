@@ -2,8 +2,13 @@
  * Admin API CRUD tests (Tests 5-9, 12-22 from bash)
  *
  * Tests organization, project, user, team, and API key management.
+ *
+ * Each `it()` is order-independent: the org/user/team fixtures it depends on
+ * are created in `beforeAll` rather than being a side-effect of an earlier
+ * `it()`. Tests that exercise create/update/delete use scratch resources with
+ * a unique suffix per test so they can run in any order without colliding.
  */
-import { describe, it, expect } from "vitest";
+import { describe, beforeAll, it, expect } from "vitest";
 import type { Client } from "../../client/client";
 import {
   organizationList,
@@ -29,6 +34,9 @@ export interface AdminApiCrudContext {
   testName: string;
 }
 
+let scratchCounter = 0;
+const scratchSuffix = () => `${Date.now()}-${++scratchCounter}`;
+
 /**
  * Run admin API CRUD tests.
  * @param getContext - Function that returns the test context. Called lazily to ensure
@@ -36,104 +44,29 @@ export interface AdminApiCrudContext {
  */
 export function runAdminApiCrudTests(getContext: () => AdminApiCrudContext) {
   describe("Admin API CRUD", () => {
+    // Shared fixtures created once in beforeAll so individual tests don't
+    // depend on the order of preceding `it()` blocks. The team is recreated
+    // fresh for each test that mutates it (update/delete/member-management).
     let orgId: string;
     let userId: string;
-    let teamId: string;
+    let orgSlug: string;
 
-    // Test 5: List organizations
-    it("can list organizations", async () => {
-      const { client } = getContext();
-      const response = await organizationList({ client });
-
-      expect(response.response.status).toBe(200);
-      expect(response.data).toBeDefined();
-      // Response is paginated with data array
-      expect(response.data?.data).toBeDefined();
-      expect(Array.isArray(response.data?.data)).toBe(true);
-    });
-
-    // Test 6: Create organization
-    it("can create an organization", async () => {
+    beforeAll(async () => {
       const { client, testName } = getContext();
-      const response = await organizationCreate({
+      orgSlug = `${testName}-org`;
+
+      const orgRes = await organizationCreate({
         client,
-        body: {
-          slug: `${testName}-org`,
-          name: `Test Organization for ${testName}`,
-        },
+        body: { slug: orgSlug, name: `Test Organization for ${testName}` },
       });
-
-      expect(response.response.status).toBe(201);
-      expect(response.data).toBeDefined();
-      expect(response.data?.slug).toBe(`${testName}-org`);
-
-      // Store org ID for later tests
-      orgId = response.data!.id;
-    });
-
-    // Test 7: Get organization
-    it("can get an organization by slug", async () => {
-      if (!orgId) {
+      if (!orgRes.data) {
         throw new Error(
-          "Test prerequisite failed: orgId not set. The 'can create an organization' test must pass first."
+          `beforeAll: organizationCreate returned no body (status ${orgRes.response.status})`
         );
       }
-      const { client, testName } = getContext();
-      const response = await organizationGet({
-        client,
-        path: { slug: `${testName}-org` },
-      });
+      orgId = orgRes.data.id;
 
-      expect(response.response.status).toBe(200);
-      expect(response.data).toBeDefined();
-      expect(response.data?.name).toBe(`Test Organization for ${testName}`);
-    });
-
-    // Test 8: Create project
-    it("can create a project in an organization", async () => {
-      const { client, testName } = getContext();
-      const response = await projectCreate({
-        client,
-        path: { org_slug: `${testName}-org` },
-        body: {
-          slug: "test-project",
-          name: "Test Project",
-        },
-      });
-
-      expect(response.response.status).toBe(201);
-      expect(response.data).toBeDefined();
-      expect(response.data?.slug).toBe("test-project");
-    });
-
-    // Test 9: Create API key (org-scoped)
-    it("can create an org-scoped API key", async () => {
-      if (!orgId) {
-        throw new Error(
-          "Test prerequisite failed: orgId not set. The 'can create an organization' test must pass first."
-        );
-      }
-      const { client } = getContext();
-      const response = await apiKeyCreate({
-        client,
-        body: {
-          name: "Test Key",
-          owner: {
-            type: "organization",
-            org_id: orgId,
-          },
-        },
-      });
-
-      expect(response.response.status).toBe(201);
-      expect(response.data).toBeDefined();
-      expect(response.data?.key).toMatch(/^gw_/);
-    });
-
-    // Test 12: Create user
-    it("can create a user", async () => {
-      const { client, testName } = getContext();
-      const response = await userCreate({
+      const userRes = await userCreate({
         client,
         body: {
           external_id: `${testName}-user`,
@@ -141,225 +74,274 @@ export function runAdminApiCrudTests(getContext: () => AdminApiCrudContext) {
           name: "Test User",
         },
       });
-
-      expect(response.response.status).toBe(201);
-      expect(response.data).toBeDefined();
-      expect(response.data?.external_id).toBe(`${testName}-user`);
-
-      // Store user ID for later tests
-      userId = response.data!.id;
-    });
-
-    // Test 13: Create team
-    it("can create a team", async () => {
-      const { client, testName } = getContext();
-      const response = await teamCreate({
-        client,
-        path: { org_slug: `${testName}-org` },
-        body: {
-          slug: "test-team",
-          name: "Test Team",
-        },
-      });
-
-      expect(response.response.status).toBe(201);
-      expect(response.data).toBeDefined();
-      expect(response.data?.slug).toBe("test-team");
-
-      // Store team ID for later tests
-      teamId = response.data!.id;
-    });
-
-    // Test 14: Get team
-    it("can get a team by slug", async () => {
-      const { client, testName } = getContext();
-      const response = await teamGet({
-        client,
-        path: {
-          org_slug: `${testName}-org`,
-          team_slug: "test-team",
-        },
-      });
-
-      expect(response.response.status).toBe(200);
-      expect(response.data).toBeDefined();
-      expect(response.data?.name).toBe("Test Team");
-    });
-
-    // Test 15: List teams
-    it("can list teams in an organization", async () => {
-      const { client, testName } = getContext();
-      const response = await teamList({
-        client,
-        path: { org_slug: `${testName}-org` },
-      });
-
-      expect(response.response.status).toBe(200);
-      expect(response.data).toBeDefined();
-      expect(response.data?.data).toBeDefined();
-      expect(Array.isArray(response.data?.data)).toBe(true);
-
-      const teamSlugs = response.data?.data.map((t) => t.slug);
-      expect(teamSlugs).toContain("test-team");
-    });
-
-    // Test 16: Update team
-    it("can update a team", async () => {
-      const { client, testName } = getContext();
-      const response = await teamUpdate({
-        client,
-        path: {
-          org_slug: `${testName}-org`,
-          team_slug: "test-team",
-        },
-        body: {
-          name: "Updated Team Name",
-        },
-      });
-
-      expect(response.response.status).toBe(200);
-      expect(response.data).toBeDefined();
-      expect(response.data?.name).toBe("Updated Team Name");
-    });
-
-    // Test 17: Add team member
-    it("can add a member to a team", async () => {
-      if (!userId) {
+      if (!userRes.data) {
         throw new Error(
-          "Test prerequisite failed: userId not set. The 'can create a user' test must pass first."
+          `beforeAll: userCreate returned no body (status ${userRes.response.status})`
         );
       }
-      const { client, testName } = getContext();
-      const response = await teamMemberAdd({
+      userId = userRes.data.id;
+
+      // Stable project fixture used by downstream persistence checks (see
+      // shared/postgres-data.ts). The mutating "create a project" test below
+      // uses scratch slugs so it remains order-independent.
+      const projectRes = await projectCreate({
         client,
-        path: {
-          org_slug: `${testName}-org`,
-          team_slug: "test-team",
-        },
-        body: {
-          user_id: userId,
-          role: "member",
-        },
+        path: { org_slug: orgSlug },
+        body: { slug: "test-project", name: "Test Project" },
+      });
+      if (!projectRes.data) {
+        throw new Error(
+          `beforeAll: projectCreate returned no body (status ${projectRes.response.status})`
+        );
+      }
+    });
+
+    /** Create a scratch team owned by the shared org for tests that mutate it. */
+    const createScratchTeam = async (): Promise<{ slug: string; id: string }> => {
+      const { client } = getContext();
+      const slug = `scratch-team-${scratchSuffix()}`;
+      const res = await teamCreate({
+        client,
+        path: { org_slug: orgSlug },
+        body: { slug, name: `Scratch Team ${slug}` },
+      });
+      if (!res.data) {
+        throw new Error(
+          `createScratchTeam failed (status ${res.response.status})`
+        );
+      }
+      return { slug, id: res.data.id };
+    };
+
+    // ── Org / project / user CRUD ─────────────────────────────────────────
+
+    it("can list organizations", async () => {
+      const { client } = getContext();
+      const response = await organizationList({ client });
+
+      expect(response.response.status).toBe(200);
+      expect(response.data?.data).toBeDefined();
+      expect(Array.isArray(response.data?.data)).toBe(true);
+      // The shared beforeAll org should be visible in the list.
+      const slugs = response.data?.data.map((o) => o.slug);
+      expect(slugs).toContain(orgSlug);
+    });
+
+    it("can create an organization", async () => {
+      const { client } = getContext();
+      const slug = `scratch-org-${scratchSuffix()}`;
+      const response = await organizationCreate({
+        client,
+        body: { slug, name: `Scratch Org ${slug}` },
       });
 
       expect(response.response.status).toBe(201);
-      expect(response.data).toBeDefined();
-      expect(response.data?.role).toBe("member");
+      expect(response.data?.slug).toBe(slug);
+      expect(response.data?.id).toBeDefined();
     });
 
-    // Test 18: List team members
-    it("can list team members", async () => {
-      const { client, testName } = getContext();
-      const response = await teamMemberList({
+    it("can get an organization by slug", async () => {
+      const { client } = getContext();
+      const response = await organizationGet({
         client,
-        path: {
-          org_slug: `${testName}-org`,
-          team_slug: "test-team",
-        },
+        path: { slug: orgSlug },
       });
 
       expect(response.response.status).toBe(200);
-      expect(response.data).toBeDefined();
-      expect(response.data?.data).toBeDefined();
-      expect(Array.isArray(response.data?.data)).toBe(true);
-
-      const memberIds = response.data?.data.map((m) => m.user_id);
-      expect(memberIds).toContain(userId);
+      expect(response.data?.slug).toBe(orgSlug);
     });
 
-    // Test 19: Update team member role
-    it("can update a team member's role", async () => {
-      const { client, testName } = getContext();
-      const response = await teamMemberUpdate({
+    it("can create a project in an organization", async () => {
+      const { client } = getContext();
+      const slug = `scratch-project-${scratchSuffix()}`;
+      const response = await projectCreate({
         client,
-        path: {
-          org_slug: `${testName}-org`,
-          team_slug: "test-team",
-          user_id: userId,
-        },
-        body: {
-          role: "admin",
-        },
+        path: { org_slug: orgSlug },
+        body: { slug, name: `Scratch Project ${slug}` },
       });
 
-      expect(response.response.status).toBe(200);
-      expect(response.data).toBeDefined();
-      expect(response.data?.role).toBe("admin");
+      expect(response.response.status).toBe(201);
+      expect(response.data?.slug).toBe(slug);
     });
 
-    // Test 20: Remove team member
-    it("can remove a team member", async () => {
-      const { client, testName } = getContext();
-      const response = await teamMemberRemove({
-        client,
-        path: {
-          org_slug: `${testName}-org`,
-          team_slug: "test-team",
-          user_id: userId,
-        },
-      });
-
-      expect(response.response.status).toBe(200);
-
-      // Verify member was removed
-      const listResponse = await teamMemberList({
-        client,
-        path: {
-          org_slug: `${testName}-org`,
-          team_slug: "test-team",
-        },
-      });
-
-      const memberIds = listResponse.data?.data.map((m) => m.user_id);
-      expect(memberIds).not.toContain(userId);
-    });
-
-    // Test 21: Create team-scoped API key
-    it("can create a team-scoped API key", async () => {
-      if (!teamId) {
-        throw new Error(
-          "Test prerequisite failed: teamId not set. The 'can create a team' test must pass first."
-        );
-      }
+    it("can create an org-scoped API key", async () => {
       const { client } = getContext();
       const response = await apiKeyCreate({
         client,
         body: {
-          name: "Team API Key",
-          owner: {
-            type: "team",
-            team_id: teamId,
-          },
+          name: `Org Key ${scratchSuffix()}`,
+          owner: { type: "organization", org_id: orgId },
         },
       });
 
       expect(response.response.status).toBe(201);
-      expect(response.data).toBeDefined();
       expect(response.data?.key).toMatch(/^gw_/);
     });
 
-    // Test 22: Delete team
-    it("can delete a team", async () => {
-      const { client, testName } = getContext();
-      const response = await teamDelete({
+    it("can create a user", async () => {
+      const { client } = getContext();
+      const externalId = `scratch-user-${scratchSuffix()}`;
+      const response = await userCreate({
         client,
-        path: {
-          org_slug: `${testName}-org`,
-          team_slug: "test-team",
+        body: {
+          external_id: externalId,
+          email: `${externalId}@example.com`,
+          name: "Scratch User",
         },
+      });
+
+      expect(response.response.status).toBe(201);
+      expect(response.data?.external_id).toBe(externalId);
+    });
+
+    // ── Team CRUD ─────────────────────────────────────────────────────────
+
+    it("can create a team", async () => {
+      const team = await createScratchTeam();
+      expect(team.slug).toMatch(/^scratch-team-/);
+      expect(team.id).toBeDefined();
+    });
+
+    it("can get a team by slug", async () => {
+      const { client } = getContext();
+      const team = await createScratchTeam();
+      const response = await teamGet({
+        client,
+        path: { org_slug: orgSlug, team_slug: team.slug },
+      });
+
+      expect(response.response.status).toBe(200);
+      expect(response.data?.id).toBe(team.id);
+    });
+
+    it("can list teams in an organization", async () => {
+      const { client } = getContext();
+      const team = await createScratchTeam();
+      const response = await teamList({
+        client,
+        path: { org_slug: orgSlug },
+      });
+
+      expect(response.response.status).toBe(200);
+      expect(response.data?.data).toBeDefined();
+      const teamSlugs = response.data?.data.map((t) => t.slug);
+      expect(teamSlugs).toContain(team.slug);
+    });
+
+    it("can update a team", async () => {
+      const { client } = getContext();
+      const team = await createScratchTeam();
+      const response = await teamUpdate({
+        client,
+        path: { org_slug: orgSlug, team_slug: team.slug },
+        body: { name: "Updated Team Name" },
+      });
+
+      expect(response.response.status).toBe(200);
+      expect(response.data?.name).toBe("Updated Team Name");
+    });
+
+    it("can add a member to a team", async () => {
+      const { client } = getContext();
+      const team = await createScratchTeam();
+      const response = await teamMemberAdd({
+        client,
+        path: { org_slug: orgSlug, team_slug: team.slug },
+        body: { user_id: userId, role: "member" },
+      });
+
+      expect(response.response.status).toBe(201);
+      expect(response.data?.role).toBe("member");
+    });
+
+    it("can list team members", async () => {
+      const { client } = getContext();
+      const team = await createScratchTeam();
+      await teamMemberAdd({
+        client,
+        path: { org_slug: orgSlug, team_slug: team.slug },
+        body: { user_id: userId, role: "member" },
+      });
+      const response = await teamMemberList({
+        client,
+        path: { org_slug: orgSlug, team_slug: team.slug },
+      });
+
+      expect(response.response.status).toBe(200);
+      const memberIds = response.data?.data.map((m) => m.user_id);
+      expect(memberIds).toContain(userId);
+    });
+
+    it("can update a team member's role", async () => {
+      const { client } = getContext();
+      const team = await createScratchTeam();
+      await teamMemberAdd({
+        client,
+        path: { org_slug: orgSlug, team_slug: team.slug },
+        body: { user_id: userId, role: "member" },
+      });
+      const response = await teamMemberUpdate({
+        client,
+        path: { org_slug: orgSlug, team_slug: team.slug, user_id: userId },
+        body: { role: "admin" },
+      });
+
+      expect(response.response.status).toBe(200);
+      expect(response.data?.role).toBe("admin");
+    });
+
+    it("can remove a team member", async () => {
+      const { client } = getContext();
+      const team = await createScratchTeam();
+      await teamMemberAdd({
+        client,
+        path: { org_slug: orgSlug, team_slug: team.slug },
+        body: { user_id: userId, role: "member" },
+      });
+      const response = await teamMemberRemove({
+        client,
+        path: { org_slug: orgSlug, team_slug: team.slug, user_id: userId },
       });
 
       expect(response.response.status).toBe(200);
 
-      // Verify team was deleted (should return 404)
-      const getResponse = await teamGet({
+      const listResponse = await teamMemberList({
         client,
-        path: {
-          org_slug: `${testName}-org`,
-          team_slug: "test-team",
+        path: { org_slug: orgSlug, team_slug: team.slug },
+      });
+      const memberIds = listResponse.data?.data.map((m) => m.user_id);
+      expect(memberIds).not.toContain(userId);
+    });
+
+    it("can create a team-scoped API key", async () => {
+      const { client } = getContext();
+      const team = await createScratchTeam();
+      const response = await apiKeyCreate({
+        client,
+        body: {
+          name: `Team API Key ${scratchSuffix()}`,
+          owner: { type: "team", team_id: team.id },
         },
       });
 
+      expect(response.response.status).toBe(201);
+      expect(response.data?.key).toMatch(/^gw_/);
+    });
+
+    it("can delete a team", async () => {
+      const { client } = getContext();
+      const team = await createScratchTeam();
+      const response = await teamDelete({
+        client,
+        path: { org_slug: orgSlug, team_slug: team.slug },
+      });
+
+      expect(response.response.status).toBe(200);
+
+      const getResponse = await teamGet({
+        client,
+        path: { org_slug: orgSlug, team_slug: team.slug },
+      });
       expect(getResponse.response.status).toBe(404);
     });
   });

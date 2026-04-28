@@ -19,20 +19,36 @@ import { useToast } from "@/components/Toast/Toast";
 import { useConfirm } from "@/components/ConfirmDialog/ConfirmDialog";
 import { exportAllIndexedDBData, deleteIndexedDBDatabase } from "@/hooks/useIndexedDB";
 
+import { formatApiError } from "@/utils/formatApiError";
 // localStorage keys used by the app
 const LOCAL_STORAGE_KEYS = ["hadrian-auth", "hadrian-mcp-servers", "hadrian-preferences"] as const;
 
-/** Export all localStorage data for Hadrian keys */
+/** Sanitize a stored auth blob so the export doesn't ship the bearer token. */
+function sanitizeForExport(key: string, value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  if (key === "hadrian-auth") {
+    const { token: _token, ...rest } = value as Record<string, unknown>;
+    return { ...rest, token: "[redacted]" };
+  }
+  return value;
+}
+
+/** Export all localStorage data for Hadrian keys.
+ *  Auth tokens are redacted: a user emailing this export "for support"
+ *  shouldn't be shipping their gateway credential. */
 function exportLocalStorageData(): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const key of LOCAL_STORAGE_KEYS) {
     try {
       const value = localStorage.getItem(key);
       if (value) {
-        result[key] = JSON.parse(value);
+        result[key] = sanitizeForExport(key, JSON.parse(value));
       }
     } catch {
-      // If parsing fails, store as raw string
+      // If parsing fails, store as raw string (auth blob always parses, so
+      // raw strings reaching here aren't credentials we know about)
       const value = localStorage.getItem(key);
       if (value) {
         result[key] = value;
@@ -103,7 +119,7 @@ export default function AccountPage() {
       });
       toast({
         title: "Failed to revoke session",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -139,7 +155,7 @@ export default function AccountPage() {
     onError: (error) => {
       toast({
         title: "Failed to delete account",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -185,7 +201,7 @@ export default function AccountPage() {
     } catch (error) {
       toast({
         title: "Failed to export data",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     }
@@ -219,7 +235,7 @@ export default function AccountPage() {
       } catch (error) {
         toast({
           title: "Failed to clear local data",
-          description: String(error),
+          description: formatApiError(error),
           type: "error",
         });
       }

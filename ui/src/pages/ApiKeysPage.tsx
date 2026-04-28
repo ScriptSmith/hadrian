@@ -50,6 +50,7 @@ import { MoreHorizontal, Trash2 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/Tooltip/Tooltip";
 import { cn } from "@/utils/cn";
 
+import { formatApiError } from "@/utils/formatApiError";
 function ApiKeyCard({
   apiKey,
   readOnly,
@@ -432,7 +433,7 @@ export default function ApiKeysPage() {
     onError: (error) => {
       toast({
         title: "Failed to create API key",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -448,7 +449,7 @@ export default function ApiKeysPage() {
     onError: (error) => {
       toast({
         title: "Failed to revoke API key",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },
@@ -467,7 +468,7 @@ export default function ApiKeysPage() {
     onError: (error) => {
       toast({
         title: "Failed to rotate API key",
-        description: String(error),
+        description: formatApiError(error),
         type: "error",
       });
     },

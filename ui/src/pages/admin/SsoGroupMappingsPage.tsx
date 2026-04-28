@@ -60,6 +60,7 @@ import { useConfirm } from "@/components/ConfirmDialog/ConfirmDialog";
 import { Badge } from "@/components/Badge/Badge";
 import { formatDateTime } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 const columnHelper = createColumnHelper<SsoGroupMapping>();
 
 // Form schema for creating/editing a mapping
@@ -208,7 +209,11 @@ export default function SsoGroupMappingsPage() {
       toast({ title: "Group mapping created", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to create mapping", description: String(error), type: "error" });
+      toast({
+        title: "Failed to create mapping",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -221,7 +226,11 @@ export default function SsoGroupMappingsPage() {
       toast({ title: "Group mapping updated", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to update mapping", description: String(error), type: "error" });
+      toast({
+        title: "Failed to update mapping",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -233,7 +242,11 @@ export default function SsoGroupMappingsPage() {
       toast({ title: "Group mapping deleted", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to delete mapping", description: String(error), type: "error" });
+      toast({
+        title: "Failed to delete mapping",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -244,7 +257,11 @@ export default function SsoGroupMappingsPage() {
       setTestResults(data);
     },
     onError: (error) => {
-      toast({ title: "Failed to test mappings", description: String(error), type: "error" });
+      toast({
+        title: "Failed to test mappings",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -269,7 +286,11 @@ export default function SsoGroupMappingsPage() {
       }
     },
     onError: (error) => {
-      toast({ title: "Failed to import mappings", description: String(error), type: "error" });
+      toast({
+        title: "Failed to import mappings",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -325,7 +346,11 @@ export default function SsoGroupMappingsPage() {
 
       toast({ title: `Exported as ${format.toUpperCase()}`, type: "success" });
     } catch (error) {
-      toast({ title: "Failed to export mappings", description: String(error), type: "error" });
+      toast({
+        title: "Failed to export mappings",
+        description: formatApiError(error),
+        type: "error",
+      });
     } finally {
       setIsExporting(false);
     }
@@ -455,7 +480,7 @@ export default function SsoGroupMappingsPage() {
         },
       });
     } catch (err) {
-      toast({ title: "Failed to parse file", description: String(err), type: "error" });
+      toast({ title: "Failed to parse file", description: formatApiError(err), type: "error" });
     }
   };
 

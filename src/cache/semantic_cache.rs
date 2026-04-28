@@ -38,10 +38,10 @@ use tokio::sync::mpsc;
 
 use super::{
     embedding_service::{EmbeddingError, EmbeddingService},
-    keys::CacheKeys,
+    keys::{CacheKeys, CacheTenantScope},
     response_cache::CachedResponse,
     traits::{Cache, CacheExt},
-    vector_store::{VectorBackend, VectorMetadata, VectorStoreError},
+    vector_store::{VectorBackend, VectorMetadata, VectorStoreError, VectorTenantFilter},
 };
 use crate::{
     api_types::CreateChatCompletionPayload, config::SemanticCachingConfig, observability::metrics,
@@ -89,6 +89,9 @@ pub struct StoreParams<'a> {
     pub model: &'a str,
     /// The provider that generated the response
     pub provider: &'a str,
+    /// Tenant scope used to key the response and tag the embedding so
+    /// cross-tenant exact and semantic matches are impossible.
+    pub tenant: &'a CacheTenantScope,
     /// The response body bytes
     pub body: Vec<u8>,
     /// The response content type
@@ -97,10 +100,6 @@ pub struct StoreParams<'a> {
     pub key_components: &'a crate::config::CacheKeyComponents,
     /// Time-to-live for the cached response
     pub ttl: Duration,
-    /// Optional organization ID for multi-tenant isolation
-    pub organization_id: Option<String>,
-    /// Optional project ID for finer-grained isolation
-    pub project_id: Option<String>,
 }
 
 /// Semantic cache service combining exact and semantic matching.
@@ -224,6 +223,7 @@ impl SemanticCache {
         payload: &CreateChatCompletionPayload,
         model: &str,
         key_components: &crate::config::CacheKeyComponents,
+        tenant: &CacheTenantScope,
         force_refresh: bool,
     ) -> SemanticLookupResult {
         // Force refresh bypasses cache lookup
@@ -243,7 +243,7 @@ impl SemanticCache {
         }
 
         // Generate exact cache key
-        let cache_key = CacheKeys::response_cache(payload, model, key_components);
+        let cache_key = CacheKeys::response_cache(payload, model, key_components, tenant);
 
         // Step 1: Try exact match first (fastest)
         match self.cache.get_json::<CachedResponse>(&cache_key).await {
@@ -283,7 +283,9 @@ impl SemanticCache {
             }
         };
 
-        // Step 3: Search for similar embeddings
+        // Step 3: Search for similar embeddings, scoped to this tenant.
+        let vector_tenant_filter =
+            VectorTenantFilter::new(tenant.org_id.as_deref(), tenant.project_id.as_deref());
         let search_results = match self
             .vector_store
             .search(
@@ -291,6 +293,7 @@ impl SemanticCache {
                 self.config.top_k,
                 self.config.similarity_threshold,
                 Some(model),
+                vector_tenant_filter,
             )
             .await
         {
@@ -305,8 +308,14 @@ impl SemanticCache {
             }
         };
 
-        // Step 4: Find best semantic match
-        if let Some(best_match) = search_results.into_iter().next() {
+        // Step 4: Find best semantic match. We re-apply the tenant filter
+        // here as well so a backend that doesn't (or can't) enforce the
+        // filter at the query layer still cannot return another tenant's
+        // cached response.
+        if let Some(best_match) = search_results
+            .into_iter()
+            .find(|r| vector_tenant_filter.matches(&r.metadata))
+        {
             // Look up the cached response using the matched cache key
             match self
                 .cache
@@ -337,6 +346,7 @@ impl SemanticCache {
                     );
                 }
                 Err(e) => {
+                    metrics::record_cache_operation("semantic", "get", "error");
                     tracing::warn!(
                         matched_key = %best_match.metadata.cache_key,
                         error = %e,
@@ -369,8 +379,12 @@ impl SemanticCache {
         }
 
         // Generate exact cache key
-        let cache_key =
-            CacheKeys::response_cache(params.payload, params.model, params.key_components);
+        let cache_key = CacheKeys::response_cache(
+            params.payload,
+            params.model,
+            params.key_components,
+            params.tenant,
+        );
 
         // Create cached response
         let cached = CachedResponse {
@@ -409,8 +423,8 @@ impl SemanticCache {
             model: params.model.to_string(),
             text,
             ttl: params.ttl,
-            organization_id: params.organization_id,
-            project_id: params.project_id,
+            organization_id: params.tenant.org_id.clone(),
+            project_id: params.tenant.project_id.clone(),
         };
 
         if let Err(e) = self.embedding_tx.try_send(task) {

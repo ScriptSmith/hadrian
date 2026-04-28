@@ -127,7 +127,7 @@ if [ "$RUN_BACKEND" = true ]; then
 
     run_check "Tests (unit + integration)" cargo test -- --include-ignored
 
-    run_check "Security audit" cargo audit || true  # Don't fail on audit warnings
+    run_check "Security audit" cargo audit
 fi
 
 # Frontend checks

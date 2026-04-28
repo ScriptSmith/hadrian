@@ -44,7 +44,8 @@ WORKDIR /app/docs
 RUN pnpm build
 
 # Stage 2: Build Rust application
-FROM rustlang/rust:nightly-slim AS builder
+# Pinned to the latest stable Rust toolchain.
+FROM rust:1.95.0-slim AS builder
 
 # Install build dependencies
 # Includes SAML libraries (libxml2, libxslt, xmlsec1) for samael crate
@@ -90,19 +91,19 @@ COPY --from=frontend-builder /app/docs/out ./docs/out/
 # Fetch model catalog (embedded at compile time via include_str!)
 RUN mkdir -p data && curl -sSL https://models.dev/api.json -o data/models-dev-catalog.json
 
-# Force fresh build of the main crate by removing cached artifacts.
-# The --mount=type=cache for target/ persists across builds, but fingerprints
-# may not detect all source changes. Removing the crate's artifacts ensures
-# a full recompile of application code (dependencies remain cached).
-RUN touch src/main.rs && \
+# Build the actual application.
+# The --mount=type=cache for target/ persists across builds, but the dummy-source
+# fingerprints from the dependency-build layer can survive even after the real
+# sources are copied in, causing the bin to link against stale rmeta that lacks
+# modules from the real lib.rs. Wipe the hadrian crate's artifacts inside the
+# same RUN as the build (so the cache mount is actually active) to force a full
+# recompile of application code while keeping dependency caches intact.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/src/hadrian/target \
     rm -rf target/release/.fingerprint/hadrian-* \
            target/release/deps/hadrian-* \
            target/release/deps/libhadrian-* \
-           target/release/hadrian
-
-# Build the actual application
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/src/hadrian/target \
+           target/release/hadrian && \
     cargo build --release && \
     cp target/release/hadrian /usr/src/hadrian/hadrian-bin
 
@@ -110,11 +111,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM debian:trixie-slim
 
 # Install runtime dependencies
-# Includes SAML libraries for XML signature verification
+# Includes SAML libraries for XML signature verification.
+# `curl` was previously required for the HEALTHCHECK; the binary now ships
+# with a `hadrian healthcheck` subcommand so curl is no longer needed.
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
-    curl \
     libxml2 \
     libxslt1.1 \
     libxmlsec1 \
@@ -156,8 +158,9 @@ EOF
 # Expose port
 EXPOSE 8080
 
-# Health check
+# Health check (uses the built-in `hadrian healthcheck` subcommand so the
+# runtime image doesn't need to ship `curl`).
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD ["/app/hadrian", "--config", "/app/config/hadrian.toml", "healthcheck"]
 
 CMD ["/app/hadrian", "--config", "/app/config/hadrian.toml"]

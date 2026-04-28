@@ -9,10 +9,22 @@ export const AuthContext = createContext<AuthContextValue | null>(null);
 
 const STORAGE_KEY = "hadrian-auth";
 
+/**
+ * TTL for the API key kept in `localStorage`. The proper fix is to move the
+ * token into a httpOnly+Secure cookie, but that requires a backend session
+ * the gateway doesn't currently issue for API-key logins. Until then, we cap
+ * the on-disk lifetime so an exfiltrated localStorage entry stops being
+ * useful within a day. Re-login refreshes the timestamp.
+ */
+const API_KEY_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
 interface StoredAuth {
   method: AuthMethod;
   token: string;
   user?: User;
+  /** Wall-clock expiry; absent on entries written by older builds (treated as
+   *  expired so they get cleared on next load). */
+  expiresAt?: number;
 }
 
 interface MeResponse {
@@ -60,45 +72,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     token: null,
   });
 
-  // Check for header-based auth (zero-trust proxy)
+  // Check for header-based auth (zero-trust proxy). Probe `/auth/me` rather
+  // than an admin endpoint so non-admin header-authenticated users (who cannot
+  // list organizations) still resolve to an authenticated session.
   const checkHeaderAuth = useCallback(async (): Promise<{
     user: User;
     token: string;
   } | null> => {
-    // In header auth mode, the proxy sets headers that the backend trusts
-    // We can make a request to a "whoami" endpoint or just trust the UI config
-    // For now, we'll check if header auth is available and make a test request
     if (!config?.auth.methods.includes("header")) {
       return null;
     }
 
-    try {
-      // Try to access an admin endpoint to see if we're authenticated via headers
-      const response = await fetch("/admin/v1/organizations?limit=1", {
-        credentials: "include",
-      });
-
-      if (response.ok) {
-        // Fetch user info from /auth/me
-        const user = await fetchMe();
-        if (user) {
-          return { user, token: "header-auth" };
-        }
-        // Fallback if /auth/me doesn't work
-        const userEmail = response.headers.get("X-Forwarded-User");
-        return {
-          user: {
-            id: userEmail || "header-user",
-            email: userEmail || undefined,
-          },
-          token: "header-auth",
-        };
-      }
-    } catch {
-      // Header auth not working
-    }
-
-    return null;
+    const user = await fetchMe();
+    return user ? { user, token: "header-auth" } : null;
   }, [config?.auth.methods]);
 
   // Initialize auth state
@@ -133,8 +119,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      // Check for stored credentials
+      // Check for stored credentials. API-key entries written before the TTL
+      // landed (or that have aged out) are evicted here so a long-stale token
+      // doesn't keep authenticating the SPA forever.
       if (storedAuth) {
+        const expired =
+          storedAuth.method === "api_key" &&
+          (storedAuth.expiresAt === undefined || storedAuth.expiresAt < Date.now());
+        if (expired) {
+          setStoredAuth(null);
+          setState({
+            isAuthenticated: false,
+            isLoading: false,
+            user: null,
+            method: null,
+            token: null,
+          });
+          return;
+        }
+
         // Refresh user info from server (user_id may have changed)
         const user = await fetchMe(storedAuth.token);
         setState({
@@ -205,6 +208,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             method: "api_key",
             token: credentials.apiKey,
             user: user || undefined,
+            expiresAt: Date.now() + API_KEY_TTL_MS,
           };
 
           setStoredAuth(authData);
@@ -250,13 +254,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       token: null,
     });
 
-    // For OIDC, we might want to redirect to the logout endpoint
-    if (state.method === "oidc" && config?.auth.oidc) {
-      // Most OIDC providers have a logout endpoint
-      const logoutUrl = config.auth.oidc.authorization_url.replace("/auth", "/logout");
-      window.location.href = `${logoutUrl}?redirect_uri=${encodeURIComponent(window.location.origin)}`;
+    // For OIDC, hand off to the backend logout endpoint. The previous
+    // `authorization_url.replace("/auth", "/logout")` trick produced a wrong
+    // URL for any provider whose authorization endpoint isn't of the form
+    // `https://idp/.../auth` (Keycloak, dex, generic providers, etc). The
+    // backend already deletes the session, redirects to
+    // `end_session_endpoint` from OIDC discovery when configured, and falls
+    // back to "/", so we just navigate there.
+    if (state.method === "oidc") {
+      window.location.href = "/auth/logout";
     }
-  }, [config?.auth.oidc, setStoredAuth, state.method]);
+  }, [setStoredAuth, state.method]);
 
   const setApiKey = useCallback(
     (apiKey: string) => {

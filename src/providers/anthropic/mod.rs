@@ -15,7 +15,7 @@ use convert::{
     convert_anthropic_to_responses_response, convert_chat_completion_reasoning_config,
     convert_messages, convert_reasoning_config, convert_response,
     convert_responses_input_to_messages, convert_responses_tool_choice, convert_responses_tools,
-    convert_stop, convert_tool_choice, convert_tools, supports_adaptive_thinking,
+    convert_stop, convert_tool_choice, convert_tools,
 };
 use serde::Deserialize;
 use stream::{AnthropicToOpenAIStream, AnthropicToResponsesStream};
@@ -45,18 +45,25 @@ const DEFAULT_MAX_TOKENS: u32 = 4096;
 
 /// Compute the `anthropic-beta` header value based on model and thinking config.
 ///
-/// When thinking is enabled on models that support interleaved thinking (Opus 4.6+),
-/// include the `interleaved-thinking-2025-05-14` beta flag.
+/// When thinking is enabled on models that match an entry in
+/// `interleaved_thinking_models` (substring match), include the
+/// `interleaved-thinking-2025-05-14` beta flag. Some Anthropic models reject
+/// this header, so the allowlist is configurable.
 fn compute_beta_header(
     model: &str,
     thinking: &Option<types::AnthropicThinkingConfig>,
+    interleaved_thinking_models: &[String],
 ) -> Option<String> {
     let thinking_enabled = matches!(
         thinking,
         Some(types::AnthropicThinkingConfig::Enabled { .. })
             | Some(types::AnthropicThinkingConfig::Adaptive)
     );
-    if thinking_enabled && supports_adaptive_thinking(model) {
+    if thinking_enabled
+        && interleaved_thinking_models
+            .iter()
+            .any(|pat| !pat.is_empty() && model.contains(pat.as_str()))
+    {
         Some("interleaved-thinking-2025-05-14".to_string())
     } else {
         None
@@ -74,6 +81,7 @@ pub struct AnthropicProvider {
     circuit_breaker: Option<Arc<CircuitBreaker>>,
     streaming_buffer: StreamingBufferConfig,
     image_fetch_config: ImageFetchConfig,
+    interleaved_thinking_models: Vec<String>,
 }
 
 impl AnthropicProvider {
@@ -100,6 +108,11 @@ impl AnthropicProvider {
     ) -> Self {
         let circuit_breaker = registry.get_or_create(provider_name, &config.circuit_breaker);
 
+        // Anthropic supports HTTPS image URLs natively, so don't waste cycles
+        // re-encoding them as base64 data URLs in the preprocess step.
+        let mut image_fetch_config = image_fetch_config;
+        image_fetch_config.pass_through_https = true;
+
         Self {
             api_key: config.api_key.clone(),
             base_url: config.base_url.trim_end_matches('/').to_string(),
@@ -111,6 +124,7 @@ impl AnthropicProvider {
             circuit_breaker,
             streaming_buffer: config.streaming_buffer.clone(),
             image_fetch_config,
+            interleaved_thinking_models: config.interleaved_thinking_models.clone(),
         }
     }
 }
@@ -203,8 +217,11 @@ impl Provider for AnthropicProvider {
         };
 
         // Pre-serialize request body before retry loop to avoid repeated serialization
-        let beta_header =
-            compute_beta_header(&anthropic_request.model, &anthropic_request.thinking);
+        let beta_header = compute_beta_header(
+            &anthropic_request.model,
+            &anthropic_request.thinking,
+            &self.interleaved_thinking_models,
+        );
         let body = serde_json::to_vec(&anthropic_request).unwrap_or_default();
 
         let url = format!("{}/v1/messages", self.base_url);
@@ -341,8 +358,11 @@ impl Provider for AnthropicProvider {
         };
 
         // Pre-serialize request body before retry loop to avoid repeated serialization
-        let beta_header =
-            compute_beta_header(&anthropic_request.model, &anthropic_request.thinking);
+        let beta_header = compute_beta_header(
+            &anthropic_request.model,
+            &anthropic_request.thinking,
+            &self.interleaved_thinking_models,
+        );
         let body = serde_json::to_vec(&anthropic_request).unwrap_or_default();
 
         let url = format!("{}/v1/messages", self.base_url);
@@ -493,5 +513,58 @@ impl Provider for AnthropicProvider {
         }
 
         Ok(ModelsResponse { data: all_models })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn enabled() -> Option<types::AnthropicThinkingConfig> {
+        Some(types::AnthropicThinkingConfig::Adaptive)
+    }
+
+    #[test]
+    fn beta_header_set_for_allowed_model() {
+        let allow = vec!["opus-4-6".to_string()];
+        assert_eq!(
+            compute_beta_header("claude-opus-4-6-20260101", &enabled(), &allow),
+            Some("interleaved-thinking-2025-05-14".to_string())
+        );
+    }
+
+    #[test]
+    fn beta_header_skipped_for_unlisted_model() {
+        let allow = vec!["opus-4-6".to_string()];
+        assert_eq!(
+            compute_beta_header("claude-sonnet-4-5-20250929", &enabled(), &allow),
+            None
+        );
+    }
+
+    #[test]
+    fn beta_header_skipped_when_thinking_disabled() {
+        let allow = vec!["opus-4-6".to_string()];
+        assert_eq!(
+            compute_beta_header("claude-opus-4-6-20260101", &None, &allow),
+            None
+        );
+    }
+
+    #[test]
+    fn beta_header_disabled_with_empty_allowlist() {
+        assert_eq!(
+            compute_beta_header("claude-opus-4-6-20260101", &enabled(), &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn beta_header_ignores_empty_pattern() {
+        let allow = vec![String::new()];
+        assert_eq!(
+            compute_beta_header("claude-opus-4-6", &enabled(), &allow),
+            None
+        );
     }
 }

@@ -31,6 +31,7 @@ import {
 import { useCursorPagination } from "@/hooks";
 import { formatDateTime, formatCurrency } from "@/utils/formatters";
 
+import { formatApiError } from "@/utils/formatApiError";
 const columnHelper = createColumnHelper<ApiKey>();
 
 export default function ApiKeysPage() {
@@ -77,7 +78,11 @@ export default function ApiKeysPage() {
       toast({ title: "API key created", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to create API key", description: String(error), type: "error" });
+      toast({
+        title: "Failed to create API key",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 
@@ -88,7 +93,11 @@ export default function ApiKeysPage() {
       toast({ title: "API key revoked", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to revoke API key", description: String(error), type: "error" });
+      toast({
+        title: "Failed to revoke API key",
+        description: formatApiError(error),
+        type: "error",
+      });
     },
   });
 

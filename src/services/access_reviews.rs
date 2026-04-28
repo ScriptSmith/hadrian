@@ -201,79 +201,17 @@ impl AccessReviewService {
         Ok(result.items.first().map(|log| log.timestamp))
     }
 
-    /// Calculate summary statistics for the access inventory
+    /// Calculate summary statistics for the access inventory.
+    ///
+    /// Each statistic is a single aggregate query against its source table
+    /// (5 queries total) so this scales to large tenants without iterating
+    /// per-user or per-org.
     async fn calculate_summary(&self) -> DbResult<AccessInventorySummary> {
-        // Count total organizations
         let total_organizations = self.db.organizations().count(false).await?;
-
-        // For project count, we need to iterate through orgs
-        // This is not ideal but ProjectRepo doesn't have a global count method
-        let orgs = self
-            .db
-            .organizations()
-            .list(ListParams {
-                limit: Some(10000),
-                include_deleted: false,
-                ..Default::default()
-            })
-            .await?;
-
-        let mut total_projects = 0i64;
-        for org in &orgs.items {
-            total_projects += self.db.projects().count_by_org(org.id, false).await?;
-        }
-
-        // For membership counts, we need to iterate through users
-        // This is not ideal for large datasets, but sufficient for now
-        let users = self
-            .db
-            .users()
-            .list(ListParams {
-                limit: Some(10000),
-                include_deleted: false,
-                ..Default::default()
-            })
-            .await?;
-
-        let mut total_org_memberships = 0i64;
-        let mut total_project_memberships = 0i64;
-        let mut total_active_api_keys = 0i64;
-        let now = Utc::now();
-
-        for user in users.items {
-            let org_memberships = self
-                .db
-                .users()
-                .get_org_memberships_for_user(user.id)
-                .await?;
-            total_org_memberships += org_memberships.len() as i64;
-
-            let project_memberships = self
-                .db
-                .users()
-                .get_project_memberships_for_user(user.id)
-                .await?;
-            total_project_memberships += project_memberships.len() as i64;
-
-            let api_keys = self
-                .db
-                .api_keys()
-                .list_by_user(
-                    user.id,
-                    ListParams {
-                        limit: Some(1000),
-                        include_deleted: true,
-                        ..Default::default()
-                    },
-                )
-                .await?;
-
-            for key in api_keys.items {
-                if key.revoked_at.is_none() && key.expires_at.is_none_or(|exp| exp >= now) {
-                    total_active_api_keys += 1;
-                }
-            }
-        }
+        let total_projects = self.db.projects().count_total(false).await?;
+        let total_org_memberships = self.db.users().count_total_org_memberships().await?;
+        let total_project_memberships = self.db.users().count_total_project_memberships().await?;
+        let total_active_api_keys = self.db.api_keys().count_total_active().await?;
 
         Ok(AccessInventorySummary {
             total_organizations,

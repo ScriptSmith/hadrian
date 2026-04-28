@@ -282,6 +282,7 @@ rust_decimal = { version = "1.40.0", features = ["macros"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 sha2 = "0.10"
+hmac = "0.12"
 subtle = "2.6.1"
 thiserror = "2.0.17"
 tokio = { version = "1.48.0", features = [
@@ -356,7 +357,7 @@ metrics-exporter-prometheus = { version = "0.16", optional = true }
 open = { version = "5.3.3", optional = true }
 openssl = { version = "0.10", optional = true }
 opentelemetry = { version = "0.31", optional = true }
-opentelemetry-otlp = { version = "0.31", features = ["trace", "logs", "grpc-tonic", "http-proto"], optional = true }
+opentelemetry-otlp = { version = "0.31", features = ["trace", "logs", "grpc-tonic", "gzip-tonic", "http-proto"], optional = true }
 opentelemetry-semantic-conventions = { version = "0.31", optional = true }
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio", "logs"], optional = true }
 redis = { version = "0.32.7", features = ["aio", "tokio-comp", "cluster-async"], optional = true }

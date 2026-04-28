@@ -34,7 +34,7 @@ use std::{sync::Arc, time::Duration};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    keys::CacheKeys,
+    keys::{CacheKeys, CacheTenantScope},
     traits::{Cache, CacheExt},
 };
 use crate::{
@@ -96,6 +96,7 @@ impl ResponseCache {
         &self,
         payload: &CreateChatCompletionPayload,
         model: &str,
+        tenant: &CacheTenantScope,
         force_refresh: bool,
     ) -> CacheLookupResult {
         // Force refresh bypasses cache lookup but still allows caching the response
@@ -122,7 +123,8 @@ impl ResponseCache {
         }
 
         // Generate cache key
-        let cache_key = CacheKeys::response_cache(payload, model, &self.config.key_components);
+        let cache_key =
+            CacheKeys::response_cache(payload, model, &self.config.key_components, tenant);
 
         // Look up in cache
         match self.cache.get_json::<CachedResponse>(&cache_key).await {
@@ -162,6 +164,7 @@ impl ResponseCache {
         payload: &CreateChatCompletionPayload,
         model: &str,
         provider: &str,
+        tenant: &CacheTenantScope,
         body: Vec<u8>,
         content_type: &str,
     ) -> bool {
@@ -194,7 +197,8 @@ impl ResponseCache {
         }
 
         // Generate cache key
-        let cache_key = CacheKeys::response_cache(payload, model, &self.config.key_components);
+        let cache_key =
+            CacheKeys::response_cache(payload, model, &self.config.key_components, tenant);
 
         // Create cached response
         let cached = CachedResponse {
@@ -239,6 +243,7 @@ impl ResponseCache {
         &self,
         payload: &CreateResponsesPayload,
         model: &str,
+        tenant: &CacheTenantScope,
         force_refresh: bool,
     ) -> CacheLookupResult {
         // Force refresh bypasses cache lookup but still allows caching the response
@@ -265,7 +270,8 @@ impl ResponseCache {
         }
 
         // Generate cache key
-        let cache_key = CacheKeys::responses_cache(payload, model, &self.config.key_components);
+        let cache_key =
+            CacheKeys::responses_cache(payload, model, &self.config.key_components, tenant);
 
         // Look up in cache
         match self.cache.get_json::<CachedResponse>(&cache_key).await {
@@ -302,6 +308,7 @@ impl ResponseCache {
         payload: &CreateResponsesPayload,
         model: &str,
         provider: &str,
+        tenant: &CacheTenantScope,
         body: Vec<u8>,
         content_type: &str,
     ) -> bool {
@@ -334,7 +341,8 @@ impl ResponseCache {
         }
 
         // Generate cache key
-        let cache_key = CacheKeys::responses_cache(payload, model, &self.config.key_components);
+        let cache_key =
+            CacheKeys::responses_cache(payload, model, &self.config.key_components, tenant);
 
         // Create cached response
         let cached = CachedResponse {
@@ -419,6 +427,7 @@ impl ResponseCache {
         &self,
         payload: &CreateCompletionPayload,
         model: &str,
+        tenant: &CacheTenantScope,
         force_refresh: bool,
     ) -> CacheLookupResult {
         // Force refresh bypasses cache lookup but still allows caching the response
@@ -445,7 +454,8 @@ impl ResponseCache {
         }
 
         // Generate cache key
-        let cache_key = CacheKeys::completions_cache(payload, model, &self.config.key_components);
+        let cache_key =
+            CacheKeys::completions_cache(payload, model, &self.config.key_components, tenant);
 
         // Look up in cache
         match self.cache.get_json::<CachedResponse>(&cache_key).await {
@@ -482,6 +492,7 @@ impl ResponseCache {
         payload: &CreateCompletionPayload,
         model: &str,
         provider: &str,
+        tenant: &CacheTenantScope,
         body: Vec<u8>,
         content_type: &str,
     ) -> bool {
@@ -514,7 +525,8 @@ impl ResponseCache {
         }
 
         // Generate cache key
-        let cache_key = CacheKeys::completions_cache(payload, model, &self.config.key_components);
+        let cache_key =
+            CacheKeys::completions_cache(payload, model, &self.config.key_components, tenant);
 
         // Create cached response
         let cached = CachedResponse {
@@ -580,6 +592,7 @@ impl ResponseCache {
         &self,
         payload: &CreateEmbeddingPayload,
         model: &str,
+        tenant: &CacheTenantScope,
         force_refresh: bool,
     ) -> CacheLookupResult {
         // Force refresh bypasses cache lookup but still allows caching the response
@@ -595,7 +608,7 @@ impl ResponseCache {
         // Embeddings don't have streaming or temperature, so no bypass checks needed
 
         // Generate cache key
-        let cache_key = CacheKeys::embeddings_cache(payload, model);
+        let cache_key = CacheKeys::embeddings_cache(payload, model, tenant);
 
         // Look up in cache
         match self.cache.get_json::<CachedResponse>(&cache_key).await {
@@ -632,6 +645,7 @@ impl ResponseCache {
         payload: &CreateEmbeddingPayload,
         model: &str,
         provider: &str,
+        tenant: &CacheTenantScope,
         body: Vec<u8>,
         content_type: &str,
     ) -> bool {
@@ -653,7 +667,7 @@ impl ResponseCache {
         }
 
         // Generate cache key
-        let cache_key = CacheKeys::embeddings_cache(payload, model);
+        let cache_key = CacheKeys::embeddings_cache(payload, model, tenant);
 
         // Create cached response
         let cached = CachedResponse {
@@ -764,7 +778,9 @@ mod tests {
         let response_cache = ResponseCache::new(cache, config);
         let payload = create_test_payload(false, Some(0.0));
 
-        let result = response_cache.lookup(&payload, "gpt-4", false).await;
+        let result = response_cache
+            .lookup(&payload, "gpt-4", &CacheTenantScope::unscoped(), false)
+            .await;
         assert!(matches!(result, CacheLookupResult::Bypass));
     }
 
@@ -776,7 +792,9 @@ mod tests {
         let response_cache = ResponseCache::new(cache, config);
         let payload = create_test_payload(true, Some(0.0));
 
-        let result = response_cache.lookup(&payload, "gpt-4", false).await;
+        let result = response_cache
+            .lookup(&payload, "gpt-4", &CacheTenantScope::unscoped(), false)
+            .await;
         assert!(matches!(result, CacheLookupResult::Bypass));
     }
 
@@ -788,7 +806,9 @@ mod tests {
         let response_cache = ResponseCache::new(cache, config);
         let payload = create_test_payload(false, Some(0.7));
 
-        let result = response_cache.lookup(&payload, "gpt-4", false).await;
+        let result = response_cache
+            .lookup(&payload, "gpt-4", &CacheTenantScope::unscoped(), false)
+            .await;
         assert!(matches!(result, CacheLookupResult::Bypass));
     }
 
@@ -801,7 +821,9 @@ mod tests {
         let payload = create_test_payload(false, Some(0.0));
 
         // First lookup should be a miss
-        let result = response_cache.lookup(&payload, "gpt-4", false).await;
+        let result = response_cache
+            .lookup(&payload, "gpt-4", &CacheTenantScope::unscoped(), false)
+            .await;
         assert!(matches!(result, CacheLookupResult::Miss));
 
         // Store a response
@@ -811,6 +833,7 @@ mod tests {
                 &payload,
                 "gpt-4",
                 "openai",
+                &CacheTenantScope::unscoped(),
                 body.clone(),
                 "application/json",
             )
@@ -818,7 +841,9 @@ mod tests {
         assert!(stored);
 
         // Second lookup should be a hit
-        let result = response_cache.lookup(&payload, "gpt-4", false).await;
+        let result = response_cache
+            .lookup(&payload, "gpt-4", &CacheTenantScope::unscoped(), false)
+            .await;
         match result {
             CacheLookupResult::Hit(cached) => {
                 assert_eq!(cached.body, body);
@@ -841,15 +866,26 @@ mod tests {
         // Store a response
         let body = br#"{"id":"test","object":"chat.completion"}"#.to_vec();
         response_cache
-            .store(&payload, "gpt-4", "openai", body, "application/json")
+            .store(
+                &payload,
+                "gpt-4",
+                "openai",
+                &CacheTenantScope::unscoped(),
+                body,
+                "application/json",
+            )
             .await;
 
         // With force_refresh=true, should return Miss even though cached
-        let result = response_cache.lookup(&payload, "gpt-4", true).await;
+        let result = response_cache
+            .lookup(&payload, "gpt-4", &CacheTenantScope::unscoped(), true)
+            .await;
         assert!(matches!(result, CacheLookupResult::Miss));
 
         // With force_refresh=false, should return Hit
-        let result = response_cache.lookup(&payload, "gpt-4", false).await;
+        let result = response_cache
+            .lookup(&payload, "gpt-4", &CacheTenantScope::unscoped(), false)
+            .await;
         assert!(matches!(result, CacheLookupResult::Hit(_)));
     }
 
@@ -865,7 +901,14 @@ mod tests {
         // Try to store a response larger than the limit
         let body = br#"{"id":"test","object":"chat.completion"}"#.to_vec();
         let stored = response_cache
-            .store(&payload, "gpt-4", "openai", body, "application/json")
+            .store(
+                &payload,
+                "gpt-4",
+                "openai",
+                &CacheTenantScope::unscoped(),
+                body,
+                "application/json",
+            )
             .await;
         assert!(!stored);
     }

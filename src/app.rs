@@ -32,6 +32,8 @@ use utoipa_scalar::{Scalar, Servable};
 use crate::observability;
 #[cfg(feature = "utoipa")]
 use crate::openapi;
+#[cfg(feature = "server")]
+use crate::streaming;
 use crate::{
     auth, authz, cache, catalog, config, db, dlq, events, guardrails,
     init::create_provider_instance, jobs, models, pricing, providers, secrets, services,
@@ -320,6 +322,11 @@ pub struct AppState {
     /// Ensures all spawned tasks complete during graceful shutdown.
     #[cfg(feature = "server")]
     pub task_tracker: TaskTracker,
+    /// Bounded channel + drainer for partial-usage logging from
+    /// `UsageTrackingStream::Drop`, which can fire outside a runtime context
+    /// (so it cannot safely spawn tasks of its own).
+    #[cfg(feature = "server")]
+    pub usage_drain: streaming::UsageDrainHandle,
     /// Registry of per-organization OIDC authenticators.
     /// Loaded from org_sso_configs table at startup for multi-tenant SSO.
     #[cfg(feature = "sso")]
@@ -410,7 +417,7 @@ impl AppState {
 
         // Initialize database and services if configured
         #[allow(unreachable_patterns)]
-        let (db, services) = match &config.database {
+        let (db, mut services) = match &config.database {
             config::DatabaseConfig::None => (None, None),
             _ => {
                 let pool = db::DbPool::from_config(&config.database).await?;
@@ -459,6 +466,50 @@ impl AppState {
                 }
             }
         };
+
+        // Wire the cache into services that benefit from a shared backend.
+        // OAuth PKCE uses it for the per-code failure counter that burns a
+        // code after repeated bad verifiers; without a cache it falls back
+        // to the legacy "never burn on failure" behaviour.
+        if let Some(services) = services.as_mut() {
+            services.oauth_pkce = std::mem::replace(
+                &mut services.oauth_pkce,
+                services::OAuthPkceService::new(
+                    db.clone()
+                        .expect("services exist only when db is configured"),
+                ),
+            )
+            .with_cache(cache.clone());
+
+            // SCIM tokens get HMAC-SHA256 hashed with a pepper so that an
+            // attacker who exfiltrates the database alone can't brute-force
+            // them. We derive the pepper from the configured session secret
+            // when one exists; otherwise we fall back to plain SHA-256 (and
+            // log so operators know to set a session secret).
+            #[cfg(feature = "sso")]
+            {
+                let pepper = config
+                    .auth
+                    .session
+                    .as_ref()
+                    .and_then(|s| s.secret.as_ref())
+                    .map(|secret| secret.as_bytes().to_vec());
+                if pepper.is_none() {
+                    tracing::warn!(
+                        "[auth.session].secret is not set — SCIM tokens will be stored as \
+                         unsalted SHA-256. Configure a session secret to enable HMAC peppering."
+                    );
+                }
+                services.scim_configs = std::mem::replace(
+                    &mut services.scim_configs,
+                    services::OrgScimConfigService::new(
+                        db.clone()
+                            .expect("services exist only when db is configured"),
+                    ),
+                )
+                .with_token_pepper(pepper);
+            }
+        }
 
         // Initialize secrets manager based on configuration
         let secrets: Arc<dyn secrets::SecretManager> = match &config.secrets {
@@ -692,12 +743,18 @@ impl AppState {
             // No default redirect URI - per-org SSO configs must specify their own
             let default_redirect_uri: Option<String> = None;
 
+            let url_validation_opts = crate::validation::UrlValidationOptions {
+                allow_loopback: config.server.allow_loopback_urls,
+                allow_private: config.server.allow_private_urls,
+            };
+
             match auth::OidcAuthenticatorRegistry::initialize_from_db(
                 &svc.org_sso_configs,
                 secrets.as_ref(),
                 session_store.clone(),
                 default_session_config.clone(),
                 default_redirect_uri.clone(),
+                url_validation_opts,
             )
             .await
             {
@@ -723,6 +780,7 @@ impl AppState {
                         session_store,
                         default_session_config,
                         default_redirect_uri,
+                        url_validation_opts,
                     );
                     Some(Arc::new(empty_registry))
                 }
@@ -902,6 +960,11 @@ impl AppState {
         // Create the task tracker for background tasks
         #[cfg(feature = "server")]
         let task_tracker = TaskTracker::new();
+        // Bounded usage-drain channel + drainer task. Owned by the same
+        // tracker so graceful shutdown waits for it to finish flushing.
+        #[cfg(feature = "server")]
+        let usage_drain =
+            streaming::UsageDrainHandle::spawn(&task_tracker, streaming::USAGE_DRAIN_CAPACITY);
 
         // Initialize semantic cache if configured
         #[cfg(feature = "server")]
@@ -1078,6 +1141,8 @@ impl AppState {
             provider_health: jobs::ProviderHealthStateRegistry::new(),
             #[cfg(feature = "server")]
             task_tracker,
+            #[cfg(feature = "server")]
+            usage_drain,
             #[cfg(feature = "sso")]
             oidc_registry,
             #[cfg(feature = "saml")]
@@ -1107,13 +1172,10 @@ impl AppState {
             )),
         });
 
-        // Warm the static models cache so /v1/models is fast from the first request
-        if let Ok(ref state) = result
-            && state.config.features.static_models_cache.enabled()
-        {
-            state.warm_static_models_cache().await;
-        }
-
+        // Note: the static models cache is no longer warmed inside
+        // `AppState::new`. The CLI server entrypoint spawns the warm on a
+        // background task after the listener is bound so a slow/dead
+        // provider can't delay startup or the readiness probe.
         result
     }
 
@@ -2006,12 +2068,14 @@ pub fn build_app(config: &config::GatewayConfig, state: AppState) -> Router {
             }
 
             // Add SSO discovery endpoint if database is configured (for per-org SSO)
-            // This is needed for both OIDC and SAML per-org configurations
+            // This is needed for both OIDC and SAML per-org configurations.
+            // Use the dedicated discover throttle (tighter than the global IP
+            // rate limit) to deter SSO-domain enumeration.
             if !config.database.is_none() {
                 let discover_route = get(routes::auth_routes::discover).route_layer(
                     axum::middleware::from_fn_with_state(
                         state.clone(),
-                        middleware::rate_limit_middleware,
+                        middleware::discover_rate_limit_middleware,
                     ),
                 );
                 app = app.route("/auth/discover", discover_route);
@@ -2109,10 +2173,25 @@ pub fn build_app(config: &config::GatewayConfig, state: AppState) -> Router {
         app = app.layer(cors_layer);
     }
 
-    app.layer(axum::extract::DefaultBodyLimit::disable())
-        .layer(TraceLayer::new_for_http())
-        .layer(RequestBodyLimitLayer::new(config.server.body_limit_bytes))
-        .with_state(state)
+    // Body limits are layered:
+    //   * Per-route `DefaultBodyLimit::max(N)` (e.g. audio / files) overrides
+    //     the global axum extractor default for those routes.
+    //   * `DefaultBodyLimit::max(body_limit_bytes)` provides the default cap
+    //     enforced by axum extractors for everything else.
+    //   * `RequestBodyLimitLayer` is the hard tower-level cap, sized to the
+    //     largest configured route limit so the route-level caps are not
+    //     stomped on by an outer layer.
+    let max_body_limit = config
+        .server
+        .body_limit_bytes
+        .max(config.server.audio_body_limit_bytes)
+        .max(config.server.files_body_limit_bytes);
+    app.layer(axum::extract::DefaultBodyLimit::max(
+        config.server.body_limit_bytes,
+    ))
+    .layer(TraceLayer::new_for_http())
+    .layer(RequestBodyLimitLayer::new(max_body_limit))
+    .with_state(state)
 }
 
 /// Returns the OpenAPI spec as JSON

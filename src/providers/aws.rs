@@ -75,6 +75,17 @@ impl AwsCredentialCache {
     /// problem where multiple concurrent requests could all trigger refresh.
     pub async fn get_credentials(&self) -> Result<Credentials, AwsError> {
         loop {
+            // Arm a waiter BEFORE the CAS check. `Notify::notify_waiters`
+            // only wakes tasks already registered at the moment of the call,
+            // so registering after losing the CAS race opens a window where
+            // the refresher could fire `notify_waiters` between our CAS
+            // failure and our `notified().await` — leaving us blocked
+            // indefinitely. `enable()` arms the future without polling so
+            // any subsequent `notify_waiters` is captured.
+            let notified = self.refresh_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
             // Fast path: check cache with read lock
             {
                 let cache = self.credentials.read().await;
@@ -113,8 +124,11 @@ impl AwsCredentialCache {
                 return result;
             }
 
-            // Another task is refreshing. Wait for notification then retry.
-            self.refresh_notify.notified().await;
+            // Lost the CAS race. Our `notified` future is already armed, so
+            // any `notify_waiters` fired after we armed it (including the
+            // one the in-flight refresher will fire) will wake us — no
+            // window for a missed notification.
+            notified.await;
         }
     }
 

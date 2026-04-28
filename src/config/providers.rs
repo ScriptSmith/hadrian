@@ -770,6 +770,19 @@ pub struct AnthropicProviderConfig {
     /// Sovereignty and compliance metadata for this provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sovereignty: Option<SovereigntyMetadata>,
+
+    /// Models for which the `interleaved-thinking-2025-05-14` beta header
+    /// should be sent when thinking is enabled. Each entry is matched against
+    /// the model name as a substring (e.g. `"opus-4-6"` matches
+    /// `"claude-opus-4-6-20250101"`). Some Anthropic models reject this
+    /// header, so override the default list when adding or removing support.
+    /// Set to an empty list to disable the beta header entirely.
+    #[serde(default = "default_interleaved_thinking_models")]
+    pub interleaved_thinking_models: Vec<String>,
+}
+
+pub fn default_interleaved_thinking_models() -> Vec<String> {
+    vec!["opus-4-6".to_string(), "opus-4.6".to_string()]
 }
 
 impl AnthropicProviderConfig {
@@ -879,6 +892,15 @@ pub struct BedrockProviderConfig {
     /// Sovereignty and compliance metadata for this provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sovereignty: Option<SovereigntyMetadata>,
+
+    /// Substring allowlist of Bedrock-hosted Claude models that should
+    /// receive the `interleaved-thinking-2025-05-14` beta header when
+    /// adaptive thinking is requested. Some Bedrock-hosted Claude models
+    /// reject the header, so this lets operators opt models in/out without
+    /// recompiling. Set to an empty list to disable the beta header.
+    /// Mirrors `AnthropicProviderConfig.interleaved_thinking_models`.
+    #[serde(default = "default_interleaved_thinking_models")]
+    pub interleaved_thinking_models: Vec<String>,
 }
 
 #[cfg(feature = "provider-bedrock")]
@@ -1503,6 +1525,14 @@ pub struct StreamingBufferConfig {
     /// Default: 1000 chunks
     #[serde(default = "default_max_output_buffer_chunks")]
     pub max_output_buffer_chunks: usize,
+
+    /// Maximum total bytes of accumulated response state (text and reasoning
+    /// content) per stream. Bounds memory usage if a provider produces a
+    /// runaway response. Bytes beyond this cap are silently dropped from the
+    /// state buffer, but pass-through deltas are still emitted to the client.
+    /// Default: 32 MB
+    #[serde(default = "default_max_response_state_bytes")]
+    pub max_response_state_bytes: usize,
 }
 
 impl Default for StreamingBufferConfig {
@@ -1510,12 +1540,17 @@ impl Default for StreamingBufferConfig {
         Self {
             max_input_buffer_bytes: default_max_input_buffer_bytes(),
             max_output_buffer_chunks: default_max_output_buffer_chunks(),
+            max_response_state_bytes: default_max_response_state_bytes(),
         }
     }
 }
 
 fn default_max_input_buffer_bytes() -> usize {
     16 * 1024 * 1024 // 16 MB
+}
+
+fn default_max_response_state_bytes() -> usize {
+    32 * 1024 * 1024 // 32 MB
 }
 
 fn default_max_output_buffer_chunks() -> usize {
@@ -2868,6 +2903,7 @@ mod tests {
             health_check: ProviderHealthCheckConfig::default(),
             catalog_provider: None,
             sovereignty: None,
+            interleaved_thinking_models: default_interleaved_thinking_models(),
         };
 
         let debug_output = format!("{:?}", config);

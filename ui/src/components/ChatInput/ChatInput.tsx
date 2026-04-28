@@ -437,6 +437,18 @@ export function ChatInput({
     [handleFileSelect]
   );
 
+  const handlePaste = useCallback(
+    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const pastedFiles = event.clipboardData?.files;
+      if (pastedFiles && pastedFiles.length > 0) {
+        // Prevent the textarea from inserting an image filename or data URL.
+        event.preventDefault();
+        handleFileSelect(pastedFiles);
+      }
+    },
+    [handleFileSelect]
+  );
+
   const handleDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
     setIsDragging(true);
@@ -549,6 +561,7 @@ export function ChatInput({
               updateSlashState(target.value, target.selectionStart ?? 0);
             }}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder={placeholder}
             className="min-h-[56px] w-full resize-none border-0 bg-transparent px-4 pt-3 pb-1 text-base focus-visible:ring-0 focus-visible:ring-offset-0"
             autoResize

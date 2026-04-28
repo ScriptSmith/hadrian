@@ -16,6 +16,7 @@ import { useToast } from "@/components/Toast/Toast";
 import { useConfirm } from "@/components/ConfirmDialog/ConfirmDialog";
 import { createSkillColumns } from "@/pages/admin/skillColumns";
 
+import { formatApiError } from "@/utils/formatApiError";
 interface SkillsTabProps {
   orgSlug: string;
   projectSlug: string;
@@ -42,7 +43,7 @@ export function SkillsTab({ orgSlug, projectSlug, projectId }: SkillsTabProps) {
       toast({ title: "Skill deleted", type: "success" });
     },
     onError: (error) => {
-      toast({ title: "Failed to delete skill", description: String(error), type: "error" });
+      toast({ title: "Failed to delete skill", description: formatApiError(error), type: "error" });
     },
   });
 

@@ -47,6 +47,7 @@ impl From<ListQuery> for ListParams {
             sort_order: Default::default(),
             include_deleted: q.include_deleted.unwrap_or(false),
         }
+        .clamp()
     }
 }
 
@@ -78,7 +79,8 @@ impl ListQuery {
             direction,
             sort_order: Default::default(),
             include_deleted: self.include_deleted.unwrap_or(false),
-        })
+        }
+        .clamp())
     }
 }
 
