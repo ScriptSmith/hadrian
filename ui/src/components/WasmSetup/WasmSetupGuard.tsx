@@ -143,6 +143,12 @@ export function WasmSetupGuard({ children }: { children: ReactNode }) {
         downloading: false,
         downloadProgress: null,
       }));
+      // Tell the SW its 60s availability cache is stale before we trigger
+      // the model-list refetch; otherwise the freshly-ready model would
+      // not appear until the cache expires organically.
+      navigator.serviceWorker.controller?.postMessage({
+        type: "BROWSER_AI_AVAILABILITY_CHANGED",
+      });
       queryClient.invalidateQueries({ queryKey: apiV1ModelsQueryKey() });
     } catch (err) {
       setBrowserAi((prev) => ({
@@ -256,8 +262,7 @@ export function WasmSetupGuard({ children }: { children: ReactNode }) {
         ollamaConnecting={ollamaConnecting}
         ollamaConnected={ollamaConnected}
         onOllamaConnect={handleOllamaConnect}
-        browserAi={browserAi}
-        onBrowserAiDownload={handleBrowserAiDownload}
+        browserAi={{ state: browserAi, onDownload: handleBrowserAiDownload }}
       />
     </WasmSetupContext.Provider>
   );

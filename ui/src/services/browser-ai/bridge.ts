@@ -120,6 +120,9 @@ async function handlePrompt(port: MessagePort, payload: PromptRequestPayload): P
       topK: payload.topK,
       monitor(m) {
         m.addEventListener("downloadprogress", (event) => {
+          // `event.loaded` is normalized to a value in [0, 1] per the Prompt
+          // API spec, not a byte count — the spec deliberately omits `total`.
+          // https://github.com/webmachinelearning/prompt-api?tab=readme-ov-file#download-progress
           port.postMessage({ type: "DOWNLOAD_PROGRESS", loaded: event.loaded });
         });
       },

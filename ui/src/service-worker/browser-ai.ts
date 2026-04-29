@@ -40,6 +40,16 @@ interface PromptToolDef {
 let availabilityCache: { state: BridgeAvailabilityReply["state"]; checkedAt: number } | null = null;
 const AVAILABILITY_TTL_MS = 60_000;
 
+/**
+ * Drop the cached availability state so the next `/v1/models` request
+ * re-queries the bridge. Called by the SW message handler after the window
+ * reports a successful model download — without this, the freshly-ready
+ * model would not appear in the list until the 60s TTL expires.
+ */
+export function invalidateAvailabilityCache(): void {
+  availabilityCache = null;
+}
+
 export function isBrowserAiModel(model: unknown): boolean {
   return typeof model === "string" && model.startsWith(BROWSER_AI_PREFIX);
 }
@@ -1021,13 +1031,25 @@ export async function handleChatCompletionsRequest(
   }
 
   const tools = extractTools(body);
-  if (tools.length > 0) {
-    messages = injectToolPrompt(messages, tools);
-  }
   const id = genId("chatcmpl");
   const created = Math.floor(Date.now() / 1000);
   const model = body.model;
   const stream = body.stream === true;
+
+  if (tools.length > 0) {
+    messages = injectToolPrompt(messages, tools);
+    return generateChatCompletionsToolModeResponse(
+      client,
+      body,
+      messages,
+      tools,
+      request.signal,
+      id,
+      created,
+      model,
+      stream
+    );
+  }
 
   if (!stream) {
     let outputText = "";
@@ -1162,6 +1184,159 @@ export async function handleChatCompletionsRequest(
       // Acknowledge unused output for type-checker: `outputText` tracks the
       // streamed text but we don't replay it at the end.
       void outputText;
+
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+  });
+
+  return new Response(sseStream, { status: 200, headers: sseHeaders() });
+}
+
+/**
+ * Tool-aware path for chat completions. Mirrors `generateToolModeResponse`:
+ * applies `responseConstraint`, buffers the constrained envelope, parses it,
+ * and surfaces tool invocations in the standard `tool_calls` field rather
+ * than as raw JSON in `content`. Token-by-token streaming is impossible
+ * here (chunks would be malformed JSON), so streaming clients receive a
+ * single `tool_calls` delta followed by the terminal chunk.
+ */
+async function generateChatCompletionsToolModeResponse(
+  client: Client,
+  body: ChatCompletionsPayload,
+  messages: LanguageModelMessage[],
+  tools: PromptToolDef[],
+  signal: AbortSignal,
+  id: string,
+  created: number,
+  model: string,
+  stream: boolean
+): Promise<Response> {
+  const schema = buildToolResponseSchema(tools);
+
+  let raw = "";
+  let inputTokens = 0;
+  let outputTokens = 0;
+  try {
+    await sendToBridge<BridgeReply>(
+      client,
+      {
+        type: "PROMPT",
+        messages,
+        temperature: body.temperature,
+        topK: body.top_k,
+        responseConstraint: schema,
+      },
+      (reply) => {
+        if (reply.type === "DELTA") {
+          raw += reply.text;
+          return false;
+        }
+        if (reply.type === "DONE") {
+          inputTokens = reply.inputTokens;
+          outputTokens = reply.outputTokens;
+          return true;
+        }
+        if (reply.type === "ERROR") throw new Error(reply.message);
+        if (reply.type === "ABORTED") throw new DOMException("Aborted", "AbortError");
+        return false;
+      },
+      signal
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return jsonError(`Browser AI: ${message}`);
+  }
+
+  const envelope = parseEnvelope(raw);
+  const parsedToolCalls = envelope?.toolCalls ?? [];
+  const text = envelope?.text ?? "";
+
+  const toolCalls = parsedToolCalls.map((call) => ({
+    id: genId("call"),
+    type: "function" as const,
+    function: { name: call.name, arguments: call.arguments },
+  }));
+
+  // OpenAI semantics: when the model returns tool calls, the assistant
+  // message has `content: null` and `finish_reason: "tool_calls"`. When
+  // there are none, we fall back to the text envelope (or the raw output
+  // if the envelope was empty).
+  const hasToolCalls = toolCalls.length > 0;
+  const content = hasToolCalls ? null : text || raw.trim() || "";
+  const finishReason = hasToolCalls ? "tool_calls" : "stop";
+
+  if (!stream) {
+    const message: Record<string, unknown> = { role: "assistant", content };
+    if (hasToolCalls) message.tool_calls = toolCalls;
+    return new Response(
+      JSON.stringify({
+        id,
+        object: "chat.completion",
+        created,
+        model,
+        choices: [{ index: 0, message, finish_reason: finishReason }],
+        usage: {
+          prompt_tokens: inputTokens,
+          completion_tokens: outputTokens,
+          total_tokens: inputTokens + outputTokens,
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  }
+
+  const encoder = new TextEncoder();
+  const sseStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const writeChunk = (chunk: Record<string, unknown>) => {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+      };
+
+      writeChunk({
+        id,
+        object: "chat.completion.chunk",
+        created,
+        model,
+        choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
+      });
+
+      if (hasToolCalls) {
+        const deltaToolCalls = toolCalls.map((call, index) => ({
+          index,
+          id: call.id,
+          type: call.type,
+          function: { name: call.function.name, arguments: call.function.arguments },
+        }));
+        writeChunk({
+          id,
+          object: "chat.completion.chunk",
+          created,
+          model,
+          choices: [{ index: 0, delta: { tool_calls: deltaToolCalls }, finish_reason: null }],
+        });
+      } else if (content) {
+        writeChunk({
+          id,
+          object: "chat.completion.chunk",
+          created,
+          model,
+          choices: [{ index: 0, delta: { content }, finish_reason: null }],
+        });
+      }
+
+      writeChunk({
+        id,
+        object: "chat.completion.chunk",
+        created,
+        model,
+        choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
+        usage: {
+          prompt_tokens: inputTokens,
+          completion_tokens: outputTokens,
+          total_tokens: inputTokens + outputTokens,
+        },
+      });
 
       controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       controller.close();

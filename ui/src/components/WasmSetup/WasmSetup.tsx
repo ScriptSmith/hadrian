@@ -106,6 +106,30 @@ function initialEntries(): ProviderEntry[] {
   return PROVIDER_TEMPLATES.map((t) => createEntry(t, 0));
 }
 
+// Bundle the browser AI state and download callback into a single optional
+// prop. Previously the two were separate optionals with `onBrowserAiDownload
+// ?? (() => {})` as a fallback, which let callers silently no-op the
+// Download button by passing state without a callback. Bundling makes the
+// pairing structural — a caller cannot supply the state without the
+// handler — so the no-op fallback can go away entirely.
+export interface BrowserAiProp {
+  state: BrowserAiState;
+  onDownload: () => void;
+}
+
+interface WasmSetupProps {
+  open: boolean;
+  onComplete: () => void;
+  oauthProviderName?: string | null;
+  oauthError?: string | null;
+  existingProviders?: DynamicProviderResponse[];
+  ollamaDetected?: boolean;
+  ollamaConnecting?: boolean;
+  ollamaConnected?: boolean;
+  onOllamaConnect?: () => void;
+  browserAi?: BrowserAiProp;
+}
+
 export function WasmSetup({
   open,
   onComplete,
@@ -117,20 +141,7 @@ export function WasmSetup({
   ollamaConnected,
   onOllamaConnect,
   browserAi,
-  onBrowserAiDownload,
-}: {
-  open: boolean;
-  onComplete: () => void;
-  oauthProviderName?: string | null;
-  oauthError?: string | null;
-  existingProviders?: DynamicProviderResponse[];
-  ollamaDetected?: boolean;
-  ollamaConnecting?: boolean;
-  ollamaConnected?: boolean;
-  onOllamaConnect?: () => void;
-  browserAi?: BrowserAiState;
-  onBrowserAiDownload?: () => void;
-}) {
+}: WasmSetupProps) {
   const [step, setStep] = useState<Step>("welcome");
   const [entries, setEntries] = useState<ProviderEntry[]>(initialEntries);
 
@@ -249,7 +260,7 @@ export function WasmSetup({
     }
   }, []);
 
-  const browserAiReady = browserAi?.availability === "available";
+  const browserAiReady = browserAi?.state.availability === "available";
   const savedCount =
     entries.filter((e) => e.saved).length +
     (hasExistingOpenRouter ? 1 : 0) +
@@ -274,7 +285,6 @@ export function WasmSetup({
           existingProviders={existingProviders}
           onDeleteExisting={handleDeleteExisting}
           browserAi={browserAi}
-          onBrowserAiDownload={onBrowserAiDownload}
         />
       )}
       {step === "providers" && (
@@ -300,7 +310,6 @@ export function WasmSetup({
           existingProviders={existingProviders}
           onDeleteExisting={handleDeleteExisting}
           browserAi={browserAi}
-          onBrowserAiDownload={onBrowserAiDownload}
         />
       )}
       {step === "done" && <DoneStep savedCount={savedCount} onComplete={onComplete} />}
@@ -322,7 +331,6 @@ function WelcomeStep({
   existingProviders,
   onDeleteExisting,
   browserAi,
-  onBrowserAiDownload,
 }: {
   onNext: () => void;
   onReady: () => void;
@@ -336,10 +344,9 @@ function WelcomeStep({
   onOllamaConnect?: () => void;
   existingProviders?: DynamicProviderResponse[];
   onDeleteExisting: (id: string) => void;
-  browserAi?: BrowserAiState;
-  onBrowserAiDownload?: () => void;
+  browserAi?: BrowserAiProp;
 }) {
-  const hasBrowserAiReady = browserAi?.availability === "available";
+  const hasBrowserAiReady = browserAi?.state.availability === "available";
   const hasProvider = hasExistingOpenRouter || hasExistingOllama || hasBrowserAiReady;
   return (
     <>
@@ -475,8 +482,8 @@ function WelcomeStep({
 
         {browserAi && (
           <BrowserAiCard
-            state={browserAi}
-            onDownload={onBrowserAiDownload ?? (() => {})}
+            state={browserAi.state}
+            onDownload={browserAi.onDownload}
             className="mt-3"
           />
         )}
@@ -549,7 +556,6 @@ function ProvidersStep({
   existingProviders,
   onDeleteExisting,
   browserAi,
-  onBrowserAiDownload,
 }: {
   entries: ProviderEntry[];
   onUpdate: (key: string, update: Partial<ProviderEntry>) => void;
@@ -571,8 +577,7 @@ function ProvidersStep({
   onOllamaConnect?: () => void;
   existingProviders?: DynamicProviderResponse[];
   onDeleteExisting: (id: string) => void;
-  browserAi?: BrowserAiState;
-  onBrowserAiDownload?: () => void;
+  browserAi?: BrowserAiProp;
 }) {
   return (
     <>
@@ -666,8 +671,8 @@ function ProvidersStep({
 
         {browserAi && (
           <BrowserAiCard
-            state={browserAi}
-            onDownload={onBrowserAiDownload ?? (() => {})}
+            state={browserAi.state}
+            onDownload={browserAi.onDownload}
             className="mb-4"
           />
         )}

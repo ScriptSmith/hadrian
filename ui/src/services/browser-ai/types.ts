@@ -14,6 +14,11 @@ export type LanguageModelAvailability =
   | "unavailable";
 
 export interface LanguageModelMonitor {
+  /**
+   * `loaded` is a fraction in [0, 1], not a byte count. The Prompt API spec
+   * normalizes progress and omits `total` for that reason.
+   * https://github.com/webmachinelearning/prompt-api?tab=readme-ov-file#download-progress
+   */
   addEventListener(type: "downloadprogress", listener: (event: { loaded: number }) => void): void;
   removeEventListener(
     type: "downloadprogress",

@@ -27,6 +27,7 @@ import {
   augmentModelsResponse,
   handleChatCompletionsRequest,
   handleResponsesRequest,
+  invalidateAvailabilityCache,
   isBrowserAiModel,
   type ChatCompletionsPayload,
   type ResponsesPayload,
@@ -58,6 +59,9 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("message", (event) => {
   if (event.data?.type === "CLAIM") {
     self.clients.claim();
+  }
+  if (event.data?.type === "BROWSER_AI_AVAILABILITY_CHANGED") {
+    invalidateAvailabilityCache();
   }
 });
 
