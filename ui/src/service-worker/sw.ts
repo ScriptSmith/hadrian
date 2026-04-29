@@ -23,6 +23,15 @@ import "./sqlite-bridge";
 import wasmInit, { HadrianGateway } from "/wasm/hadrian.js";
 
 import { formatApiError } from "../utils/formatApiError";
+import {
+  augmentModelsResponse,
+  handleChatCompletionsRequest,
+  handleResponsesRequest,
+  isBrowserAiModel,
+  type ChatCompletionsPayload,
+  type ResponsesPayload,
+} from "./browser-ai";
+
 let gateway: HadrianGateway | null = null;
 let initPromise: Promise<void> | null = null;
 
@@ -59,10 +68,10 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
   if (!GATEWAY_PATHS.some((p) => url.pathname.startsWith(p))) return;
 
-  event.respondWith(handleRequest(event.request));
+  event.respondWith(handleRequest(event.request, url, event.clientId));
 });
 
-async function handleRequest(request: Request): Promise<Response> {
+async function handleRequest(request: Request, url: URL, clientId: string): Promise<Response> {
   // Lazy-init the WASM gateway on first intercepted request
   if (!gateway) {
     if (!initPromise) {
@@ -90,6 +99,8 @@ async function handleRequest(request: Request): Promise<Response> {
   }
 
   try {
+    const intercepted = await maybeHandleBrowserAi(request, url, clientId);
+    if (intercepted) return intercepted;
     return await gateway!.handle(request);
   } catch (error) {
     console.error("Hadrian WASM gateway error:", error);
@@ -107,4 +118,45 @@ async function handleRequest(request: Request): Promise<Response> {
       }
     );
   }
+}
+
+function isResponsesPath(pathname: string): boolean {
+  return pathname.endsWith("/v1/responses");
+}
+
+function isChatCompletionsPath(pathname: string): boolean {
+  return pathname.endsWith("/v1/chat/completions");
+}
+
+function isModelsPath(pathname: string): boolean {
+  return pathname.endsWith("/v1/models");
+}
+
+async function maybeHandleBrowserAi(
+  request: Request,
+  url: URL,
+  clientId: string
+): Promise<Response | null> {
+  if (request.method === "GET" && isModelsPath(url.pathname)) {
+    const upstream = await gateway!.handle(request);
+    return augmentModelsResponse(upstream, clientId);
+  }
+
+  if (request.method !== "POST") return null;
+  if (!isResponsesPath(url.pathname) && !isChatCompletionsPath(url.pathname)) return null;
+
+  let body: unknown;
+  try {
+    body = await request.clone().json();
+  } catch {
+    return null;
+  }
+  if (!body || typeof body !== "object") return null;
+  const model = (body as { model?: unknown }).model;
+  if (!isBrowserAiModel(model)) return null;
+
+  if (isResponsesPath(url.pathname)) {
+    return handleResponsesRequest(request, body as ResponsesPayload, clientId);
+  }
+  return handleChatCompletionsRequest(request, body as ChatCompletionsPayload, clientId);
 }

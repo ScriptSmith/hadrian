@@ -137,6 +137,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   qwen: "Qwen",
   openrouter: "OpenRouter",
   test: "Test",
+  browser: "Browser AI",
 };
 
 export function getProviderInfo(

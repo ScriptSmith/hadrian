@@ -15,12 +15,19 @@ import {
   apiV1ModelsQueryKey,
 } from "@/api/generated/@tanstack/react-query.gen";
 import { WasmSetup } from "./WasmSetup";
+import type { BrowserAiState } from "./BrowserAiCard";
 import { formatApiError } from "@/utils/formatApiError";
 import {
   getOpenRouterCallbackCode,
   clearCallbackCode,
   exchangeCodeForKey,
 } from "./openrouter-oauth";
+import {
+  getAvailability,
+  getLanguageModel,
+  installBrowserAiBridge,
+  isLanguageModelSupported,
+} from "@/services/browser-ai";
 
 const IS_WASM = import.meta.env.VITE_WASM_MODE === "true";
 const DISMISSED_KEY = "hadrian-wasm-setup-dismissed";
@@ -64,6 +71,13 @@ export function WasmSetupGuard({ children }: { children: ReactNode }) {
   const [ollamaDetected, setOllamaDetected] = useState(false);
   const [ollamaConnecting, setOllamaConnecting] = useState(false);
   const [ollamaConnected, setOllamaConnected] = useState(false);
+  const [browserAi, setBrowserAi] = useState<BrowserAiState>(() => ({
+    supported: IS_WASM ? isLanguageModelSupported() : false,
+    availability: "unavailable",
+    downloadProgress: null,
+    downloading: false,
+    error: null,
+  }));
   const queryClient = useQueryClient();
 
   const createProvider = useMutation({ ...meProvidersCreateMutation() });
@@ -84,6 +98,62 @@ export function WasmSetupGuard({ children }: { children: ReactNode }) {
       .catch(() => {});
     return () => controller.abort();
   }, []);
+
+  // Install the LanguageModel bridge so the WASM service worker can reach
+  // the on-device Prompt API (only exposed in window scope), and surface the
+  // current availability state for the UI.
+  useEffect(() => {
+    if (!IS_WASM) return;
+    if (!isLanguageModelSupported()) return;
+    const uninstall = installBrowserAiBridge();
+    let cancelled = false;
+    getAvailability().then((state) => {
+      if (cancelled) return;
+      setBrowserAi((prev) => ({ ...prev, availability: state }));
+    });
+    return () => {
+      cancelled = true;
+      uninstall();
+    };
+  }, []);
+
+  const handleBrowserAiDownload = useCallback(async () => {
+    const lm = getLanguageModel();
+    if (!lm) return;
+    setBrowserAi((prev) => ({
+      ...prev,
+      downloading: true,
+      downloadProgress: 0,
+      availability: "downloading",
+      error: null,
+    }));
+    try {
+      const session = await lm.create({
+        monitor(m) {
+          m.addEventListener("downloadprogress", (event) => {
+            setBrowserAi((prev) => ({ ...prev, downloadProgress: event.loaded }));
+          });
+        },
+      });
+      session.destroy();
+      const next = await getAvailability();
+      setBrowserAi((prev) => ({
+        ...prev,
+        availability: next,
+        downloading: false,
+        downloadProgress: null,
+      }));
+      queryClient.invalidateQueries({ queryKey: apiV1ModelsQueryKey() });
+    } catch (err) {
+      setBrowserAi((prev) => ({
+        ...prev,
+        downloading: false,
+        downloadProgress: null,
+        availability: "downloadable",
+        error: formatApiError(err),
+      }));
+    }
+  }, [queryClient]);
 
   const handleOllamaConnect = useCallback(async () => {
     setOllamaConnecting(true);
@@ -165,8 +235,13 @@ export function WasmSetupGuard({ children }: { children: ReactNode }) {
     return <WasmSetupContext.Provider value={contextValue}>{children}</WasmSetupContext.Provider>;
   }
 
-  // Auto-show: no providers and not previously dismissed
-  const needsOnboarding = !dismissed && !isLoading && (data?.data?.length ?? 0) === 0;
+  // Auto-show: no providers and not previously dismissed. Browser AI counts
+  // as a provider once the model is ready locally, since requests against
+  // it succeed without any setup the wizard could prompt for.
+  const dynamicProviderCount = data?.data?.length ?? 0;
+  const browserAiCounts = browserAi.supported && browserAi.availability === "available";
+  const needsOnboarding =
+    !dismissed && !isLoading && dynamicProviderCount === 0 && !browserAiCounts;
 
   return (
     <WasmSetupContext.Provider value={contextValue}>
@@ -181,6 +256,8 @@ export function WasmSetupGuard({ children }: { children: ReactNode }) {
         ollamaConnecting={ollamaConnecting}
         ollamaConnected={ollamaConnected}
         onOllamaConnect={handleOllamaConnect}
+        browserAi={browserAi}
+        onBrowserAiDownload={handleBrowserAiDownload}
       />
     </WasmSetupContext.Provider>
   );

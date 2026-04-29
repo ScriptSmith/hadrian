@@ -33,6 +33,7 @@ import { Input } from "@/components/Input/Input";
 import { FormField } from "@/components/FormField/FormField";
 import { HadrianIcon } from "@/components/HadrianIcon/HadrianIcon";
 import { startOpenRouterOAuth, isInIframe } from "./openrouter-oauth";
+import { BrowserAiCard, type BrowserAiState } from "./BrowserAiCard";
 import { cn } from "@/utils/cn";
 
 import { formatApiError } from "@/utils/formatApiError";
@@ -115,6 +116,8 @@ export function WasmSetup({
   ollamaConnecting,
   ollamaConnected,
   onOllamaConnect,
+  browserAi,
+  onBrowserAiDownload,
 }: {
   open: boolean;
   onComplete: () => void;
@@ -125,6 +128,8 @@ export function WasmSetup({
   ollamaConnecting?: boolean;
   ollamaConnected?: boolean;
   onOllamaConnect?: () => void;
+  browserAi?: BrowserAiState;
+  onBrowserAiDownload?: () => void;
 }) {
   const [step, setStep] = useState<Step>("welcome");
   const [entries, setEntries] = useState<ProviderEntry[]>(initialEntries);
@@ -244,10 +249,12 @@ export function WasmSetup({
     }
   }, []);
 
+  const browserAiReady = browserAi?.availability === "available";
   const savedCount =
     entries.filter((e) => e.saved).length +
     (hasExistingOpenRouter ? 1 : 0) +
-    (hasExistingOllama ? 1 : 0);
+    (hasExistingOllama ? 1 : 0) +
+    (browserAiReady ? 1 : 0);
   const hasAnySaved = savedCount > 0;
 
   return (
@@ -266,6 +273,8 @@ export function WasmSetup({
           onOllamaConnect={onOllamaConnect}
           existingProviders={existingProviders}
           onDeleteExisting={handleDeleteExisting}
+          browserAi={browserAi}
+          onBrowserAiDownload={onBrowserAiDownload}
         />
       )}
       {step === "providers" && (
@@ -290,6 +299,8 @@ export function WasmSetup({
           onOllamaConnect={onOllamaConnect}
           existingProviders={existingProviders}
           onDeleteExisting={handleDeleteExisting}
+          browserAi={browserAi}
+          onBrowserAiDownload={onBrowserAiDownload}
         />
       )}
       {step === "done" && <DoneStep savedCount={savedCount} onComplete={onComplete} />}
@@ -310,6 +321,8 @@ function WelcomeStep({
   onOllamaConnect,
   existingProviders,
   onDeleteExisting,
+  browserAi,
+  onBrowserAiDownload,
 }: {
   onNext: () => void;
   onReady: () => void;
@@ -323,8 +336,11 @@ function WelcomeStep({
   onOllamaConnect?: () => void;
   existingProviders?: DynamicProviderResponse[];
   onDeleteExisting: (id: string) => void;
+  browserAi?: BrowserAiState;
+  onBrowserAiDownload?: () => void;
 }) {
-  const hasProvider = hasExistingOpenRouter || hasExistingOllama;
+  const hasBrowserAiReady = browserAi?.availability === "available";
+  const hasProvider = hasExistingOpenRouter || hasExistingOllama || hasBrowserAiReady;
   return (
     <>
       <ModalHeader>
@@ -457,6 +473,14 @@ function WelcomeStep({
           </div>
         )}
 
+        {browserAi && (
+          <BrowserAiCard
+            state={browserAi}
+            onDownload={onBrowserAiDownload ?? (() => {})}
+            className="mt-3"
+          />
+        )}
+
         <p className="text-sm text-muted-foreground mt-4">
           {hasProvider
             ? "You can also add API keys from OpenAI, Anthropic, or other providers."
@@ -524,6 +548,8 @@ function ProvidersStep({
   onOllamaConnect,
   existingProviders,
   onDeleteExisting,
+  browserAi,
+  onBrowserAiDownload,
 }: {
   entries: ProviderEntry[];
   onUpdate: (key: string, update: Partial<ProviderEntry>) => void;
@@ -545,6 +571,8 @@ function ProvidersStep({
   onOllamaConnect?: () => void;
   existingProviders?: DynamicProviderResponse[];
   onDeleteExisting: (id: string) => void;
+  browserAi?: BrowserAiState;
+  onBrowserAiDownload?: () => void;
 }) {
   return (
     <>
@@ -635,6 +663,14 @@ function ProvidersStep({
             </div>
           </div>
         ) : null}
+
+        {browserAi && (
+          <BrowserAiCard
+            state={browserAi}
+            onDownload={onBrowserAiDownload ?? (() => {})}
+            className="mb-4"
+          />
+        )}
 
         <div className="space-y-5">
           {entries.map((entry) => (
