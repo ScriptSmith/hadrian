@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio_util::task::TaskTracker;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use super::resolve_config_path;
 use crate::{
@@ -379,17 +379,28 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         None
     };
 
+    // CancellationToken for long-running background tasks that hold an
+    // AppState clone. Without this, an infinite-loop tokio::spawn'd task
+    // (like the refresh below) keeps a clone of `usage_drain`'s mpsc::Sender
+    // alive forever, which prevents the tracked drainer worker's
+    // `rx.recv().await` from ever seeing `None`. Tripped when the OS shutdown
+    // signal arrives.
+    let shutdown_token = CancellationToken::new();
+
     // Refresh the static models cache periodically in the background
     // (initial warming already happened in AppState::new)
     if config.features.static_models_cache.enabled() {
         let interval = config.features.static_models_cache.refresh_interval();
         let state_ref = state.clone();
+        let cancel = shutdown_token.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);
             ticker.tick().await; // skip the immediate first tick (already warmed)
             loop {
-                ticker.tick().await;
-                state_ref.warm_static_models_cache().await;
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    _ = ticker.tick() => state_ref.warm_static_models_cache().await,
+                }
             }
         });
     }
@@ -455,34 +466,35 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
 
     let shutdown_config = config.server.shutdown.clone();
 
-    // Graceful shutdown: wait for SIGINT/SIGTERM, then wait for all background tasks.
-    // `into_make_service_with_connect_info` is required so middleware can read the
-    // connecting peer address via `ConnectInfo<SocketAddr>` for IP-based rate limits,
-    // API-key IP allowlists, and audit logging.
-    if let Err(e) = axum::serve(
+    // The shutdown future cancels `shutdown_token` so cooperative background
+    // tasks release any AppState clones they hold. The task_tracker drain
+    // happens *after* `axum::serve` returns: `app` (and its `AppState`) is
+    // alive until then, and the tracked usage-drain worker can't exit while
+    // AppState's `mpsc::Sender` is alive.
+    //
+    // `into_make_service_with_connect_info` is required so middleware can read
+    // the connecting peer address via `ConnectInfo<SocketAddr>` for IP-based
+    // rate limits, API-key IP allowlists, and audit logging.
+    let shutdown_token_signal = shutdown_token.clone();
+    let serve_result = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal(
-        task_tracker,
-        usage_buffer_handle,
-        shutdown_config,
-    ))
-    .await
-    {
+    .with_graceful_shutdown(async move {
+        wait_for_shutdown_signal().await;
+        shutdown_token_signal.cancel();
+    })
+    .await;
+
+    if let Err(e) = serve_result {
         tracing::error!(error = %e, "Server error");
         std::process::exit(1);
     }
+
+    drain_background_tasks(task_tracker, usage_buffer_handle, shutdown_config).await;
 }
 
-async fn shutdown_signal(
-    task_tracker: TaskTracker,
-    usage_buffer_handle: Option<(
-        Arc<usage_buffer::UsageLogBuffer>,
-        tokio::task::JoinHandle<()>,
-    )>,
-    shutdown_config: crate::config::ShutdownConfig,
-) {
+async fn wait_for_shutdown_signal() {
     let ctrl_c = async {
         if let Err(e) = tokio::signal::ctrl_c().await {
             tracing::error!(error = %e, "Failed to install Ctrl+C handler");
@@ -510,12 +522,19 @@ async fn shutdown_signal(
         _ = terminate => {},
     }
 
-    tracing::info!("Shutdown signal received, waiting for background tasks to complete...");
+    tracing::info!("Shutdown signal received, draining connections...");
+}
 
-    // Close the task tracker to prevent new tasks from being spawned
+async fn drain_background_tasks(
+    task_tracker: TaskTracker,
+    usage_buffer_handle: Option<(
+        Arc<usage_buffer::UsageLogBuffer>,
+        tokio::task::JoinHandle<()>,
+    )>,
+    shutdown_config: crate::config::ShutdownConfig,
+) {
     task_tracker.close();
 
-    // Shutdown usage buffer worker and wait for it to flush
     if let Some((buffer, handle)) = usage_buffer_handle {
         buffer.shutdown();
         if let Err(e) = tokio::time::timeout(
@@ -530,7 +549,6 @@ async fn shutdown_signal(
         }
     }
 
-    // Wait for all in-flight tasks to complete (with timeout)
     let wait_result = tokio::time::timeout(
         std::time::Duration::from_secs(shutdown_config.drain_secs),
         task_tracker.wait(),
