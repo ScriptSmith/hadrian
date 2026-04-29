@@ -45,12 +45,12 @@ export function isBrowserAiModel(model: unknown): boolean {
 }
 
 async function getClient(clientId: string): Promise<Client | null> {
-  if (clientId) {
-    const direct = await self.clients.get(clientId);
-    if (direct) return direct;
-  }
-  const all = await self.clients.matchAll({ type: "window", includeUncontrolled: false });
-  return all[0] ?? null;
+  // Only the originating tab's window can service the request: its bridge
+  // owns the conversation context and abort signal. Falling back to
+  // "first window client" cross-routes between tabs.
+  if (!clientId) return null;
+  const direct = await self.clients.get(clientId);
+  return direct ?? null;
 }
 
 async function sendToBridge<T extends BridgeReply>(
@@ -167,7 +167,10 @@ export async function augmentModelsResponse(
   } catch {
     return response;
   }
-  if (availability === "unavailable") return response;
+  // Only expose the model after the user has explicitly downloaded it via
+  // the wizard. Listing it while merely `downloadable` would trigger a
+  // multi-GB download on first chat use with no progress indication.
+  if (availability !== "available") return response;
 
   let body: { data?: unknown[]; [k: string]: unknown };
   try {
@@ -184,10 +187,7 @@ export async function augmentModelsResponse(
     created: 0,
     owned_by: BROWSER_AI_PROVIDER,
     source: "static",
-    description:
-      availability === "available"
-        ? `On-device ${detected.vendor} model, runs locally in your browser.`
-        : `On-device ${detected.vendor} model, runs locally in your browser. Downloads on first use.`,
+    description: `On-device ${detected.vendor} model, runs locally in your browser.`,
     capabilities: { tools: true, vision: false, streaming: true },
     modalities: { input: ["text"], output: ["text"] },
     tasks: ["chat"],
@@ -608,34 +608,12 @@ async function generateToolModeResponse(
     return jsonError(`Browser AI: ${message}`);
   }
 
-  let envelope = parseEnvelope(raw);
-  // Parse-and-retry safety net. If the model returned text that doesn't
-  // fit the envelope (or fits but is empty), give it one more shot with
-  // an explicit reminder. Limited to a single retry to avoid loops.
-  const empty = !envelope || (envelope.toolCalls.length === 0 && !envelope.text);
-  if (empty) {
-    const retryMessages: LanguageModelMessage[] = [
-      ...messages,
-      { role: "assistant", content: raw || "(empty)" },
-      {
-        role: "user",
-        content:
-          "That reply did not match the required JSON shape. Reply ONLY with a JSON object: " +
-          '{"tool_calls":[{"name":"...","arguments":{...}}]} or {"text":"..."}. ' +
-          "Use the same tool names and argument schemas listed earlier.",
-      },
-    ];
-    try {
-      const retry = await runOnce(retryMessages);
-      raw = retry.raw;
-      inputTokens += retry.inputTokens;
-      outputTokens += retry.outputTokens;
-      envelope = parseEnvelope(raw);
-    } catch {
-      // Fall through with what we have.
-    }
-  }
-
+  // `responseConstraint` enforces the schema at decode time, so JSON.parse
+  // is guaranteed to succeed. The only remaining failure mode is the model
+  // emitting `{}` (both fields are optional in the schema), which a retry
+  // does not reliably correct. We surface whatever we got — empty case is
+  // handled below by falling back to the raw text.
+  const envelope = parseEnvelope(raw);
   const toolCalls = envelope?.toolCalls ?? [];
   const text = envelope?.text ?? "";
   const createdAt = Math.floor(Date.now() / 1000);
@@ -662,8 +640,8 @@ async function generateToolModeResponse(
     });
   }
   if (outputItems.length === 0) {
-    // Both retries produced nothing usable. Surface the raw output so the
-    // user sees what went wrong rather than an empty turn.
+    // Model returned an empty envelope. Surface the raw output so the
+    // user sees what came back rather than a blank turn.
     outputItems.push({
       id: genId("msg"),
       type: "message",

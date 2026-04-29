@@ -126,11 +126,15 @@ async function handlePrompt(port: MessagePort, payload: PromptRequestPayload): P
       signal: abort.signal,
     });
 
+    // Count input tokens across system + conversation messages. The earlier
+    // version only measured `conversation`, which understated usage whenever
+    // a system prompt was supplied (every Hadrian chat turn).
     let inputTokens = 0;
     try {
-      inputTokens = await session.measureInputUsage(conversation);
-    } catch {
+      inputTokens = await session.measureInputUsage(payload.messages);
+    } catch (err) {
       // measureInputUsage may not be implemented on every channel.
+      console.debug("[browser-ai] measureInputUsage(input) failed", err);
     }
 
     let outputText = "";
@@ -170,10 +174,19 @@ async function handlePrompt(port: MessagePort, payload: PromptRequestPayload): P
       }
     }
 
+    // measureInputUsage of an assistant message also counts role-framing
+    // tokens (a few per message). Subtract the framing baseline so the
+    // reported output count tracks the generated text rather than the
+    // wrapper. Falls back to ~4 chars/token when the API isn't available.
     let outputTokens = 0;
     try {
-      outputTokens = await session.measureInputUsage([{ role: "assistant", content: outputText }]);
-    } catch {
+      const [withText, baseline] = await Promise.all([
+        session.measureInputUsage([{ role: "assistant", content: outputText }]),
+        session.measureInputUsage([{ role: "assistant", content: "" }]),
+      ]);
+      outputTokens = Math.max(0, withText - baseline);
+    } catch (err) {
+      console.debug("[browser-ai] measureInputUsage(output) failed", err);
       outputTokens = Math.max(1, Math.ceil(outputText.length / 4));
     }
 
