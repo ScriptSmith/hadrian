@@ -9,9 +9,7 @@ use std::sync::Arc;
 use base64::Engine;
 use chrono::Utc;
 use hickory_resolver::{
-    Resolver, TokioResolver,
-    net::runtime::TokioRuntimeProvider,
-    proto::rr::RData,
+    Resolver, TokioResolver, net::runtime::TokioRuntimeProvider, proto::rr::RData,
     system_conf::read_system_conf,
 };
 use rand::Rng;
