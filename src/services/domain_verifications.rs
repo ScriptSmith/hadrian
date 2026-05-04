@@ -9,7 +9,10 @@ use std::sync::Arc;
 use base64::Engine;
 use chrono::Utc;
 use hickory_resolver::{
-    Resolver, TokioResolver, name_server::TokioConnectionProvider, system_conf::read_system_conf,
+    Resolver, TokioResolver,
+    net::runtime::TokioRuntimeProvider,
+    proto::rr::RData,
+    system_conf::read_system_conf,
 };
 use rand::Rng;
 use uuid::Uuid;
@@ -129,16 +132,20 @@ impl DomainVerificationService {
         // Try to use system configuration, fall back to default if not available
         let resolver = match read_system_conf() {
             Ok((config, opts)) => {
-                Resolver::builder_with_config(config, TokioConnectionProvider::default())
+                Resolver::builder_with_config(config, TokioRuntimeProvider::default())
                     .with_options(opts)
                     .build()
+                    .expect("DNS resolver build should not fail")
             }
             Err(e) => {
                 tracing::warn!(
                     error = %e,
                     "Failed to read system DNS config, using default"
                 );
-                Resolver::builder_tokio().unwrap().build()
+                Resolver::builder_tokio()
+                    .unwrap()
+                    .build()
+                    .expect("DNS resolver build should not fail")
             }
         };
         Self { db, resolver }
@@ -483,13 +490,17 @@ impl DomainVerificationService {
             .map_err(|e| DomainVerificationError::DnsLookup(e.to_string()))?;
 
         let records: Vec<String> = response
+            .answers()
             .iter()
-            .map(|txt| {
-                txt.txt_data()
-                    .iter()
-                    .map(|data| String::from_utf8_lossy(data).to_string())
-                    .collect::<Vec<_>>()
-                    .join("")
+            .filter_map(|record| match &record.data {
+                RData::TXT(txt) => Some(
+                    txt.txt_data
+                        .iter()
+                        .map(|data| String::from_utf8_lossy(data).to_string())
+                        .collect::<Vec<_>>()
+                        .join(""),
+                ),
+                _ => None,
             })
             .collect();
 
