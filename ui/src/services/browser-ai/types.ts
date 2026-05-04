@@ -84,10 +84,10 @@ export interface LanguageModelSession {
     input: string | LanguageModelMessage[],
     options?: LanguageModelPromptOptions
   ): ReadableStream<string>;
-  measureInputUsage(input: string | LanguageModelMessage[]): Promise<number>;
+  measureContextUsage(input: string | LanguageModelMessage[]): Promise<number>;
   destroy(): void;
-  readonly inputUsage: number;
-  readonly inputQuota: number;
+  readonly contextUsage: number;
+  readonly contextWindow: number;
 }
 
 export interface LanguageModelGlobal {

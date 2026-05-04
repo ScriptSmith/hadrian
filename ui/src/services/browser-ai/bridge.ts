@@ -134,10 +134,10 @@ async function handlePrompt(port: MessagePort, payload: PromptRequestPayload): P
     // a system prompt was supplied (every Hadrian chat turn).
     let inputTokens = 0;
     try {
-      inputTokens = await session.measureInputUsage(payload.messages);
+      inputTokens = await session.measureContextUsage(payload.messages);
     } catch (err) {
-      // measureInputUsage may not be implemented on every channel.
-      console.debug("[browser-ai] measureInputUsage(input) failed", err);
+      // measureContextUsage may not be implemented on every channel.
+      console.debug("[browser-ai] measureContextUsage(input) failed", err);
     }
 
     let outputText = "";
@@ -177,19 +177,19 @@ async function handlePrompt(port: MessagePort, payload: PromptRequestPayload): P
       }
     }
 
-    // measureInputUsage of an assistant message also counts role-framing
+    // measureContextUsage of an assistant message also counts role-framing
     // tokens (a few per message). Subtract the framing baseline so the
     // reported output count tracks the generated text rather than the
     // wrapper. Falls back to ~4 chars/token when the API isn't available.
     let outputTokens = 0;
     try {
       const [withText, baseline] = await Promise.all([
-        session.measureInputUsage([{ role: "assistant", content: outputText }]),
-        session.measureInputUsage([{ role: "assistant", content: "" }]),
+        session.measureContextUsage([{ role: "assistant", content: outputText }]),
+        session.measureContextUsage([{ role: "assistant", content: "" }]),
       ]);
       outputTokens = Math.max(0, withText - baseline);
     } catch (err) {
-      console.debug("[browser-ai] measureInputUsage(output) failed", err);
+      console.debug("[browser-ai] measureContextUsage(output) failed", err);
       outputTokens = Math.max(1, Math.ceil(outputText.length / 4));
     }
 
