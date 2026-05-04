@@ -151,11 +151,23 @@ export function WasmSetupGuard({ children }: { children: ReactNode }) {
       });
       queryClient.invalidateQueries({ queryKey: apiV1ModelsQueryKey() });
     } catch (err) {
+      // Re-query the actual availability rather than assuming "downloadable":
+      // a mid-download failure (e.g. storage pressure made the device
+      // ineligible) can transition the API to "unavailable", and resetting
+      // to "downloadable" would resurface a Download button that fails again
+      // on every click.
+      let availability: BrowserAiState["availability"] = "downloadable";
+      try {
+        availability = await getAvailability();
+      } catch {
+        // Bridge unreachable; "downloadable" is the safest default since the
+        // user already saw the download UI.
+      }
       setBrowserAi((prev) => ({
         ...prev,
         downloading: false,
         downloadProgress: null,
-        availability: "downloadable",
+        availability,
         error: formatApiError(err),
       }));
     }

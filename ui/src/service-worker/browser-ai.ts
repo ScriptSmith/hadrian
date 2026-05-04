@@ -235,9 +235,23 @@ interface ResponsesPayload {
   tools?: ToolDef[];
 }
 
+interface ChatCompletionsToolCall {
+  id?: string;
+  type?: string;
+  function?: { name?: string; arguments?: string };
+}
+
+interface ChatCompletionsMessage {
+  role: string;
+  content?: string | Array<{ type: string; text?: string }> | null;
+  tool_calls?: ChatCompletionsToolCall[];
+  tool_call_id?: string;
+  name?: string;
+}
+
 interface ChatCompletionsPayload {
   model: string;
-  messages: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
+  messages: ChatCompletionsMessage[];
   stream?: boolean;
   temperature?: number;
   top_k?: number;
@@ -467,7 +481,44 @@ function chatMessagesToBridge(
   messages: ChatCompletionsPayload["messages"]
 ): LanguageModelMessage[] {
   const out: LanguageModelMessage[] = [];
+  // Map tool_call_id → function name so a later `role: "tool"` reply can be
+  // rendered with the tool's name (mirroring the Responses-API path's
+  // `<tool_result name="...">` markup).
+  const callIdToName = new Map<string, string>();
   for (const m of messages) {
+    if (m.role === "assistant" && Array.isArray(m.tool_calls)) {
+      for (const tc of m.tool_calls) {
+        const name = tc.function?.name;
+        if (typeof tc.id === "string" && typeof name === "string") {
+          callIdToName.set(tc.id, name);
+        }
+      }
+    }
+  }
+
+  for (const m of messages) {
+    if (m.role === "tool") {
+      const callId = typeof m.tool_call_id === "string" ? m.tool_call_id : "";
+      const name = callIdToName.get(callId) ?? m.name ?? "tool";
+      const output = flattenContent(m.content);
+      out.push({
+        role: "user",
+        content: `<tool_result name="${name}">${output}</tool_result>`,
+      });
+      continue;
+    }
+    if (m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+      const calls = m.tool_calls
+        .map((tc) => {
+          const name = tc.function?.name ?? "tool";
+          const args = tc.function?.arguments ?? "{}";
+          return `<tool_call name="${name}">${args}</tool_call>`;
+        })
+        .join("");
+      const text = flattenContent(m.content);
+      out.push({ role: "assistant", content: text ? `${text}${calls}` : calls });
+      continue;
+    }
     if (m.role !== "system" && m.role !== "user" && m.role !== "assistant") continue;
     const text = flattenContent(m.content);
     if (!text) continue;
