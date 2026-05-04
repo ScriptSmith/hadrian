@@ -246,4 +246,8 @@ export const PROVIDER_COLORS: Record<string, ProviderColorEntry> = {
     solid: "bg-gray-500",
     badge: "bg-gray-500/10 text-gray-700 dark:text-gray-400",
   },
+  browser: {
+    solid: "bg-sky-500",
+    badge: "bg-sky-500/10 text-sky-700 dark:text-sky-400",
+  },
 };

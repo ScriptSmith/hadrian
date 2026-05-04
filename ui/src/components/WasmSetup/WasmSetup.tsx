@@ -33,6 +33,7 @@ import { Input } from "@/components/Input/Input";
 import { FormField } from "@/components/FormField/FormField";
 import { HadrianIcon } from "@/components/HadrianIcon/HadrianIcon";
 import { startOpenRouterOAuth, isInIframe } from "./openrouter-oauth";
+import { BrowserAiCard, type BrowserAiState } from "./BrowserAiCard";
 import { cn } from "@/utils/cn";
 
 import { formatApiError } from "@/utils/formatApiError";
@@ -105,6 +106,30 @@ function initialEntries(): ProviderEntry[] {
   return PROVIDER_TEMPLATES.map((t) => createEntry(t, 0));
 }
 
+// Bundle the browser AI state and download callback into a single optional
+// prop. Previously the two were separate optionals with `onBrowserAiDownload
+// ?? (() => {})` as a fallback, which let callers silently no-op the
+// Download button by passing state without a callback. Bundling makes the
+// pairing structural — a caller cannot supply the state without the
+// handler — so the no-op fallback can go away entirely.
+export interface BrowserAiProp {
+  state: BrowserAiState;
+  onDownload: () => void;
+}
+
+interface WasmSetupProps {
+  open: boolean;
+  onComplete: () => void;
+  oauthProviderName?: string | null;
+  oauthError?: string | null;
+  existingProviders?: DynamicProviderResponse[];
+  ollamaDetected?: boolean;
+  ollamaConnecting?: boolean;
+  ollamaConnected?: boolean;
+  onOllamaConnect?: () => void;
+  browserAi?: BrowserAiProp;
+}
+
 export function WasmSetup({
   open,
   onComplete,
@@ -115,17 +140,8 @@ export function WasmSetup({
   ollamaConnecting,
   ollamaConnected,
   onOllamaConnect,
-}: {
-  open: boolean;
-  onComplete: () => void;
-  oauthProviderName?: string | null;
-  oauthError?: string | null;
-  existingProviders?: DynamicProviderResponse[];
-  ollamaDetected?: boolean;
-  ollamaConnecting?: boolean;
-  ollamaConnected?: boolean;
-  onOllamaConnect?: () => void;
-}) {
+  browserAi,
+}: WasmSetupProps) {
   const [step, setStep] = useState<Step>("welcome");
   const [entries, setEntries] = useState<ProviderEntry[]>(initialEntries);
 
@@ -244,10 +260,12 @@ export function WasmSetup({
     }
   }, []);
 
+  const browserAiReady = browserAi?.state.availability === "available";
   const savedCount =
     entries.filter((e) => e.saved).length +
     (hasExistingOpenRouter ? 1 : 0) +
-    (hasExistingOllama ? 1 : 0);
+    (hasExistingOllama ? 1 : 0) +
+    (browserAiReady ? 1 : 0);
   const hasAnySaved = savedCount > 0;
 
   return (
@@ -266,6 +284,7 @@ export function WasmSetup({
           onOllamaConnect={onOllamaConnect}
           existingProviders={existingProviders}
           onDeleteExisting={handleDeleteExisting}
+          browserAi={browserAi}
         />
       )}
       {step === "providers" && (
@@ -290,6 +309,7 @@ export function WasmSetup({
           onOllamaConnect={onOllamaConnect}
           existingProviders={existingProviders}
           onDeleteExisting={handleDeleteExisting}
+          browserAi={browserAi}
         />
       )}
       {step === "done" && <DoneStep savedCount={savedCount} onComplete={onComplete} />}
@@ -310,6 +330,7 @@ function WelcomeStep({
   onOllamaConnect,
   existingProviders,
   onDeleteExisting,
+  browserAi,
 }: {
   onNext: () => void;
   onReady: () => void;
@@ -323,8 +344,10 @@ function WelcomeStep({
   onOllamaConnect?: () => void;
   existingProviders?: DynamicProviderResponse[];
   onDeleteExisting: (id: string) => void;
+  browserAi?: BrowserAiProp;
 }) {
-  const hasProvider = hasExistingOpenRouter || hasExistingOllama;
+  const hasBrowserAiReady = browserAi?.state.availability === "available";
+  const hasProvider = hasExistingOpenRouter || hasExistingOllama || hasBrowserAiReady;
   return (
     <>
       <ModalHeader>
@@ -457,6 +480,14 @@ function WelcomeStep({
           </div>
         )}
 
+        {browserAi && (
+          <BrowserAiCard
+            state={browserAi.state}
+            onDownload={browserAi.onDownload}
+            className="mt-3"
+          />
+        )}
+
         <p className="text-sm text-muted-foreground mt-4">
           {hasProvider
             ? "You can also add API keys from OpenAI, Anthropic, or other providers."
@@ -524,6 +555,7 @@ function ProvidersStep({
   onOllamaConnect,
   existingProviders,
   onDeleteExisting,
+  browserAi,
 }: {
   entries: ProviderEntry[];
   onUpdate: (key: string, update: Partial<ProviderEntry>) => void;
@@ -545,6 +577,7 @@ function ProvidersStep({
   onOllamaConnect?: () => void;
   existingProviders?: DynamicProviderResponse[];
   onDeleteExisting: (id: string) => void;
+  browserAi?: BrowserAiProp;
 }) {
   return (
     <>
@@ -635,6 +668,14 @@ function ProvidersStep({
             </div>
           </div>
         ) : null}
+
+        {browserAi && (
+          <BrowserAiCard
+            state={browserAi.state}
+            onDownload={browserAi.onDownload}
+            className="mb-4"
+          />
+        )}
 
         <div className="space-y-5">
           {entries.map((entry) => (
