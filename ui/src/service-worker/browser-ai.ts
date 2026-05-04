@@ -907,7 +907,18 @@ async function generateStreamingResponse(
   const encoder = new TextEncoder();
   const createdAt = Math.floor(Date.now() / 1000);
 
+  // request.signal does not reliably fire abort in service workers when a
+  // streaming response is cancelled by the client. The ReadableStream's
+  // cancel() callback does, so funnel both into a local controller and
+  // forward that to the bridge.
+  const aborter = new AbortController();
+  if (signal.aborted) aborter.abort(signal.reason);
+  else signal.addEventListener("abort", () => aborter.abort(signal.reason), { once: true });
+
   const stream = new ReadableStream<Uint8Array>({
+    cancel(reason: unknown) {
+      aborter.abort(reason);
+    },
     async start(controller) {
       const enqueue = (event: string, data: unknown) => {
         controller.enqueue(encoder.encode(sseEvent(event, data)));
@@ -996,7 +1007,7 @@ async function generateStreamingResponse(
             }
             return false;
           },
-          signal
+          aborter.signal
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1160,7 +1171,17 @@ export async function handleChatCompletionsRequest(
   }
 
   const encoder = new TextEncoder();
+  const aborter = new AbortController();
+  if (request.signal.aborted) aborter.abort(request.signal.reason);
+  else
+    request.signal.addEventListener("abort", () => aborter.abort(request.signal.reason), {
+      once: true,
+    });
+
   const sseStream = new ReadableStream<Uint8Array>({
+    cancel(reason: unknown) {
+      aborter.abort(reason);
+    },
     async start(controller) {
       const writeChunk = (chunk: Record<string, unknown>) => {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
@@ -1208,7 +1229,7 @@ export async function handleChatCompletionsRequest(
             if (reply.type === "ABORTED") throw new DOMException("Aborted", "AbortError");
             return false;
           },
-          request.signal
+          aborter.signal
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
