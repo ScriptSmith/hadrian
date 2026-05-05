@@ -101,10 +101,11 @@ export function WasmSetupGuard({ children }: { children: ReactNode }) {
 
   // Install the LanguageModel bridge so the WASM service worker can reach
   // the on-device Prompt API (only exposed in window scope), and surface the
-  // current availability state for the UI.
+  // current availability state for the UI. Always install the bridge — even
+  // on browsers without the Prompt API — so the SW's AVAILABILITY probe
+  // always gets a reply (otherwise `/v1/models` hangs forever on Firefox).
   useEffect(() => {
     if (!IS_WASM) return;
-    if (!isLanguageModelSupported()) return;
     const uninstall = installBrowserAiBridge();
     let cancelled = false;
     getAvailability().then((state) => {
