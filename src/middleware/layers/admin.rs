@@ -2474,6 +2474,9 @@ mod tests {
             output_guardrails: None,
             event_bus: Arc::new(crate::events::EventBus::new()),
             file_search_service: None,
+            shell_runtime: None,
+            responses_store: None,
+            response_event_buffer: None,
             #[cfg(any(
                 feature = "document-extraction-basic",
                 feature = "document-extraction-full"
@@ -2783,6 +2786,9 @@ mod tests {
             output_guardrails: None,
             event_bus: Arc::new(crate::events::EventBus::new()),
             file_search_service: None,
+            shell_runtime: None,
+            responses_store: None,
+            response_event_buffer: None,
             #[cfg(any(
                 feature = "document-extraction-basic",
                 feature = "document-extraction-full"

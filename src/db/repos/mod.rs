@@ -13,6 +13,8 @@ mod org_sso_configs;
 mod organizations;
 mod projects;
 mod providers;
+mod response_events;
+mod responses;
 #[cfg(feature = "sso")]
 mod scim_configs;
 #[cfg(feature = "sso")]
@@ -45,6 +47,8 @@ pub use org_sso_configs::*;
 pub use organizations::*;
 pub use projects::*;
 pub use providers::*;
+pub use response_events::*;
+pub use responses::*;
 #[cfg(feature = "sso")]
 pub use scim_configs::*;
 #[cfg(feature = "sso")]

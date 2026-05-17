@@ -36,7 +36,7 @@ use crate::openapi;
 use crate::streaming;
 use crate::{
     auth, authz, cache, catalog, config, db, dlq, events, guardrails,
-    init::create_provider_instance, jobs, models, pricing, providers, secrets, services,
+    init::create_provider_instance, jobs, models, pricing, providers, runtimes, secrets, services,
     usage_buffer,
 };
 #[cfg(feature = "server")]
@@ -364,6 +364,20 @@ pub struct AppState {
     /// File search service for RAG (Retrieval Augmented Generation).
     /// Used by the file_search tool in the Responses API to search vector stores.
     pub file_search_service: Option<Arc<services::FileSearchService>>,
+    /// Shell tool runtime adapter. Constructed once at startup from
+    /// `[features.shell]` config. `None` when shell tool is disabled.
+    /// When the runtime advertises `passthrough_only`, the orchestrator
+    /// skips registering a ShellExecutor and the shell tool flows
+    /// through to the upstream provider unchanged.
+    pub shell_runtime: Option<Arc<dyn runtimes::ShellRuntime>>,
+    /// Persisted Responses API store. Always present when a database
+    /// is configured; powers `GET/POST cancel/DELETE /v1/responses/{id}`
+    /// and the cancellation signal pipeline.
+    pub responses_store: Option<Arc<services::ResponsesStore>>,
+    /// Bounded-channel writer that batches `response_events` rows.
+    /// Constructed alongside `responses_store` so persistence and event
+    /// log share the same DB lifecycle.
+    pub response_event_buffer: Option<Arc<services::ResponseEventBuffer>>,
     /// Document processor for chunking and embedding files added to vector stores.
     /// Used by the Vector Store Files API to process uploaded files.
     #[cfg(any(
@@ -1039,6 +1053,67 @@ impl AppState {
         )
         .await;
 
+        // Initialize the persisted Responses API store when a database
+        // is available. Requests without a DB run stateless — shell
+        // tool retrieval/cancel/delete endpoints will 404.
+        let responses_store: Option<Arc<services::ResponsesStore>> = db.as_ref().map(|db| {
+            let mut store = services::ResponsesStore::new(
+                db.clone(),
+                std::time::Duration::from_secs(config.features.responses.retention_secs),
+            );
+            if let Some(ref hook) = config.features.responses.webhook {
+                let dispatcher =
+                    services::ResponsesWebhookDispatcher::new(hook.clone(), http_client.clone());
+                store = store.with_webhook(dispatcher);
+                tracing::info!(url = %hook.url, "Responses webhook configured");
+            }
+            Arc::new(store)
+        });
+
+        // Event buffer writes batched response_events. Defaults: 100ms
+        // flush interval, batches of 64 events, channel of 1024.
+        let response_event_buffer: Option<Arc<services::ResponseEventBuffer>> =
+            db.as_ref().map(|db| {
+                Arc::new(services::ResponseEventBuffer::spawn(
+                    db.response_events(),
+                    64,
+                    std::time::Duration::from_millis(100),
+                    1024,
+                ))
+            });
+
+        // Initialize the shell tool runtime from [features.shell].
+        // Microsandbox / OpenSandbox / E2B adapters land in slice 1B; for
+        // now they return None and emit a clear startup error.
+        let shell_runtime: Option<Arc<dyn runtimes::ShellRuntime>> = match &config.features.shell {
+            config::ShellRuntimeConfig::None => None,
+            config::ShellRuntimeConfig::PassthroughOpenAI => {
+                tracing::info!("Shell tool runtime: passthrough_openai");
+                Some(Arc::new(runtimes::PassthroughRuntime::new()))
+            }
+            #[cfg(feature = "runtime-microsandbox")]
+            config::ShellRuntimeConfig::Microsandbox(cfg) => {
+                tracing::info!(
+                    image = %cfg.image,
+                    cpus = cfg.cpus,
+                    memory_mb = cfg.memory_mb,
+                    "Shell tool runtime: microsandbox"
+                );
+                Some(Arc::new(runtimes::MicrosandboxRuntime::new(cfg.clone())))
+            }
+            #[cfg(feature = "runtime-opensandbox")]
+            config::ShellRuntimeConfig::OpenSandbox(cfg) => {
+                tracing::info!(
+                    endpoint = %cfg.endpoint,
+                    "Shell tool runtime: opensandbox"
+                );
+                Some(Arc::new(runtimes::OpenSandboxRuntime::new(
+                    cfg.clone(),
+                    http_client.clone(),
+                )))
+            }
+        };
+
         // Initialize document processor for RAG file processing
         // This reuses the embedding service and vector store from file_search_service
         #[cfg(any(
@@ -1158,6 +1233,9 @@ impl AppState {
             output_guardrails,
             event_bus,
             file_search_service,
+            shell_runtime,
+            responses_store,
+            response_event_buffer,
             #[cfg(any(
                 feature = "document-extraction-basic",
                 feature = "document-extraction-full"

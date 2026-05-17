@@ -618,7 +618,9 @@ CREATE TABLE IF NOT EXISTS usage_records (
     tool_query TEXT,
     tool_url TEXT,
     tool_bytes_fetched INTEGER,
-    tool_results_count INTEGER
+    tool_results_count INTEGER,
+    -- Wall-clock runtime in seconds (only populated for shell tool records)
+    tool_runtime_seconds REAL
 );
 
 -- SQLite doesn't support partial indexes; use regular indexes
@@ -1044,3 +1046,76 @@ CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_code ON oauth_authorization_cod
 CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_user ON oauth_authorization_codes(user_id);
 -- Used by the periodic cleanup query to find expired/consumed codes
 CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_expires ON oauth_authorization_codes(expires_at);
+
+-- ======================================================================
+-- Responses (Responses API persistence)
+-- ======================================================================
+
+-- A persisted response from the Responses API. Stored when the
+-- client sends `store=true` (default per OpenAI spec). Allows clients
+-- to retrieve responses by ID, list their history, cancel in-progress
+-- background responses, and delete persisted records.
+--
+-- Status lifecycle: queued -> in_progress -> {completed | failed |
+-- cancelled | incomplete}.
+--
+-- `retention_expires_at` drives the cleanup worker that prunes old
+-- records (default 24h after the response reaches a terminal state).
+-- `request_payload`, `output`, `usage`, `error` are stored as JSON
+-- text — the schema is intentionally opaque so the API surface can
+-- evolve without further migrations.
+CREATE TABLE IF NOT EXISTS responses (
+    id TEXT PRIMARY KEY,
+    -- Tenancy
+    org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    -- Principal attribution
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    api_key_id TEXT REFERENCES api_keys(id) ON DELETE SET NULL,
+    service_account_id TEXT REFERENCES service_accounts(id) ON DELETE SET NULL,
+    -- Lifecycle
+    status TEXT NOT NULL,
+    background INTEGER NOT NULL DEFAULT 0,
+    model TEXT NOT NULL,
+    provider TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    -- Payload + result (JSON)
+    request_payload TEXT NOT NULL,
+    output TEXT,
+    usage TEXT,
+    error TEXT,
+    -- Retention
+    retention_expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_responses_org_status ON responses(org_id, status);
+CREATE INDEX IF NOT EXISTS idx_responses_user_created ON responses(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_responses_retention ON responses(retention_expires_at);
+
+-- Append-only event log for in-flight + completed responses. Powers
+-- `GET /v1/responses/{id}/events?starting_after=N` for clients that
+-- need to resume a dropped stream — they replay missed events from the
+-- log up to whatever sequence number they had when they disconnected,
+-- then continue with live events.
+--
+-- `sequence_number` is monotonic per response and assigned in the
+-- gateway (not derived from the upstream provider) so retries don't
+-- create gaps. ON DELETE CASCADE on `response_id` keeps the log in
+-- sync with `responses` cleanup.
+CREATE TABLE IF NOT EXISTS response_events (
+    response_id TEXT NOT NULL REFERENCES responses(id) ON DELETE CASCADE,
+    sequence_number INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (response_id, sequence_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_response_events_response_seq
+    ON response_events(response_id, sequence_number);
+
+-- Track the highest sequence number persisted for a response so the
+-- replay endpoint can decide when there's nothing more coming.
+ALTER TABLE responses ADD COLUMN last_sequence_number INTEGER NOT NULL DEFAULT 0;

@@ -50,6 +50,8 @@ pub struct UsageLogRecord {
     pub tool_bytes_fetched: Option<i64>,
     /// Number of search results returned — only for web_search records
     pub tool_results_count: Option<i32>,
+    /// Wall-clock runtime in seconds — only for shell tool records.
+    pub tool_runtime_seconds: Option<f64>,
 }
 
 /// Usage log entry for a single API request.
@@ -130,6 +132,11 @@ pub struct UsageLogEntry {
     /// Number of search results returned — only for web_search records
     #[serde(default)]
     pub tool_results_count: Option<i32>,
+    /// Wall-clock runtime in seconds — only for shell tool records.
+    /// Multiplied by the rate from `[features.server_tools.pricing]`
+    /// to populate `cost_microcents` for billing.
+    #[serde(default)]
+    pub tool_runtime_seconds: Option<f64>,
 }
 
 fn default_record_type() -> String {

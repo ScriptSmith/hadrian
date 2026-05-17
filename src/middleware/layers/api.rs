@@ -977,6 +977,7 @@ pub async fn api_middleware(
                     tool_url: None,
                     tool_bytes_fetched: None,
                     tool_results_count: None,
+                    tool_runtime_seconds: None,
                 });
             }
         }
@@ -1138,6 +1139,7 @@ fn track_usage_async(ctx: UsageTrackingContext<'_>) {
         tool_url: None,
         tool_bytes_fetched: None,
         tool_results_count: None,
+        tool_runtime_seconds: None,
     };
 
     let is_success = response.status().is_success();
@@ -2289,6 +2291,9 @@ mod tests {
             output_guardrails: None,
             event_bus: Arc::new(crate::events::EventBus::new()),
             file_search_service: None,
+            shell_runtime: None,
+            responses_store: None,
+            response_event_buffer: None,
             #[cfg(any(
                 feature = "document-extraction-basic",
                 feature = "document-extraction-full"
@@ -2347,6 +2352,9 @@ mod tests {
             output_guardrails: None,
             event_bus: Arc::new(crate::events::EventBus::new()),
             file_search_service: None,
+            shell_runtime: None,
+            responses_store: None,
+            response_event_buffer: None,
             #[cfg(any(
                 feature = "document-extraction-basic",
                 feature = "document-extraction-full"

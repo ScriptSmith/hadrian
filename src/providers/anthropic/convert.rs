@@ -593,6 +593,7 @@ pub fn convert_responses_input_to_messages(
                     }
                     ResponsesInputItem::WebSearchCall(_)
                     | ResponsesInputItem::FileSearchCall(_)
+                    | ResponsesInputItem::ShellCall(_)
                     | ResponsesInputItem::ImageGeneration(_) => {
                         // These are server-side tool calls that don't need translation
                         // to Anthropic format - they're OpenAI-specific features
@@ -734,6 +735,15 @@ pub fn convert_responses_tools(
                 // Dead code: web_search tools are preprocessed to function tools in execution.rs
                 // before reaching provider-specific conversion. This branch is a safety net.
                 tracing::warn!("Unexpected web_search tool variant reached Anthropic conversion");
+            }
+            ResponsesToolDefinition::Shell(_) => {
+                // Shell tool is OpenAI-specific (only the passthrough runtime forwards
+                // it). When the upstream is Anthropic, the request shouldn't include a
+                // shell tool — drop it with a warning rather than crashing.
+                tracing::warn!(
+                    "Shell tool reached Anthropic conversion — only OpenAI passthrough is \
+                     supported for shell in the current build; dropping the tool definition"
+                );
             }
             ResponsesToolDefinition::FileSearch(file_search) => {
                 // File search is handled by the gateway middleware, but the model needs to know

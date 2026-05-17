@@ -74,6 +74,10 @@ struct CachedRepos {
     service_accounts: Arc<dyn ServiceAccountRepo>,
     // OAuth PKCE authorization codes
     oauth_authorization_codes: Arc<dyn OAuthAuthorizationCodeRepo>,
+    // Persisted Responses API records
+    responses: Arc<dyn ResponsesRepo>,
+    // Per-response event log
+    response_events: Arc<dyn ResponseEventsRepo>,
 }
 
 enum PoolStorage {
@@ -153,6 +157,8 @@ impl DbPool {
             oauth_authorization_codes: Arc::new(sqlite::SqliteOAuthAuthorizationCodeRepo::new(
                 pool.clone(),
             )),
+            responses: Arc::new(sqlite::SqliteResponsesRepo::new(pool.clone())),
+            response_events: Arc::new(sqlite::SqliteResponseEventsRepo::new(pool.clone())),
         };
         DbPool {
             inner: PoolStorage::Sqlite(pool),
@@ -195,6 +201,8 @@ impl DbPool {
             oauth_authorization_codes: Arc::new(sqlite::SqliteOAuthAuthorizationCodeRepo::new(
                 pool.clone(),
             )),
+            responses: Arc::new(sqlite::SqliteResponsesRepo::new(pool.clone())),
+            response_events: Arc::new(sqlite::SqliteResponseEventsRepo::new(pool.clone())),
         };
         DbPool {
             inner: PoolStorage::WasmSqlite(pool),
@@ -305,6 +313,14 @@ impl DbPool {
                 write_pool.clone(),
                 read_pool.clone(),
             )),
+            responses: Arc::new(postgres::PostgresResponsesRepo::new(
+                write_pool.clone(),
+                read_pool.clone(),
+            )),
+            response_events: Arc::new(postgres::PostgresResponseEventsRepo::new(
+                write_pool.clone(),
+                read_pool.clone(),
+            )),
         };
         DbPool {
             inner: PoolStorage::Postgres(PgPoolPair {
@@ -384,6 +400,8 @@ impl DbPool {
                     oauth_authorization_codes: Arc::new(
                         sqlite::SqliteOAuthAuthorizationCodeRepo::new(pool.clone()),
                     ),
+                    responses: Arc::new(sqlite::SqliteResponsesRepo::new(pool.clone())),
+                    response_events: Arc::new(sqlite::SqliteResponseEventsRepo::new(pool.clone())),
                 };
 
                 Ok(DbPool {
@@ -526,6 +544,14 @@ impl DbPool {
                             read_pool.clone(),
                         ),
                     ),
+                    responses: Arc::new(postgres::PostgresResponsesRepo::new(
+                        write_pool.clone(),
+                        read_pool.clone(),
+                    )),
+                    response_events: Arc::new(postgres::PostgresResponseEventsRepo::new(
+                        write_pool.clone(),
+                        read_pool.clone(),
+                    )),
                 };
 
                 Ok(DbPool {
@@ -694,6 +720,16 @@ impl DbPool {
     /// Get OAuth PKCE authorization code repository
     pub fn oauth_authorization_codes(&self) -> Arc<dyn OAuthAuthorizationCodeRepo> {
         Arc::clone(&self.repos.oauth_authorization_codes)
+    }
+
+    /// Get persisted Responses API record repository.
+    pub fn responses(&self) -> Arc<dyn ResponsesRepo> {
+        Arc::clone(&self.repos.responses)
+    }
+
+    /// Get the response event log repository.
+    pub fn response_events(&self) -> Arc<dyn ResponseEventsRepo> {
+        Arc::clone(&self.repos.response_events)
     }
 
     /// Get a reference to the underlying database pool.

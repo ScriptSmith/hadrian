@@ -21,8 +21,21 @@ use crate::{
         FallbackDecision, Provider, ProviderError, anthropic, build_fallback_chain,
         classify_provider_error, open_ai, should_fallback_on_response_status, test,
     },
-    services::{preprocess_file_search_tools, preprocess_web_search_tools},
+    services::{
+        preprocess_file_search_tools, preprocess_web_search_tools,
+        shell_tool::preprocess_shell_tools,
+    },
 };
+
+/// Whether the shell tool spec should be left intact for the upstream
+/// provider to execute (passthrough mode). Currently only OpenAI hosts
+/// a shell runtime.
+fn shell_passthrough_for_openai(state: &AppState) -> bool {
+    matches!(
+        state.config.features.shell,
+        crate::config::ShellRuntimeConfig::PassthroughOpenAI
+    )
+}
 
 // ============================================================================
 // Unified Execution Result
@@ -258,12 +271,22 @@ impl ProviderExecutor for ResponsesExecutor {
         provider_config: &ProviderConfig,
         payload: Self::Payload,
     ) -> Result<Response, ProviderError> {
+        // Shell tool preprocessing rules:
+        // - OpenAI / Azure OpenAI: leave native `shell` tool intact when
+        //   passthrough is configured; otherwise rewrite to function tool.
+        //   (Currently the only "otherwise" is when a non-passthrough
+        //   runtime adapter is wired up, which is gated to slice 1B.)
+        // - Anthropic / Bedrock / Vertex: always rewrite, since these
+        //   providers have no native shell tool.
+        let openai_keep_native_shell = shell_passthrough_for_openai(state);
         match provider_config {
             ProviderConfig::OpenAi(config) => {
-                // Preprocess built-in tools to function tools for OpenAI-compatible providers
                 let mut payload = payload;
                 preprocess_file_search_tools(&mut payload);
                 preprocess_web_search_tools(&mut payload);
+                if !openai_keep_native_shell {
+                    preprocess_shell_tools(&mut payload);
+                }
 
                 open_ai::OpenAICompatibleProvider::from_config_with_registry(
                     config,
@@ -274,9 +297,9 @@ impl ProviderExecutor for ResponsesExecutor {
                 .await
             }
             ProviderConfig::Anthropic(config) => {
-                // Preprocess web_search tools (Anthropic handles file_search in its own convert)
                 let mut payload = payload;
                 preprocess_web_search_tools(&mut payload);
+                preprocess_shell_tools(&mut payload);
                 anthropic::AnthropicProvider::from_config_with_registry(
                     config,
                     provider_name,
@@ -287,10 +310,12 @@ impl ProviderExecutor for ResponsesExecutor {
             }
             #[cfg(feature = "provider-azure")]
             ProviderConfig::AzureOpenAi(config) => {
-                // Preprocess built-in tools to function tools for Azure OpenAI
                 let mut payload = payload;
                 preprocess_file_search_tools(&mut payload);
                 preprocess_web_search_tools(&mut payload);
+                if !openai_keep_native_shell {
+                    preprocess_shell_tools(&mut payload);
+                }
 
                 azure_openai::AzureOpenAIProvider::from_config_with_registry(
                     config,
@@ -302,10 +327,10 @@ impl ProviderExecutor for ResponsesExecutor {
             }
             #[cfg(feature = "provider-bedrock")]
             ProviderConfig::Bedrock(config) => {
-                // Preprocess built-in tools to function tools for Bedrock
                 let mut payload = payload;
                 preprocess_file_search_tools(&mut payload);
                 preprocess_web_search_tools(&mut payload);
+                preprocess_shell_tools(&mut payload);
 
                 bedrock::BedrockProvider::from_config_with_registry(
                     config,
@@ -317,9 +342,9 @@ impl ProviderExecutor for ResponsesExecutor {
             }
             #[cfg(feature = "provider-vertex")]
             ProviderConfig::Vertex(config) => {
-                // Preprocess web_search tools (Vertex handles file_search in its own convert)
                 let mut payload = payload;
                 preprocess_web_search_tools(&mut payload);
+                preprocess_shell_tools(&mut payload);
                 vertex::VertexProvider::from_config_with_registry(
                     config,
                     provider_name,
@@ -329,10 +354,10 @@ impl ProviderExecutor for ResponsesExecutor {
                 .await
             }
             ProviderConfig::Test(config) => {
-                // Preprocess built-in tools for test provider
                 let mut payload = payload;
                 preprocess_file_search_tools(&mut payload);
                 preprocess_web_search_tools(&mut payload);
+                preprocess_shell_tools(&mut payload);
 
                 test::TestProvider::from_config(config)
                     .create_responses(&state.http_client, payload)
@@ -343,6 +368,69 @@ impl ProviderExecutor for ResponsesExecutor {
 
     fn operation_name() -> &'static str {
         "responses"
+    }
+}
+
+/// Marker type for the standalone `/v1/responses/compact` endpoint.
+///
+/// Forwards to providers that implement
+/// [`Provider::create_responses_compact`]. Non-OpenAI providers return
+/// `Unsupported` from the trait default, which surfaces as HTTP 501
+/// to the caller with `error_code = "not_supported"`.
+pub struct CompactExecutor;
+
+impl ProviderExecutor for CompactExecutor {
+    type Payload = api_types::CreateResponsesPayload;
+
+    async fn execute(
+        state: &AppState,
+        provider_name: &str,
+        provider_config: &ProviderConfig,
+        payload: Self::Payload,
+    ) -> Result<Response, ProviderError> {
+        match provider_config {
+            ProviderConfig::OpenAi(config) => {
+                open_ai::OpenAICompatibleProvider::from_config_with_registry(
+                    config,
+                    provider_name,
+                    &state.circuit_breakers,
+                )
+                .create_responses_compact(&state.http_client, payload)
+                .await
+            }
+            #[cfg(feature = "provider-azure")]
+            ProviderConfig::AzureOpenAi(config) => {
+                azure_openai::AzureOpenAIProvider::from_config_with_registry(
+                    config,
+                    provider_name,
+                    &state.circuit_breakers,
+                )
+                .create_responses_compact(&state.http_client, payload)
+                .await
+            }
+            // Every other provider falls through to the trait default
+            // (Unsupported → 501). Listing them explicitly keeps the
+            // match exhaustive so adding a future provider forces a
+            // conscious choice here.
+            ProviderConfig::Anthropic(_) => Err(ProviderError::Unsupported(
+                "compaction is only supported by OpenAI-compatible providers".to_string(),
+            )),
+            #[cfg(feature = "provider-bedrock")]
+            ProviderConfig::Bedrock(_) => Err(ProviderError::Unsupported(
+                "compaction is only supported by OpenAI-compatible providers".to_string(),
+            )),
+            #[cfg(feature = "provider-vertex")]
+            ProviderConfig::Vertex(_) => Err(ProviderError::Unsupported(
+                "compaction is only supported by OpenAI-compatible providers".to_string(),
+            )),
+            ProviderConfig::Test(_) => Err(ProviderError::Unsupported(
+                "compaction is only supported by OpenAI-compatible providers".to_string(),
+            )),
+        }
+    }
+
+    fn operation_name() -> &'static str {
+        "responses_compact"
     }
 }
 
@@ -852,6 +940,9 @@ pub fn provider_error_to_api_error(e: ProviderError) -> ApiError {
             "internal_error",
             "Internal provider error".to_string(),
         ),
+        ProviderError::Unsupported(msg) => {
+            (StatusCode::NOT_IMPLEMENTED, "not_supported", msg.clone())
+        }
         ProviderError::CircuitBreakerOpen(cb) => (
             StatusCode::SERVICE_UNAVAILABLE,
             "circuit_breaker_open",
@@ -913,6 +1004,9 @@ mod tests {
             output_guardrails: None,
             event_bus: Arc::new(EventBus::new()),
             file_search_service: None,
+            shell_runtime: None,
+            responses_store: None,
+            response_event_buffer: None,
             #[cfg(any(
                 feature = "document-extraction-basic",
                 feature = "document-extraction-full"

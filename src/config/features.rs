@@ -62,6 +62,88 @@ pub struct FeaturesConfig {
     /// Caches model lists from config-file providers to avoid per-request latency.
     #[serde(default)]
     pub static_models_cache: StaticModelsCacheConfig,
+
+    /// Shared configuration for server-executed tools (file_search, web_search,
+    /// future: shell). Controls the global per-request iteration budget across
+    /// all such tools. Replaces the per-tool `max_iterations` fields on
+    /// `[features.file_search]` and `[features.web_search]`, which are
+    /// deprecated and emit a warning at startup if set to a non-default value.
+    #[serde(default)]
+    pub server_tools: ServerToolsConfig,
+
+    /// Shell tool runtime configuration. Selects which backend executes
+    /// `shell` tool calls (passthrough_openai, microsandbox, etc.).
+    /// Defaults to `None` — shell tool disabled.
+    #[serde(default)]
+    pub shell: super::ShellRuntimeConfig,
+
+    /// Persistence settings for the Responses API.
+    #[serde(default)]
+    pub responses: ResponsesPersistenceConfig,
+}
+
+/// Persistence and retention settings for the Responses API.
+///
+/// When `store=true` (the OpenAI default) is set on a request, Hadrian
+/// writes a row to the `responses` table that can later be retrieved
+/// via `GET /v1/responses/{id}` or cancelled via
+/// `POST /v1/responses/{id}/cancel`. Records past
+/// `retention_secs` are removed by the cleanup worker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ResponsesPersistenceConfig {
+    /// How long a terminal response is kept before pruning.
+    /// Default 86400 (24h).
+    #[serde(default = "default_responses_retention_secs")]
+    pub retention_secs: u64,
+    /// Interval at which the retention worker scans for expired
+    /// records. Default 3600 (1h).
+    #[serde(default = "default_responses_cleanup_interval_secs")]
+    pub cleanup_interval_secs: u64,
+    /// Optional webhook fired on terminal-state transitions
+    /// (`completed`, `failed`, `cancelled`, `incomplete`). Disabled
+    /// when unset.
+    #[serde(default)]
+    pub webhook: Option<ResponsesWebhookConfig>,
+}
+
+impl Default for ResponsesPersistenceConfig {
+    fn default() -> Self {
+        Self {
+            retention_secs: default_responses_retention_secs(),
+            cleanup_interval_secs: default_responses_cleanup_interval_secs(),
+            webhook: None,
+        }
+    }
+}
+
+/// Webhook delivery settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ResponsesWebhookConfig {
+    /// Target URL. Must be HTTPS or pass `validate_base_url` (no SSRF
+    /// to internal services unless explicitly allowed).
+    pub url: String,
+    /// Optional bearer token sent in the `Authorization` header.
+    #[serde(default)]
+    pub bearer_token: Option<String>,
+    /// Per-request timeout in seconds. Default 10s.
+    #[serde(default = "default_webhook_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+fn default_webhook_timeout_secs() -> u64 {
+    10
+}
+
+fn default_responses_retention_secs() -> u64 {
+    86_400
+}
+
+fn default_responses_cleanup_interval_secs() -> u64 {
+    3_600
 }
 
 impl FeaturesConfig {
@@ -70,8 +152,87 @@ impl FeaturesConfig {
         if let Some(ref file_search) = self.file_search {
             file_search.validate()?;
         }
+        // Surface deprecation warnings for per-tool iteration limits.
+        if let Some(ref file_search) = self.file_search
+            && file_search.max_iterations != default_file_search_max_iterations()
+        {
+            tracing::warn!(
+                "[features.file_search] max_iterations is deprecated; \
+                 use [features.server_tools] max_iterations instead. \
+                 The global value ({}) will be used.",
+                self.server_tools.max_iterations
+            );
+        }
+        if let Some(ref web_search) = self.web_search
+            && web_search.max_iterations != default_web_search_max_iterations()
+        {
+            tracing::warn!(
+                "[features.web_search] max_iterations is deprecated; \
+                 use [features.server_tools] max_iterations instead. \
+                 The global value ({}) will be used.",
+                self.server_tools.max_iterations
+            );
+        }
         Ok(())
     }
+}
+
+/// Configuration shared by all server-executed tools.
+///
+/// Server-executed tools (`file_search`, `web_search`, etc.) run inside the
+/// gateway in a multi-turn loop. This config gates the total number of
+/// iterations a single request can drive, across **all** tools — preventing
+/// runaway sessions where the model keeps requesting new tool calls.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ServerToolsConfig {
+    /// Maximum number of provider continuation requests in one response.
+    ///
+    /// Counts all server-executed tool iterations together (file_search +
+    /// web_search + shell + …). On the final iteration the tools strip
+    /// their own definitions from the continuation payload so the model
+    /// is forced to produce a text response.
+    ///
+    /// Default: 10.
+    #[serde(default = "default_server_tools_max_iterations")]
+    pub max_iterations: usize,
+
+    /// Pricing for runtime time consumed by the shell tool.
+    ///
+    /// Local runtimes (microsandbox) are billed by wall-clock seconds.
+    /// Passthrough mode (where the upstream provider runs the container)
+    /// is billed by that provider and remains 0 here.
+    #[serde(default)]
+    pub pricing: ServerToolsPricingConfig,
+}
+
+impl Default for ServerToolsConfig {
+    fn default() -> Self {
+        Self {
+            max_iterations: default_server_tools_max_iterations(),
+            pricing: ServerToolsPricingConfig::default(),
+        }
+    }
+}
+
+fn default_server_tools_max_iterations() -> usize {
+    10
+}
+
+/// Cost rates for billable server-tool runtimes.
+///
+/// Rates are in **microcents per second** (1/1,000,000 of a dollar per
+/// second, matching the precision used elsewhere in `pricing::PricingConfig`).
+/// Total cost per shell call is `runtime_seconds * rate`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ServerToolsPricingConfig {
+    /// Microcents per second of microsandbox VM wall-clock time.
+    /// Default 0 (no charge until operator sets a rate).
+    #[serde(default)]
+    pub microsandbox_microcents_per_second: u64,
 }
 
 /// Embedding configuration.

@@ -14,6 +14,8 @@ mod org_sso_configs;
 mod organizations;
 mod projects;
 mod providers;
+mod response_events;
+mod responses;
 #[cfg(feature = "sso")]
 mod scim_configs;
 #[cfg(feature = "sso")]
@@ -44,6 +46,8 @@ pub use org_sso_configs::SqliteOrgSsoConfigRepo;
 pub use organizations::SqliteOrganizationRepo;
 pub use projects::SqliteProjectRepo;
 pub use providers::SqliteDynamicProviderRepo;
+pub use response_events::SqliteResponseEventsRepo;
+pub use responses::SqliteResponsesRepo;
 #[cfg(feature = "sso")]
 pub use scim_configs::SqliteOrgScimConfigRepo;
 #[cfg(feature = "sso")]

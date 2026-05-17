@@ -1,3 +1,5 @@
+pub mod sse_buffer;
+
 use std::{
     io,
     pin::Pin,
@@ -12,6 +14,7 @@ use std::{
 use bytes::Bytes;
 use futures_util::stream::Stream;
 use serde_json::Value;
+pub use sse_buffer::SseBuffer;
 #[cfg(feature = "server")]
 use tokio::sync::mpsc;
 use tokio::time::Sleep;

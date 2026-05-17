@@ -60,6 +60,10 @@ pub fn classify_provider_error(error: &ProviderError) -> FallbackDecision {
 
         // Internal errors are typically programming errors - don't retry
         ProviderError::Internal(_) => FallbackDecision::NoRetry,
+
+        // Unsupported operations won't succeed on another provider of
+        // the same type — bail out instead of cycling fallbacks.
+        ProviderError::Unsupported(_) => FallbackDecision::NoRetry,
     }
 }
 

@@ -31,17 +31,14 @@
 //! 4. Continues the conversation with the provider
 //! 5. Streams the final response to the client
 
-use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Instant};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use axum::body::Body;
-use bytes::{Bytes, BytesMut};
-use futures_util::StreamExt;
-use http::Response;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::mpsc;
-use tracing::{Instrument, debug, error, info, info_span, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -59,11 +56,7 @@ use crate::{
         AttributeFilter, ComparisonFilter, ComparisonOperator, CompoundFilter, FilterValue,
         LogicalOperator,
     },
-    observability::{
-        metrics::{record_file_search, record_file_search_iteration},
-        otel_span_error, otel_span_ok,
-    },
-    providers::ProviderError,
+    observability::{metrics::record_file_search, otel_span_error, otel_span_ok},
     services::{FileSearchRequest, FileSearchResponse, FileSearchService},
 };
 
@@ -427,26 +420,6 @@ impl FileSearchAuthContext {
     }
 }
 
-/// Type alias for the provider callback function.
-///
-/// This callback is used to send continuation requests to the provider
-/// after executing file_search tool calls.
-#[cfg(not(target_arch = "wasm32"))]
-pub type ProviderCallback = Arc<
-    dyn Fn(
-            CreateResponsesPayload,
-        ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, ProviderError>> + Send>>
-        + Send
-        + Sync,
->;
-
-#[cfg(target_arch = "wasm32")]
-pub type ProviderCallback = Arc<
-    dyn Fn(
-        CreateResponsesPayload,
-    ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, ProviderError>>>>,
->;
-
 /// Errors that can occur during file search middleware processing.
 #[derive(Debug, Error)]
 #[allow(dead_code)] // Variants will be used as implementation grows
@@ -647,102 +620,6 @@ impl CitationTracker {
 // SSE Frame Buffer
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Buffer for accumulating SSE (Server-Sent Events) data and extracting complete events.
-///
-/// SSE events are delimited by double newlines (`\n\n` or `\r\n\r\n`). TCP chunks may
-/// arrive with events split across boundaries, so this buffer accumulates data until
-/// complete events can be extracted.
-///
-/// # Example
-///
-/// ```ignore
-/// let mut buffer = SseBuffer::new();
-///
-/// // First chunk arrives with partial event
-/// buffer.extend(b"data: {\"type\":");
-/// assert!(buffer.extract_complete_events().is_empty());
-///
-/// // Second chunk completes the event
-/// buffer.extend(b" \"test\"}\n\n");
-/// let events = buffer.extract_complete_events();
-/// assert_eq!(events.len(), 1);
-/// ```
-#[derive(Debug, Default)]
-pub(crate) struct SseBuffer {
-    buffer: BytesMut,
-}
-
-impl SseBuffer {
-    /// Create a new empty SSE buffer.
-    pub(crate) fn new() -> Self {
-        Self {
-            buffer: BytesMut::new(),
-        }
-    }
-
-    /// Append data to the buffer.
-    pub(crate) fn extend(&mut self, data: &[u8]) {
-        self.buffer.extend_from_slice(data);
-    }
-
-    /// Extract all complete SSE events from the buffer.
-    ///
-    /// Returns a vector of complete events (each ending with `\n\n` or `\r\n\r\n`)
-    /// and retains any incomplete data for the next call.
-    pub(crate) fn extract_complete_events(&mut self) -> Vec<Bytes> {
-        let mut events = Vec::new();
-
-        while let Some(end_pos) = self.find_event_boundary() {
-            // Extract the complete event including the delimiter
-            let event = self.buffer.split_to(end_pos);
-            events.push(event.freeze());
-        }
-
-        events
-    }
-
-    /// Find the position of the next event boundary (end of `\n\n` or `\r\n\r\n`).
-    ///
-    /// Returns the position immediately after the delimiter, or None if no
-    /// complete event boundary is found.
-    fn find_event_boundary(&self) -> Option<usize> {
-        let bytes = &self.buffer[..];
-
-        // Look for \n\n (most common)
-        for i in 0..bytes.len().saturating_sub(1) {
-            if bytes[i] == b'\n' && bytes[i + 1] == b'\n' {
-                return Some(i + 2);
-            }
-        }
-
-        // Also check for \r\n\r\n (Windows-style)
-        for i in 0..bytes.len().saturating_sub(3) {
-            if bytes[i] == b'\r'
-                && bytes[i + 1] == b'\n'
-                && bytes[i + 2] == b'\r'
-                && bytes[i + 3] == b'\n'
-            {
-                return Some(i + 4);
-            }
-        }
-
-        None
-    }
-
-    /// Get any remaining incomplete data in the buffer.
-    ///
-    /// This is useful for forwarding partial data when the stream ends
-    /// or when we need to pass through data that couldn't be parsed.
-    pub(crate) fn take_remaining(&mut self) -> Bytes {
-        self.buffer.split().freeze()
-    }
-
-    /// Check if the buffer is empty.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.buffer.is_empty()
-    }
-}
-
 /// Context for file search middleware operations.
 #[derive(Clone)]
 pub struct FileSearchContext {
@@ -757,8 +634,6 @@ pub struct FileSearchContext {
     pub tool_definitions: Vec<FileSearchTool>,
     /// The original request payload (used to build continuation requests).
     pub original_payload: CreateResponsesPayload,
-    /// Callback to send continuation requests to the provider.
-    pub provider_callback: Option<ProviderCallback>,
 }
 
 impl FileSearchContext {
@@ -776,14 +651,7 @@ impl FileSearchContext {
             auth,
             tool_definitions,
             original_payload,
-            provider_callback: None,
         }
-    }
-
-    /// Set the provider callback for multi-turn execution.
-    pub fn with_provider_callback(mut self, callback: ProviderCallback) -> Self {
-        self.provider_callback = Some(callback);
-        self
     }
 
     /// Check if file search is enabled.
@@ -1425,516 +1293,6 @@ pub fn detect_file_search_in_chunk(
     found_calls
 }
 
-/// Build a continuation payload with the original input plus tool call outputs.
-///
-/// Handles multiple file_search tool calls from a single LLM response by adding
-/// all function call outputs to the payload.
-///
-/// # Arguments
-/// * `original` - The original request payload to clone and modify
-/// * `tool_results` - The tool calls and their results to add to the input
-/// * `is_final_iteration` - If true, removes file_search tools from the payload to force
-///   the model to generate a final text response instead of requesting more tool calls
-#[instrument(skip(original, tool_results), fields(
-    tool_result_count = tool_results.len(),
-    is_final_iteration = is_final_iteration,
-))]
-fn build_continuation_payload(
-    original: &CreateResponsesPayload,
-    tool_results: &[(&FileSearchToolCall, FileSearchToolResult)],
-    is_final_iteration: bool,
-) -> CreateResponsesPayload {
-    let mut payload = original.clone();
-
-    // Build function call output items for all tool calls
-    let function_outputs: Vec<ResponsesInputItem> = tool_results
-        .iter()
-        .map(|(tool_call, tool_result)| {
-            ResponsesInputItem::FunctionCallOutput(FunctionCallOutput {
-                type_: FunctionCallOutputType::FunctionCallOutput,
-                id: Some(tool_call.id.clone()),
-                call_id: tool_call.id.clone(),
-                output: tool_result.content.clone(),
-                status: None,
-            })
-        })
-        .collect();
-
-    // Add all function call outputs to the input
-    match payload.input {
-        Some(ResponsesInput::Items(ref mut items)) => {
-            items.extend(function_outputs);
-        }
-        Some(ResponsesInput::Text(text)) => {
-            // Convert text input to items and add all function call outputs
-            let mut items = vec![ResponsesInputItem::EasyMessage(
-                crate::api_types::responses::EasyInputMessage {
-                    type_: None,
-                    role: crate::api_types::responses::EasyInputMessageRole::User,
-                    content: crate::api_types::responses::EasyInputMessageContent::Text(text),
-                },
-            )];
-            items.extend(function_outputs);
-            payload.input = Some(ResponsesInput::Items(items));
-        }
-        None => {
-            payload.input = Some(ResponsesInput::Items(function_outputs));
-        }
-    }
-
-    // On the final iteration, remove file_search tools to force the model to
-    // generate a final text response instead of requesting more tool calls.
-    // This prevents hitting the iteration limit with an unexecuted tool call.
-    if is_final_iteration && let Some(ref mut tools) = payload.tools {
-        let original_count = tools.len();
-        tools.retain(|t| !t.is_file_search());
-        let removed_count = original_count - tools.len();
-        if removed_count > 0 {
-            info!(
-                stage = "tools_removed",
-                removed_count = removed_count,
-                "Removed file_search tools on final iteration to force completion"
-            );
-        }
-        // If no tools remain, set to None to avoid sending empty array
-        if tools.is_empty() {
-            payload.tools = None;
-        }
-    }
-
-    // Ensure streaming is enabled for the continuation
-    payload.stream = true;
-
-    payload
-}
-
-/// Wrap a streaming response with file_search tool interception and multi-turn execution.
-///
-/// This function monitors the stream for file_search tool calls. When detected:
-/// 1. Executes the search against configured vector stores
-/// 2. Builds a continuation payload with the tool result
-/// 3. Sends the continuation request to the provider via the callback
-/// 4. Streams the continuation response to the client
-///
-/// If no provider callback is configured, it falls back to detection-only mode
-/// (logs tool calls but doesn't execute multi-turn).
-pub fn wrap_streaming_with_file_search(
-    response: Response<Body>,
-    context: FileSearchContext,
-) -> Response<Body> {
-    if !context.is_enabled() {
-        return response;
-    }
-
-    let (parts, body) = response.into_parts();
-    let vector_store_ids = context.get_vector_store_ids();
-    let max_iterations = context.config.max_iterations;
-    let has_callback = context.provider_callback.is_some();
-    let include_results = should_include_results(&context.original_payload);
-
-    // Create parent span for the entire file search flow
-    let file_search_span = info_span!(
-        "file_search_stream",
-        vector_store_ids = ?vector_store_ids,
-        max_iterations = max_iterations,
-        has_callback = has_callback,
-    );
-
-    // Create a channel for forwarding chunks
-    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
-
-    // Spawn a task to process the stream, propagating the span context
-    crate::compat::spawn_detached(
-        async move {
-            let mut iteration = 0;
-            let mut current_body = body;
-            // Track citations across all search results for annotation injection
-            let mut citation_tracker = CitationTracker::new();
-            // Cache for query deduplication within this request
-            // Maps cache_key -> FileSearchToolResult to avoid redundant searches
-            let mut query_cache: HashMap<String, FileSearchToolResult> = HashMap::new();
-
-            loop {
-                iteration += 1;
-                let at_iteration_limit = iteration > max_iterations;
-
-                // Create child span for this iteration
-                let iteration_span = info_span!(
-                    "file_search_iteration",
-                    iteration = iteration,
-                    at_limit = at_iteration_limit,
-                );
-                let _iteration_guard = iteration_span.enter();
-
-                let mut body_stream = current_body.into_data_stream();
-                let mut accumulated = BytesMut::new();
-                // Collect all file_search tool calls from this response
-                let mut detected_tool_calls: Vec<FileSearchToolCall> = Vec::new();
-                // SSE buffer to handle events split across TCP chunks
-                let mut sse_buffer = SseBuffer::new();
-
-                // Process the current response stream
-                while let Some(chunk_result) = body_stream.next().await {
-                    match chunk_result {
-                        Ok(chunk) => {
-                            accumulated.extend_from_slice(&chunk);
-                            sse_buffer.extend(&chunk);
-
-                            // Extract complete SSE events from the buffer
-                            let complete_events = sse_buffer.extract_complete_events();
-
-                            for event in complete_events {
-                                // Check for file_search tool calls in this event
-                                // (skip detection if we've hit the iteration limit - we'll forward everything)
-                                if !at_iteration_limit {
-                                    let tool_calls =
-                                        detect_file_search_in_chunk(&event, &vector_store_ids);
-                                    for tool_call in tool_calls {
-                                        info!(
-                                            stage = "tool_call_detected",
-                                            tool_call_id = %tool_call.id,
-                                            query = %tool_call.query,
-                                            vector_store_ids = ?tool_call.vector_store_ids,
-                                            iteration = iteration,
-                                            "Detected file_search tool call in stream"
-                                        );
-                                        detected_tool_calls.push(tool_call);
-                                    }
-
-                                    // If we found tool calls and have a callback,
-                                    // we're accumulating the response, don't forward yet
-                                    if !detected_tool_calls.is_empty() && has_callback {
-                                        continue;
-                                    }
-                                }
-
-                                // Forward the complete event to the client, injecting citations if we have tracked sources
-                                let event_to_send = if !citation_tracker.is_empty() {
-                                    inject_citation_annotations(&event, &citation_tracker)
-                                } else {
-                                    event
-                                };
-                                if tx.send(Ok(event_to_send)).await.is_err() {
-                                    return; // Client disconnected
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            warn!(
-                                stage = "stream_error",
-                                error = %e,
-                                iteration = iteration,
-                                "Error reading stream chunk"
-                            );
-                            let _ = tx.send(Err(std::io::Error::other(e))).await;
-                            return;
-                        }
-                    }
-                }
-
-                // Forward any remaining incomplete data in the SSE buffer
-                // (provider may have sent data without final \n\n)
-                if !sse_buffer.is_empty() {
-                    let remaining = sse_buffer.take_remaining();
-                    if !remaining.is_empty() {
-                        // Only forward if we're not accumulating for tool calls
-                        if detected_tool_calls.is_empty() || !has_callback {
-                            let data_to_send = if !citation_tracker.is_empty() {
-                                inject_citation_annotations(&remaining, &citation_tracker)
-                            } else {
-                                remaining
-                            };
-                            if tx.send(Ok(data_to_send)).await.is_err() {
-                                return; // Client disconnected
-                            }
-                        }
-                    }
-                }
-
-                // If we've hit the iteration limit, we've forwarded the final response above
-                // (tool call detection was skipped, so all chunks were forwarded)
-                if at_iteration_limit {
-                    warn!(
-                        stage = "iteration_limit_reached",
-                        iteration = iteration,
-                        max_iterations = max_iterations,
-                        "Maximum file_search iterations exceeded, forwarding final response"
-                    );
-                    record_file_search_iteration(iteration as u32, true, "limit_reached");
-                    break;
-                }
-
-                // If we detected tool calls, execute them all in parallel and continue
-                if !detected_tool_calls.is_empty() {
-                    let tool_call_count = detected_tool_calls.len();
-
-                    // Emit in_progress events for each tool call to notify the client
-                    for (idx, tool_call) in detected_tool_calls.iter().enumerate() {
-                        let event = format_file_search_in_progress_event(&tool_call.id, idx);
-                        if tx.send(Ok(event)).await.is_err() {
-                            return; // Client disconnected
-                        }
-                    }
-
-                    // Create span for the batch search execution
-                    let batch_search_span = info_span!(
-                        "execute_batch_searches",
-                        tool_call_count = tool_call_count,
-                        iteration = iteration,
-                    );
-                    let _batch_guard = batch_search_span.enter();
-
-                    info!(
-                        stage = "batch_search_starting",
-                        tool_call_count = tool_call_count,
-                        iteration = iteration,
-                        "Executing {} file_search tool calls in parallel",
-                        tool_call_count
-                    );
-
-                    // Emit searching events as we start the actual search
-                    for (idx, tool_call) in detected_tool_calls.iter().enumerate() {
-                        let event = format_file_search_searching_event(&tool_call.id, idx);
-                        if tx.send(Ok(event)).await.is_err() {
-                            return; // Client disconnected
-                        }
-                    }
-
-                    // Execute all searches in parallel
-                    // First, separate cached vs uncached to minimize redundant work
-                    let search_futures: Vec<_> = detected_tool_calls
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, tool_call)| {
-                            let cache_key = tool_call.cache_key();
-                            let cached = query_cache.get(&cache_key).cloned();
-                            let ctx = context.clone();
-                            let tc = tool_call.clone();
-
-                            // Create child span for each individual search
-                            let search_span = info_span!(
-                                "execute_single_search",
-                                search_index = idx,
-                                tool_call_id = %tc.id,
-                                query = %tc.query,
-                                cache_hit = cached.is_some(),
-                            );
-
-                            async move {
-                                if let Some(cached_result) = cached {
-                                    info!(
-                                        stage = "search_completed",
-                                        tool_call_id = %tc.id,
-                                        query = %tc.query,
-                                        result_count = cached_result.result_count,
-                                        vector_stores_searched = cached_result.vector_stores_searched,
-                                        cache_hit = true,
-                                        duration_ms = 0_u64,
-                                        "Returning cached file search result (duplicate query)"
-                                    );
-                                    // Record cache hit metric (duration ~0 for cached result)
-                                    record_file_search(
-                                        "success",
-                                        0.0,
-                                        cached_result.result_count as u32,
-                                        cached_result.vector_stores_searched as u32,
-                                        true, // cache_hit = true
-                                    );
-                                    let tool_call_id = tc.id.clone();
-                                    Ok((
-                                        tc,
-                                        FileSearchToolResult {
-                                            tool_call_id,
-                                            ..cached_result
-                                        },
-                                        None, // No cache key to update
-                                    ))
-                                } else {
-                                    match ctx.execute_search(&tc).await {
-                                        Ok(result) => {
-                                            // execute_search already logs search_completed
-                                            Ok((tc, result, Some(cache_key)))
-                                        }
-                                        Err(e) => {
-                                            // execute_search already logs the error
-                                            Err(e)
-                                        }
-                                    }
-                                }
-                            }
-                            .instrument(search_span)
-                        })
-                        .collect();
-
-                    let search_results = futures_util::future::join_all(search_futures).await;
-
-                    // Process results: check for failures, update cache, emit to client
-                    let mut successful_results: Vec<(&FileSearchToolCall, FileSearchToolResult)> =
-                        Vec::new();
-                    let mut had_failure = false;
-
-                    for result in search_results {
-                        match result {
-                            Ok((tool_call, search_result, cache_key_opt)) => {
-                                // Update cache for newly executed searches
-                                if let Some(cache_key) = cache_key_opt {
-                                    query_cache.insert(cache_key, search_result.clone());
-                                }
-
-                                // Track sources for citation annotation
-                                if let Some(ref raw_response) = search_result.raw_response {
-                                    citation_tracker.add_from_response(raw_response);
-                                    debug!(
-                                        stage = "citations_tracked",
-                                        tool_call_id = %tool_call.id,
-                                        source_count = raw_response.results.len(),
-                                        "Added search results to citation tracker"
-                                    );
-
-                                    // Emit file_search_call output item to the client
-                                    let file_search_call_output = build_file_search_call_output(
-                                        &tool_call.id,
-                                        &tool_call.query,
-                                        raw_response,
-                                        include_results,
-                                    );
-
-                                    if let Some(sse_event) =
-                                        format_file_search_call_sse_event(&file_search_call_output)
-                                    {
-                                        debug!(
-                                            stage = "result_emitted",
-                                            tool_call_id = %tool_call.id,
-                                            include_results = include_results,
-                                            "Sending file_search_call output to client"
-                                        );
-                                        if tx.send(Ok(sse_event)).await.is_err() {
-                                            return; // Client disconnected
-                                        }
-                                    }
-
-                                    // Emit completed event for this tool call
-                                    // Find the index of this tool call in the detected list
-                                    let output_index = detected_tool_calls
-                                        .iter()
-                                        .position(|tc| tc.id == tool_call.id)
-                                        .unwrap_or(0);
-                                    let completed_event = format_file_search_completed_event(
-                                        &tool_call.id,
-                                        output_index,
-                                    );
-                                    if tx.send(Ok(completed_event)).await.is_err() {
-                                        return; // Client disconnected
-                                    }
-                                }
-
-                                // Find the original tool call reference for the continuation payload
-                                if let Some(orig_tc) =
-                                    detected_tool_calls.iter().find(|tc| tc.id == tool_call.id)
-                                {
-                                    successful_results.push((orig_tc, search_result));
-                                }
-                            }
-                            Err(_) => {
-                                had_failure = true;
-                            }
-                        }
-                    }
-
-                    // If any search failed, forward accumulated response and stop
-                    if had_failure {
-                        if tx.send(Ok(accumulated.freeze())).await.is_err() {
-                            return;
-                        }
-                        record_file_search_iteration(iteration as u32, true, "error");
-                        break;
-                    }
-
-                    // If we have a callback, make the continuation request with all results
-                    if let Some(ref callback) = context.provider_callback {
-                        // On the final iteration (iteration == max_iterations), remove file_search
-                        // tools from the continuation request to force the model to generate a
-                        // final text response instead of requesting another tool call.
-                        let is_final_iteration = iteration == max_iterations;
-                        let continuation_payload = build_continuation_payload(
-                            &context.original_payload,
-                            &successful_results,
-                            is_final_iteration,
-                        );
-
-                        info!(
-                            stage = "continuation_sent",
-                            tool_call_count = successful_results.len(),
-                            iteration = iteration,
-                            is_final_iteration = is_final_iteration,
-                            "Sending continuation request to provider with {} tool results",
-                            successful_results.len()
-                        );
-
-                        match callback(continuation_payload).await {
-                            Ok(continuation_response) => {
-                                // Continue processing the new response stream
-                                let (_, new_body) = continuation_response.into_parts();
-                                current_body = new_body;
-                                continue; // Go to next iteration of the loop
-                            }
-                            Err(e) => {
-                                error!(
-                                    stage = "continuation_failed",
-                                    iteration = iteration,
-                                    error = %e,
-                                    "Provider continuation request failed"
-                                );
-                                // On provider error, forward accumulated response and stop
-                                if tx.send(Ok(accumulated.freeze())).await.is_err() {
-                                    return;
-                                }
-                                record_file_search_iteration(iteration as u32, true, "error");
-                                break;
-                            }
-                        }
-                    } else {
-                        // No callback - forward accumulated response
-                        debug!(
-                            stage = "no_callback",
-                            iteration = iteration,
-                            "No provider callback configured, forwarding original response"
-                        );
-                        if tx.send(Ok(accumulated.freeze())).await.is_err() {
-                            return;
-                        }
-                        record_file_search_iteration(iteration as u32, true, "no_callback");
-                        break;
-                    }
-                } else {
-                    // No tool calls detected, we're done
-                    debug!(
-                        stage = "stream_completed",
-                        iteration = iteration,
-                        "No tool calls detected, stream complete"
-                    );
-                    record_file_search_iteration(iteration as u32, true, "completed");
-                    break;
-                }
-            }
-
-            debug!(
-                stage = "processing_completed",
-                "File search stream processing completed"
-            );
-        }
-        .instrument(file_search_span),
-    );
-
-    // Create a stream from the receiver using futures_util::stream::unfold
-    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
-        rx.recv().await.map(|item| (item, rx))
-    });
-    let body = Body::from_stream(stream);
-
-    Response::from_parts(parts, body)
-}
-
 /// Check a non-streaming response for file_search tool calls.
 ///
 /// Returns the detected tool calls and whether the response requires
@@ -1987,9 +1345,298 @@ pub fn format_tool_result_json(result: &FileSearchToolResult) -> Value {
     })
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ServerExecutedTool implementation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `ServerExecutedTool` implementation for `file_search`.
+///
+/// Wraps a `FileSearchContext` plus per-request shared state (query cache and
+/// citation tracker) so the runner can dispatch concurrent calls against a
+/// single instance while preserving the original wrapper's behaviour.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct FileSearchExecutor {
+    context: FileSearchContext,
+    /// Citation tracker shared across all calls for this request, used by
+    /// `transform_event` to inject `FileCitation` annotations into events
+    /// the model emits after a search has completed.
+    citation_tracker: std::sync::Mutex<CitationTracker>,
+    /// Query cache deduplicates identical searches within one request.
+    query_cache: tokio::sync::Mutex<HashMap<String, FileSearchToolResult>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FileSearchExecutor {
+    pub fn new(context: FileSearchContext) -> Self {
+        Self {
+            context,
+            citation_tracker: std::sync::Mutex::new(CitationTracker::new()),
+            query_cache: tokio::sync::Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait::async_trait]
+impl crate::services::server_tools::ServerExecutedTool for FileSearchExecutor {
+    fn name(&self) -> &'static str {
+        "file_search"
+    }
+
+    fn is_enabled_for(&self, _payload: &CreateResponsesPayload) -> bool {
+        self.context.is_enabled()
+    }
+
+    fn detect(
+        &self,
+        event: &[u8],
+        _ctx: &crate::services::server_tools::ToolContext,
+    ) -> Vec<crate::services::server_tools::DetectedToolCall> {
+        let vector_store_ids = self.context.get_vector_store_ids();
+        detect_file_search_in_chunk(event, &vector_store_ids)
+            .into_iter()
+            .map(|tc| crate::services::server_tools::DetectedToolCall {
+                tool_name: "file_search",
+                call_id: tc.id.clone(),
+                arguments: serde_json::to_value(&tc).unwrap_or(Value::Null),
+            })
+            .collect()
+    }
+
+    async fn execute(
+        &self,
+        call: crate::services::server_tools::DetectedToolCall,
+        ctx: &crate::services::server_tools::ToolContext,
+    ) -> Result<
+        crate::services::server_tools::ToolExecutionHandle,
+        crate::services::server_tools::ToolError,
+    > {
+        let tool_call: FileSearchToolCall =
+            serde_json::from_value(call.arguments).map_err(|e| {
+                crate::services::server_tools::ToolError::InvalidCall(format!(
+                    "could not deserialize FileSearchToolCall: {e}"
+                ))
+            })?;
+        let include_results = should_include_results(&ctx.original_payload);
+        let cache_key = tool_call.cache_key();
+        let context = self.context.clone();
+        let call_id = call.call_id.clone();
+
+        // Channel carries the progress/output events to the runner.
+        let (event_tx, event_rx) = mpsc::channel::<Bytes>(8);
+
+        // Future producing the final ToolCallResult.
+        let cache_handle = &self.query_cache;
+        let tracker_handle = &self.citation_tracker;
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel::<
+            Result<
+                crate::services::server_tools::ToolCallResult,
+                crate::services::server_tools::ToolError,
+            >,
+        >();
+
+        // Clone the mutex references into the spawned task.
+        // SAFETY: Mutex<T> is Send+Sync when T is — but we need owned handles.
+        // Move via Arcs is the standard pattern; since the executor owns the
+        // mutexes, callers must keep the executor alive while execute() is
+        // running. The runner holds `Arc<dyn ServerExecutedTool>`, so this
+        // is naturally upheld.
+        // We work around by accessing the mutex via the spawned closure
+        // borrowing the executor — but that needs lifetime tricks. Instead
+        // we'll just clone what we need synchronously before spawning.
+        let cached_result = {
+            let cache = cache_handle.lock().await;
+            cache.get(&cache_key).cloned()
+        };
+
+        // Shared citation tracker: capture by Arc<Mutex<...>> for the result
+        // task. We need an Arc not a borrow.
+        // Since CitationTracker is per-instance, we'll do the update
+        // synchronously after the result is ready, before completing.
+
+        // To avoid lifetime complications, we collect the work synchronously
+        // here and only stream the events through a small async task.
+        let (in_progress_evt, searching_evt) = (
+            format_file_search_in_progress_event(&tool_call.id, 0),
+            format_file_search_searching_event(&tool_call.id, 0),
+        );
+
+        // Send in_progress + searching synchronously into the channel.
+        let _ = event_tx.send(in_progress_evt).await;
+        let _ = event_tx.send(searching_evt).await;
+
+        // Perform the search (or use cache).
+        let search_result = if let Some(cached) = cached_result {
+            info!(
+                stage = "search_completed",
+                tool_call_id = %tool_call.id,
+                query = %tool_call.query,
+                cache_hit = true,
+                "Returning cached file_search result"
+            );
+            FileSearchToolResult {
+                tool_call_id: tool_call.id.clone(),
+                ..cached
+            }
+        } else {
+            match context.execute_search(&tool_call).await {
+                Ok(r) => {
+                    let mut cache = cache_handle.lock().await;
+                    cache.insert(cache_key, r.clone());
+                    r
+                }
+                Err(e) => {
+                    let _ = result_tx.send(Err(
+                        crate::services::server_tools::ToolError::ExecutionFailed(e.to_string()),
+                    ));
+                    // Drop event_tx so the events stream completes.
+                    drop(event_tx);
+                    return Ok(crate::services::server_tools::ToolExecutionHandle {
+                        events: Box::pin(futures_util::stream::unfold(
+                            event_rx,
+                            |mut rx| async move { rx.recv().await.map(|item| (item, rx)) },
+                        )),
+                        result: Box::pin(async move {
+                            result_rx.await.map_err(|_| {
+                                crate::services::server_tools::ToolError::ExecutionFailed(
+                                    "result channel closed".into(),
+                                )
+                            })?
+                        }),
+                    });
+                }
+            }
+        };
+
+        // Update citation tracker.
+        if let Some(ref raw) = search_result.raw_response {
+            if let Ok(mut tracker) = tracker_handle.lock() {
+                tracker.add_from_response(raw);
+                debug!(
+                    stage = "citations_tracked",
+                    tool_call_id = %tool_call.id,
+                    source_count = raw.results.len(),
+                    "Added search results to citation tracker"
+                );
+            }
+
+            // Emit the file_search_call output_item.done event.
+            let call_output = build_file_search_call_output(
+                &tool_call.id,
+                &tool_call.query,
+                raw,
+                include_results,
+            );
+            if let Some(evt) = format_file_search_call_sse_event(&call_output) {
+                let _ = event_tx.send(evt).await;
+            }
+        }
+
+        // Emit the completed event.
+        let completed_evt = format_file_search_completed_event(&tool_call.id, 0);
+        let _ = event_tx.send(completed_evt).await;
+
+        // Build the continuation item (FunctionCallOutput) for the next turn.
+        let cont_item = ResponsesInputItem::FunctionCallOutput(FunctionCallOutput {
+            type_: FunctionCallOutputType::FunctionCallOutput,
+            id: Some(tool_call.id.clone()),
+            call_id: tool_call.id.clone(),
+            output: search_result.content.clone(),
+            status: None,
+        });
+
+        let _ = result_tx.send(Ok(crate::services::server_tools::ToolCallResult {
+            call_id,
+            continuation_items: vec![cont_item],
+        }));
+
+        drop(event_tx);
+
+        Ok(crate::services::server_tools::ToolExecutionHandle {
+            events: Box::pin(futures_util::stream::unfold(
+                event_rx,
+                |mut rx| async move { rx.recv().await.map(|item| (item, rx)) },
+            )),
+            result: Box::pin(async move {
+                result_rx.await.map_err(|_| {
+                    crate::services::server_tools::ToolError::ExecutionFailed(
+                        "result channel closed".into(),
+                    )
+                })?
+            }),
+        })
+    }
+
+    fn apply_to_continuation(
+        &self,
+        payload: &mut CreateResponsesPayload,
+        results: &[crate::services::server_tools::ToolCallResult],
+        is_final_iteration: bool,
+    ) {
+        // Append all function-call outputs to the input.
+        let function_outputs: Vec<ResponsesInputItem> = results
+            .iter()
+            .flat_map(|r| r.continuation_items.clone())
+            .collect();
+
+        if function_outputs.is_empty() {
+            return;
+        }
+
+        match payload.input {
+            Some(ResponsesInput::Items(ref mut items)) => {
+                items.extend(function_outputs);
+            }
+            Some(ResponsesInput::Text(ref text)) => {
+                let text = text.clone();
+                let mut items = vec![ResponsesInputItem::EasyMessage(
+                    crate::api_types::responses::EasyInputMessage {
+                        type_: None,
+                        role: crate::api_types::responses::EasyInputMessageRole::User,
+                        content: crate::api_types::responses::EasyInputMessageContent::Text(text),
+                    },
+                )];
+                items.extend(function_outputs);
+                payload.input = Some(ResponsesInput::Items(items));
+            }
+            None => {
+                payload.input = Some(ResponsesInput::Items(function_outputs));
+            }
+        }
+
+        // On the final iteration, strip file_search tool definitions so the
+        // model is forced to produce a text response instead of looping.
+        if is_final_iteration && let Some(ref mut tools) = payload.tools {
+            let before = tools.len();
+            tools.retain(|t| !t.is_file_search());
+            if tools.len() < before {
+                info!(
+                    stage = "tools_removed",
+                    removed = before - tools.len(),
+                    "Removed file_search tools on final iteration to force completion"
+                );
+            }
+            if tools.is_empty() {
+                payload.tools = None;
+            }
+        }
+    }
+
+    fn transform_event(&self, event: Bytes) -> Bytes {
+        let Ok(tracker) = self.citation_tracker.lock() else {
+            return event;
+        };
+        if tracker.is_empty() {
+            return event;
+        }
+        inject_citation_annotations(&event, &tracker)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::streaming::SseBuffer;
 
     #[test]
     fn test_parse_file_search_tool_call() {
@@ -2286,379 +1933,6 @@ mod tests {
         assert_eq!(results[0].query, "weather data");
         assert_eq!(results[1].id, "search_2");
         assert_eq!(results[1].query, "climate report");
-    }
-
-    #[test]
-    fn test_build_continuation_payload_multiple_results() {
-        use crate::api_types::responses::{CreateResponsesPayload, ResponsesInput};
-
-        let original = CreateResponsesPayload {
-            input: Some(ResponsesInput::Text(
-                "What are Q1 and Q2 metrics?".to_string(),
-            )),
-            instructions: None,
-            metadata: None,
-            tools: None,
-            tool_choice: None,
-            parallel_tool_calls: None,
-            model: Some("gpt-4".to_string()),
-            models: None,
-            text: None,
-            reasoning: None,
-            max_output_tokens: None,
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            prompt_cache_key: None,
-            previous_response_id: None,
-            prompt: None,
-            include: None,
-            background: None,
-            safety_identifier: None,
-            store: None,
-            service_tier: None,
-            truncation: None,
-            presence_penalty: None,
-            frequency_penalty: None,
-            stream: false,
-            provider: None,
-            plugins: None,
-            user: None,
-            sovereignty_requirements: None,
-        };
-
-        let tool_call_1 = FileSearchToolCall {
-            id: "call_1".to_string(),
-            query: "Q1 metrics".to_string(),
-            vector_store_ids: vec!["vs_1".to_string()],
-            max_num_results: None,
-            score_threshold: None,
-            filters: None,
-            ranking_options: None,
-        };
-
-        let tool_call_2 = FileSearchToolCall {
-            id: "call_2".to_string(),
-            query: "Q2 metrics".to_string(),
-            vector_store_ids: vec!["vs_1".to_string()],
-            max_num_results: None,
-            score_threshold: None,
-            filters: None,
-            ranking_options: None,
-        };
-
-        let result_1 = FileSearchToolResult {
-            tool_call_id: "call_1".to_string(),
-            content: "Q1 revenue: $1M".to_string(),
-            result_count: 1,
-            vector_stores_searched: 1,
-            raw_response: None,
-        };
-
-        let result_2 = FileSearchToolResult {
-            tool_call_id: "call_2".to_string(),
-            content: "Q2 revenue: $1.5M".to_string(),
-            result_count: 1,
-            vector_stores_searched: 1,
-            raw_response: None,
-        };
-
-        let tool_results = vec![(&tool_call_1, result_1), (&tool_call_2, result_2)];
-
-        let payload = build_continuation_payload(&original, &tool_results, false);
-
-        // Check that streaming is enabled
-        assert!(payload.stream);
-
-        // Check that the payload has items input (converted from text)
-        match payload.input {
-            Some(ResponsesInput::Items(items)) => {
-                // Should have: original text message + 2 function outputs
-                assert_eq!(items.len(), 3);
-
-                // First item should be the original text as an EasyMessage
-                match &items[0] {
-                    ResponsesInputItem::EasyMessage(msg) => {
-                        assert_eq!(
-                            msg.role,
-                            crate::api_types::responses::EasyInputMessageRole::User
-                        );
-                    }
-                    _ => panic!("Expected EasyMessage as first item"),
-                }
-
-                // Second and third items should be FunctionCallOutput
-                match &items[1] {
-                    ResponsesInputItem::FunctionCallOutput(output) => {
-                        assert_eq!(output.call_id, "call_1");
-                        assert_eq!(output.output, "Q1 revenue: $1M");
-                    }
-                    _ => panic!("Expected FunctionCallOutput as second item"),
-                }
-
-                match &items[2] {
-                    ResponsesInputItem::FunctionCallOutput(output) => {
-                        assert_eq!(output.call_id, "call_2");
-                        assert_eq!(output.output, "Q2 revenue: $1.5M");
-                    }
-                    _ => panic!("Expected FunctionCallOutput as third item"),
-                }
-            }
-            _ => panic!("Expected Items input"),
-        }
-    }
-
-    #[test]
-    fn test_build_continuation_payload_final_iteration_removes_file_search() {
-        use crate::api_types::responses::{
-            CreateResponsesPayload, FileSearchTool, FileSearchToolType, ResponsesInput,
-            ResponsesToolDefinition,
-        };
-
-        // Create a payload with file_search and function tools
-        let function_tool = serde_json::json!({
-            "type": "function",
-            "name": "get_weather",
-            "description": "Get current weather",
-            "parameters": {"type": "object", "properties": {}}
-        });
-
-        let original = CreateResponsesPayload {
-            input: Some(ResponsesInput::Text("Find Q1 results".to_string())),
-            instructions: None,
-            metadata: None,
-            tools: Some(vec![
-                ResponsesToolDefinition::FileSearch(FileSearchTool {
-                    type_: FileSearchToolType::FileSearch,
-                    vector_store_ids: vec!["vs_1".to_string()],
-                    max_num_results: None,
-                    ranking_options: None,
-                    filters: None,
-                    cache_control: None,
-                }),
-                ResponsesToolDefinition::Function(function_tool.clone()),
-            ]),
-            tool_choice: None,
-            parallel_tool_calls: None,
-            model: Some("gpt-4".to_string()),
-            models: None,
-            text: None,
-            reasoning: None,
-            max_output_tokens: None,
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            prompt_cache_key: None,
-            previous_response_id: None,
-            prompt: None,
-            include: None,
-            background: None,
-            safety_identifier: None,
-            store: None,
-            service_tier: None,
-            truncation: None,
-            presence_penalty: None,
-            frequency_penalty: None,
-            stream: false,
-            provider: None,
-            plugins: None,
-            user: None,
-            sovereignty_requirements: None,
-        };
-
-        let tool_call = FileSearchToolCall {
-            id: "call_1".to_string(),
-            query: "Q1 metrics".to_string(),
-            vector_store_ids: vec!["vs_1".to_string()],
-            max_num_results: None,
-            score_threshold: None,
-            filters: None,
-            ranking_options: None,
-        };
-
-        let result = FileSearchToolResult {
-            tool_call_id: "call_1".to_string(),
-            content: "Q1 revenue: $1M".to_string(),
-            result_count: 1,
-            vector_stores_searched: 1,
-            raw_response: None,
-        };
-
-        let tool_results = vec![(&tool_call, result)];
-
-        // Test with is_final_iteration = true
-        let payload = build_continuation_payload(&original, &tool_results, true);
-
-        // file_search tool should be removed
-        let tools = payload.tools.expect("tools should exist");
-        assert_eq!(tools.len(), 1, "Should have 1 tool (function only)");
-        assert!(
-            !tools[0].is_file_search(),
-            "Remaining tool should not be file_search"
-        );
-
-        // Function tool should be preserved
-        match &tools[0] {
-            ResponsesToolDefinition::Function(v) => {
-                assert_eq!(v["name"], "get_weather");
-            }
-            _ => panic!("Expected Function tool"),
-        }
-    }
-
-    #[test]
-    fn test_build_continuation_payload_final_iteration_removes_all_tools_if_only_file_search() {
-        use crate::api_types::responses::{
-            CreateResponsesPayload, FileSearchTool, FileSearchToolType, ResponsesInput,
-            ResponsesToolDefinition,
-        };
-
-        // Create a payload with only file_search tool
-        let original = CreateResponsesPayload {
-            input: Some(ResponsesInput::Text("Find Q1 results".to_string())),
-            instructions: None,
-            metadata: None,
-            tools: Some(vec![ResponsesToolDefinition::FileSearch(FileSearchTool {
-                type_: FileSearchToolType::FileSearch,
-                vector_store_ids: vec!["vs_1".to_string()],
-                max_num_results: None,
-                ranking_options: None,
-                filters: None,
-                cache_control: None,
-            })]),
-            tool_choice: None,
-            parallel_tool_calls: None,
-            model: Some("gpt-4".to_string()),
-            models: None,
-            text: None,
-            reasoning: None,
-            max_output_tokens: None,
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            prompt_cache_key: None,
-            previous_response_id: None,
-            prompt: None,
-            include: None,
-            background: None,
-            safety_identifier: None,
-            store: None,
-            service_tier: None,
-            truncation: None,
-            presence_penalty: None,
-            frequency_penalty: None,
-            stream: false,
-            provider: None,
-            plugins: None,
-            user: None,
-            sovereignty_requirements: None,
-        };
-
-        let tool_call = FileSearchToolCall {
-            id: "call_1".to_string(),
-            query: "Q1 metrics".to_string(),
-            vector_store_ids: vec!["vs_1".to_string()],
-            max_num_results: None,
-            score_threshold: None,
-            filters: None,
-            ranking_options: None,
-        };
-
-        let result = FileSearchToolResult {
-            tool_call_id: "call_1".to_string(),
-            content: "Q1 revenue: $1M".to_string(),
-            result_count: 1,
-            vector_stores_searched: 1,
-            raw_response: None,
-        };
-
-        let tool_results = vec![(&tool_call, result)];
-
-        // Test with is_final_iteration = true
-        let payload = build_continuation_payload(&original, &tool_results, true);
-
-        // tools should be None (not empty array) since only file_search was present
-        assert!(
-            payload.tools.is_none(),
-            "tools should be None when only file_search was present"
-        );
-    }
-
-    #[test]
-    fn test_build_continuation_payload_not_final_iteration_preserves_tools() {
-        use crate::api_types::responses::{
-            CreateResponsesPayload, FileSearchTool, FileSearchToolType, ResponsesInput,
-            ResponsesToolDefinition,
-        };
-
-        // Create a payload with file_search tool
-        let original = CreateResponsesPayload {
-            input: Some(ResponsesInput::Text("Find Q1 results".to_string())),
-            instructions: None,
-            metadata: None,
-            tools: Some(vec![ResponsesToolDefinition::FileSearch(FileSearchTool {
-                type_: FileSearchToolType::FileSearch,
-                vector_store_ids: vec!["vs_1".to_string()],
-                max_num_results: None,
-                ranking_options: None,
-                filters: None,
-                cache_control: None,
-            })]),
-            tool_choice: None,
-            parallel_tool_calls: None,
-            model: Some("gpt-4".to_string()),
-            models: None,
-            text: None,
-            reasoning: None,
-            max_output_tokens: None,
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            prompt_cache_key: None,
-            previous_response_id: None,
-            prompt: None,
-            include: None,
-            background: None,
-            safety_identifier: None,
-            store: None,
-            service_tier: None,
-            truncation: None,
-            presence_penalty: None,
-            frequency_penalty: None,
-            stream: false,
-            provider: None,
-            plugins: None,
-            user: None,
-            sovereignty_requirements: None,
-        };
-
-        let tool_call = FileSearchToolCall {
-            id: "call_1".to_string(),
-            query: "Q1 metrics".to_string(),
-            vector_store_ids: vec!["vs_1".to_string()],
-            max_num_results: None,
-            score_threshold: None,
-            filters: None,
-            ranking_options: None,
-        };
-
-        let result = FileSearchToolResult {
-            tool_call_id: "call_1".to_string(),
-            content: "Q1 revenue: $1M".to_string(),
-            result_count: 1,
-            vector_stores_searched: 1,
-            raw_response: None,
-        };
-
-        let tool_results = vec![(&tool_call, result)];
-
-        // Test with is_final_iteration = false
-        let payload = build_continuation_payload(&original, &tool_results, false);
-
-        // file_search tool should be preserved
-        let tools = payload.tools.expect("tools should exist");
-        assert_eq!(tools.len(), 1, "Should have 1 tool");
-        assert!(tools[0].is_file_search(), "Tool should be file_search");
     }
 
     #[test]
@@ -3365,6 +2639,8 @@ mod tests {
             plugins: None,
             user: None,
             sovereignty_requirements: None,
+            skills: None,
+            context_management: None,
         };
 
         // Should not panic with no tools
@@ -3416,6 +2692,8 @@ mod tests {
             plugins: None,
             user: None,
             sovereignty_requirements: None,
+            skills: None,
+            context_management: None,
         };
 
         preprocess_file_search_tools(&mut payload);
@@ -3493,6 +2771,8 @@ mod tests {
             plugins: None,
             user: None,
             sovereignty_requirements: None,
+            skills: None,
+            context_management: None,
         };
 
         preprocess_file_search_tools(&mut payload);

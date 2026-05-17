@@ -100,6 +100,7 @@ standard = [
     "prometheus",
     "redis",
     "response-validation",
+    "runtime-microsandbox",
     "s3-storage",
     "secrets-aws",
     "secrets-azure",
@@ -111,6 +112,7 @@ standard = [
 full = [
     "standard",
     "document-extraction-full",
+    "runtime-opensandbox",
     "saml",
     "virus-scan",
 ]
@@ -138,6 +140,8 @@ headless = [
     "provider-vertex",
     "redis",
     "response-validation",
+    "runtime-microsandbox",
+    "runtime-opensandbox",
     "s3-storage",
     "saml",
     "secrets-aws",
@@ -196,6 +200,12 @@ secrets-aws = ["aws-sdk", "dep:aws-sdk-secretsmanager"]
 secrets-azure = ["azure-sdk", "dep:azure_security_keyvault_secrets"]
 secrets-gcp = ["gcp-sdk", "dep:google-cloud-secretmanager-v1"]
 vault = ["dep:vaultrs"]
+
+# Shell-tool runtimes (server-executed `shell` tool backends)
+# - microsandbox: local microVMs (github.com/superradcompany/microsandbox)
+# - opensandbox: Alibaba's Sandbox Protocol over HTTP
+runtime-microsandbox = ["dep:microsandbox"]
+runtime-opensandbox = []
 
 # Auth
 sso = ["dep:hickory-resolver"]
@@ -348,7 +358,7 @@ flate2 = { version = "1", optional = true }
 google-cloud-auth = { version = "0.17", default-features = false, features = ["rustls-tls"], optional = true }
 google-cloud-secretmanager-v1 = { version = "1.2", optional = true }
 google-cloud-token = { version = "0.1", optional = true }
-hickory-resolver = { version = "0.26", features = ["tokio", "system-config"], optional = true }
+hickory-resolver = { version = "0.26.1", features = ["tokio", "system-config"], optional = true }
 hostname = { version = "0.4.2", optional = true }
 jsonschema = { version = "0.29", optional = true }
 kreuzberg = { version = "~4.7", default-features = false, features = ["tokio-runtime", "bundled-pdfium", "office", "excel", "ocr"], optional = true }
@@ -372,6 +382,19 @@ tracing-opentelemetry = { version = "0.32", optional = true }
 utoipa = { version = "5", features = ["chrono", "uuid", "axum_extras"], optional = true }
 utoipa-scalar = { version = "0.3", features = ["axum"], optional = true }
 vaultrs = { version = "0.7.4", features = ["rustls"], optional = true }
+
+# Shell-tool runtime: local microVM SDK.
+#
+# Pinned to 0.4.5: microsandbox 0.4.6 bumped `microsandbox-network` to
+# `hickory-proto = 0.26.0-alpha.1` with the `tls-ring` feature, which
+# was dropped in the 0.26 stable release — so 0.4.6 + Hadrian's
+# `hickory-resolver = 0.26.1` won't resolve. 0.4.5 still depends on the
+# 0.25.x line which carries `tls-ring`, letting Cargo pull two majors
+# of hickory-proto side by side.
+#
+# We skip `keyring` (it pulls dbus) but keep `net` for container
+# networking.
+microsandbox = { version = "=0.4.5", default-features = false, features = ["net", "prebuilt"], optional = true }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Target-specific: WASM needs JS-backed getrandom for uuid/rand

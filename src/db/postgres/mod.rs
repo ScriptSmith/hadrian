@@ -12,6 +12,8 @@ mod org_sso_configs;
 mod organizations;
 mod projects;
 mod providers;
+mod response_events;
+mod responses;
 #[cfg(feature = "sso")]
 mod scim_configs;
 #[cfg(feature = "sso")]
@@ -42,6 +44,8 @@ pub use org_sso_configs::PostgresOrgSsoConfigRepo;
 pub use organizations::PostgresOrganizationRepo;
 pub use projects::PostgresProjectRepo;
 pub use providers::PostgresDynamicProviderRepo;
+pub use response_events::PostgresResponseEventsRepo;
+pub use responses::PostgresResponsesRepo;
 #[cfg(feature = "sso")]
 pub use scim_configs::PostgresOrgScimConfigRepo;
 #[cfg(feature = "sso")]

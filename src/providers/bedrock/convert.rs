@@ -605,6 +605,7 @@ pub(super) fn convert_responses_input_to_bedrock_messages(
                     }
                     ResponsesInputItem::WebSearchCall(_)
                     | ResponsesInputItem::FileSearchCall(_)
+                    | ResponsesInputItem::ShellCall(_)
                     | ResponsesInputItem::ImageGeneration(_) => {
                         // These are server-side tool calls that don't need translation
                     }
@@ -742,6 +743,12 @@ pub(super) fn convert_responses_tools_to_bedrock(
             | ResponsesToolDefinition::WebSearch20250826(_) => {
                 // Dead code: preprocessed to function tools in execution.rs
                 tracing::warn!("Unexpected web_search tool variant reached Bedrock conversion");
+            }
+            ResponsesToolDefinition::Shell(_) => {
+                tracing::warn!(
+                    "Shell tool reached Bedrock conversion — only OpenAI passthrough is \
+                     supported for shell in the current build; dropping the tool definition"
+                );
             }
             ResponsesToolDefinition::FileSearch(file_search) => {
                 // File search is handled by the gateway middleware

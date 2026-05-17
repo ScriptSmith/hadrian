@@ -1592,6 +1592,7 @@ fn extract_text_from_input_item(item: &ResponsesInputItem) -> Option<String> {
         // Tool calls don't have meaningful text content for guardrails
         ResponsesInputItem::WebSearchCall(_)
         | ResponsesInputItem::FileSearchCall(_)
+        | ResponsesInputItem::ShellCall(_)
         | ResponsesInputItem::ImageGeneration(_) => None,
     }
 }

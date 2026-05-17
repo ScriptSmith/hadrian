@@ -24,6 +24,8 @@ pub mod providers;
 pub mod retention;
 pub mod routes;
 pub mod routing;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod runtimes;
 #[cfg(feature = "sso")]
 pub mod scim;
 pub mod secrets;

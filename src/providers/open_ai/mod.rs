@@ -282,6 +282,42 @@ impl Provider for OpenAICompatibleProvider {
         skip(self, client, payload),
         fields(
             provider = "openai",
+            operation = "responses_compact",
+            model = %payload.model.as_deref().unwrap_or("default"),
+        )
+    )]
+    async fn create_responses_compact(
+        &self,
+        client: &reqwest::Client,
+        payload: CreateResponsesPayload,
+    ) -> Result<Response, ProviderError> {
+        let url = format!("{}/responses/compact", self.base_url);
+        let stream = payload.stream;
+        let body = serde_json::to_vec(&payload).unwrap_or_default();
+
+        let response = with_circuit_breaker_and_retry(
+            self.circuit_breaker.as_deref(),
+            &self.circuit_breaker_config,
+            &self.retry,
+            "openai",
+            "responses_compact",
+            || async {
+                self.build_request(client.post(&url))
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(body.clone())
+                    .send()
+                    .await
+            },
+        )
+        .await?;
+
+        providers::build_response(response, stream).await
+    }
+
+    #[tracing::instrument(
+        skip(self, client, payload),
+        fields(
+            provider = "openai",
             operation = "completion",
             model = %payload.model.as_deref().unwrap_or("default"),
             stream = payload.stream

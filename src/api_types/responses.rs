@@ -707,6 +707,39 @@ pub struct FileSearchCallOutput {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum ShellCallOutputType {
+    ShellCall,
+}
+
+/// Output item for a `shell` tool call.
+///
+/// Emitted as the final visible record of a shell execution. The
+/// per-command output chunks flow as `response.shell_call.output_chunk`
+/// streaming events; this struct is the post-completion summary the
+/// model and the client both retain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShellCallOutput {
+    #[serde(rename = "type")]
+    pub type_: ShellCallOutputType,
+    /// Call ID issued by the model for this shell tool call.
+    pub id: String,
+    /// The command that was executed.
+    pub command: String,
+    /// Exit code returned by the command.
+    pub exit_code: i32,
+    /// Final status — typically `completed` or `failed`.
+    pub status: WebSearchStatus,
+    /// Truncated stdout for the model's context. The full stream lives
+    /// in the event log.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout: Option<String>,
+    /// Truncated stderr for the model's context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum ImageGenerationCallType {
     ImageGenerationCall,
 }
@@ -733,6 +766,7 @@ pub enum ResponsesInputItem {
     OutputFunctionCall(OutputItemFunctionCall),
     WebSearchCall(WebSearchCallOutput),
     FileSearchCall(FileSearchCallOutput),
+    ShellCall(ShellCallOutput),
     ImageGeneration(ImageGenerationCall),
 }
 
@@ -751,6 +785,7 @@ pub enum ResponsesOutputItem {
     FunctionCall(OutputItemFunctionCall),
     WebSearchCall(WebSearchCallOutput),
     FileSearchCall(FileSearchCallOutput),
+    ShellCall(ShellCallOutput),
     ImageGeneration(ImageGenerationCall),
 }
 
@@ -961,7 +996,38 @@ impl FileSearchTool {
     }
 }
 
-/// Tool definition - can be a function tool, web search tool, or file search tool
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShellToolType {
+    Shell,
+}
+
+/// Shell tool — instructs the model that it may call `shell` and the
+/// gateway will execute the resulting commands in a sandboxed runtime
+/// (or forward them to the upstream provider's hosted runtime if
+/// configured for passthrough).
+///
+/// The exact spec mirrors OpenAI's `shell` tool definition for
+/// GPT-5.2+. Hadrian extends it with optional `environment` overrides
+/// the admin may set per-request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShellTool {
+    #[serde(rename = "type")]
+    pub type_: ShellToolType,
+    /// Optional runtime-environment hints the model can see. Maps to
+    /// OpenAI's `environment` field in their shell tool spec.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment: Option<serde_json::Value>,
+}
+
+impl ShellTool {
+    pub fn is_shell(&self) -> bool {
+        matches!(self.type_, ShellToolType::Shell)
+    }
+}
+
+/// Tool definition - can be a function tool, web search tool, file search tool,
+/// or shell tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ResponsesToolDefinition {
@@ -970,6 +1036,7 @@ pub enum ResponsesToolDefinition {
     WebSearchPreview20250311(WebSearchPreview20250311Tool),
     WebSearch(WebSearchTool),
     WebSearch20250826(WebSearch20250826Tool),
+    Shell(ShellTool),
     Function(serde_json::Value), // Must be last - matches any JSON object
 }
 
@@ -996,6 +1063,19 @@ impl ResponsesToolDefinition {
                 | ResponsesToolDefinition::WebSearch(_)
                 | ResponsesToolDefinition::WebSearch20250826(_)
         )
+    }
+
+    /// Returns true if this is a shell tool.
+    pub fn is_shell(&self) -> bool {
+        matches!(self, ResponsesToolDefinition::Shell(_))
+    }
+
+    /// Returns the shell tool definition if this is a shell tool.
+    pub fn as_shell(&self) -> Option<&ShellTool> {
+        match self {
+            ResponsesToolDefinition::Shell(tool) => Some(tool),
+            _ => None,
+        }
     }
 
     /// Extracts `search_context_size` from any web_search tool variant.
@@ -1366,6 +1446,51 @@ pub struct CreateResponsesPayload {
     /// Merged with API key requirements (most restrictive wins).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sovereignty_requirements: Option<crate::config::SovereigntyRequirements>,
+
+    /// **Hadrian Extension:** Skill bundle IDs to mount into the
+    /// session for tools that support skill mounting (e.g. the shell
+    /// runtime). Each entry is a skill UUID owned by the caller's
+    /// organization; unknown IDs fail the request with 400.
+    ///
+    /// Each skill's `SKILL.md` is prepended to `instructions` so the
+    /// model knows the skill is available; all skill files are
+    /// materialized under `/skills/<skill_id>/` inside the sandbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
+
+    /// Context management directives. Forwarded verbatim to providers
+    /// that support server-side compaction (OpenAI, Azure OpenAI); for
+    /// others the field is ignored at the adapter layer. See OpenAI's
+    /// compaction guide for the schema; the canonical entry is
+    /// `{"type": "compaction", "compact_threshold": <tokens>}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "utoipa", schema(value_type = Vec<Object>))]
+    pub context_management: Option<Vec<ContextManagementItem>>,
+}
+
+/// Entry in `CreateResponsesPayload::context_management`.
+///
+/// Mirrors the OpenAI Responses API directive — we surface the
+/// `compaction` variant explicitly so callers get type-checked help
+/// when wiring it up; unknown variants fail deserialization with a
+/// clear error rather than silently passing through.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContextManagementItem {
+    /// Server-side compaction. When the rendered token count crosses
+    /// `compact_threshold`, the provider emits a compaction item in
+    /// the same response stream and prunes context before continuing
+    /// inference.
+    Compaction {
+        /// Token count that triggers a compaction pass. Provider
+        /// validates the range.
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "serialize_as_integer"
+        )]
+        compact_threshold: Option<f64>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1683,5 +1808,33 @@ impl CreateResponsesPayload {
                 .unwrap_or(serde_json::Value::Null),
         );
         m
+    }
+}
+
+#[cfg(test)]
+mod context_management_tests {
+    use super::*;
+
+    #[test]
+    fn compaction_round_trip_matches_openai_spec() {
+        let raw = serde_json::json!([{"type": "compaction", "compact_threshold": 200000}]);
+        let items: Vec<ContextManagementItem> = serde_json::from_value(raw.clone()).unwrap();
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            ContextManagementItem::Compaction { compact_threshold } => {
+                assert_eq!(compact_threshold.unwrap() as i64, 200000);
+            }
+        }
+        // Re-serialize and confirm the threshold is emitted as an
+        // integer (matches OpenAI's wire format, not float).
+        let round = serde_json::to_value(&items).unwrap();
+        assert_eq!(round, raw);
+    }
+
+    #[test]
+    fn unknown_context_management_variant_is_rejected() {
+        let raw = serde_json::json!([{"type": "summarize", "compact_threshold": 1000}]);
+        let parsed: Result<Vec<ContextManagementItem>, _> = serde_json::from_value(raw);
+        assert!(parsed.is_err(), "unknown context_management type must fail");
     }
 }

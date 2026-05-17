@@ -33,6 +33,8 @@ mod embeddings;
 mod files;
 mod images;
 mod models;
+#[cfg(feature = "server")]
+pub mod responses_lookup;
 pub(crate) mod tools;
 mod vector_stores;
 
@@ -843,6 +845,20 @@ pub(crate) fn api_v1_routes(limits: ApiBodyLimits) -> Router<AppState> {
     let router = Router::new()
         .route("/v1/chat/completions", post(api_v1_chat_completions))
         .route("/v1/responses", post(api_v1_responses))
+        .route("/v1/responses/compact", post(api_v1_responses_compact))
+        .route(
+            "/v1/responses/{response_id}",
+            get(responses_lookup::api_v1_responses_get)
+                .delete(responses_lookup::api_v1_responses_delete),
+        )
+        .route(
+            "/v1/responses/{response_id}/cancel",
+            post(responses_lookup::api_v1_responses_cancel),
+        )
+        .route(
+            "/v1/responses/{response_id}/events",
+            get(responses_lookup::api_v1_responses_events),
+        )
         .route("/v1/completions", post(api_v1_completions))
         .route("/v1/embeddings", post(api_v1_embeddings))
         .route("/v1/models", get(api_v1_models))

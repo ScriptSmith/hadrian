@@ -681,6 +681,7 @@ pub(super) fn convert_responses_input_to_vertex(
                     }
                     ResponsesInputItem::WebSearchCall(_)
                     | ResponsesInputItem::FileSearchCall(_)
+                    | ResponsesInputItem::ShellCall(_)
                     | ResponsesInputItem::ImageGeneration(_) => {
                         // Server-side tool calls not supported by Vertex
                     }
@@ -776,6 +777,12 @@ pub(super) fn convert_responses_tools_to_vertex(
             | ResponsesToolDefinition::WebSearch20250826(_) => {
                 // Dead code: preprocessed to function tools in execution.rs
                 tracing::warn!("Unexpected web_search tool variant reached Vertex conversion");
+            }
+            ResponsesToolDefinition::Shell(_) => {
+                tracing::warn!(
+                    "Shell tool reached Vertex conversion — only OpenAI passthrough is \
+                     supported for shell in the current build; dropping the tool definition"
+                );
             }
             ResponsesToolDefinition::FileSearch(_) => {
                 // File search is handled by the gateway middleware, but the model needs to know

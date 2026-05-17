@@ -18,14 +18,11 @@ use crate::{
     middleware::{AuthzContext, ClientInfo, RequestId},
     models::UsageLogEntry,
     routes::execution::{
-        ChatCompletionExecutor, CompletionExecutor, ExecutionResult, ProviderExecutor,
-        ResponsesExecutor, execute_with_fallback,
+        ChatCompletionExecutor, CompactExecutor, CompletionExecutor, ExecutionResult,
+        ProviderExecutor, ResponsesExecutor, execute_with_fallback,
     },
     routing::{resolver, route_model_extended, route_models_extended},
-    services::{
-        FileSearchAuthContext, FileSearchContext, ProviderCallback, WebSearchContext,
-        wrap_streaming_with_file_search, wrap_streaming_with_web_search,
-    },
+    services::response_persister::persist_non_streaming,
 };
 
 /// Cache status for tracking cache hits/misses in response headers.
@@ -234,6 +231,7 @@ pub(super) fn build_streaming_usage_entry(
             tool_url: None,
             tool_bytes_fetched: None,
             tool_results_count: None,
+            tool_runtime_seconds: None,
         })
     } else if state.default_user_id.is_some() || state.default_org_id.is_some() {
         // Anonymous mode: attribute to the default user/org so streaming usage
@@ -271,6 +269,7 @@ pub(super) fn build_streaming_usage_entry(
             tool_url: None,
             tool_bytes_fetched: None,
             tool_results_count: None,
+            tool_runtime_seconds: None,
         })
     } else {
         None
@@ -284,7 +283,7 @@ pub(super) fn build_streaming_usage_entry(
 /// - FinalOnly: Pass chunks through, evaluate complete response at end
 /// - Buffered: Evaluate periodically during streaming
 /// - PerChunk: Evaluate each chunk individually
-pub(super) fn wrap_streaming_with_guardrails(
+pub fn wrap_streaming_with_guardrails(
     response: Response,
     output_guardrails: &crate::guardrails::OutputGuardrails,
     user_id: Option<String>,
@@ -1230,6 +1229,122 @@ pub async fn api_v1_responses(
     // Check if cache should be bypassed based on request headers
     let force_refresh = should_bypass_cache(&headers);
 
+    // Background mode: insert the row now and return queued JSON
+    // immediately. The background worker (jobs/background_responses.rs)
+    // claims the row asynchronously and runs the LLM in its own task,
+    // recording events via the persister. Clients poll
+    // GET /v1/responses/{id} for status or
+    // GET /v1/responses/{id}/events?starting_after=N for the live event log.
+    if payload.background == Some(true) {
+        if let Some(ref store) = state.responses_store {
+            let principal_org = auth
+                .as_ref()
+                .and_then(|a| a.api_key().and_then(|k| k.org_id))
+                .or_else(|| auth.as_ref().and_then(|a| a.principal().org_id()))
+                .or(state.default_org_id);
+            let principal_user = auth
+                .as_ref()
+                .and_then(|a| a.user_id())
+                .or(state.default_user_id);
+            let principal_api_key = auth.as_ref().and_then(|a| a.api_key().map(|k| k.key.id));
+            let principal_project = auth
+                .as_ref()
+                .and_then(|a| a.api_key().and_then(|k| k.project_id));
+            let principal_service_account = auth
+                .as_ref()
+                .and_then(|a| a.api_key().and_then(|k| k.service_account_id));
+
+            let resp_id = crate::services::ResponsesStore::new_response_id();
+            let now = chrono::Utc::now();
+            let new_row = crate::db::repos::NewResponse {
+                id: resp_id.clone(),
+                org_id: principal_org,
+                project_id: principal_project,
+                user_id: principal_user,
+                api_key_id: principal_api_key,
+                service_account_id: principal_service_account,
+                status: crate::db::repos::ResponseStatus::Queued,
+                background: true,
+                model: model_name.clone(),
+                provider: Some(provider_name.clone()),
+                created_at: now,
+                request_payload: serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null),
+                retention_expires_at: store.retention_expires_at(now),
+            };
+            store.create(new_row).await.map_err(|e| {
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "background_dispatch_failed",
+                    e.to_string(),
+                )
+            })?;
+
+            // Return the queued response envelope. The client uses
+            // resp_id to poll for status / events.
+            let queued = serde_json::json!({
+                "id": resp_id,
+                "object": "response",
+                "status": "queued",
+                "background": true,
+                "model": model_name,
+                "provider": provider_name,
+                "created_at": now.timestamp() as f64,
+            });
+            return Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", "application/json")
+                .body(Body::from(queued.to_string()))
+                .unwrap());
+        }
+        return Err(ApiError::new(
+            StatusCode::NOT_IMPLEMENTED,
+            "background_mode_requires_persistence",
+            "background=true requires a configured database".to_string(),
+        ));
+    }
+
+    // Resolve skills (Hadrian extension): fetch the bundles, mount
+    // them in the sandbox via `mounted_skills`, and prepend each
+    // SKILL.md to `payload.instructions` so the model knows the skill
+    // is available. Background-mode requests skip this — they short
+    // -circuit above and the worker resolves skills when it runs, so
+    // the persisted `request_payload` keeps the user's original input
+    // (not the rewritten instructions).
+    let principal = crate::services::responses_pipeline::PipelinePrincipal::from_auth(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+    );
+    let mounted_skills = crate::services::responses_pipeline::resolve_and_inject_skills(
+        &state,
+        &mut payload,
+        principal.org_id,
+    )
+    .await
+    .map_err(|e| {
+        let code = match &e {
+            crate::services::responses_pipeline::SkillResolutionError::InvalidId(_)
+            | crate::services::responses_pipeline::SkillResolutionError::NotFound(_)
+            | crate::services::responses_pipeline::SkillResolutionError::MissingOrg => {
+                "invalid_skill_reference"
+            }
+            crate::services::responses_pipeline::SkillResolutionError::NoService => {
+                "skills_not_configured"
+            }
+            crate::services::responses_pipeline::SkillResolutionError::Db(_) => {
+                "skill_lookup_failed"
+            }
+        };
+        let status = if matches!(
+            e,
+            crate::services::responses_pipeline::SkillResolutionError::Db(_)
+        ) {
+            StatusCode::INTERNAL_SERVER_ERROR
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        ApiError::new(status, code, e.to_string())
+    })?;
+
     // Track cache status for response headers
     let mut cache_status = CacheStatus::None;
 
@@ -1448,7 +1563,7 @@ pub async fn api_v1_responses(
     };
 
     // Apply output guardrails if configured
-    let (final_response, output_guardrails_headers) = if let Some(ref output_guardrails) =
+    let (final_response, output_guardrails_headers) = if let Some(ref _output_guardrails) =
         state.output_guardrails
         && response.status().is_success()
     {
@@ -1458,12 +1573,15 @@ pub async fn api_v1_responses(
         let req_id = request_id.as_ref().map(|r| r.0.0.clone());
 
         if is_streaming {
-            // Wrap streaming response with guardrails filter
-            let wrapped =
-                wrap_streaming_with_guardrails(response, output_guardrails, user_id, req_id);
-            (wrapped, Vec::new())
+            // Streaming guardrails are applied inside the shared
+            // pipeline below alongside the tool runner + persister.
+            // Suppress unused-var warnings by binding explicitly.
+            let _ = (user_id, req_id);
+            (response, Vec::new())
         } else {
-            // Apply guardrails to non-streaming response
+            // Apply guardrails to non-streaming response. Non-streaming
+            // needs ci_ip/ci_ua for audit logging, so it stays out of
+            // the shared pipeline.
             apply_output_guardrails_responses(
                 &state,
                 response,
@@ -1478,121 +1596,59 @@ pub async fn api_v1_responses(
         (response, Vec::new())
     };
 
-    // Apply file_search tool interception for streaming responses
-    // This wraps the stream to detect and execute file_search tool calls
-    let final_response = if is_streaming
+    // Insert the persisted-response row up front (when store=true)
+    // so the shared pipeline can attach the persister wrap. Principal
+    // was already built up top for skill resolution.
+    let persistence_handle: Option<(String, crate::services::CancelSignal)> = if let Some(ref store) =
+        state.responses_store
+        && payload.store != Some(false)
         && final_response.status().is_success()
-        && let Some(ref file_search_service) = state.file_search_service
-        && let Some(ref file_search_config) = state.config.features.file_search
-        && file_search_config.enabled
     {
-        // Extract file_search tool definitions from the request
-        let file_search_tools: Vec<_> = payload
-            .tools
-            .as_ref()
-            .map(|tools| {
-                tools
-                    .iter()
-                    .filter_map(|t| t.as_file_search().cloned())
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        if !file_search_tools.is_empty() {
-            // Extract full auth context for access control
-            let file_search_auth =
-                FileSearchAuthContext::from_auth_optional(auth.as_ref().map(|e| &e.0));
-
-            // Create the provider callback for continuation requests
-            let callback_state = state.clone();
-            let callback_provider_name = provider_name.clone();
-            let callback_provider_config = provider_config.clone();
-            let callback_model_name = model_name.clone();
-
-            let provider_callback: ProviderCallback = std::sync::Arc::new(move |payload| {
-                let state = callback_state.clone();
-                let provider_name = callback_provider_name.clone();
-                let provider_config = callback_provider_config.clone();
-                let model_name = callback_model_name.clone();
-
-                Box::pin(async move {
-                    // Set the model on the payload
-                    let mut payload = payload;
-                    payload.model = Some(model_name);
-
-                    // Execute using the same provider
-                    ResponsesExecutor::execute(&state, &provider_name, &provider_config, payload)
-                        .await
-                })
-            });
-
-            let context = FileSearchContext::new(
-                file_search_service.clone(),
-                file_search_config.clone(),
-                file_search_auth,
-                file_search_tools,
-                payload.clone(),
-            )
-            .with_provider_callback(provider_callback);
-
-            tracing::debug!(
-                vector_store_ids = ?context.get_vector_store_ids(),
-                "File search middleware enabled for request with multi-turn support"
-            );
-
-            wrap_streaming_with_file_search(final_response, context)
-        } else {
-            final_response
+        let resp_id = crate::services::ResponsesStore::new_response_id();
+        let now = chrono::Utc::now();
+        let new_row = crate::db::repos::NewResponse {
+            id: resp_id.clone(),
+            org_id: principal.org_id,
+            project_id: principal.project_id,
+            user_id: principal.user_id,
+            api_key_id: principal.api_key_id,
+            service_account_id: principal.service_account_id,
+            status: crate::db::repos::ResponseStatus::InProgress,
+            background: payload.background.unwrap_or(false),
+            model: model_name.clone(),
+            provider: Some(provider_name.clone()),
+            created_at: now,
+            request_payload: serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null),
+            retention_expires_at: store.retention_expires_at(now),
+        };
+        match store.create(new_row).await {
+            Ok((_record, cancel_rx)) => Some((resp_id, cancel_rx)),
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to insert response row; persistence skipped");
+                None
+            }
         }
     } else {
-        final_response
+        None
     };
+    let persistence_id = persistence_handle.as_ref().map(|(id, _)| id.clone());
 
-    // Apply web_search tool interception for streaming responses
-    let mut final_response = if is_streaming
-        && final_response.status().is_success()
-        && let Some(ref web_search_config) = state.config.features.web_search
-    {
-        let has_web_search = payload
-            .tools
-            .as_ref()
-            .map(|tools| tools.iter().any(|t| t.is_web_search()))
-            .unwrap_or(false);
-
-        if has_web_search {
-            let callback_state = state.clone();
-            let callback_provider_name = provider_name.clone();
-            let callback_provider_config = provider_config.clone();
-            let callback_model_name = model_name.clone();
-
-            let provider_callback: ProviderCallback = std::sync::Arc::new(move |payload| {
-                let state = callback_state.clone();
-                let provider_name = callback_provider_name.clone();
-                let provider_config = callback_provider_config.clone();
-                let model_name = callback_model_name.clone();
-
-                Box::pin(async move {
-                    let mut payload = payload;
-                    payload.model = Some(model_name);
-                    ResponsesExecutor::execute(&state, &provider_name, &provider_config, payload)
-                        .await
-                })
-            });
-
-            let context = WebSearchContext::new(
-                state.http_client.clone(),
-                web_search_config.clone(),
-                web_search_config.max_iterations,
-                payload.clone(),
-            )
-            .with_provider_callback(provider_callback);
-
-            tracing::debug!("Web search middleware enabled for request with multi-turn support");
-
-            wrap_streaming_with_web_search(final_response, context)
-        } else {
-            final_response
-        }
+    // Apply the shared pipeline: output guardrails + server-executed
+    // tool loop + persister.
+    let mut final_response = if is_streaming {
+        let req_id_str = request_id.as_ref().map(|r| r.0.0.clone());
+        crate::services::responses_pipeline::apply_streaming_pipeline(
+            &state,
+            &payload,
+            provider_name.clone(),
+            provider_config.clone(),
+            model_name.clone(),
+            principal,
+            mounted_skills,
+            req_id_str,
+            final_response,
+            persistence_handle,
+        )
     } else {
         final_response
     };
@@ -1652,6 +1708,16 @@ pub async fn api_v1_responses(
                             )
                             .await;
                     });
+                }
+
+                // Persist the non-streaming response now that the body
+                // is materialized. Streaming responses are persisted by
+                // `wrap_streaming_with_persistence` from inside its
+                // spawned task as the final event arrives.
+                if let (Some(resp_id), Some(store)) =
+                    (persistence_id.as_ref(), state.responses_store.as_ref())
+                {
+                    persist_non_streaming(store, resp_id, &body_vec, parts.status.as_u16()).await;
                 }
 
                 // Rebuild response
@@ -1836,6 +1902,120 @@ async fn apply_output_guardrails_responses(
             Err(ApiError::new(status, e.error_code(), e.to_string()))
         }
     }
+}
+
+/// Compact a context window via the provider's standalone compact
+/// endpoint.
+///
+/// Stateless passthrough: forwards `model` + `input` (and any other
+/// fields the provider accepts) to the upstream `/responses/compact`
+/// endpoint and streams the compacted window back. Only OpenAI and
+/// Azure OpenAI implement this; routing to any other provider returns
+/// 501 with `error_code = "not_supported"`.
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    post,
+    path = "/api/v1/responses/compact",
+    tag = "responses",
+    request_body = api_types::CreateResponsesPayload,
+    responses(
+        (status = 200, description = "Compacted context window"),
+        (status = 400, description = "Bad request", body = crate::openapi::ErrorResponse),
+        (status = 501, description = "Provider does not support compaction", body = crate::openapi::ErrorResponse),
+    ),
+    security(("api_key" = []))
+))]
+#[tracing::instrument(
+    name = "api.responses.compact",
+    skip(state, auth, authz, payload),
+    fields(model = %payload.model.as_deref().unwrap_or("default"))
+)]
+pub async fn api_v1_responses_compact(
+    State(state): State<AppState>,
+    auth: Option<Extension<AuthenticatedRequest>>,
+    authz: Option<Extension<AuthzContext>>,
+    Valid(Json(mut payload)): Valid<Json<api_types::CreateResponsesPayload>>,
+) -> Result<Response, ApiError> {
+    // Route + resolve the model the same way the main responses
+    // handler does so per-org overrides and model-aliasing apply.
+    let model_clone = payload.model.clone();
+    let models_clone = payload.models.clone();
+    let routed = route_models_extended(
+        model_clone.as_deref(),
+        models_clone.as_deref(),
+        &state.config.providers,
+    )?;
+
+    let resolved = resolver::resolve_to_provider(
+        routed,
+        state.db.as_ref(),
+        state.cache.as_ref(),
+        state.secrets.as_ref(),
+        auth.as_ref().map(|e| &e.0),
+    )
+    .await
+    .map_err(|e| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "provider_resolution_error",
+            format!("Failed to resolve provider: {e}"),
+        )
+    })?;
+    let (provider_name, provider_config, model_name) = (
+        resolved.provider_name,
+        resolved.provider_config,
+        resolved.model,
+    );
+    payload.model = Some(model_name.clone());
+
+    // Per-API-key model restrictions (mirrors api_v1_responses).
+    if let Some(Extension(ref auth)) = auth
+        && let Some(api_key) = auth.api_key()
+    {
+        let model_to_check = model_clone.as_deref().unwrap_or(&model_name);
+        api_key.check_model_allowed(model_to_check).map_err(|e| {
+            ApiError::new(StatusCode::FORBIDDEN, "model_not_allowed", e.to_string())
+        })?;
+    }
+
+    // RBAC: same `model:use` policy as the main responses endpoint —
+    // compaction is a strict subset of `/responses` access.
+    if let Some(Extension(ref authz)) = authz {
+        let org_id = auth.as_ref().and_then(|a| {
+            a.api_key()
+                .and_then(|k| k.org_id.map(|id| id.to_string()))
+                .or_else(|| a.identity().and_then(|i| i.org_ids.first().cloned()))
+        });
+        let project_id = auth.as_ref().and_then(|a| {
+            a.api_key()
+                .and_then(|k| k.project_id.map(|id| id.to_string()))
+                .or_else(|| a.identity().and_then(|i| i.project_ids.first().cloned()))
+        });
+        authz
+            .require_api(
+                "model",
+                "use",
+                model_clone.as_deref().or(Some(&model_name)),
+                Some(RequestContext::new().with_stream(payload.stream)),
+                org_id.as_deref(),
+                project_id.as_deref(),
+            )
+            .await
+            .map_err(|e| {
+                ApiError::new(StatusCode::FORBIDDEN, "authorization_denied", e.to_string())
+            })?;
+    }
+
+    CompactExecutor::execute(&state, &provider_name, &provider_config, payload)
+        .await
+        .map_err(|e| {
+            let (status, code) = match &e {
+                crate::providers::ProviderError::Unsupported(_) => {
+                    (StatusCode::NOT_IMPLEMENTED, "not_supported")
+                }
+                _ => (StatusCode::BAD_GATEWAY, "provider_error"),
+            };
+            ApiError::new(status, code, e.to_string())
+        })
 }
 
 /// Modifies the output_text in a responses API response JSON.

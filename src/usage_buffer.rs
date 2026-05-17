@@ -355,6 +355,7 @@ mod buffer {
                 tool_url: None,
                 tool_bytes_fetched: None,
                 tool_results_count: None,
+                tool_runtime_seconds: None,
             }
         }
 

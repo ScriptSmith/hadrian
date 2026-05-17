@@ -259,6 +259,27 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         });
     }
 
+    // Start the Responses API retention worker. Always runs when a
+    // responses_store is configured; rate is governed by
+    // [features.responses] cleanup_interval_secs.
+    if let (Some(db), Some(store)) = (state.db.clone(), state.responses_store.clone()) {
+        let interval =
+            std::time::Duration::from_secs(config.features.responses.cleanup_interval_secs);
+        tokio::spawn(async move {
+            jobs::start_responses_retention_worker(store, db, interval).await;
+        });
+    }
+
+    // Start the background response worker — claims rows queued by
+    // `POST /v1/responses` with `background=true` and runs them
+    // through the LLM pipeline.
+    if state.responses_store.is_some() && state.db.is_some() {
+        let worker_state = state.clone();
+        tokio::spawn(async move {
+            jobs::start_background_response_worker(worker_state).await;
+        });
+    }
+
     // Start vector store cleanup worker if configured and database is available
     if let Some(db) = state.db.clone() {
         let cleanup_config = config.features.vector_store_cleanup.clone();

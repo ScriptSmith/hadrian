@@ -387,6 +387,11 @@ requests_per_minute = 120
         // Public API routes
         api::api_v1_chat_completions,
         api::api_v1_responses,
+        api::api_v1_responses_compact,
+        api::responses_lookup::api_v1_responses_get,
+        api::responses_lookup::api_v1_responses_cancel,
+        api::responses_lookup::api_v1_responses_delete,
+        api::responses_lookup::api_v1_responses_events,
         api::api_v1_completions,
         api::api_v1_embeddings,
         api::api_v1_models,

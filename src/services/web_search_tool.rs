@@ -4,16 +4,12 @@
 //! the configured search provider (Tavily/Exa), feeding results back into the
 //! conversation transparently — following the same pattern as `file_search_tool`.
 
-use std::{future::Future, pin::Pin, sync::Arc, time::Instant};
+use std::time::Instant;
 
-use axum::body::Body;
-use bytes::{Bytes, BytesMut};
-use futures_util::StreamExt;
-use http::Response;
+use bytes::Bytes;
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::sync::mpsc;
-use tracing::{Instrument, debug, error, info, info_span, warn};
+use tracing::{debug, error, info};
 
 use crate::{
     api_types::responses::{
@@ -22,10 +18,8 @@ use crate::{
         WebSearchStatus,
     },
     config::WebSearchConfig,
-    observability::metrics::{record_web_search, record_web_search_iteration},
-    providers::ProviderError,
+    observability::metrics::record_web_search,
     routes::api::tools::{WebSearchResult, execute_web_search},
-    services::file_search_tool::SseBuffer,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -103,31 +97,12 @@ pub fn preprocess_web_search_tools(payload: &mut CreateResponsesPayload) {
 // Context
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Type alias for the provider callback (reuses the same signature as file_search).
-#[cfg(not(target_arch = "wasm32"))]
-type ProviderCallback = Arc<
-    dyn Fn(
-            CreateResponsesPayload,
-        ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, ProviderError>> + Send>>
-        + Send
-        + Sync,
->;
-
-#[cfg(target_arch = "wasm32")]
-type ProviderCallback = Arc<
-    dyn Fn(
-        CreateResponsesPayload,
-    ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, ProviderError>>>>,
->;
-
 /// Context for web search middleware operations.
 #[derive(Clone)]
 pub struct WebSearchContext {
     pub http_client: reqwest::Client,
     pub config: WebSearchConfig,
     pub max_iterations: usize,
-    original_payload: CreateResponsesPayload,
-    provider_callback: Option<ProviderCallback>,
 }
 
 impl WebSearchContext {
@@ -135,20 +110,12 @@ impl WebSearchContext {
         http_client: reqwest::Client,
         config: WebSearchConfig,
         max_iterations: usize,
-        original_payload: CreateResponsesPayload,
     ) -> Self {
         Self {
             http_client,
             config,
             max_iterations,
-            original_payload,
-            provider_callback: None,
         }
-    }
-
-    pub fn with_provider_callback(mut self, callback: crate::services::ProviderCallback) -> Self {
-        self.provider_callback = Some(callback);
-        self
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -346,382 +313,206 @@ fn format_web_search_call_output_event(item_id: &str) -> Option<Bytes> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Continuation payload
-// ─────────────────────────────────────────────────────────────────────────────
-
-fn build_web_search_continuation_payload(
-    original: &CreateResponsesPayload,
-    tool_results: &[(&WebSearchToolCall, String)],
-    is_final_iteration: bool,
-) -> CreateResponsesPayload {
-    let mut payload = original.clone();
-
-    let function_outputs: Vec<ResponsesInputItem> = tool_results
-        .iter()
-        .map(|(tool_call, content)| {
-            ResponsesInputItem::FunctionCallOutput(FunctionCallOutput {
-                type_: FunctionCallOutputType::FunctionCallOutput,
-                id: Some(tool_call.id.clone()),
-                call_id: tool_call.id.clone(),
-                output: content.clone(),
-                status: None,
-            })
-        })
-        .collect();
-
-    match payload.input {
-        Some(ResponsesInput::Items(ref mut items)) => {
-            items.extend(function_outputs);
-        }
-        Some(ResponsesInput::Text(text)) => {
-            let mut items = vec![ResponsesInputItem::EasyMessage(
-                crate::api_types::responses::EasyInputMessage {
-                    type_: None,
-                    role: crate::api_types::responses::EasyInputMessageRole::User,
-                    content: crate::api_types::responses::EasyInputMessageContent::Text(text),
-                },
-            )];
-            items.extend(function_outputs);
-            payload.input = Some(ResponsesInput::Items(items));
-        }
-        None => {
-            payload.input = Some(ResponsesInput::Items(function_outputs));
-        }
-    }
-
-    // On final iteration, remove web_search tools to force text completion
-    if is_final_iteration && let Some(ref mut tools) = payload.tools {
-        let original_count = tools.len();
-        tools.retain(|t| !t.is_web_search());
-        // Also remove function tools named "web_search" (from preprocessing)
-        tools.retain(|t| {
-            if let ResponsesToolDefinition::Function(v) = t {
-                v.get("name").and_then(|n| n.as_str())
-                    != Some(WebSearchToolArguments::FUNCTION_NAME)
-            } else {
-                true
-            }
-        });
-        let removed_count = original_count - tools.len();
-        if removed_count > 0 {
-            info!(
-                stage = "tools_removed",
-                removed_count = removed_count,
-                "Removed web_search tools on final iteration to force completion"
-            );
-        }
-        if tools.is_empty() {
-            payload.tools = None;
-        }
-    }
-
-    payload.stream = true;
-    payload
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Streaming wrapper
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Wrap a streaming response with web_search tool interception and multi-turn execution.
-///
-/// Monitors the stream for web_search function calls. When detected:
-/// 1. Executes the search against the configured provider (Tavily/Exa)
-/// 2. Builds a continuation payload with the search results
-/// 3. Sends the continuation to the provider via the callback
-/// 4. Streams the continuation response to the client
-pub fn wrap_streaming_with_web_search(
-    response: Response<Body>,
+// ─────────────────────────────────────────────────────────────────────────────
+// ServerExecutedTool implementation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `ServerExecutedTool` implementation for `web_search`.
+pub struct WebSearchExecutor {
     context: WebSearchContext,
-) -> Response<Body> {
-    if !context.is_enabled() {
-        return response;
+}
+
+impl WebSearchExecutor {
+    pub fn new(context: WebSearchContext) -> Self {
+        Self { context }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::services::server_tools::ServerExecutedTool for WebSearchExecutor {
+    fn name(&self) -> &'static str {
+        WebSearchToolArguments::FUNCTION_NAME
     }
 
-    let (parts, body) = response.into_parts();
-    let max_iterations = context.max_iterations;
-    let has_callback = context.provider_callback.is_some();
+    fn is_enabled_for(&self, payload: &CreateResponsesPayload) -> bool {
+        self.context.is_enabled()
+            && payload
+                .tools
+                .as_ref()
+                .map(|tools| {
+                    tools.iter().any(|t| {
+                        t.is_web_search()
+                            || matches!(
+                                t,
+                                ResponsesToolDefinition::Function(v)
+                                    if v.get("name").and_then(|n| n.as_str())
+                                        == Some(WebSearchToolArguments::FUNCTION_NAME)
+                            )
+                    })
+                })
+                .unwrap_or(false)
+    }
 
-    let web_search_span = info_span!(
-        "web_search_stream",
-        max_iterations = max_iterations,
-        has_callback = has_callback,
-    );
+    fn detect(
+        &self,
+        event: &[u8],
+        _ctx: &crate::services::server_tools::ToolContext,
+    ) -> Vec<crate::services::server_tools::DetectedToolCall> {
+        detect_web_search_in_chunk(event)
+            .into_iter()
+            .map(|tc| crate::services::server_tools::DetectedToolCall {
+                tool_name: WebSearchToolArguments::FUNCTION_NAME,
+                call_id: tc.id.clone(),
+                arguments: serde_json::json!({
+                    "id": tc.id,
+                    "query": tc.query,
+                }),
+            })
+            .collect()
+    }
 
-    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
+    async fn execute(
+        &self,
+        call: crate::services::server_tools::DetectedToolCall,
+        _ctx: &crate::services::server_tools::ToolContext,
+    ) -> Result<
+        crate::services::server_tools::ToolExecutionHandle,
+        crate::services::server_tools::ToolError,
+    > {
+        let query = call
+            .arguments
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let id = call.call_id.clone();
 
-    crate::compat::spawn_detached(
-        async move {
-            let mut iteration = 0;
-            let mut current_body = body;
+        let (event_tx, event_rx) = tokio::sync::mpsc::channel::<Bytes>(8);
 
-            loop {
-                iteration += 1;
-                let at_iteration_limit = iteration > max_iterations;
+        // in_progress + searching events
+        let _ = event_tx
+            .send(format_web_search_in_progress_event(&id, 0))
+            .await;
+        let _ = event_tx
+            .send(format_web_search_searching_event(&id, 0))
+            .await;
 
-                debug!(
-                    iteration = iteration,
-                    at_limit = at_iteration_limit,
-                    "Starting web_search iteration"
-                );
+        let context = self.context.clone();
+        let start = Instant::now();
+        let search_outcome = context.execute_search(&query).await;
+        let duration = start.elapsed().as_secs_f64();
 
-                let mut body_stream = current_body.into_data_stream();
-                let mut accumulated = BytesMut::new();
-                let mut detected_tool_calls: Vec<WebSearchToolCall> = Vec::new();
-                let mut sse_buffer = SseBuffer::new();
-
-                while let Some(chunk_result) = body_stream.next().await {
-                    match chunk_result {
-                        Ok(chunk) => {
-                            accumulated.extend_from_slice(&chunk);
-                            sse_buffer.extend(&chunk);
-
-                            let complete_events = sse_buffer.extract_complete_events();
-
-                            for event in complete_events {
-                                if !at_iteration_limit {
-                                    let tool_calls = detect_web_search_in_chunk(&event);
-                                    for tool_call in tool_calls {
-                                        info!(
-                                            stage = "tool_call_detected",
-                                            tool_call_id = %tool_call.id,
-                                            query = %tool_call.query,
-                                            iteration = iteration,
-                                            "Detected web_search tool call in stream"
-                                        );
-                                        detected_tool_calls.push(tool_call);
-                                    }
-
-                                    if !detected_tool_calls.is_empty() && has_callback {
-                                        continue;
-                                    }
-                                }
-
-                                if tx.send(Ok(event)).await.is_err() {
-                                    return;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            warn!(
-                                stage = "stream_error",
-                                error = %e,
-                                iteration = iteration,
-                                "Error reading stream chunk"
-                            );
-                            let _ = tx.send(Err(std::io::Error::other(e))).await;
-                            return;
-                        }
-                    }
+        let content = match search_outcome {
+            Ok(results) => {
+                record_web_search("success", duration, results.len() as u32);
+                if let Some(out_event) = format_web_search_call_output_event(&id) {
+                    let _ = event_tx.send(out_event).await;
                 }
-
-                // Forward remaining incomplete data
-                if !sse_buffer.is_empty() {
-                    let remaining = sse_buffer.take_remaining();
-                    if !remaining.is_empty()
-                        && (detected_tool_calls.is_empty() || !has_callback)
-                        && tx.send(Ok(remaining)).await.is_err()
-                    {
-                        return;
-                    }
-                }
-
-                if at_iteration_limit {
-                    warn!(
-                        stage = "iteration_limit_reached",
-                        iteration = iteration,
-                        max_iterations = max_iterations,
-                        "Maximum web_search iterations exceeded, forwarding final response"
-                    );
-                    record_web_search_iteration(iteration as u32, true, "limit_reached");
-                    break;
-                }
-
-                if !detected_tool_calls.is_empty() {
-                    let tool_call_count = detected_tool_calls.len();
-
-                    // Emit in_progress events
-                    for (idx, tool_call) in detected_tool_calls.iter().enumerate() {
-                        let event = format_web_search_in_progress_event(&tool_call.id, idx);
-                        if tx.send(Ok(event)).await.is_err() {
-                            return;
-                        }
-                    }
-
-                    info!(
-                        stage = "batch_search_starting",
-                        tool_call_count = tool_call_count,
-                        iteration = iteration,
-                        "Executing {} web_search tool calls in parallel",
-                        tool_call_count
-                    );
-
-                    // Emit searching events
-                    for (idx, tool_call) in detected_tool_calls.iter().enumerate() {
-                        let event = format_web_search_searching_event(&tool_call.id, idx);
-                        if tx.send(Ok(event)).await.is_err() {
-                            return;
-                        }
-                    }
-
-                    // Execute all searches in parallel
-                    let search_futures: Vec<_> = detected_tool_calls
-                        .iter()
-                        .map(|tool_call| {
-                            let ctx = context.clone();
-                            let query = tool_call.query.clone();
-                            async move {
-                                let start = Instant::now();
-                                match ctx.execute_search(&query).await {
-                                    Ok(results) => {
-                                        let count = results.len() as u32;
-                                        record_web_search(
-                                            "success",
-                                            start.elapsed().as_secs_f64(),
-                                            count,
-                                        );
-                                        Ok(results)
-                                    }
-                                    Err(e) => {
-                                        record_web_search(
-                                            "error",
-                                            start.elapsed().as_secs_f64(),
-                                            0,
-                                        );
-                                        Err(e)
-                                    }
-                                }
-                            }
-                        })
-                        .collect();
-
-                    let search_results = futures_util::future::join_all(search_futures).await;
-
-                    // Process results — on failure, synthesize an error message
-                    // for the model instead of forwarding raw internal SSE.
-                    let mut tool_results: Vec<(&WebSearchToolCall, String)> = Vec::new();
-
-                    for (tool_call, result) in detected_tool_calls.iter().zip(search_results) {
-                        match result {
-                            Ok(results) => {
-                                let content = format_web_search_results(&tool_call.query, &results);
-
-                                // Emit output_item.done with WebSearchCallOutput
-                                if let Some(sse_event) =
-                                    format_web_search_call_output_event(&tool_call.id)
-                                    && tx.send(Ok(sse_event)).await.is_err()
-                                {
-                                    return;
-                                }
-
-                                // Emit completed event
-                                let output_index = detected_tool_calls
-                                    .iter()
-                                    .position(|tc| tc.id == tool_call.id)
-                                    .unwrap_or(0);
-                                let completed =
-                                    format_web_search_completed_event(&tool_call.id, output_index);
-                                if tx.send(Ok(completed)).await.is_err() {
-                                    return;
-                                }
-
-                                tool_results.push((tool_call, content));
-                            }
-                            Err(e) => {
-                                error!(
-                                    stage = "search_failed",
-                                    tool_call_id = %tool_call.id,
-                                    error = %e,
-                                    "Web search execution failed"
-                                );
-                                // Provide the model with an error message instead of
-                                // dropping the result or leaking raw SSE.
-                                tool_results.push((
-                                    tool_call,
-                                    format!(
-                                        "Web search failed for query \"{}\": {}",
-                                        tool_call.query, e
-                                    ),
-                                ));
-                            }
-                        }
-                    }
-
-                    // Continue with provider callback
-                    if let Some(ref callback) = context.provider_callback {
-                        let is_final_iteration = iteration == max_iterations;
-                        let continuation_payload = build_web_search_continuation_payload(
-                            &context.original_payload,
-                            &tool_results,
-                            is_final_iteration,
-                        );
-
-                        info!(
-                            stage = "continuation_sent",
-                            tool_call_count = tool_results.len(),
-                            iteration = iteration,
-                            is_final_iteration = is_final_iteration,
-                            "Sending continuation request to provider with {} web search results",
-                            tool_results.len()
-                        );
-
-                        match callback(continuation_payload).await {
-                            Ok(continuation_response) => {
-                                let (_, new_body) = continuation_response.into_parts();
-                                current_body = new_body;
-                                continue;
-                            }
-                            Err(e) => {
-                                error!(
-                                    stage = "continuation_failed",
-                                    iteration = iteration,
-                                    error = %e,
-                                    "Provider continuation request failed"
-                                );
-                                if tx.send(Ok(accumulated.freeze())).await.is_err() {
-                                    return;
-                                }
-                                record_web_search_iteration(iteration as u32, true, "error");
-                                break;
-                            }
-                        }
-                    } else {
-                        debug!(
-                            stage = "no_callback",
-                            iteration = iteration,
-                            "No provider callback configured, forwarding original response"
-                        );
-                        if tx.send(Ok(accumulated.freeze())).await.is_err() {
-                            return;
-                        }
-                        record_web_search_iteration(iteration as u32, true, "no_callback");
-                        break;
-                    }
-                } else {
-                    debug!(
-                        stage = "stream_completed",
-                        iteration = iteration,
-                        "No web_search tool calls detected, stream complete"
-                    );
-                    record_web_search_iteration(iteration as u32, true, "completed");
-                    break;
-                }
+                let _ = event_tx
+                    .send(format_web_search_completed_event(&id, 0))
+                    .await;
+                format_web_search_results(&query, &results)
             }
+            Err(e) => {
+                record_web_search("error", duration, 0);
+                error!(
+                    stage = "search_failed",
+                    call_id = %id,
+                    error = %e,
+                    "Web search execution failed"
+                );
+                // Surface error text back to the model rather than dropping it.
+                format!("Web search failed for query \"{}\": {}", query, e)
+            }
+        };
 
-            debug!(
-                stage = "processing_completed",
-                "Web search stream processing completed"
-            );
+        let continuation_item = ResponsesInputItem::FunctionCallOutput(FunctionCallOutput {
+            type_: FunctionCallOutputType::FunctionCallOutput,
+            id: Some(id.clone()),
+            call_id: id.clone(),
+            output: content,
+            status: None,
+        });
+
+        drop(event_tx);
+
+        let result = crate::services::server_tools::ToolCallResult {
+            call_id: id,
+            continuation_items: vec![continuation_item],
+        };
+
+        Ok(crate::services::server_tools::ToolExecutionHandle {
+            events: Box::pin(futures_util::stream::unfold(
+                event_rx,
+                |mut rx| async move { rx.recv().await.map(|item| (item, rx)) },
+            )),
+            result: Box::pin(async move { Ok(result) }),
+        })
+    }
+
+    fn apply_to_continuation(
+        &self,
+        payload: &mut CreateResponsesPayload,
+        results: &[crate::services::server_tools::ToolCallResult],
+        is_final_iteration: bool,
+    ) {
+        let function_outputs: Vec<ResponsesInputItem> = results
+            .iter()
+            .flat_map(|r| r.continuation_items.clone())
+            .collect();
+
+        if function_outputs.is_empty() {
+            return;
         }
-        .instrument(web_search_span),
-    );
 
-    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
-        rx.recv().await.map(|item| (item, rx))
-    });
-    let body = Body::from_stream(stream);
+        match payload.input {
+            Some(ResponsesInput::Items(ref mut items)) => {
+                items.extend(function_outputs);
+            }
+            Some(ResponsesInput::Text(ref text)) => {
+                let text = text.clone();
+                let mut items = vec![ResponsesInputItem::EasyMessage(
+                    crate::api_types::responses::EasyInputMessage {
+                        type_: None,
+                        role: crate::api_types::responses::EasyInputMessageRole::User,
+                        content: crate::api_types::responses::EasyInputMessageContent::Text(text),
+                    },
+                )];
+                items.extend(function_outputs);
+                payload.input = Some(ResponsesInput::Items(items));
+            }
+            None => {
+                payload.input = Some(ResponsesInput::Items(function_outputs));
+            }
+        }
 
-    Response::from_parts(parts, body)
+        // Strip web_search tool definitions on the final iteration.
+        if is_final_iteration && let Some(ref mut tools) = payload.tools {
+            let before = tools.len();
+            tools.retain(|t| !t.is_web_search());
+            tools.retain(|t| {
+                if let ResponsesToolDefinition::Function(v) = t {
+                    v.get("name").and_then(|n| n.as_str())
+                        != Some(WebSearchToolArguments::FUNCTION_NAME)
+                } else {
+                    true
+                }
+            });
+            if tools.len() < before {
+                info!(
+                    stage = "tools_removed",
+                    removed = before - tools.len(),
+                    "Removed web_search tools on final iteration to force completion"
+                );
+            }
+            if tools.is_empty() {
+                payload.tools = None;
+            }
+        }
+    }
 }
 
 #[cfg(test)]

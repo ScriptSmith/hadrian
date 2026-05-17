@@ -664,7 +664,9 @@ CREATE TABLE IF NOT EXISTS usage_records (
     tool_query TEXT,
     tool_url TEXT,
     tool_bytes_fetched BIGINT,
-    tool_results_count INTEGER
+    tool_results_count INTEGER,
+    -- Wall-clock runtime in seconds (only populated for shell tool records)
+    tool_runtime_seconds DOUBLE PRECISION
 );
 
 -- API key indexes (partial: only index rows with api_key_id)
@@ -1291,3 +1293,48 @@ CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_code ON oauth_authorization_cod
 CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_user ON oauth_authorization_codes(user_id);
 -- Used by the periodic cleanup query to find expired/consumed codes
 CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_expires ON oauth_authorization_codes(expires_at);
+
+-- ======================================================================
+-- Responses (Responses API persistence)
+-- ======================================================================
+
+-- See SQLite migration for documentation. Mirror schema.
+CREATE TABLE IF NOT EXISTS responses (
+    id VARCHAR(64) PRIMARY KEY,
+    org_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+    project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    api_key_id UUID REFERENCES api_keys(id) ON DELETE SET NULL,
+    service_account_id UUID REFERENCES service_accounts(id) ON DELETE SET NULL,
+    status VARCHAR(16) NOT NULL,
+    background BOOLEAN NOT NULL DEFAULT FALSE,
+    model TEXT NOT NULL,
+    provider TEXT,
+    created_at TIMESTAMPTZ NOT NULL,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    request_payload JSONB NOT NULL,
+    output JSONB,
+    usage JSONB,
+    error JSONB,
+    retention_expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_responses_org_status ON responses(org_id, status);
+CREATE INDEX IF NOT EXISTS idx_responses_user_created ON responses(user_id, created_at DESC) WHERE user_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_responses_retention ON responses(retention_expires_at);
+
+-- Append-only event log; see SQLite migration for documentation.
+CREATE TABLE IF NOT EXISTS response_events (
+    response_id VARCHAR(64) NOT NULL REFERENCES responses(id) ON DELETE CASCADE,
+    sequence_number BIGINT NOT NULL,
+    event_type VARCHAR(64) NOT NULL,
+    payload JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (response_id, sequence_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_response_events_response_seq
+    ON response_events(response_id, sequence_number);
+
+ALTER TABLE responses ADD COLUMN last_sequence_number BIGINT NOT NULL DEFAULT 0;

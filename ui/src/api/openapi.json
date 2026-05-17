@@ -18194,6 +18194,245 @@
         ]
       }
     },
+    "/api/v1/responses/compact": {
+      "post": {
+        "tags": [
+          "responses"
+        ],
+        "summary": "Compact a context window via the provider's standalone compact\nendpoint.",
+        "description": "Stateless passthrough: forwards `model` + `input` (and any other\nfields the provider accepts) to the upstream `/responses/compact`\nendpoint and streams the compacted window back. Only OpenAI and\nAzure OpenAI implement this; routing to any other provider returns\n501 with `error_code = \"not_supported\"`.",
+        "operationId": "api_v1_responses_compact",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateResponsesPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Compacted context window"
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Provider does not support compaction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/api/v1/responses/{response_id}": {
+      "get": {
+        "tags": [
+          "responses"
+        ],
+        "summary": "`GET /v1/responses/{response_id}` — retrieve a stored response.",
+        "operationId": "api_v1_responses_get",
+        "parameters": [
+          {
+            "name": "response_id",
+            "in": "path",
+            "description": "ID returned by POST /v1/responses",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stored response object"
+          },
+          "404": {
+            "description": "Response not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Persistence disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "responses"
+        ],
+        "summary": "`DELETE /v1/responses/{response_id}` — remove a stored response.\nReturns the OpenAI-spec deletion confirmation shape.",
+        "operationId": "api_v1_responses_delete",
+        "parameters": [
+          {
+            "name": "response_id",
+            "in": "path",
+            "description": "ID of the response to delete",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deletion confirmation"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/api/v1/responses/{response_id}/cancel": {
+      "post": {
+        "tags": [
+          "responses"
+        ],
+        "summary": "`POST /v1/responses/{response_id}/cancel` — cancel an in-progress\nbackground response. Per OpenAI's spec, returns 400 if the response\nis not in background mode. Idempotent for already-terminal rows.",
+        "operationId": "api_v1_responses_cancel",
+        "parameters": [
+          {
+            "name": "response_id",
+            "in": "path",
+            "description": "ID of the response to cancel",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The cancelled response object"
+          },
+          "400": {
+            "description": "Response is not in background mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Response not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/api/v1/responses/{response_id}/events": {
+      "get": {
+        "tags": [
+          "responses"
+        ],
+        "summary": "`GET /v1/responses/{response_id}/events?starting_after=N` —\npoll-replay reconnect.",
+        "description": "Streams the persisted event log as Server-Sent Events. While the\nresponse is still in-progress the handler polls the DB every\n250ms for new rows; once the row reaches a terminal status and the\ncaller has caught up to `last_sequence_number`, the stream\nterminates with a `data: [DONE]` sentinel.",
+        "operationId": "api_v1_responses_events",
+        "parameters": [
+          {
+            "name": "response_id",
+            "in": "path",
+            "description": "ID of the response",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "starting_after",
+            "in": "query",
+            "description": "Resume cursor",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Cap on events per page",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream of response events"
+          },
+          "404": {
+            "description": "Response not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/api/v1/tools/web-fetch": {
       "post": {
         "tags": [
@@ -22702,6 +22941,13 @@
             ],
             "description": "Run in background"
           },
+          "context_management": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Context management directives. Forwarded verbatim to providers\nthat support server-side compaction (OpenAI, Azure OpenAI); for\nothers the field is ignored at the adapter layer. See OpenAI's\ncompaction guide for the schema; the canonical entry is\n`{\"type\": \"compaction\", \"compact_threshold\": <tokens>}`."
+          },
           "frequency_penalty": {
             "type": [
               "number",
@@ -22815,6 +23061,16 @@
           "service_tier": {
             "type": "object",
             "description": "Service tier"
+          },
+          "skills": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "**Hadrian Extension:** Skill bundle IDs to mount into the\nsession for tools that support skill mounting (e.g. the shell\nruntime). Each entry is a skill UUID owned by the caller's\norganization; unknown IDs fail the request with 400.\n\nEach skill's `SKILL.md` is prepended to `instructions` so the\nmodel knows the skill is available; all skill files are\nmaterialized under `/skills/<skill_id>/` inside the sandbox."
           },
           "sovereignty_requirements": {
             "oneOf": [

@@ -150,6 +150,12 @@ pub enum ProviderError {
     #[error("Internal provider error: {0}")]
     Internal(String),
 
+    /// The provider does not implement the requested operation. Maps to
+    /// HTTP 501 with `error_code = "not_supported"` so clients can
+    /// distinguish from generic provider errors.
+    #[error("{0}")]
+    Unsupported(String),
+
     #[error("{0}")]
     CircuitBreakerOpen(#[from] circuit_breaker::CircuitBreakerError),
 }
@@ -161,6 +167,7 @@ impl From<ProviderError> for StatusCode {
             ProviderError::ResponseBuilder(_) | ProviderError::Internal(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
+            ProviderError::Unsupported(_) => StatusCode::NOT_IMPLEMENTED,
             ProviderError::CircuitBreakerOpen(_) => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
@@ -188,6 +195,9 @@ impl IntoResponse for ProviderError {
                 "internal",
                 "Internal provider error".to_string(),
             ),
+            ProviderError::Unsupported(msg) => {
+                (StatusCode::NOT_IMPLEMENTED, "not_supported", msg.clone())
+            }
             ProviderError::CircuitBreakerOpen(e) => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "circuit_breaker_open",
@@ -241,6 +251,20 @@ pub trait Provider: Send + Sync {
         client: &reqwest::Client,
         payload: CreateResponsesPayload,
     ) -> Result<Response, ProviderError>;
+
+    /// Compact a context window via the provider's standalone compact
+    /// endpoint. Only OpenAI-compatible providers implement this; the
+    /// default returns `Unsupported` so non-OpenAI providers surface a
+    /// clean 501 to the caller.
+    async fn create_responses_compact(
+        &self,
+        _client: &reqwest::Client,
+        _payload: CreateResponsesPayload,
+    ) -> Result<Response, ProviderError> {
+        Err(ProviderError::Unsupported(
+            "compaction is not supported by this provider".to_string(),
+        ))
+    }
 
     async fn create_completion(
         &self,
@@ -1006,6 +1030,7 @@ pub async fn log_media_usage(params: MediaUsageParams<'_>) -> (Option<i64>, bool
             tool_url: None,
             tool_bytes_fetched: None,
             tool_results_count: None,
+            tool_runtime_seconds: None,
         };
 
         let db = db_pool.clone();
