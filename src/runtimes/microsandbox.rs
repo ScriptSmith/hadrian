@@ -55,28 +55,28 @@ impl ShellRuntime for MicrosandboxRuntime {
         RuntimeCapabilities {
             passthrough_only: false,
             client_executes: false,
-            // Slice 1D enables secret injection via microsandbox's
-            // SecretBuilder (placeholder substitution at the TLS proxy).
+            // Microsandbox supports placeholder substitution at the TLS
+            // proxy via SecretBuilder so the model never sees the raw
+            // secret value.
             secret_injection: true,
-            // Hostname-based egress allowlist without an accompanying
-            // secret isn't natively supported by microsandbox's
-            // NetworkPolicy (which is IP-based). Adding it would
-            // require DNS-resolution + per-IP rules; punt for now and
-            // recommend operators scope egress via secret mounts.
-            egress_allowlist: false,
+            // Hostname-based egress allowlists are first-class in the
+            // microsandbox 0.4 NetworkPolicy builder (`allow_domains` /
+            // `allow_domain_suffixes`). With those rules wired up, this
+            // runtime matches opensandbox's deny-by-default + explicit
+            // allowlist semantics.
+            egress_allowlist: true,
             skill_mount: true,
             file_io: true,
-            network_isolation_modes: vec![NetworkMode::Full],
+            network_isolation_modes: vec![
+                NetworkMode::None,
+                NetworkMode::AllowList,
+                NetworkMode::Full,
+            ],
             max_session_duration: None,
         }
     }
 
     async fn start_session(&self, spec: SessionSpec) -> RuntimeResult<SessionHandle> {
-        // Validate capability requirements before spinning up a VM.
-        if !spec.egress_policy.allow_hosts.is_empty() {
-            return Err(RuntimeError::Unsupported("egress_allowlist"));
-        }
-
         let session_id = spec
             .session_id_hint
             .unwrap_or_else(|| format!("hadrian-{}", Uuid::new_v4()));
@@ -90,30 +90,36 @@ impl ShellRuntime for MicrosandboxRuntime {
             .map(|b| (b / (1024 * 1024)) as u32)
             .unwrap_or(self.config.memory_mb);
 
+        // Translate Hadrian's `allow_hosts` patterns into a concrete
+        // `NetworkPolicy`. The shapes we accept (from the OpenAI shell
+        // tool spec via `resolve_shell_environment`):
+        //   - `[]`        → no egress (deny-all). Matches opensandbox.
+        //   - `["*"]`     → unrestricted public egress. The SDK's
+        //                   `public_only()` denies private/loopback/
+        //                   metadata so the IMDS endpoint at
+        //                   169.254.169.254 stays blocked.
+        //   - exact name  → `allow_domains([name])`.
+        //   - `*.suffix`  → `allow_domain_suffixes([suffix])`.
+        // Per-secret allow-host rules still apply on top via
+        // `secret().allow_host()` below.
+        let policy = build_network_policy(&spec.egress_policy.allow_hosts);
+
         info!(
             stage = "microsandbox_starting",
             session_id = %session_id,
             image = %self.config.image,
             cpus,
             memory_mb,
+            egress_hosts = ?spec.egress_policy.allow_hosts,
             "Creating microsandbox VM"
         );
 
-        // Pin an explicit `public_only` network policy: egress allowed
-        // to public internet ranges, denied for private/loopback/
-        // link-local/metadata (the IMDS endpoint at 169.254.169.254
-        // and friends). This makes the network posture independent of
-        // whatever `NetworkConfig::default()` happens to be in the SDK
-        // version we're built against — a future SDK that flipped the
-        // default to allow-all would silently regress us otherwise.
-        // Per-secret allow-host rules still apply on top via
-        // `secret().allow_host()` below.
         let mut builder = Sandbox::builder(session_id.clone())
             .image(self.config.image.clone())
             .cpus(cpus)
             .memory(memory_mb)
             .replace()
-            .network(|n| n.policy(NetworkPolicy::public_only()));
+            .network(|n| n.policy(policy));
 
         // Wire each requested SecretMount into microsandbox's
         // SecretBuilder. Each mount gives the guest a placeholder env
@@ -169,6 +175,71 @@ impl ShellRuntime for MicrosandboxRuntime {
                 sandbox: Arc::new(Mutex::new(Some(sandbox))),
             }),
         ))
+    }
+}
+
+/// Build a [`NetworkPolicy`] from a Hadrian `allow_hosts` list (already
+/// intersected with the operator allowlist by `resolve_shell_environment`).
+///
+/// Rules:
+/// - Empty list → deny-all in both directions. The runtime defers to
+///   `NetworkPolicy::none()`; matches opensandbox's default semantics
+///   so the model can't quietly assume the public internet is reachable
+///   when no per-request `network_policy` was supplied.
+/// - `"*"` anywhere in the list → `public_only()` (allow public, deny
+///   private/loopback/link-local/metadata). Equivalent of "open internet,
+///   no SSRF risk."
+/// - Otherwise → deny by default, allow only the supplied hostnames /
+///   `*.suffix` patterns. Patterns are normalized: a leading `*.` is
+///   recognised as a `Destination::DomainSuffix`; everything else is
+///   treated as an exact `Destination::Domain`.
+fn build_network_policy(allow_hosts: &[String]) -> NetworkPolicy {
+    if allow_hosts.is_empty() {
+        return NetworkPolicy::none();
+    }
+    if allow_hosts.iter().any(|h| h == "*") {
+        return NetworkPolicy::public_only();
+    }
+
+    let mut domains: Vec<String> = Vec::new();
+    let mut suffixes: Vec<String> = Vec::new();
+    for h in allow_hosts {
+        let h = h.trim().trim_end_matches('.');
+        if let Some(rest) = h.strip_prefix("*.") {
+            // Strip a redundant trailing dot the operator might have
+            // typed (`*.example.com.`).
+            suffixes.push(rest.trim_end_matches('.').to_string());
+        } else {
+            domains.push(h.to_string());
+        }
+    }
+
+    // Egress is the only thing this allowlist gates. We don't publish
+    // inbound ports for shell-tool VMs, so denying ingress is benign
+    // (avoids the extra `Action` import path).
+    let policy = NetworkPolicy::builder().default_deny().egress(|e| {
+        if !suffixes.is_empty() {
+            e.allow_domain_suffixes(suffixes.iter().cloned());
+        }
+        if !domains.is_empty() {
+            e.allow_domains(domains.iter().cloned());
+        }
+        e
+    });
+    match policy.build() {
+        Ok(p) => p,
+        Err(err) => {
+            // Builder errors only happen on invalid patterns (e.g. an
+            // empty domain string). Fall back to deny-all rather than
+            // silently allowing more than the operator asked for.
+            warn!(
+                stage = "microsandbox_policy_build_failed",
+                error = %err,
+                hosts = ?allow_hosts,
+                "NetworkPolicy build failed; falling back to deny-all"
+            );
+            NetworkPolicy::none()
+        }
     }
 }
 
@@ -262,6 +333,15 @@ fn parent_of(path: &str) -> Option<String> {
     Some(trimmed[..idx].to_string())
 }
 
+/// Internal sentinel returned by the per-iteration `select!` inside
+/// the exec drain task: a delivered SDK event, the upstream channel
+/// closing cleanly, or the per-command deadline elapsing.
+enum DrainOutcome {
+    Event(MsExecEvent),
+    Eof,
+    Timeout,
+}
+
 /// One live microsandbox session.
 ///
 /// The inner `Option<Sandbox>` lets `terminate()` consume the Sandbox
@@ -306,32 +386,123 @@ impl ShellSession for MicrosandboxSession {
             .await
             .map_err(|e| RuntimeError::Backend(format!("microsandbox shell_stream: {e}")))?;
 
+        // Honor the per-command timeout in `ExecRequest`. The SDK's
+        // `shell_stream` doesn't apply the `ExecOptionsBuilder.timeout`
+        // value to the streaming path (`exec_stream_inner` discards it
+        // — only `exec_with_opts` enforces it after collecting), so we
+        // wrap the drain loop with `tokio::time::timeout` ourselves and
+        // call the SDK's `handle.kill()` on elapse. Exit code 124 is
+        // the coreutils convention for "command timed out."
+        //
+        // Stash a clone of the underlying `ExecHandle` first so the kill
+        // path doesn't fight the drain task for ownership.
+        let kill_after = cmd.timeout;
+        let exec_id = handle.id();
         // Bridge the SDK's UnboundedReceiver<MsExecEvent> into our
         // Stream<ExecEvent>. We can't move `handle` directly across a
         // .await in a stream::unfold without owning it, so we drain it
         // into our own channel via a detached task.
         let (tx, rx) = mpsc::channel::<ExecEvent>(32);
         crate::compat::spawn_detached(async move {
-            while let Some(ev) = handle.recv().await {
-                let mapped = match ev {
-                    MsExecEvent::Started { .. } => continue, // skip
-                    MsExecEvent::Stdout(b) => ExecEvent::Stdout(b),
-                    MsExecEvent::Stderr(b) => ExecEvent::Stderr(b),
-                    MsExecEvent::Exited { code } => ExecEvent::Exit { code, signal: None },
-                    MsExecEvent::Failed(f) => {
-                        warn!(
-                            stage = "exec_failed",
-                            error = ?f,
-                            "microsandbox exec failed to start"
-                        );
-                        ExecEvent::Exit {
-                            code: -1,
-                            signal: None,
-                        }
+            let deadline = kill_after.map(|d| tokio::time::Instant::now() + d);
+            let mut exit_seen = false;
+            loop {
+                let next = if let Some(dl) = deadline {
+                    tokio::select! {
+                        ev = handle.recv() => ev.map(DrainOutcome::Event)
+                            .unwrap_or(DrainOutcome::Eof),
+                        _ = tokio::time::sleep_until(dl) => DrainOutcome::Timeout,
+                    }
+                } else {
+                    match handle.recv().await {
+                        Some(ev) => DrainOutcome::Event(ev),
+                        None => DrainOutcome::Eof,
                     }
                 };
-                if tx.send(mapped).await.is_err() {
-                    return;
+
+                match next {
+                    DrainOutcome::Event(ev) => {
+                        let mapped = match ev {
+                            MsExecEvent::Started { .. } => continue, // skip
+                            MsExecEvent::Stdout(b) => ExecEvent::Stdout(b),
+                            MsExecEvent::Stderr(b) => ExecEvent::Stderr(b),
+                            MsExecEvent::Exited { code } => {
+                                exit_seen = true;
+                                ExecEvent::Exit { code, signal: None }
+                            }
+                            MsExecEvent::Failed(f) => {
+                                warn!(
+                                    stage = "exec_failed",
+                                    error = ?f,
+                                    exec_id = %exec_id,
+                                    "microsandbox exec failed to start"
+                                );
+                                exit_seen = true;
+                                ExecEvent::Exit {
+                                    code: -1,
+                                    signal: None,
+                                }
+                            }
+                        };
+                        if tx.send(mapped).await.is_err() {
+                            return;
+                        }
+                    }
+                    DrainOutcome::Eof => return,
+                    DrainOutcome::Timeout => {
+                        warn!(
+                            stage = "exec_timeout",
+                            exec_id = %exec_id,
+                            timeout_ms = kill_after.map(|d| d.as_millis() as u64),
+                            "microsandbox shell command exceeded timeout; killing"
+                        );
+                        // Best-effort kill of the underlying process.
+                        if let Err(e) = handle.kill().await {
+                            warn!(
+                                stage = "exec_kill_failed",
+                                exec_id = %exec_id,
+                                error = ?e,
+                                "Failed to kill timed-out microsandbox exec"
+                            );
+                        }
+                        // Brief grace period to collect anything the
+                        // process emitted between the timeout firing
+                        // and the kill landing. After that, emit our
+                        // own `Exit { code: 124 }` so the caller's
+                        // stream terminates promptly.
+                        let grace =
+                            tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+                        loop {
+                            let res = tokio::select! {
+                                ev = handle.recv() => Some(ev),
+                                _ = tokio::time::sleep_until(grace) => None,
+                            };
+                            match res {
+                                Some(Some(MsExecEvent::Stdout(b))) => {
+                                    let _ = tx.send(ExecEvent::Stdout(b)).await;
+                                }
+                                Some(Some(MsExecEvent::Stderr(b))) => {
+                                    let _ = tx.send(ExecEvent::Stderr(b)).await;
+                                }
+                                Some(Some(MsExecEvent::Exited { code })) => {
+                                    let _ = tx.send(ExecEvent::Exit { code, signal: None }).await;
+                                    return;
+                                }
+                                Some(Some(_)) => continue,
+                                // Stream closed or grace elapsed.
+                                Some(None) | None => break,
+                            }
+                        }
+                        if !exit_seen {
+                            let _ = tx
+                                .send(ExecEvent::Exit {
+                                    code: 124,
+                                    signal: None,
+                                })
+                                .await;
+                        }
+                        return;
+                    }
                 }
             }
         });

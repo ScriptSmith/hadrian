@@ -66,9 +66,10 @@ impl UsageRepo for PostgresUsageRepo {
                 user_id, org_id, project_id, team_id, service_account_id, pricing_source,
                 image_count, audio_seconds, character_count, provider_source,
                 record_type, tool_name, tool_query, tool_url,
-                tool_bytes_fetched, tool_results_count, tool_runtime_seconds
+                tool_bytes_fetched, tool_results_count, tool_runtime_seconds,
+                tool_exit_code
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36)
             ON CONFLICT (request_id) DO NOTHING
             "#,
         )
@@ -107,6 +108,7 @@ impl UsageRepo for PostgresUsageRepo {
         .bind(entry.tool_bytes_fetched)
         .bind(entry.tool_results_count)
         .bind(entry.tool_runtime_seconds)
+        .bind(entry.tool_exit_code)
         .execute(&self.write_pool)
         .await?;
 
@@ -119,7 +121,7 @@ impl UsageRepo for PostgresUsageRepo {
         }
 
         // PostgreSQL allows up to 65535 parameters per query
-        // Each entry uses 35 parameters, so we can insert ~1872 entries per batch
+        // Each entry uses 36 parameters, so we can insert ~1820 entries per batch
         // Use 1000 as a reasonable batch size for performance
         const MAX_ENTRIES_PER_BATCH: usize = 1000;
 
@@ -137,15 +139,15 @@ impl UsageRepo for PostgresUsageRepo {
                 .iter()
                 .enumerate()
                 .map(|(i, _)| {
-                    let o = i * 35;
+                    let o = i * 36;
                     format!(
-                        "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                        "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
                         o + 1, o + 2, o + 3, o + 4, o + 5, o + 6,
                         o + 7, o + 8, o + 9, o + 10, o + 11, o + 12,
                         o + 13, o + 14, o + 15, o + 16, o + 17, o + 18,
                         o + 19, o + 20, o + 21, o + 22, o + 23, o + 24,
                         o + 25, o + 26, o + 27, o + 28, o + 29, o + 30,
-                        o + 31, o + 32, o + 33, o + 34, o + 35
+                        o + 31, o + 32, o + 33, o + 34, o + 35, o + 36
                     )
                 })
                 .collect();
@@ -160,7 +162,8 @@ impl UsageRepo for PostgresUsageRepo {
                     user_id, org_id, project_id, team_id, service_account_id, pricing_source,
                     image_count, audio_seconds, character_count, provider_source,
                     record_type, tool_name, tool_query, tool_url,
-                    tool_bytes_fetched, tool_results_count, tool_runtime_seconds
+                    tool_bytes_fetched, tool_results_count, tool_runtime_seconds,
+                    tool_exit_code
                 )
                 VALUES {}
                 ON CONFLICT (request_id) DO NOTHING
@@ -209,7 +212,8 @@ impl UsageRepo for PostgresUsageRepo {
                     .bind(&entry.tool_url)
                     .bind(entry.tool_bytes_fetched)
                     .bind(entry.tool_results_count)
-                    .bind(entry.tool_runtime_seconds);
+                    .bind(entry.tool_runtime_seconds)
+                    .bind(entry.tool_exit_code);
             }
 
             let result = query_builder.execute(&mut *tx).await?;
@@ -3879,7 +3883,8 @@ impl UsageRepo for PostgresUsageRepo {
                    latency_ms, cancelled, status_code, pricing_source,
                    image_count, audio_seconds, character_count, provider_source,
                    record_type, tool_name, tool_query, tool_url,
-                   tool_bytes_fetched, tool_results_count, tool_runtime_seconds
+                   tool_bytes_fetched, tool_results_count, tool_runtime_seconds,
+                   tool_exit_code
             FROM usage_records
             {}
             ORDER BY recorded_at {}, id {}
@@ -3974,6 +3979,7 @@ impl UsageRepo for PostgresUsageRepo {
                 tool_bytes_fetched: row.get("tool_bytes_fetched"),
                 tool_results_count: row.get("tool_results_count"),
                 tool_runtime_seconds: row.get("tool_runtime_seconds"),
+                tool_exit_code: row.get("tool_exit_code"),
             })
             .collect();
 

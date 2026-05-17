@@ -169,9 +169,24 @@ pub struct OpenSandboxConfig {
     /// `Running` state. Default 60.
     #[serde(default = "default_opensandbox_start_timeout")]
     pub start_timeout_secs: u64,
+
+    /// Wall-clock cap, in seconds, the OpenSandbox control plane is
+    /// asked to enforce on the sandbox lifecycle (`timeout` field on
+    /// `POST /sandboxes`). Independent of `idle_ttl_secs` (which is
+    /// Hadrian-side) and `command_timeout_secs` (per-exec). Default
+    /// 3600 (1h); set lower for cost containment, higher for long
+    /// agent sessions. Always at least `start_timeout_secs + 60` to
+    /// keep startup polling under the lifecycle deadline.
+    #[serde(default = "default_opensandbox_sandbox_timeout")]
+    pub sandbox_timeout_secs: u64,
 }
 
 #[cfg(feature = "runtime-opensandbox")]
 fn default_opensandbox_start_timeout() -> u64 {
     60
+}
+
+#[cfg(feature = "runtime-opensandbox")]
+fn default_opensandbox_sandbox_timeout() -> u64 {
+    3_600
 }

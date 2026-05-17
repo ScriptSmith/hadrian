@@ -341,7 +341,14 @@ impl ShellRuntime for OpenSandboxRuntime {
 
         let body = CreateSandboxRequest {
             image: ImageSpec { uri: image },
-            timeout: Some(3600),
+            // Sandbox lifecycle cap — configurable so operators can
+            // bound cost (or extend for long agent sessions) without
+            // touching the source. See
+            // `OpenSandboxConfig::sandbox_timeout_secs`.
+            timeout: Some(self.config.sandbox_timeout_secs.max(
+                // Keep startup polling under the lifecycle deadline.
+                self.config.start_timeout_secs.saturating_add(60),
+            )),
             resource_limits,
             entrypoint: vec!["tail", "-f", "/dev/null"],
             network_policy,

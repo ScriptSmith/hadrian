@@ -226,6 +226,54 @@ async fn stage_input_files_if_shell(
     })
 }
 
+/// Serialize a Responses-API payload for storage in `responses.request_payload`,
+/// stripping inline base64 blobs that are already resolved into separate
+/// container files / staged buffers.
+///
+/// Concretely: `input_file.file_data` carries the raw bytes the model
+/// uploaded (often megabytes of base64 in a single string). The file
+/// has already been resolved into `StagedFile` (for /mnt/data) and, when
+/// persistence is on, into a `container_files` row. Storing the blob a
+/// second time in JSONB doubles the row size and slows every later
+/// `GET /v1/responses/{id}`. We replace the blob with a placeholder
+/// note so the persisted payload still records that an inline file
+/// was present, just not its contents.
+fn serialize_payload_for_storage(
+    payload: &crate::api_types::CreateResponsesPayload,
+) -> serde_json::Value {
+    let mut value = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
+    strip_input_file_data(&mut value);
+    value
+}
+
+/// Walk a serialized payload, replacing every `input_file.file_data`
+/// (a base64 data URL) with a small `{ "_omitted": "..."}` marker.
+fn strip_input_file_data(value: &mut serde_json::Value) {
+    use serde_json::Value;
+    match value {
+        Value::Object(map) => {
+            // An `input_file` part: redact `file_data` if present.
+            if map.get("type").and_then(|v| v.as_str()) == Some("input_file")
+                && let Some(file_data) = map.get_mut("file_data")
+                && let Value::String(s) = file_data
+            {
+                let len = s.len();
+                *file_data = Value::String(format!("_omitted_{len}_bytes"));
+            }
+            // Recurse — `input` items, nested message parts, etc.
+            for (_, v) in map.iter_mut() {
+                strip_input_file_data(v);
+            }
+        }
+        Value::Array(items) => {
+            for v in items.iter_mut() {
+                strip_input_file_data(v);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Resolve a chain reuse opportunity: if `prev_id` is a response in
 /// this org and its row carries a still-active `container_id`, return
 /// it so the new request reattaches to the same VM. Returns `None`
@@ -321,6 +369,7 @@ pub(super) fn build_streaming_usage_entry(
             tool_bytes_fetched: None,
             tool_results_count: None,
             tool_runtime_seconds: None,
+            tool_exit_code: None,
         })
     } else if state.default_user_id.is_some() || state.default_org_id.is_some() {
         // Anonymous mode: attribute to the default user/org so streaming usage
@@ -359,6 +408,7 @@ pub(super) fn build_streaming_usage_entry(
             tool_bytes_fetched: None,
             tool_results_count: None,
             tool_runtime_seconds: None,
+            tool_exit_code: None,
         })
     } else {
         None
@@ -1370,9 +1420,10 @@ pub async fn api_v1_responses(
     // Background mode: insert the row now and return queued JSON
     // immediately. The background worker (jobs/background_responses.rs)
     // claims the row asynchronously and runs the LLM in its own task,
-    // recording events via the persister. Clients poll
-    // GET /v1/responses/{id} for status or
-    // GET /v1/responses/{id}/events?starting_after=N for the live event log.
+    // recording events via the persister. Clients tail the live event
+    // log via GET /v1/responses/{id}?stream=true&starting_after=N (the
+    // OpenAI Responses-API spec for resuming a stream) or fetch the
+    // terminal-state JSON via GET /v1/responses/{id}.
     if payload.background == Some(true) {
         if let Some(ref store) = state.responses_store {
             let principal_org = auth
@@ -1434,7 +1485,7 @@ pub async fn api_v1_responses(
                 // background worker resolves skills locally at
                 // execute time so the row stays free of operator-
                 // private skill content.
-                request_payload: serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null),
+                request_payload: serialize_payload_for_storage(&payload),
                 retention_expires_at: store.retention_expires_at(now),
             };
             store.create(new_row).await.map_err(|e| {
@@ -1819,7 +1870,7 @@ pub async fn api_v1_responses(
                 request_payload: {
                     let mut snapshot = payload.clone();
                     snapshot.instructions = original_instructions.clone();
-                    serde_json::to_value(&snapshot).unwrap_or(serde_json::Value::Null)
+                    serialize_payload_for_storage(&snapshot)
                 },
                 retention_expires_at: store.retention_expires_at(now),
             };

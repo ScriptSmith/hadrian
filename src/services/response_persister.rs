@@ -99,10 +99,10 @@ pub fn wrap_streaming_with_persistence(
                         // up. Terminal events go through `insert_sync`
                         // so the row's status update later in this
                         // function happens-after the event commit —
-                        // closes the race where /events readers see
-                        // `status=Completed` before the terminal event
-                        // reaches the log. Non-terminal events ride
-                        // the buffered fast path.
+                        // closes the race where ?stream=true readers
+                        // see `status=Completed` before the terminal
+                        // event reaches the log. Non-terminal events
+                        // ride the buffered fast path.
                         if let Some(ref buf) = event_buffer {
                             sequence_number += 1;
                             let (event_type, payload) = parse_event_for_log(&event);
@@ -178,9 +178,9 @@ pub fn wrap_streaming_with_persistence(
         // If the row is closing out terminally but no terminal event
         // landed in the log yet (cancelled mid-stream, or the upstream
         // closed without one), synthesise one and commit it
-        // synchronously. /events readers can then detect the terminal
-        // event from the log alone, matching the "event-log-as-truth"
-        // contract.
+        // synchronously. ?stream=true readers can then detect the
+        // terminal event from the log alone, matching the
+        // "event-log-as-truth" contract.
         if let Some(ref buf) = event_buffer
             && status.is_terminal()
             && !terminal_event_persisted
@@ -256,23 +256,77 @@ pub fn wrap_streaming_with_persistence(
 ///   data: {"type":"response.incomplete","response":{...}}
 fn inspect_terminal_event(event: &[u8]) -> Option<(Value, ResponseStatus)> {
     let s = std::str::from_utf8(event).ok()?;
+    // Named SSE events arrive as `event: <type>\ndata: <json>\n\n` —
+    // we must skip the `event:` (and any future header) lines instead
+    // of short-circuiting on the first non-`data:` line. A `?` on
+    // `strip_prefix` here would mean a single `event:` header in a
+    // multi-line frame silently drops the trailing terminal payload.
     for line in s.lines() {
-        let data = line.strip_prefix("data:")?.trim();
-        if data == "[DONE]" {
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
             continue;
         }
-        let json: Value = serde_json::from_str(data).ok()?;
-        let event_type = json.get("type")?.as_str()?;
+        let Ok(json) = serde_json::from_str::<Value>(data) else {
+            continue;
+        };
+        let Some(event_type) = json.get("type").and_then(|t| t.as_str()) else {
+            continue;
+        };
         let status = match event_type {
             "response.completed" => ResponseStatus::Completed,
             "response.failed" => ResponseStatus::Failed,
             "response.incomplete" => ResponseStatus::Incomplete,
             _ => continue,
         };
-        let response = json.get("response")?.clone();
+        let response = json.get("response").cloned().unwrap_or(Value::Null);
         return Some((response, status));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_terminal_event_with_event_header_prefix() {
+        // Named-SSE form: `event: response.completed\ndata: {...}\n\n`.
+        // A previous bug short-circuited on the first non-`data:` line
+        // (the `event:` header) and missed the terminal data entirely.
+        let raw = b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_abc\",\"status\":\"completed\"}}\n\n";
+        let result = inspect_terminal_event(raw);
+        assert!(
+            result.is_some(),
+            "should detect terminal event past header line"
+        );
+        let (resp, status) = result.unwrap();
+        assert_eq!(status, ResponseStatus::Completed);
+        assert_eq!(resp.get("id").and_then(|v| v.as_str()), Some("resp_abc"));
+    }
+
+    #[test]
+    fn detects_terminal_event_data_only_form() {
+        // Plain Responses-API form without an `event:` line.
+        let raw = b"data: {\"type\":\"response.failed\",\"response\":{\"error\":\"boom\"}}\n\n";
+        let result = inspect_terminal_event(raw);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().1, ResponseStatus::Failed);
+    }
+
+    #[test]
+    fn ignores_non_terminal_events() {
+        let raw = b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n";
+        assert!(inspect_terminal_event(raw).is_none());
+    }
+
+    #[test]
+    fn ignores_done_sentinel() {
+        let raw = b"data: [DONE]\n\n";
+        assert!(inspect_terminal_event(raw).is_none());
+    }
 }
 
 /// Parse one SSE event into (`event_type`, `payload`) for the event

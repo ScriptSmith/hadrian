@@ -271,6 +271,10 @@ fn validate_source_count(part: &InputFilePart) -> Result<(), StageError> {
 
 /// Apply collision dedupe: if `filename` is already in `seen`, prefix
 /// it with the short content hash so the staged set keeps both files.
+/// If that prefixed form is also taken (e.g. three uploads with the
+/// same content + filename), append an incrementing `-N-` counter
+/// until a free name is found.
+///
 /// Mutates `seen` to remember the returned name.
 fn dedupe_filename(filename: String, bytes: &[u8], seen: &mut HashSet<String>) -> String {
     if seen.insert(filename.clone()) {
@@ -278,8 +282,26 @@ fn dedupe_filename(filename: String, bytes: &[u8], seen: &mut HashSet<String>) -
     }
     let prefix = short_content_hash(bytes);
     let prefixed = format!("{prefix}-{filename}");
-    seen.insert(prefixed.clone());
-    prefixed
+    if seen.insert(prefixed.clone()) {
+        return prefixed;
+    }
+    // Same content + same filename arriving a third time. Walk a
+    // counter to keep collisions unique — bounded by attempt count
+    // so we never spin forever on a pathologically full `seen`.
+    for n in 2u32..u32::MAX {
+        let candidate = format!("{prefix}-{n}-{filename}");
+        if seen.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    // Fall-through is unreachable in practice (we'd need to have
+    // ingested ~4 billion files with identical content in one
+    // request, which `max_input_files_per_request` rules out). Emit
+    // a UUID-suffixed fallback rather than risk a duplicate-path
+    // overwrite at /mnt/data write time.
+    let fallback = format!("{prefix}-{}-{filename}", uuid::Uuid::new_v4().simple());
+    seen.insert(fallback.clone());
+    fallback
 }
 
 async fn resolve_file_id(
@@ -688,5 +710,25 @@ mod tests {
         assert_eq!(r, "a.txt");
         let r2 = dedupe_filename("b.txt".into(), b"y", &mut seen);
         assert_eq!(r2, "b.txt");
+    }
+
+    #[test]
+    fn dedupe_filename_handles_repeat_same_content_collisions() {
+        // Three uploads with identical content + filename: the first
+        // gets the bare name, the second a content-hash-prefixed name,
+        // the third a counter-suffixed prefix so all three stage
+        // distinct paths under `/mnt/data`.
+        let mut seen = HashSet::new();
+        let bytes = b"identical";
+        let a = dedupe_filename("doc.csv".into(), bytes, &mut seen);
+        let b = dedupe_filename("doc.csv".into(), bytes, &mut seen);
+        let c = dedupe_filename("doc.csv".into(), bytes, &mut seen);
+        assert_eq!(a, "doc.csv");
+        assert_ne!(b, a);
+        assert_ne!(c, a);
+        assert_ne!(c, b, "third occurrence must not collide with the second");
+        // Counter variant is recognizable.
+        let prefix = short_content_hash(bytes);
+        assert!(c.starts_with(&format!("{prefix}-2-")), "got: {c}");
     }
 }

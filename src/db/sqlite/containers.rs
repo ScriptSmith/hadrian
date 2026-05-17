@@ -334,18 +334,21 @@ impl ContainersRepo for SqliteContainersRepo {
 
     async fn mark_expired_idle(&self, now: chrono::DateTime<chrono::Utc>) -> DbResult<Vec<String>> {
         let now_ts = truncate_to_millis(now);
-        // SQLite TEXT timestamps compare lexicographically when in
-        // ISO-8601 form (with millisecond precision the truncate
-        // helper enforces) — so `last_active_at + interval` math
-        // becomes a same-string comparison after we shift `now`
-        // back by the per-row idle TTL. Doing the shift in SQL avoids
-        // pulling rows up.
+        // SQLite's `datetime(x, '+N seconds')` strips fractional
+        // seconds and the timezone suffix, returning `YYYY-MM-DD HH:MM:SS`.
+        // sqlx-sqlite encodes a bound `DateTime<Utc>` as `YYYY-MM-DD
+        // HH:MM:SS.fff+00:00`. The two strings share the same date+time
+        // prefix but differ in suffix length, so a raw lex-comparison
+        // can trip ~1 ms early at the boundary. Wrap the bound value
+        // in `datetime()` too so both sides go through the same
+        // normalization and the comparison is apples-to-apples.
         let rows = query(
             r#"
             UPDATE containers
             SET status = 'expired', expires_at = ?
             WHERE status = 'active'
-              AND datetime(last_active_at, '+' || idle_ttl_secs || ' seconds') < ?
+              AND datetime(last_active_at, '+' || idle_ttl_secs || ' seconds')
+                  < datetime(?)
             RETURNING id
             "#,
         )

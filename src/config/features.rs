@@ -459,6 +459,14 @@ pub struct ShellLimitsConfig {
     /// runtime substitutes the value at egress to the permitted hosts.
     #[serde(default)]
     pub allowed_domain_secrets: HashMap<String, AllowedDomainSecret>,
+    /// Maximum number of characters of stdout/stderr fed back to the
+    /// model per shell call. Output longer than this is head + tail
+    /// trimmed with a `... N chars truncated ...` marker so the model
+    /// still sees both ends. The full stream remains in the response
+    /// event log; operators can raise this for token-rich models or
+    /// lower it to bound context spend. Default 8000.
+    #[serde(default = "default_shell_max_output_chars")]
+    pub max_output_chars: usize,
 }
 
 impl Default for ShellLimitsConfig {
@@ -470,8 +478,13 @@ impl Default for ShellLimitsConfig {
             max_mem_limit_mb: None,
             allowed_egress_hosts: Vec::new(),
             allowed_domain_secrets: HashMap::new(),
+            max_output_chars: default_shell_max_output_chars(),
         }
     }
+}
+
+fn default_shell_max_output_chars() -> usize {
+    8_000
 }
 
 /// One operator-pinned secret the request may reference via

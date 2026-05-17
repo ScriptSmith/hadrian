@@ -8,10 +8,12 @@
 
 use axum::{
     Extension, Json,
-    extract::{Path, State},
-    http::StatusCode,
+    body::Body,
+    extract::{Path, Query, State},
+    http::{StatusCode, header},
+    response::IntoResponse,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
@@ -214,14 +216,58 @@ fn map_store_err(e: ResponsesStoreError) -> ApiError {
     }
 }
 
+/// Query parameters for `GET /v1/responses/{id}`. Mirrors OpenAI's
+/// retrieve-response spec: `stream` flips to SSE mode, `starting_after`
+/// resumes replay from a sequence number, `include` widens the response
+/// shape, and `limit` caps batch size in poll-replay loops.
+#[derive(Debug, Default, Deserialize)]
+pub struct RetrieveQuery {
+    /// When `true`, the response is streamed as Server-Sent Events
+    /// replaying the persisted event log instead of returning a static
+    /// JSON object. Matches OpenAI's `stream` field on the retrieve
+    /// endpoint so SDK clients can resume a dropped subscription.
+    #[serde(default)]
+    pub stream: Option<bool>,
+    /// Return events with `sequence_number > starting_after`. Clients
+    /// pass the highest sequence number they've already seen so a
+    /// reconnect resumes without duplicates. Only meaningful with
+    /// `stream=true`.
+    #[serde(default)]
+    pub starting_after: Option<i64>,
+    /// Soft cap on events returned per replay page. Default 200.
+    /// Only meaningful with `stream=true`.
+    #[serde(default)]
+    pub limit: Option<i64>,
+    /// Pass-through of OpenAI's `include` widening field. Currently
+    /// ignored — the persisted shape already returns echoed fields.
+    /// Accepted so SDK calls don't 400 on the extra param.
+    #[serde(default)]
+    pub include: Option<Vec<String>>,
+    /// Pass-through of OpenAI's `include_obfuscation` field. Accepted
+    /// for parity but Hadrian doesn't add padding bytes today.
+    #[serde(default)]
+    pub include_obfuscation: Option<bool>,
+}
+
 /// `GET /v1/responses/{response_id}` — retrieve a stored response.
+///
+/// When `?stream=true` is set, returns the persisted event log as an
+/// SSE stream (matching OpenAI's retrieve-with-stream behavior). The
+/// `starting_after` query parameter resumes replay from a specific
+/// sequence number so a client reconnecting after a disconnect picks
+/// up exactly where it stopped.
 #[cfg_attr(feature = "utoipa", utoipa::path(
     get,
     path = "/api/v1/responses/{response_id}",
     tag = "responses",
-    params(("response_id" = String, Path, description = "ID returned by POST /v1/responses")),
+    params(
+        ("response_id" = String, Path, description = "ID returned by POST /v1/responses"),
+        ("stream" = Option<bool>, Query, description = "Stream the event log as SSE"),
+        ("starting_after" = Option<i64>, Query, description = "Resume cursor (stream mode)"),
+        ("limit" = Option<i64>, Query, description = "Events per page (stream mode)"),
+    ),
     responses(
-        (status = 200, description = "The stored response object"),
+        (status = 200, description = "Stored response (JSON) or SSE replay when stream=true"),
         (status = 401, description = "Authentication required", body = crate::openapi::ErrorResponse),
         (status = 403, description = "Authorization denied", body = crate::openapi::ErrorResponse),
         (status = 404, description = "Response not found", body = crate::openapi::ErrorResponse),
@@ -234,15 +280,28 @@ pub async fn api_v1_responses_get(
     auth: Option<Extension<AuthenticatedRequest>>,
     authz: Option<Extension<AuthzContext>>,
     Path(response_id): Path<String>,
-) -> Result<Json<WireResponse>, ApiError> {
+    Query(query): Query<RetrieveQuery>,
+) -> Result<axum::response::Response, ApiError> {
     let store = resolve_store(&state)?;
     enforce_authz(authz.as_ref(), auth.as_ref(), "read").await?;
     let org_id = require_caller_org(auth.as_ref())?;
+
+    if query.stream.unwrap_or(false) {
+        return stream_response_events(
+            state.clone(),
+            response_id,
+            org_id,
+            query.starting_after,
+            query.limit,
+        )
+        .await;
+    }
+
     let record = store
         .get(&response_id, org_id)
         .await
         .map_err(map_store_err)?;
-    Ok(Json(record_to_wire(&record)))
+    Ok(Json(record_to_wire(&record)).into_response())
 }
 
 /// `POST /v1/responses/{response_id}/cancel` — cancel an in-progress
@@ -289,23 +348,7 @@ pub struct DeleteResponse {
 // Event log replay
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(serde::Deserialize)]
-pub struct EventsQuery {
-    /// Return events with `sequence_number > starting_after`. Clients
-    /// pass the highest `sequence_number` they've already seen so
-    /// reconnect resumes without duplicates.
-    #[serde(default)]
-    pub starting_after: Option<i64>,
-    /// Soft cap on the number of events returned per page. Useful for
-    /// non-streaming clients that want a single GET. Default 200.
-    #[serde(default)]
-    pub limit: Option<i64>,
-}
-
-/// `GET /v1/responses/{response_id}/events?starting_after=N` —
-/// poll-replay reconnect.
-///
-/// Streams the persisted event log as Server-Sent Events. While the
+/// Stream the persisted event log as Server-Sent Events. While the
 /// response is still in-progress the handler polls the DB every
 /// 250ms for new rows; once the row reaches a terminal status and the
 /// caller has caught up to `last_sequence_number`, the stream
@@ -314,33 +357,19 @@ pub struct EventsQuery {
 /// Each event is emitted with the OpenAI-style named SSE form
 /// (`event: <type>\ndata: <payload>\n\n`) so JS SDK callers see the
 /// typed events they expect.
-#[cfg_attr(feature = "utoipa", utoipa::path(
-    get,
-    path = "/api/v1/responses/{response_id}/events",
-    tag = "responses",
-    params(
-        ("response_id" = String, Path, description = "ID of the response"),
-        ("starting_after" = Option<i64>, Query, description = "Resume cursor"),
-        ("limit" = Option<i64>, Query, description = "Cap on events per page"),
-    ),
-    responses(
-        (status = 200, description = "SSE stream of response events"),
-        (status = 401, description = "Authentication required", body = crate::openapi::ErrorResponse),
-        (status = 403, description = "Authorization denied", body = crate::openapi::ErrorResponse),
-        (status = 404, description = "Response not found", body = crate::openapi::ErrorResponse),
-    ),
-    security(("api_key" = []))
-))]
-pub async fn api_v1_responses_events(
-    State(state): State<AppState>,
-    auth: Option<Extension<AuthenticatedRequest>>,
-    authz: Option<Extension<AuthzContext>>,
-    Path(response_id): Path<String>,
-    axum::extract::Query(query): axum::extract::Query<EventsQuery>,
+///
+/// Used by both `GET /v1/responses/{id}?stream=true` (the
+/// spec-conformant entry point) and any clients that supply the cursor
+/// query parameter.
+async fn stream_response_events(
+    state: AppState,
+    response_id: String,
+    org_id: Uuid,
+    starting_after: Option<i64>,
+    limit: Option<i64>,
 ) -> Result<axum::response::Response, ApiError> {
-    use axum::body::Body;
     use bytes::Bytes;
-    use http::{Response as HttpResponse, header};
+    use http::Response as HttpResponse;
 
     let store = resolve_store(&state)?;
     let Some(db) = state.db.as_ref().cloned() else {
@@ -351,17 +380,14 @@ pub async fn api_v1_responses_events(
         ));
     };
 
-    enforce_authz(authz.as_ref(), auth.as_ref(), "read").await?;
-    let org_id = require_caller_org(auth.as_ref())?;
-
     // Verify the response exists and belongs to the caller's org.
     let _record = store
         .get(&response_id, org_id)
         .await
         .map_err(map_store_err)?;
 
-    let starting_after = query.starting_after.unwrap_or(0).max(0);
-    let limit = query.limit.unwrap_or(200).clamp(1, 1000);
+    let starting_after = starting_after.unwrap_or(0).max(0);
+    let limit = limit.unwrap_or(200).clamp(1, 1000);
     let store_clone = state.responses_store.as_ref().cloned();
     let events_repo = db.response_events();
     let response_id_clone = response_id.clone();

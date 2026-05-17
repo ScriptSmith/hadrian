@@ -209,6 +209,10 @@ A background worker picks up the queued response, runs it through the same pipel
 foreground requests, and persists every SSE event so clients can resume the stream from any
 point — including reconnecting after the server restarts.
 
+Pass `?starting_after=N` alongside `?stream=true` to resume the SSE stream from a specific
+sequence number; events are emitted in OpenAI's named-SSE form (`event: <type>\ndata: <payload>`)
+so SDK clients pick up the typed events they expect.
+
 ## How it compares
 
 | Capability                          | Hadrian              | OpenAI Responses     | Anthropic           | Bedrock AgentCore  | Gemini             |

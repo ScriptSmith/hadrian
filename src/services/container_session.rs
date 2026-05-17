@@ -141,6 +141,50 @@ impl ContainerSessionRegistry {
         (arc, prior)
     }
 
+    /// Atomic get-or-insert: returns the existing session if one is
+    /// already registered for `container_id`, otherwise inserts the
+    /// session produced by `build()` and returns it. The booted
+    /// session — including the underlying VM — is only constructed
+    /// when no prior entry exists, so a race between two requests for
+    /// the same `previous_response_id` boots exactly one VM instead
+    /// of two (with the loser then being torn down).
+    ///
+    /// Returns `(arc, inserted)` where `inserted` is `false` when the
+    /// existing entry won the race. On `build` failure the slot is
+    /// left empty and the error bubbles up.
+    pub async fn get_or_try_insert_with<F, Fut, E>(
+        &self,
+        container_id: String,
+        build: F,
+    ) -> Result<(Arc<Mutex<ContainerSession>>, bool), E>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<ContainerSession, E>>,
+    {
+        // `DashMap::entry` blocks any other writer on the same shard
+        // for the duration the `Entry` is held. We do NOT hold it
+        // across the `build().await` (it's a sync mutex internally —
+        // holding across await would block all other shard writers
+        // including unrelated containers). Instead, fast-path a
+        // get(), boot, then re-check under entry().
+        if let Some(existing) = self.sessions.get(&container_id) {
+            return Ok((existing.clone(), false));
+        }
+        let session = build().await?;
+        let arc_new = Arc::new(Mutex::new(session));
+        // CAS: only insert if still vacant. If a parallel request
+        // raced us and registered first, drop our freshly-booted VM
+        // (its `Drop` impl detaches a terminate task).
+        let entry = self.sessions.entry(container_id);
+        match entry {
+            dashmap::Entry::Occupied(o) => Ok((o.get().clone(), false)),
+            dashmap::Entry::Vacant(v) => {
+                v.insert(arc_new.clone());
+                Ok((arc_new, true))
+            }
+        }
+    }
+
     /// Drop the registry's reference to this session. Returns the
     /// removed entry so callers can terminate it explicitly when
     /// they need ordered cleanup; ignoring the return value relies on

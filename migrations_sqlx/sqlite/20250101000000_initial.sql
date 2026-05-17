@@ -620,7 +620,11 @@ CREATE TABLE IF NOT EXISTS usage_records (
     tool_bytes_fetched INTEGER,
     tool_results_count INTEGER,
     -- Wall-clock runtime in seconds (only populated for shell tool records)
-    tool_runtime_seconds REAL
+    tool_runtime_seconds REAL,
+    -- Shell process exit code (only populated for shell tool records).
+    -- Kept separate from status_code (HTTP) so a shell that exits non-zero
+    -- inside a 200 response is observable in usage queries.
+    tool_exit_code INTEGER
 );
 
 -- SQLite doesn't support partial indexes; use regular indexes

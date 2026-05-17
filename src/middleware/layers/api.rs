@@ -978,6 +978,7 @@ pub async fn api_middleware(
                     tool_bytes_fetched: None,
                     tool_results_count: None,
                     tool_runtime_seconds: None,
+                    tool_exit_code: None,
                 });
             }
         }
@@ -1140,6 +1141,7 @@ fn track_usage_async(ctx: UsageTrackingContext<'_>) {
         tool_bytes_fetched: None,
         tool_results_count: None,
         tool_runtime_seconds: None,
+        tool_exit_code: None,
     };
 
     let is_success = response.status().is_success();

@@ -120,8 +120,9 @@ pub async fn execute_persisted_response(
     );
 
     // Reconstruct the payload. We force `stream = true` so the
-    // persister captures events; the client uses
-    // GET /v1/responses/{id}/events for live updates anyway.
+    // persister captures events; the client tails them via
+    // GET /v1/responses/{id}?stream=true (matching OpenAI's spec for
+    // resuming a Responses-API stream).
     let mut payload: CreateResponsesPayload =
         serde_json::from_value(record.request_payload.clone()).map_err(|e| {
             BackgroundExecuteError::BadPayload(format!("invalid request_payload: {e}"))
@@ -284,6 +285,53 @@ pub async fn execute_persisted_response(
         _ => None,
     };
 
+    // Build a `UsageLogEntry` so model-token usage from this
+    // background run lands in the per-principal usage ledger. Without
+    // this the row's `usage` field gets persisted but no
+    // `usage_records` row is written — which means cost reports and
+    // budget enforcement diverge from reality for background-mode
+    // workloads. Mirrors what `build_streaming_usage_entry` does for
+    // the foreground path, but sources principal fields from the
+    // persisted row instead of the live auth extension.
+    let usage_entry = crate::models::UsageLogEntry {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        api_key_id: record.api_key_id,
+        user_id: record.user_id,
+        org_id: Some(record.org_id),
+        project_id: record.project_id,
+        team_id: None,
+        service_account_id: record.service_account_id,
+        model: model_name.clone(),
+        provider: provider_name.clone(),
+        input_tokens: 0,
+        output_tokens: 0,
+        cost_microcents: None,
+        http_referer: None,
+        request_at: chrono::Utc::now(),
+        streamed: true,
+        cached_tokens: 0,
+        reasoning_tokens: 0,
+        finish_reason: None,
+        latency_ms: None,
+        cancelled: false,
+        status_code: None,
+        pricing_source: crate::pricing::CostPricingSource::None,
+        image_count: None,
+        audio_seconds: None,
+        character_count: None,
+        provider_source: None,
+        record_type: "model".to_string(),
+        tool_name: None,
+        tool_query: None,
+        tool_url: None,
+        tool_bytes_fetched: None,
+        tool_results_count: None,
+        tool_runtime_seconds: None,
+        tool_exit_code: None,
+    };
+
+    let provider_name_clone = provider_name.clone();
+    let model_name_clone = model_name.clone();
     let wrapped = apply_streaming_pipeline(
         &state,
         &payload,
@@ -308,6 +356,31 @@ pub async fn execute_persisted_response(
             cancel_rx,
         }),
     );
+
+    // Wrap the response with the usage-tracking stream so token deltas
+    // flow into `state.usage_buffer` exactly the way they do for
+    // foreground streaming. The wrap also injects calculated cost into
+    // the SSE chunks, but in background mode no client is reading them
+    // — the persister is the only downstream consumer, and it already
+    // captures the upstream's verbatim `usage` payload.
+    let wrapped =
+        crate::providers::inject_cost_into_response(crate::providers::CostInjectionParams {
+            response: wrapped,
+            provider: &provider_name_clone,
+            model: &model_name_clone,
+            pricing: &state.pricing,
+            db: state.db.as_ref(),
+            usage_entry: Some(usage_entry),
+            #[cfg(feature = "server")]
+            task_tracker: Some(&state.task_tracker),
+            #[cfg(feature = "server")]
+            usage_drain: Some(&state.usage_drain),
+            max_response_body_bytes: state.config.server.max_response_body_bytes,
+            streaming_idle_timeout_secs: state.config.server.streaming_idle_timeout_secs,
+            validation_config: &state.config.observability.response_validation,
+            response_type: crate::validation::ResponseType::ResponseStream,
+        })
+        .await;
 
     // Drain the body silently. The persister's internal spawned task
     // handles event log writes + the terminal row update.

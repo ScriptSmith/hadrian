@@ -1031,6 +1031,7 @@ pub async fn log_media_usage(params: MediaUsageParams<'_>) -> (Option<i64>, bool
             tool_bytes_fetched: None,
             tool_results_count: None,
             tool_runtime_seconds: None,
+            tool_exit_code: None,
         };
 
         let db = db_pool.clone();

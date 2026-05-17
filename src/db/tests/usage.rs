@@ -107,6 +107,7 @@ fn create_usage_entry(
         tool_bytes_fetched: None,
         tool_results_count: None,
         tool_runtime_seconds: None,
+        tool_exit_code: None,
     }
 }
 
@@ -150,6 +151,7 @@ fn create_usage_entry_with_referer(
         tool_bytes_fetched: None,
         tool_results_count: None,
         tool_runtime_seconds: None,
+        tool_exit_code: None,
     }
 }
 
@@ -193,6 +195,7 @@ fn create_usage_entry_at_time(
         tool_bytes_fetched: None,
         tool_results_count: None,
         tool_runtime_seconds: None,
+        tool_exit_code: None,
     }
 }
 
@@ -246,6 +249,7 @@ fn create_attributed_usage_entry(
         tool_bytes_fetched: None,
         tool_results_count: None,
         tool_runtime_seconds: None,
+        tool_exit_code: None,
     }
 }
 

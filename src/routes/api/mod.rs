@@ -857,10 +857,6 @@ pub(crate) fn api_v1_routes(limits: ApiBodyLimits) -> Router<AppState> {
             post(responses_lookup::api_v1_responses_cancel),
         )
         .route(
-            "/v1/responses/{response_id}/events",
-            get(responses_lookup::api_v1_responses_events),
-        )
-        .route(
             "/v1/containers/{container_id}",
             get(containers::api_v1_containers_get).delete(containers::api_v1_containers_delete),
         )

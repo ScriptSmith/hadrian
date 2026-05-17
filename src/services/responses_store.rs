@@ -43,6 +43,40 @@ pub type ResponsesStoreResult<T> = Result<T, ResponsesStoreError>;
 /// Cancellation signal for a single in-flight response. The streaming
 /// pipeline holds a `watch::Receiver<bool>` and polls it; the cancel
 /// route handler flips it via the matching `Sender`.
+///
+/// # Cross-replica cancel protocol
+///
+/// A single response can be created on replica A, executed on replica
+/// B (by the background worker after `claim_queued`), and cancelled
+/// on replica C (because the user retried the cancel POST against a
+/// different load-balancer target). The in-process `cancel_senders`
+/// map only knows about its local replica's executions, so the cancel
+/// has to flow through the database. The protocol is:
+///
+/// 1. Replica C's `cancel()` handler flips the in-process flag (no-op
+///    on C if the row isn't executing there) AND writes
+///    `status='cancelled'` to the DB.
+/// 2. On every replica, [`jobs::responses_cancel_poller`] periodically
+///    queries `WHERE status='cancelled' AND id IN (active set)` against
+///    the `responses` table and trips the matching local cancel sender.
+/// 3. On replica B (the executor), the cancel sender fires, the
+///    persister's `tokio::select!` on `cancel_rx.changed()` wins, the
+///    stream terminates, and a synthetic `response.cancelled` event is
+///    appended to the log so polling clients converge to the same view.
+///
+/// **Why a poller and not a notify/listen channel?** Hadrian deploys
+/// equally on SQLite (no LISTEN/NOTIFY) and Postgres; one batched
+/// query per cycle is one DB round-trip regardless of in-flight count
+/// and avoids per-execution polling tasks. The cancel latency floor is
+/// `[features.responses]` cleanup_interval bounded by `POLL_INTERVAL`
+/// in the poller job (currently 5s).
+///
+/// **What happens between the cancel and the poller tick?** The DB
+/// row already says `cancelled`; new `GET /v1/responses/{id}` calls
+/// see the terminal state immediately. The executor on replica B keeps
+/// streaming until the poller fires, at which point the persister
+/// truncates the stream and writes the synthetic terminal event. The
+/// row's `status` doesn't flip back to in_progress in the interim.
 pub type CancelSignal = watch::Receiver<bool>;
 
 /// Service for persisted Responses API records.

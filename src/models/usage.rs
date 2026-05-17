@@ -52,6 +52,11 @@ pub struct UsageLogRecord {
     pub tool_results_count: Option<i32>,
     /// Wall-clock runtime in seconds — only for shell tool records.
     pub tool_runtime_seconds: Option<f64>,
+    /// Process exit code — only for shell tool records. Distinct from
+    /// `status_code` (which is the HTTP status of the API request that
+    /// drove the tool); a shell can exit `0` while the wrapping request
+    /// returns 200, or exit `7` while the request still returns 200.
+    pub tool_exit_code: Option<i32>,
 }
 
 /// Usage log entry for a single API request.
@@ -137,6 +142,13 @@ pub struct UsageLogEntry {
     /// to populate `cost_microcents` for billing.
     #[serde(default)]
     pub tool_runtime_seconds: Option<f64>,
+    /// Process exit code for shell tool records. `None` when the
+    /// command never reached an `Exit` event (e.g. client disconnect
+    /// before the runtime signaled completion); a sentinel `-1` is
+    /// what we report to clients in `response.shell_call.completed`
+    /// for that case, but the usage record preserves the distinction.
+    #[serde(default)]
+    pub tool_exit_code: Option<i32>,
 }
 
 fn default_record_type() -> String {

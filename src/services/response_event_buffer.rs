@@ -92,7 +92,7 @@ impl ResponseEventBuffer {
     ///
     /// The persister uses this for the terminal event so the row's
     /// status update happens-after the terminal event commit. Without
-    /// this, `GET /v1/responses/{id}/events` readers can observe
+    /// this, `GET /v1/responses/{id}?stream=true` readers can observe
     /// `status=Completed` before the terminal event reaches the log.
     pub async fn insert_sync(&self, event: NewResponseEvent) -> Result<(), crate::db::DbError> {
         let response_id = event.response_id.clone();

@@ -320,6 +320,22 @@ impl ToolLoopRunner {
                     };
 
                     let is_final_iteration = iteration == max_iterations;
+                    // Build the continuation from the *original* payload
+                    // each iteration: tool `apply_to_continuation`
+                    // implementations append this iteration's
+                    // function-call outputs onto `payload.input`, so
+                    // reusing the previous iteration's mutated payload
+                    // would double-record prior outputs. Cloning is
+                    // therefore intentional and necessary — but only on
+                    // iterations where a continuation actually fires
+                    // (the early-`break` paths above skip this work).
+                    //
+                    // For requests with large `input` (uploaded files,
+                    // long instructions) the dominant cost here is the
+                    // `Vec<ResponsesInputItem>` clone inside `input`.
+                    // If that becomes hot in profiles, the next step is
+                    // to swap `CreateResponsesPayload.input` for an
+                    // `Arc<Vec<…>>` + copy-on-write on first append.
                     let mut continuation_payload = original_payload.clone();
                     for tool in &enabled_tools {
                         if let Some(results) = results_by_tool.get(tool.name()) {

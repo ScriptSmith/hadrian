@@ -213,14 +213,21 @@ fn host_matches(host: &str, pattern: &str) -> bool {
     if pattern == "*" {
         return true;
     }
+    // Normalize a trailing dot on the host — `example.com.` and
+    // `example.com` are the same FQDN and operators don't write the
+    // trailing form into allowlists. Cheap to strip; avoids a surprise
+    // miss when the model echoes a fully-qualified name back through
+    // curl or DNS tooling.
+    let host = host.trim_end_matches('.');
     if let Some(suffix) = pattern.strip_prefix("*.") {
         // `*.example.com` matches any subdomain (`a.example.com`,
         // `a.b.example.com`) but not the bare apex.
+        let suffix = suffix.trim_end_matches('.');
         return host.len() > suffix.len() + 1
             && host.ends_with(suffix)
             && host.as_bytes()[host.len() - suffix.len() - 1] == b'.';
     }
-    host.eq_ignore_ascii_case(pattern)
+    host.eq_ignore_ascii_case(pattern.trim_end_matches('.'))
 }
 
 /// Identity fields captured at request time for shell-tool usage
@@ -302,7 +309,7 @@ impl Default for ShellToolHint {
             network_summary: ShellNetworkSummary::Unknown,
             mem_limit_mb: None,
             command_timeout_secs: 300,
-            max_output_chars: MAX_OUTPUT_CHARS,
+            max_output_chars: DEFAULT_MAX_OUTPUT_CHARS,
             mounted_skill_ids: Vec::new(),
         }
     }
@@ -625,32 +632,215 @@ fn format_file_created(item_id: &str, output_index: usize, file: &ContainerFileR
     }))
 }
 
+/// Emit a structured `response.output_item.done` event carrying a
+/// `shell_call_output` item per the OpenAI Responses-API output-item
+/// shape. Mirrors what `passthrough_openai` upstreams emit natively
+/// so non-passthrough modes (`microsandbox`/`opensandbox`) reach the
+/// same wire contract, in particular surfacing the Hadrian-extension
+/// `output_files` array clients use to download captured artifacts.
+///
+/// The standard `function_call_output` continuation item still flows
+/// through `apply_to_continuation` for the model's next-turn input —
+/// this event is purely additive on the client-facing SSE stream.
+fn format_shell_call_output_item(
+    item_id: &str,
+    output_index: usize,
+    command: &str,
+    exit_code: i32,
+    stdout: &str,
+    stderr: &str,
+    files: &[ContainerFileRef],
+) -> Bytes {
+    // status: `completed` when the process exited; `failed` when we
+    // never observed an Exit event or had to synthesize `-1`/`124`.
+    let status_str = if exit_code == 0 {
+        "completed"
+    } else {
+        "failed"
+    };
+    let item = serde_json::json!({
+        "type": "shell_call_output",
+        "id": item_id,
+        "command": command,
+        "exit_code": exit_code,
+        "status": status_str,
+        "stdout": stdout,
+        "stderr": stderr,
+        "output_files": files,
+    });
+    sse_event(serde_json::json!({
+        "type": "response.output_item.done",
+        "output_index": output_index,
+        "item": item,
+    }))
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Output trimming for continuation payload
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Max characters of stdout/stderr we feed back to the model per call,
-/// preserving head + tail like OpenAI's `output_text_truncation`.
-const MAX_OUTPUT_CHARS: usize = 8_000;
+/// Default operator cap for `[features.server_tools.shell_limits].max_output_chars`.
+/// Used as the fallback the `ShellToolHint::default()` description embeds; the
+/// configured value flows in via [`ShellExecutor`] at execute time.
+pub const DEFAULT_MAX_OUTPUT_CHARS: usize = 8_000;
 
-fn trim_output(s: String) -> String {
-    if s.len() <= MAX_OUTPUT_CHARS {
-        return s;
+/// Streaming UTF-8 decoder that buffers bytes split across chunk
+/// boundaries instead of emitting a `U+FFFD` per partial sequence.
+/// Callers feed in raw stdout/stderr bytes via [`Self::push`] and read
+/// out fully-decoded strings; whatever's left over (≤ 3 trailing bytes
+/// of an incomplete code point) is carried into the next call.
+struct Utf8ChunkDecoder {
+    /// Bytes that belong to an in-progress UTF-8 sequence at the tail
+    /// of the previous push. Always < 4 bytes.
+    leftover: Vec<u8>,
+}
+
+impl Utf8ChunkDecoder {
+    fn new() -> Self {
+        Self {
+            leftover: Vec::with_capacity(4),
+        }
     }
-    let half = MAX_OUTPUT_CHARS / 2;
-    let head: String = s.chars().take(half).collect();
-    let tail: String = s
-        .chars()
-        .rev()
-        .take(half)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect();
-    format!(
-        "{head}\n... [{} chars truncated] ...\n{tail}",
-        s.len() - MAX_OUTPUT_CHARS
-    )
+
+    /// Append `bytes` to the pending buffer and return everything we
+    /// can prove is a complete UTF-8 sequence. Invalid sequences are
+    /// turned into replacement chars (consistent with
+    /// `String::from_utf8_lossy`); the very last possibly-partial
+    /// sequence is held back for the next call.
+    fn push(&mut self, bytes: &[u8]) -> String {
+        if bytes.is_empty() && self.leftover.is_empty() {
+            return String::new();
+        }
+        let combined: Vec<u8> = if self.leftover.is_empty() {
+            bytes.to_vec()
+        } else {
+            let mut v = std::mem::take(&mut self.leftover);
+            v.extend_from_slice(bytes);
+            v
+        };
+
+        // Find the largest prefix of `combined` that's complete. A
+        // trailing UTF-8 sequence is incomplete if its leading byte
+        // promises more continuation bytes than we've seen.
+        let mut boundary = combined.len();
+        let max_lookback = boundary.min(3);
+        for back in 1..=max_lookback {
+            let i = boundary - back;
+            let b = combined[i];
+            if b < 0x80 {
+                break; // ASCII — nothing partial above this
+            }
+            // Continuation byte (10xxxxxx): keep scanning back.
+            if b & 0b1100_0000 == 0b1000_0000 {
+                continue;
+            }
+            // Leading byte: figure out how many bytes the sequence
+            // should occupy and see whether we have them all.
+            let needed = if b & 0b1110_0000 == 0b1100_0000 {
+                2
+            } else if b & 0b1111_0000 == 0b1110_0000 {
+                3
+            } else if b & 0b1111_1000 == 0b1111_0000 {
+                4
+            } else {
+                // Invalid leading byte — let the lossy decoder mark
+                // it `U+FFFD` rather than holding back forever.
+                break;
+            };
+            if combined.len() - i < needed {
+                boundary = i;
+            }
+            break;
+        }
+
+        self.leftover.clear();
+        if boundary < combined.len() {
+            self.leftover.extend_from_slice(&combined[boundary..]);
+        }
+        String::from_utf8_lossy(&combined[..boundary]).into_owned()
+    }
+
+    /// Flush whatever's left, treating any straggling partial sequence
+    /// as malformed (renders as `U+FFFD`).
+    fn flush(&mut self) -> String {
+        if self.leftover.is_empty() {
+            return String::new();
+        }
+        let s = String::from_utf8_lossy(&self.leftover).into_owned();
+        self.leftover.clear();
+        s
+    }
+}
+
+/// Bounded buffer that head + tail trims as bytes arrive so a runaway
+/// stdout doesn't pin gigabytes of memory before the post-exec trim
+/// runs. Total visible characters are capped at `max_chars`: the first
+/// `max_chars / 2` chars land in `head`, the last `max_chars / 2` chars
+/// in a rotating `tail` ring, and everything in between is counted but
+/// discarded.
+///
+/// Final rendering via [`Self::into_trimmed`] emits `head` + a
+/// `... N chars truncated ...` marker + `tail` when the stream
+/// overflowed `max_chars`; otherwise the captured prefix is returned
+/// verbatim. Matches the contract the function-mode shell tool
+/// description embeds ("truncated past {N} chars").
+struct BoundedHeadTail {
+    head: String,
+    head_chars: usize,
+    /// Ring of the most recent tail chars sized at `half`. Below the
+    /// head fill we accumulate into `head` only.
+    tail: std::collections::VecDeque<char>,
+    /// Total chars seen (used to compute the truncation count and
+    /// avoid mixing bytes and chars).
+    total_chars: usize,
+    /// Per-side cap. Head takes the first `half` chars, tail rotates
+    /// the most recent `half` chars after that.
+    half: usize,
+    max_chars: usize,
+}
+
+impl BoundedHeadTail {
+    fn new(max_chars: usize) -> Self {
+        let half = max_chars / 2;
+        Self {
+            head: String::with_capacity(half.min(8 * 1024)),
+            head_chars: 0,
+            tail: std::collections::VecDeque::new(),
+            total_chars: 0,
+            half,
+            max_chars,
+        }
+    }
+
+    fn push_str(&mut self, s: &str) {
+        for c in s.chars() {
+            self.total_chars += 1;
+            if self.head_chars < self.half {
+                self.head.push(c);
+                self.head_chars += 1;
+                continue;
+            }
+            // Past the head fill: rotate into a `half`-sized ring.
+            if self.tail.len() == self.half {
+                self.tail.pop_front();
+            }
+            self.tail.push_back(c);
+        }
+    }
+
+    fn into_trimmed(self) -> String {
+        if self.total_chars <= self.max_chars {
+            // Head + tail combined still fit under the cap; just glue
+            // them (no truncation marker).
+            let head = self.head;
+            let tail: String = self.tail.into_iter().collect();
+            return format!("{head}{tail}");
+        }
+        let head = self.head;
+        let tail: String = self.tail.into_iter().collect();
+        let dropped = self.total_chars - self.max_chars;
+        format!("{head}\n... [{dropped} chars truncated] ...\n{tail}")
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -869,6 +1059,7 @@ impl ServerExecutedTool for ShellExecutor {
         let command_for_task = command.clone();
         let exec_timeout = Duration::from_secs(self.limits.command_timeout_secs.max(1));
         let default_cpu = self.limits.default_cpu_limit;
+        let max_output_chars = self.limits.max_output_chars.max(64);
         // Per-request override (already intersected with operator's
         // limits at request-acceptance time) wins; fall back to the
         // operator default. `egress_policy` is taken from the resolved
@@ -884,58 +1075,122 @@ impl ServerExecutedTool for ShellExecutor {
             // VM and register it. Subsequent calls within this
             // response read the cached `Arc<Mutex<ContainerSession>>`
             // without touching the registry.
+            //
+            // When `container_id_hint` is set, the get-or-insert path
+            // is atomic via `ContainerSessionRegistry::get_or_try_insert_with`
+            // so two concurrent requests racing on the same hint boot
+            // exactly one VM rather than booting two and terminating
+            // the loser mid-exec.
             let session_arc: Arc<Mutex<ContainerSession>> = {
                 let mut handle_slot = session_handle_slot.lock().await;
                 if let Some(existing) = handle_slot.as_ref() {
                     existing.clone()
                 } else {
-                    // First-call path. Try the registry under the
-                    // requested id; if missing, boot.
-                    let resolved: Arc<Mutex<ContainerSession>> = match container_id_hint
-                        .as_deref()
-                        .and_then(|cid| registry.get(cid))
+                    let spec_template = || SessionSpec {
+                        mounted_skills: mounted_skills.clone(),
+                        cpu_limit: default_cpu,
+                        mem_limit_bytes: resolved_env.mem_limit_bytes,
+                        egress_policy: resolved_env.egress_policy.clone(),
+                        ..SessionSpec::default()
+                    };
+
+                    // Async boot helper kept inline so it can close
+                    // over `runtime`, `containers_config`, etc.
+                    let runtime_for_boot = runtime.clone();
+                    let runtime_label_for_boot = runtime_label;
+                    let containers_config_for_boot = containers_config.clone();
+                    let persistence_for_boot = persistence.clone();
+                    let hint_for_boot = container_id_hint.clone();
+
+                    let boot_session = move || async move {
+                        let spec = spec_template();
+                        match (hint_for_boot, persistence_for_boot.clone()) {
+                            (Some(cid), Some(p)) => {
+                                ContainerSession::start_attached(
+                                    cid,
+                                    runtime_for_boot,
+                                    runtime_label_for_boot,
+                                    spec,
+                                    containers_config_for_boot,
+                                    p,
+                                )
+                                .await
+                            }
+                            _ => {
+                                ContainerSession::start_new(
+                                    runtime_for_boot,
+                                    runtime_label_for_boot,
+                                    spec,
+                                    containers_config_for_boot,
+                                    persistence_for_boot,
+                                )
+                                .await
+                            }
+                        }
+                    };
+
+                    let resolved: Arc<Mutex<ContainerSession>> = match container_id_hint.as_deref()
                     {
-                        Some(cached) => cached,
-                        None => {
-                            let spec = SessionSpec {
-                                mounted_skills,
-                                cpu_limit: default_cpu,
-                                mem_limit_bytes: resolved_env.mem_limit_bytes,
-                                egress_policy: resolved_env.egress_policy,
-                                ..SessionSpec::default()
-                            };
-                            let boot_result = match (container_id_hint.clone(), persistence.clone())
+                        Some(hint) => {
+                            // Atomic get-or-create under the hint id.
+                            // The registry's CAS guarantees at most one
+                            // VM gets booted across racing requests.
+                            match registry
+                                .get_or_try_insert_with(hint.to_string(), boot_session)
+                                .await
                             {
-                                (Some(cid), Some(p)) => {
-                                    ContainerSession::start_attached(
-                                        cid,
-                                        runtime.clone(),
-                                        runtime_label,
-                                        spec,
-                                        containers_config.clone(),
-                                        p,
-                                    )
-                                    .await
+                                Ok((arc, inserted)) => {
+                                    debug!(
+                                        stage = "container_session_resolved",
+                                        call_id = %id_for_task,
+                                        container_id = %hint,
+                                        booted = inserted,
+                                        "Resolved container session via registry CAS"
+                                    );
+                                    arc
                                 }
-                                _ => {
-                                    ContainerSession::start_new(
-                                        runtime.clone(),
-                                        runtime_label,
-                                        spec,
-                                        containers_config.clone(),
-                                        persistence.clone(),
-                                    )
-                                    .await
+                                Err(RuntimeError::Passthrough) => {
+                                    warn!(
+                                        stage = "passthrough_invoked",
+                                        call_id = %id_for_task,
+                                        "Passthrough runtime received an execute() call; \
+                                         this indicates a misconfiguration in chat.rs registration"
+                                    );
+                                    let _ =
+                                        event_tx.send(format_completed(&id_for_task, 0, -1)).await;
+                                    let _ = result_tx.send(Err(ToolError::ExecutionFailed(
+                                        "shell runtime is configured for passthrough but \
+                                         executor was invoked"
+                                            .into(),
+                                    )));
+                                    return;
                                 }
-                            };
-                            let session = match boot_result {
+                                Err(e) => {
+                                    error!(
+                                        stage = "session_start_failed",
+                                        call_id = %id_for_task,
+                                        error = %e,
+                                        "Failed to start shell session"
+                                    );
+                                    let _ =
+                                        event_tx.send(format_completed(&id_for_task, 0, -1)).await;
+                                    let _ = result_tx
+                                        .send(Err(ToolError::ExecutionFailed(e.to_string())));
+                                    return;
+                                }
+                            }
+                        }
+                        None => {
+                            // No hint: each request boots its own
+                            // fresh container. We still register so
+                            // subsequent chains can reattach.
+                            let session = match boot_session().await {
                                 Ok(s) => {
                                     debug!(
                                         stage = "container_session_started",
                                         call_id = %id_for_task,
                                         container_id = %s.container_id,
                                         file_io = s.file_io_enabled(),
-                                        reattached = container_id_hint.is_some(),
                                         "Started persistent container session"
                                     );
                                     s
@@ -971,21 +1226,12 @@ impl ServerExecutedTool for ShellExecutor {
                                 }
                             };
                             let cid = session.container_id.clone();
-                            let (arc, displaced) = registry.insert(cid, session);
-                            if let Some(prev) = displaced {
-                                warn!(
-                                    stage = "container_registry_race",
-                                    call_id = %id_for_task,
-                                    "Two concurrent requests booted a VM under the same \
-                                     container_id; the displaced session will be terminated \
-                                     when its Arc is dropped"
-                                );
-                                // Drop the displaced Arc explicitly so
-                                // any in-flight readers finish, then
-                                // its `ContainerSession::drop`
-                                // detaches the terminate task.
-                                drop(prev);
-                            }
+                            let (arc, _displaced) = registry.insert(cid, session);
+                            // No `container_id_hint` ⇒ the id we just
+                            // picked is fresh, so a `displaced` here
+                            // would only happen against an unrelated
+                            // session under the same brand-new UUID —
+                            // statistically impossible (32 hex chars).
                             arc
                         }
                     };
@@ -1029,8 +1275,13 @@ impl ServerExecutedTool for ShellExecutor {
                         // assistant message picks them up in
                         // annotations, even if the shell command
                         // itself produces no further output.
-                        let mut guard =
-                            captured_files.lock().expect("captured_files lock poisoned");
+                        // Poison recovery: see `transform_event`; the
+                        // map contents are still consistent after a
+                        // panic in another holder.
+                        let mut guard = match captured_files.lock() {
+                            Ok(g) => g,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
                         for r in refs {
                             guard.insert(r.path.clone(), r);
                         }
@@ -1079,9 +1330,20 @@ impl ServerExecutedTool for ShellExecutor {
             //
             // This catches disconnect even for commands that produce no
             // output, which the previous send-error-only check missed.
-            let mut stdout_buf = String::new();
-            let mut stderr_buf = String::new();
-            let mut final_exit: i32 = 0;
+            //
+            // Output handling: we feed bytes through a `Utf8ChunkDecoder`
+            // so multi-byte sequences split across stdout chunks don't
+            // emit a `U+FFFD` per chunk boundary, and into a
+            // `BoundedHeadTail` so an `echo "$(head -c 1G /dev/urandom)"`
+            // can't pin gigabytes of memory before the post-exec trim
+            // runs. The SSE chunk is still emitted from the original
+            // bytes so observers downstream see the raw stream.
+            let max_chars = max_output_chars;
+            let mut stdout_decoder = Utf8ChunkDecoder::new();
+            let mut stderr_decoder = Utf8ChunkDecoder::new();
+            let mut stdout_buf = BoundedHeadTail::new(max_chars);
+            let mut stderr_buf = BoundedHeadTail::new(max_chars);
+            let mut final_exit: Option<i32> = None;
             let mut output = exec.handle.output;
             let mut client_disconnected = false;
             loop {
@@ -1099,19 +1361,25 @@ impl ServerExecutedTool for ShellExecutor {
                         let Some(ev) = maybe_ev else { break };
                         let send_result = match ev {
                             ExecEvent::Stdout(bytes) => {
-                                stdout_buf.push_str(&String::from_utf8_lossy(&bytes));
+                                let decoded = stdout_decoder.push(&bytes);
+                                if !decoded.is_empty() {
+                                    stdout_buf.push_str(&decoded);
+                                }
                                 event_tx
                                     .send(format_output_chunk(&id_for_task, 0, "stdout", &bytes))
                                     .await
                             }
                             ExecEvent::Stderr(bytes) => {
-                                stderr_buf.push_str(&String::from_utf8_lossy(&bytes));
+                                let decoded = stderr_decoder.push(&bytes);
+                                if !decoded.is_empty() {
+                                    stderr_buf.push_str(&decoded);
+                                }
                                 event_tx
                                     .send(format_output_chunk(&id_for_task, 0, "stderr", &bytes))
                                     .await
                             }
                             ExecEvent::Exit { code, .. } => {
-                                final_exit = code;
+                                final_exit = Some(code);
                                 Ok(())
                             }
                         };
@@ -1126,6 +1394,16 @@ impl ServerExecutedTool for ShellExecutor {
                         }
                     }
                 }
+            }
+            // Flush any straggling bytes from a multi-byte sequence
+            // that wasn't completed before the runtime closed the stream.
+            let stdout_tail = stdout_decoder.flush();
+            if !stdout_tail.is_empty() {
+                stdout_buf.push_str(&stdout_tail);
+            }
+            let stderr_tail = stderr_decoder.flush();
+            if !stderr_tail.is_empty() {
+                stderr_buf.push_str(&stderr_tail);
             }
 
             // Snapshot /mnt/data to detect any files the command
@@ -1154,7 +1432,10 @@ impl ServerExecutedTool for ShellExecutor {
             // and deletions consistently with what the model sees).
             let all_tracked = session.list_captured().await;
             {
-                let mut guard = captured_files.lock().expect("captured_files lock poisoned");
+                let mut guard = match captured_files.lock() {
+                    Ok(g) => g,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
                 guard.clear();
                 for r in all_tracked {
                     guard.insert(r.path.clone(), r);
@@ -1174,6 +1455,16 @@ impl ServerExecutedTool for ShellExecutor {
             // Push the per-principal usage record. We do this on every
             // exit path (completion + disconnect) so the principal is
             // billed for what they consumed.
+            // Resolve the exit code for downstream reporting. `final_exit
+            // == None` means the runtime stream closed without an `Exit`
+            // event — surface that as `-1` to clients and metrics (the
+            // sentinel the existing `record_shell_execution` and
+            // `response.shell_call.completed` already use for error
+            // exits) but preserve `None` on the usage row so a later
+            // audit can tell "process exited 0" from "process never
+            // reported an exit."
+            let exit_for_report = final_exit.unwrap_or(-1);
+
             #[cfg(feature = "concurrency")]
             if let Some(ref buf) = usage_buffer {
                 buf.push(UsageLogEntry {
@@ -1195,10 +1486,10 @@ impl ServerExecutedTool for ShellExecutor {
                     cached_tokens: 0,
                     reasoning_tokens: 0,
                     finish_reason: Some(
-                        if client_disconnected {
-                            "client_disconnected"
-                        } else {
-                            "completed"
+                        match (client_disconnected, final_exit) {
+                            (true, _) => "client_disconnected",
+                            (false, None) => "no_exit_event",
+                            (false, Some(_)) => "completed",
                         }
                         .to_string(),
                     ),
@@ -1217,6 +1508,7 @@ impl ServerExecutedTool for ShellExecutor {
                     tool_bytes_fetched: None,
                     tool_results_count: None,
                     tool_runtime_seconds: Some(duration_secs),
+                    tool_exit_code: final_exit,
                 });
             }
             #[cfg(not(feature = "concurrency"))]
@@ -1225,7 +1517,7 @@ impl ServerExecutedTool for ShellExecutor {
             if client_disconnected {
                 crate::observability::metrics::record_shell_execution(
                     duration_secs,
-                    final_exit,
+                    exit_for_report,
                     "client_disconnected",
                     runtime_label,
                     cost_microcents,
@@ -1236,12 +1528,42 @@ impl ServerExecutedTool for ShellExecutor {
             }
 
             let _ = event_tx
-                .send(format_completed(&id_for_task, 0, final_exit))
+                .send(format_completed(&id_for_task, 0, exit_for_report))
                 .await;
+
+            // Emit the structured `shell_call_output` output item with
+            // the Hadrian-extension `output_files` array. Mirrors the
+            // shape OpenAI's hosted shell tool produces so clients
+            // built against the Responses-API spec get the same item
+            // type regardless of which runtime executed the call.
+            // Snapshot the trimmed stdout/stderr for this event — we
+            // must build it before the buffers are moved into the
+            // continuation text below.
+            // We can't read `stdout_buf` / `stderr_buf` twice (the
+            // `into_trimmed` method consumes them), so swap them out
+            // into local vars first, render the output item, then use
+            // the rendered strings for the continuation text too.
+            let stdout_render =
+                std::mem::replace(&mut stdout_buf, BoundedHeadTail::new(max_chars)).into_trimmed();
+            let stderr_render =
+                std::mem::replace(&mut stderr_buf, BoundedHeadTail::new(max_chars)).into_trimmed();
+            let _ = event_tx
+                .send(format_shell_call_output_item(
+                    &id_for_task,
+                    0,
+                    &command_for_task,
+                    exit_for_report,
+                    &stdout_render,
+                    &stderr_render,
+                    &new_files,
+                ))
+                .await;
+
             info!(
                 stage = "shell_completed",
                 call_id = %id_for_task,
-                exit_code = final_exit,
+                exit_code = exit_for_report,
+                exit_observed = final_exit.is_some(),
                 duration_ms = (duration_secs * 1000.0) as u64,
                 cost_microcents,
                 runtime = runtime_label,
@@ -1249,8 +1571,12 @@ impl ServerExecutedTool for ShellExecutor {
             );
             crate::observability::metrics::record_shell_execution(
                 duration_secs,
-                final_exit,
-                "completed",
+                exit_for_report,
+                if final_exit.is_some() {
+                    "completed"
+                } else {
+                    "no_exit_event"
+                },
                 runtime_label,
                 cost_microcents,
             );
@@ -1271,10 +1597,7 @@ impl ServerExecutedTool for ShellExecutor {
             };
             let combined = format!(
                 "exit_code: {}\nstdout:\n{}\nstderr:\n{}{}",
-                final_exit,
-                trim_output(stdout_buf),
-                trim_output(stderr_buf),
-                files_section,
+                exit_for_report, stdout_render, stderr_render, files_section,
             );
 
             let cont_item = ResponsesInputItem::FunctionCallOutput(FunctionCallOutput {
@@ -1678,6 +2001,15 @@ mod tests {
     }
 
     #[test]
+    fn host_match_normalizes_trailing_dot() {
+        // FQDN form (RFC 1035) with explicit root-domain dot.
+        assert!(host_matches("api.openai.com.", "api.openai.com"));
+        assert!(host_matches("api.openai.com", "api.openai.com."));
+        assert!(host_matches("a.example.com.", "*.example.com"));
+        assert!(host_matches("a.example.com", "*.example.com."));
+    }
+
+    #[test]
     fn parses_function_call_arguments() {
         let v = serde_json::json!({
             "type": "function_call",
@@ -1764,12 +2096,47 @@ mod tests {
     }
 
     #[test]
-    fn trim_output_preserves_head_and_tail() {
-        let big = "a".repeat(MAX_OUTPUT_CHARS + 100);
-        let trimmed = trim_output(big);
-        assert!(trimmed.contains("chars truncated"));
-        assert!(trimmed.starts_with("aaa"));
-        assert!(trimmed.ends_with("aaa"));
+    fn utf8_chunk_decoder_buffers_partial_sequences() {
+        let mut dec = Utf8ChunkDecoder::new();
+        // "é" is 0xC3 0xA9 in UTF-8. Feed the lead byte alone — should
+        // emit nothing yet and hold the byte for the next push.
+        assert_eq!(dec.push(&[0xC3]), "");
+        // Now feed the continuation byte — should emit the full char.
+        assert_eq!(dec.push(&[0xA9]), "é");
+        // Mixed: ASCII then a partial sequence at the tail.
+        assert_eq!(dec.push(b"abc\xC3"), "abc");
+        assert_eq!(dec.push(&[0xA9]), "é");
+    }
+
+    #[test]
+    fn utf8_chunk_decoder_handles_three_and_four_byte_sequences() {
+        let mut dec = Utf8ChunkDecoder::new();
+        // Snowman: 0xE2 0x98 0x83 (3 bytes).
+        assert_eq!(dec.push(&[0xE2, 0x98]), "");
+        assert_eq!(dec.push(&[0x83]), "☃");
+        // 4-byte: 𝄞 = 0xF0 0x9D 0x84 0x9E.
+        assert_eq!(dec.push(&[0xF0, 0x9D, 0x84]), "");
+        assert_eq!(dec.push(&[0x9E]), "𝄞");
+    }
+
+    #[test]
+    fn bounded_head_tail_under_cap_passes_through() {
+        let mut b = BoundedHeadTail::new(20);
+        b.push_str("hello world");
+        assert_eq!(b.into_trimmed(), "hello world");
+    }
+
+    #[test]
+    fn bounded_head_tail_emits_truncation_marker() {
+        let mut b = BoundedHeadTail::new(10);
+        // 5 head + 5 tail = 10 kept; the rest is the truncated middle.
+        b.push_str("AAAAA");
+        b.push_str("BBBBBBBBBB");
+        b.push_str("CCCCC");
+        let out = b.into_trimmed();
+        assert!(out.contains("chars truncated"), "got: {out}");
+        assert!(out.starts_with("AAAAA"));
+        assert!(out.ends_with("CCCCC"));
     }
 
     fn sample_file(file_id: &str, filename: &str, path: &str) -> ContainerFileRef {
