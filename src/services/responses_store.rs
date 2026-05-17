@@ -156,6 +156,13 @@ impl ResponsesStore {
     /// `org_id` returns `NotFound` rather than writing into someone
     /// else's row. Removes the cancellation sender when the response
     /// enters a terminal state.
+    ///
+    /// Webhook firing is gated on the *first* terminal transition:
+    /// the prior status is read before patching, and the webhook only
+    /// enqueues when `!was_terminal && now_terminal`. Without that
+    /// check, a cancel() race with the persister (both patch
+    /// status=Cancelled) or a no-op patch on an already-terminal row
+    /// would fire the webhook twice.
     pub async fn update_within_org(
         &self,
         id: &str,
@@ -170,6 +177,17 @@ impl ResponsesStore {
         {
             patch.retention_expires_at = Some(self.retention_expires_at(Utc::now()));
         }
+        // Read the prior status only when a webhook is configured —
+        // otherwise the answer doesn't matter and we can save the
+        // round-trip.
+        let was_terminal = if self.webhook.is_some() {
+            self.repo
+                .get_by_id_and_org(id, org_id)
+                .await?
+                .is_some_and(|r| r.status.is_terminal())
+        } else {
+            false
+        };
         let record = self
             .repo
             .update_within_org(id, org_id, patch)
@@ -177,7 +195,7 @@ impl ResponsesStore {
             .ok_or(ResponsesStoreError::NotFound)?;
         if record.status.is_terminal() {
             self.cancel_senders.lock().await.remove(id);
-            if let Some(ref webhook) = self.webhook {
+            if !was_terminal && let Some(ref webhook) = self.webhook {
                 webhook.enqueue(record.id.clone(), record.status, record.background);
             }
         }
@@ -206,11 +224,16 @@ impl ResponsesStore {
     /// Trip the cancel signal AND mark the row cancelled.
     ///
     /// Per OpenAI's spec, cancel only succeeds when `background=true`.
-    /// Returns the updated record.
+    /// Idempotent for already-terminal rows: returns the existing
+    /// record without re-patching (which would otherwise churn
+    /// completed_at and risk a stray webhook fire).
     pub async fn cancel(&self, id: &str, org_id: Uuid) -> ResponsesStoreResult<ResponseRecord> {
         let record = self.get(id, org_id).await?;
         if !record.background {
             return Err(ResponsesStoreError::NotBackground);
+        }
+        if record.status.is_terminal() {
+            return Ok(record);
         }
         // Trip the in-process flag first so any in-flight stream sees
         // it before we update the DB.

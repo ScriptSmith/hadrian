@@ -1315,15 +1315,14 @@ pub async fn api_v1_responses(
                 model: model_name.clone(),
                 provider: Some(provider_name.clone()),
                 created_at: now,
-                // FIXME(skill-leak): `payload.instructions` carries
-                // skill SKILL.md content that was inlined by
-                // `resolve_and_inject_skills` upstream. When retrieve
-                // echoes `instructions` back to the caller, any
-                // operator-private skill content reaches anyone with
-                // GET access to this response inside the same org. If
-                // skills can ever contain content that shouldn't be
-                // visible to regular users, persist the original
-                // payload references and resolve at execute time.
+                // Background mode persists the user's original payload
+                // verbatim — `resolve_and_inject_skills` hasn't run on
+                // this code path (it short-circuits earlier than the
+                // skill-resolution block below), so `instructions`
+                // does not contain inlined SKILL.md content. The
+                // background worker resolves skills locally at
+                // execute time so the row stays free of operator-
+                // private skill content.
                 request_payload: serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null),
                 retention_expires_at: store.retention_expires_at(now),
             };
@@ -1371,6 +1370,13 @@ pub async fn api_v1_responses(
         &state,
         auth.as_ref().map(|e| &e.0),
     );
+    // Snapshot the caller's original `instructions` before skill
+    // resolution rewrites them with inlined SKILL.md content. The
+    // foreground persistence block below restores this snapshot when
+    // building `request_payload`, so retrieve echoes the user's
+    // original input rather than leaking operator-private skill
+    // content to anyone with GET access in the same org.
+    let original_instructions = payload.instructions.clone();
     let mounted_skills = crate::services::responses_pipeline::resolve_and_inject_skills(
         &state,
         &mut payload,
@@ -1679,15 +1685,17 @@ pub async fn api_v1_responses(
                 model: model_name.clone(),
                 provider: Some(provider_name.clone()),
                 created_at: now,
-                // FIXME(skill-leak): `payload.instructions` already
-                // carries inlined SKILL.md content from the skill
-                // resolution step. Retrieve echoes `instructions`
-                // back, so operator-private skill content reaches any
-                // retriever within the same org. If skills can ever
-                // hold content not appropriate for the request's
-                // caller, persist references and resolve at execute
-                // time.
-                request_payload: serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null),
+                // Persist the caller's original instructions, not the
+                // skill-rewritten ones, so retrieve doesn't leak
+                // operator-private SKILL.md content. The execution
+                // pipeline keeps using `payload` with the rewritten
+                // instructions — only the persisted snapshot is
+                // restored.
+                request_payload: {
+                    let mut snapshot = payload.clone();
+                    snapshot.instructions = original_instructions.clone();
+                    serde_json::to_value(&snapshot).unwrap_or(serde_json::Value::Null)
+                },
                 retention_expires_at: store.retention_expires_at(now),
             };
             match store.create(new_row).await {

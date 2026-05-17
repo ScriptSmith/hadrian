@@ -25,7 +25,7 @@ use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::Serialize;
 use tokio::sync::{Semaphore, mpsc};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     config::ResponsesWebhookConfig,
@@ -65,6 +65,13 @@ pub struct WebhookEventData {
 #[derive(Clone)]
 pub struct ResponsesWebhookDispatcher {
     tx: mpsc::Sender<WebhookEvent>,
+    /// Held on the dispatcher (not just the drainer) so `enqueue` can
+    /// divert events to the DLQ when the bounded channel is full,
+    /// instead of silently dropping them.
+    dlq: Option<Arc<dyn DeadLetterQueue>>,
+    /// Webhook target URL — copied here so the overflow path can
+    /// label DLQ entries without reading the full config.
+    target_url: String,
 }
 
 impl ResponsesWebhookDispatcher {
@@ -78,14 +85,24 @@ impl ResponsesWebhookDispatcher {
     ) -> Self {
         let (tx, rx) = mpsc::channel(config.retry_queue_capacity.max(1));
         let semaphore = Arc::new(Semaphore::new(config.max_concurrent_deliveries.max(1)));
-        let shared = Arc::new(DispatcherInner { config, http, dlq });
+        let target_url = config.url.clone();
+        let shared = Arc::new(DispatcherInner {
+            config,
+            http,
+            dlq: dlq.clone(),
+        });
         crate::compat::spawn_detached(drain_events(rx, semaphore, shared));
-        Self { tx }
+        Self {
+            tx,
+            dlq,
+            target_url,
+        }
     }
 
-    /// Non-blocking enqueue. Drops on overflow with a warning — the
-    /// retry queue is bounded so a wedged target can't grow memory
-    /// unboundedly.
+    /// Non-blocking enqueue. When the retry queue is full, the event
+    /// is diverted to the DLQ (if configured) so a wedged target
+    /// can't cause terminal-state notifications to vanish silently.
+    /// Without a DLQ, an overflow logs and drops as a last resort.
     pub fn enqueue(&self, response_id: String, status: ResponseStatus, background: bool) {
         let Some(event_type) = terminal_event_name(status) else {
             // Non-terminal status — nothing to deliver.
@@ -103,16 +120,63 @@ impl ResponsesWebhookDispatcher {
         match self.tx.try_send(event) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(ev)) => {
-                warn!(
-                    response_id = %ev.data.id,
-                    event_type = %ev.event_type,
-                    "Webhook retry queue full; dropping event"
-                );
+                self.route_overflow_to_dlq(ev);
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 // Drainer exited; we're shutting down.
             }
         }
+    }
+
+    /// Divert an overflow event to the DLQ off the hot path. Uses a
+    /// detached task because `enqueue` is sync; the caller (the
+    /// `responses_store` update path) doesn't pay for DLQ writes.
+    fn route_overflow_to_dlq(&self, ev: WebhookEvent) {
+        let Some(ref dlq) = self.dlq else {
+            warn!(
+                response_id = %ev.data.id,
+                event_type = %ev.event_type,
+                "Webhook retry queue full and no DLQ configured; dropping event"
+            );
+            return;
+        };
+        let dlq = dlq.clone();
+        let target_url = self.target_url.clone();
+        crate::compat::spawn_detached(async move {
+            let payload = match serde_json::to_string(&ev) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        response_id = %ev.data.id,
+                        event_type = %ev.event_type,
+                        "Failed to serialise overflow webhook event for DLQ; event lost"
+                    );
+                    return;
+                }
+            };
+            let entry = DlqEntry::new(
+                DLQ_ENTRY_TYPE,
+                payload,
+                format!("webhook retry queue full; deferred to DLQ ({target_url})"),
+            )
+            .with_metadata("response_id", ev.data.id.clone())
+            .with_metadata("event_type", ev.event_type.clone())
+            .with_metadata("reason", "queue_full".to_string());
+            match dlq.push(entry).await {
+                Ok(_) => info!(
+                    response_id = %ev.data.id,
+                    event_type = %ev.event_type,
+                    "Webhook retry queue full; overflow event routed to DLQ"
+                ),
+                Err(e) => error!(
+                    response_id = %ev.data.id,
+                    event_type = %ev.event_type,
+                    error = %e,
+                    "Failed to push overflow webhook event to DLQ; event lost"
+                ),
+            }
+        });
     }
 }
 
