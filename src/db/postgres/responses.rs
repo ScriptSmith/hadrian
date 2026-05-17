@@ -107,11 +107,7 @@ impl ResponsesRepo for PostgresResponsesRepo {
         })
     }
 
-    async fn get_by_id_and_org(
-        &self,
-        id: &str,
-        org_id: Option<Uuid>,
-    ) -> DbResult<Option<ResponseRecord>> {
+    async fn get_by_id_and_org(&self, id: &str, org_id: Uuid) -> DbResult<Option<ResponseRecord>> {
         let result = sqlx::query(
             r#"
             SELECT id, org_id, project_id, user_id, api_key_id, service_account_id,
@@ -120,7 +116,7 @@ impl ResponsesRepo for PostgresResponsesRepo {
                    request_payload, output, usage, error,
                    retention_expires_at, last_sequence_number
             FROM responses
-            WHERE id = $1 AND (org_id IS NOT DISTINCT FROM $2)
+            WHERE id = $1 AND org_id = $2
             "#,
         )
         .bind(id)
@@ -133,9 +129,10 @@ impl ResponsesRepo for PostgresResponsesRepo {
         }
     }
 
-    async fn update(
+    async fn update_within_org(
         &self,
         id: &str,
+        org_id: Uuid,
         patch: ResponseCompletion,
     ) -> DbResult<Option<ResponseRecord>> {
         // Build the SET clause dynamically with numbered placeholders.
@@ -158,17 +155,20 @@ impl ResponsesRepo for PostgresResponsesRepo {
         add!(patch.error.is_some(), "error");
         add!(patch.retention_expires_at.is_some(), "retention_expires_at");
         if setters.is_empty() {
-            return self.get_by_id_and_org(id, None).await;
+            return self.get_by_id_and_org(id, org_id).await;
         }
 
+        let id_placeholder = idx;
+        let org_placeholder = idx + 1;
         let sql = format!(
-            "UPDATE responses SET {} WHERE id = ${} RETURNING \
+            "UPDATE responses SET {} WHERE id = ${} AND org_id = ${} RETURNING \
              id, org_id, project_id, user_id, api_key_id, service_account_id, \
              status, background, model, provider, \
              created_at, started_at, completed_at, \
              request_payload, output, usage, error, retention_expires_at, last_sequence_number",
             setters.join(", "),
-            idx
+            id_placeholder,
+            org_placeholder
         );
         let mut q = sqlx::query(&sql);
         if let Some(status) = patch.status {
@@ -192,7 +192,7 @@ impl ResponsesRepo for PostgresResponsesRepo {
         if let Some(ts) = patch.retention_expires_at {
             q = q.bind(ts);
         }
-        q = q.bind(id);
+        q = q.bind(id).bind(org_id);
 
         let result = q.fetch_optional(&self.write_pool).await?;
         match result {
@@ -201,11 +201,11 @@ impl ResponsesRepo for PostgresResponsesRepo {
         }
     }
 
-    async fn delete_by_id_and_org(&self, id: &str, org_id: Option<Uuid>) -> DbResult<bool> {
+    async fn delete_by_id_and_org(&self, id: &str, org_id: Uuid) -> DbResult<bool> {
         let result = sqlx::query(
             r#"
             DELETE FROM responses
-            WHERE id = $1 AND (org_id IS NOT DISTINCT FROM $2)
+            WHERE id = $1 AND org_id = $2
             "#,
         )
         .bind(id)
@@ -248,6 +248,22 @@ impl ResponsesRepo for PostgresResponsesRepo {
         }
     }
 
+    async fn list_cancelled_among(&self, ids: &[String]) -> DbResult<Vec<String>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            r#"
+            SELECT id FROM responses
+            WHERE status = 'cancelled' AND id = ANY($1)
+            "#,
+        )
+        .bind(ids)
+        .fetch_all(&self.read_pool)
+        .await?;
+        Ok(rows.iter().map(|r| r.get::<String, _>("id")).collect())
+    }
+
     async fn delete_expired(&self, before: DateTime<Utc>) -> DbResult<u64> {
         let result = sqlx::query(
             r#"
@@ -257,6 +273,37 @@ impl ResponsesRepo for PostgresResponsesRepo {
             "#,
         )
         .bind(before)
+        .execute(&self.write_pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    async fn reap_stuck_in_progress(
+        &self,
+        started_before: DateTime<Utc>,
+        completed_at: DateTime<Utc>,
+        retention_expires_at: DateTime<Utc>,
+    ) -> DbResult<u64> {
+        let error_payload = serde_json::json!({
+            "code": "worker_lost",
+            "message": "Worker died mid-execution; reaped by retention worker",
+        });
+        let result = sqlx::query(
+            r#"
+            UPDATE responses
+            SET status = 'failed',
+                completed_at = $1,
+                error = $2,
+                retention_expires_at = $3
+            WHERE status = 'in_progress'
+              AND started_at IS NOT NULL
+              AND started_at < $4
+            "#,
+        )
+        .bind(completed_at)
+        .bind(error_payload)
+        .bind(retention_expires_at)
+        .bind(started_before)
         .execute(&self.write_pool)
         .await?;
         Ok(result.rows_affected())

@@ -33,6 +33,7 @@ mod leader_lock;
 mod model_catalog_sync;
 mod oauth_code_cleanup;
 mod provider_health_check;
+mod responses_cancel_poller;
 mod responses_retention;
 mod vector_store_cleanup;
 
@@ -42,5 +43,6 @@ pub use oauth_code_cleanup::start_oauth_code_cleanup_worker;
 pub use provider_health_check::{
     ProviderHealthChecker, ProviderHealthState, ProviderHealthStateRegistry,
 };
+pub use responses_cancel_poller::start_responses_cancel_poller;
 pub use responses_retention::start_responses_retention_worker;
 pub use vector_store_cleanup::start_vector_store_cleanup_worker;

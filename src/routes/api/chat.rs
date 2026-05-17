@@ -164,6 +164,23 @@ pub(super) async fn apply_output_guardrails(
     }
 }
 
+/// Returns true if the resolved provider can handle a shell-tool spec
+/// forwarded verbatim (i.e. it implements OpenAI's hosted shell-tool
+/// runtime). Used to gate `ShellRuntimeConfig::PassthroughOpenAI`.
+fn provider_supports_passthrough_shell(provider: &crate::config::ProviderConfig) -> bool {
+    use crate::config::ProviderConfig;
+    matches!(provider, ProviderConfig::OpenAi(_)) || {
+        #[cfg(feature = "provider-azure")]
+        {
+            matches!(provider, ProviderConfig::AzureOpenAi(_))
+        }
+        #[cfg(not(feature = "provider-azure"))]
+        {
+            false
+        }
+    }
+}
+
 /// Modifies the assistant content in a chat completion response JSON.
 ///
 /// Returns the modified response body, or None if modification failed.
@@ -1158,6 +1175,29 @@ pub async fn api_v1_responses(
         })?;
     }
 
+    // Shell-tool passthrough requires an OpenAI-compatible upstream
+    // (OpenAI's hosted runtime or Azure OpenAI). Reject early instead
+    // of dropping the tool silently in a downstream provider's
+    // convert.rs.
+    let payload_has_shell = payload
+        .tools
+        .as_ref()
+        .map(|t| t.iter().any(|tt| tt.is_shell()))
+        .unwrap_or(false);
+    if payload_has_shell
+        && matches!(
+            state.config.features.shell,
+            crate::config::ShellRuntimeConfig::PassthroughOpenAI
+        )
+        && !provider_supports_passthrough_shell(&provider_config)
+    {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "passthrough_requires_openai_upstream",
+            "shell-tool passthrough is configured but the resolved provider is not OpenAI-compatible",
+        ));
+    }
+
     // Check authorization if authz context is available and API RBAC is enabled
     if let Some(Extension(ref authz)) = authz {
         // Check if file_search tool is present
@@ -1241,7 +1281,14 @@ pub async fn api_v1_responses(
                 .as_ref()
                 .and_then(|a| a.api_key().and_then(|k| k.org_id))
                 .or_else(|| auth.as_ref().and_then(|a| a.principal().org_id()))
-                .or(state.default_org_id);
+                .or(state.default_org_id)
+                .ok_or_else(|| {
+                    ApiError::new(
+                        StatusCode::UNAUTHORIZED,
+                        "org_required",
+                        "Background responses require an authenticated org",
+                    )
+                })?;
             let principal_user = auth
                 .as_ref()
                 .and_then(|a| a.user_id())
@@ -1268,14 +1315,24 @@ pub async fn api_v1_responses(
                 model: model_name.clone(),
                 provider: Some(provider_name.clone()),
                 created_at: now,
+                // FIXME(skill-leak): `payload.instructions` carries
+                // skill SKILL.md content that was inlined by
+                // `resolve_and_inject_skills` upstream. When retrieve
+                // echoes `instructions` back to the caller, any
+                // operator-private skill content reaches anyone with
+                // GET access to this response inside the same org. If
+                // skills can ever contain content that shouldn't be
+                // visible to regular users, persist the original
+                // payload references and resolve at execute time.
                 request_payload: serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null),
                 retention_expires_at: store.retention_expires_at(now),
             };
             store.create(new_row).await.map_err(|e| {
+                tracing::error!(error = %e, "background dispatch failed");
                 ApiError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "background_dispatch_failed",
-                    e.to_string(),
+                    "Failed to enqueue background response",
                 )
             })?;
 
@@ -1288,7 +1345,7 @@ pub async fn api_v1_responses(
                 "background": true,
                 "model": model_name,
                 "provider": provider_name,
-                "created_at": now.timestamp() as f64,
+                "created_at": now.timestamp(),
             });
             return Ok(Response::builder()
                 .status(StatusCode::ACCEPTED)
@@ -1599,39 +1656,73 @@ pub async fn api_v1_responses(
     // Insert the persisted-response row up front (when store=true)
     // so the shared pipeline can attach the persister wrap. Principal
     // was already built up top for skill resolution.
-    let persistence_handle: Option<(String, crate::services::CancelSignal)> = if let Some(ref store) =
-        state.responses_store
-        && payload.store != Some(false)
-        && final_response.status().is_success()
-    {
-        let resp_id = crate::services::ResponsesStore::new_response_id();
-        let now = chrono::Utc::now();
-        let new_row = crate::db::repos::NewResponse {
-            id: resp_id.clone(),
-            org_id: principal.org_id,
-            project_id: principal.project_id,
-            user_id: principal.user_id,
-            api_key_id: principal.api_key_id,
-            service_account_id: principal.service_account_id,
-            status: crate::db::repos::ResponseStatus::InProgress,
-            background: payload.background.unwrap_or(false),
-            model: model_name.clone(),
-            provider: Some(provider_name.clone()),
-            created_at: now,
-            request_payload: serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null),
-            retention_expires_at: store.retention_expires_at(now),
-        };
-        match store.create(new_row).await {
-            Ok((_record, cancel_rx)) => Some((resp_id, cancel_rx)),
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to insert response row; persistence skipped");
-                None
+    let persistence_handle: Option<crate::services::responses_pipeline::PersistenceHandle> = {
+        let want_persist = state.responses_store.is_some()
+            && payload.store != Some(false)
+            && final_response.status().is_success();
+        if !want_persist {
+            None
+        } else if let (Some(store), Some(row_org)) =
+            (state.responses_store.as_ref(), principal.org_id)
+        {
+            let resp_id = crate::services::ResponsesStore::new_response_id();
+            let now = chrono::Utc::now();
+            let new_row = crate::db::repos::NewResponse {
+                id: resp_id.clone(),
+                org_id: row_org,
+                project_id: principal.project_id,
+                user_id: principal.user_id,
+                api_key_id: principal.api_key_id,
+                service_account_id: principal.service_account_id,
+                status: crate::db::repos::ResponseStatus::InProgress,
+                background: payload.background.unwrap_or(false),
+                model: model_name.clone(),
+                provider: Some(provider_name.clone()),
+                created_at: now,
+                // FIXME(skill-leak): `payload.instructions` already
+                // carries inlined SKILL.md content from the skill
+                // resolution step. Retrieve echoes `instructions`
+                // back, so operator-private skill content reaches any
+                // retriever within the same org. If skills can ever
+                // hold content not appropriate for the request's
+                // caller, persist references and resolve at execute
+                // time.
+                request_payload: serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null),
+                retention_expires_at: store.retention_expires_at(now),
+            };
+            match store.create(new_row).await {
+                Ok((record, cancel_rx)) => {
+                    Some(crate::services::responses_pipeline::PersistenceHandle {
+                        response_id: resp_id,
+                        org_id: row_org,
+                        initial_sequence_number: record.last_sequence_number,
+                        cancel_rx,
+                    })
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "Failed to insert response row; persistence skipped"
+                    );
+                    None
+                }
             }
+        } else {
+            // Persistence requires an authenticated tenant. Without
+            // an org we can't scope subsequent retrieve/cancel/delete
+            // calls safely, so persistence is silently skipped — the
+            // request still serves a response.
+            if state.responses_store.is_some() {
+                tracing::warn!(
+                    "Response persistence skipped: no org on principal (anonymous/disabled auth)"
+                );
+            }
+            None
         }
-    } else {
-        None
     };
-    let persistence_id = persistence_handle.as_ref().map(|(id, _)| id.clone());
+    let persistence_id_and_org = persistence_handle
+        .as_ref()
+        .map(|h| (h.response_id.clone(), h.org_id));
 
     // Apply the shared pipeline: output guardrails + server-executed
     // tool loop + persister.
@@ -1667,27 +1758,33 @@ pub async fn api_v1_responses(
         }
     }
 
-    // Cache successful responses (non-streaming only)
-    let final_response = if cache_status == CacheStatus::Miss
+    // Cache and/or persist the response (non-streaming only). The two
+    // operations share a materialized body: read it once, hand the
+    // bytes to whichever side wants them. Persistence is needed
+    // regardless of cache outcome — without this branch a cache hit
+    // or a cache-disabled deployment would leave the response row
+    // stuck `in_progress` until retention pruned it.
+    let needs_cache_store = cache_status == CacheStatus::Miss
         && final_response.status().is_success()
         && !is_streaming
-    {
-        // Extract content-type and body for caching
+        && state.response_cache.is_some();
+    let needs_persist =
+        !is_streaming && persistence_id_and_org.is_some() && state.responses_store.is_some();
+    let final_response = if needs_cache_store || needs_persist {
+        // Extract content-type and body once.
         let content_type = final_response
             .headers()
             .get("Content-Type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("application/json")
             .to_string();
-
-        // Read the body bytes for caching
         let (parts, body) = final_response.into_parts();
         match axum::body::to_bytes(body, state.config.server.max_response_body_bytes).await {
             Ok(bytes) => {
                 let body_vec = bytes.to_vec();
 
                 // Store in response cache (semantic cache not yet supported for responses API)
-                if let Some(ref response_cache) = state.response_cache {
+                if needs_cache_store && let Some(ref response_cache) = state.response_cache {
                     let cache = response_cache.clone();
                     let payload_clone = payload.clone();
                     let model_clone = model_name.clone();
@@ -1714,17 +1811,25 @@ pub async fn api_v1_responses(
                 // is materialized. Streaming responses are persisted by
                 // `wrap_streaming_with_persistence` from inside its
                 // spawned task as the final event arrives.
-                if let (Some(resp_id), Some(store)) =
-                    (persistence_id.as_ref(), state.responses_store.as_ref())
-                {
-                    persist_non_streaming(store, resp_id, &body_vec, parts.status.as_u16()).await;
+                if let (Some((resp_id, org_id)), Some(store)) = (
+                    persistence_id_and_org.as_ref(),
+                    state.responses_store.as_ref(),
+                ) {
+                    persist_non_streaming(
+                        store,
+                        resp_id,
+                        *org_id,
+                        &body_vec,
+                        parts.status.as_u16(),
+                    )
+                    .await;
                 }
 
                 // Rebuild response
                 Response::from_parts(parts, Body::from(body_vec))
             }
             Err(e) => {
-                tracing::warn!(error = %e, "Failed to read response body for caching");
+                tracing::warn!(error = %e, "Failed to read response body for caching/persistence");
                 // Return error - we've consumed the body
                 return Ok(Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -2004,6 +2109,17 @@ pub async fn api_v1_responses_compact(
                 ApiError::new(StatusCode::FORBIDDEN, "authorization_denied", e.to_string())
             })?;
     }
+
+    // Compaction sends context through the model, so it has the same
+    // data-sovereignty surface as the main responses endpoint. Apply
+    // the same per-API-key + per-request residency check.
+    let _ = check_sovereignty(
+        auth.as_ref(),
+        payload.sovereignty_requirements.as_ref(),
+        &provider_config,
+        &model_name,
+        &state.model_catalog,
+    )?;
 
     CompactExecutor::execute(&state, &provider_name, &provider_config, payload)
         .await

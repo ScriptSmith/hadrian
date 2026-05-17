@@ -1062,8 +1062,11 @@ impl AppState {
                 std::time::Duration::from_secs(config.features.responses.retention_secs),
             );
             if let Some(ref hook) = config.features.responses.webhook {
-                let dispatcher =
-                    services::ResponsesWebhookDispatcher::new(hook.clone(), http_client.clone());
+                let dispatcher = services::ResponsesWebhookDispatcher::spawn(
+                    hook.clone(),
+                    http_client.clone(),
+                    dlq.clone(),
+                );
                 store = store.with_webhook(dispatcher);
                 tracing::info!(url = %hook.url, "Responses webhook configured");
             }

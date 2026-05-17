@@ -167,10 +167,13 @@ impl OpenSandboxRuntime {
     }
 
     /// Poll the sandbox until it reaches Running (or terminal failure)
-    /// within the configured timeout.
+    /// within the configured timeout. Uses exponential backoff so a
+    /// slow control plane gets fewer polls per second over time.
     async fn wait_for_running(&self, id: &str) -> RuntimeResult<()> {
         let deadline =
             tokio::time::Instant::now() + Duration::from_secs(self.config.start_timeout_secs);
+        let mut backoff = Duration::from_millis(100);
+        let max_backoff = Duration::from_secs(2);
         loop {
             if tokio::time::Instant::now() > deadline {
                 return Err(RuntimeError::SessionTimeout);
@@ -200,7 +203,8 @@ impl OpenSandboxRuntime {
                     )));
                 }
                 _ => {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(max_backoff);
                 }
             }
         }
@@ -245,6 +249,21 @@ impl OpenSandboxRuntime {
             )));
         }
         Ok(())
+    }
+
+    /// Best-effort cleanup of a sandbox we created but couldn't fully
+    /// hand off to a session. Logs the failure (with the rollback
+    /// stage) instead of silently swallowing it — orphaned sandboxes
+    /// burn operator budget and are easy to lose visibility on.
+    async fn cleanup_orphan(&self, id: &str, stage: &'static str) {
+        if let Err(e) = self.delete_sandbox(id).await {
+            warn!(
+                sandbox_id = %id,
+                stage,
+                error = %e,
+                "Failed to delete orphaned opensandbox during rollback"
+            );
+        }
     }
 }
 
@@ -329,13 +348,13 @@ impl ShellRuntime for OpenSandboxRuntime {
 
         let id = self.create_sandbox(body).await?;
         if let Err(e) = self.wait_for_running(&id).await {
-            let _ = self.delete_sandbox(&id).await;
+            self.cleanup_orphan(&id, "wait_for_running").await;
             return Err(e);
         }
         let execd_url = match self.fetch_execd_url(&id).await {
             Ok(u) => u,
             Err(e) => {
-                let _ = self.delete_sandbox(&id).await;
+                self.cleanup_orphan(&id, "fetch_execd_url").await;
                 return Err(e);
             }
         };
@@ -352,7 +371,7 @@ impl ShellRuntime for OpenSandboxRuntime {
             )
             .await
             {
-                let _ = self.delete_sandbox(&id).await;
+                self.cleanup_orphan(&id, "mount_skill_via_execd").await;
                 return Err(e);
             }
             debug!(
@@ -388,15 +407,13 @@ async fn mount_skill_via_execd(
 ) -> RuntimeResult<()> {
     let upload_url = format!("{}/files/upload", execd_url.trim_end_matches('/'));
     for file in &skill.files {
-        let full_path = if file.relative_path.starts_with('/') {
-            file.relative_path.clone()
-        } else {
-            format!(
-                "{}/{}",
-                skill.mount_path.trim_end_matches('/'),
-                file.relative_path.trim_start_matches('/')
-            )
-        };
+        // Reject path traversal and absolute paths. Skills come from
+        // Hadrian's own SkillService, but treat their `relative_path`
+        // as untrusted — a single malicious entry of `../etc/passwd`
+        // would otherwise let one skill clobber arbitrary files inside
+        // the sandbox (and across tenants if a skill is shared).
+        let safe_rel = sanitize_skill_relative_path(&file.relative_path)?;
+        let full_path = format!("{}/{}", skill.mount_path.trim_end_matches('/'), safe_rel);
         let metadata = serde_json::json!({
             "path": full_path,
             "mode": 0o644,
@@ -426,6 +443,38 @@ async fn mount_skill_via_execd(
         }
     }
     Ok(())
+}
+
+/// Reject path traversal in skill-file relative paths. Returns the
+/// cleaned path on success (leading slashes stripped) or a
+/// `RuntimeError::Backend` on any `..` segment, absolute prefix, or
+/// non-normal path component (e.g. `.`, prefix verbatim on Windows).
+fn sanitize_skill_relative_path(rel: &str) -> RuntimeResult<String> {
+    use std::path::{Component, Path};
+
+    let path = Path::new(rel);
+    if path.is_absolute() {
+        return Err(RuntimeError::Backend(format!(
+            "skill relative_path must not be absolute: {rel}"
+        )));
+    }
+    let mut cleaned = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => cleaned.push(part),
+            Component::CurDir => {
+                // `./foo` is harmless; just skip the component.
+            }
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(RuntimeError::Backend(format!(
+                    "skill relative_path must not contain traversal: {rel}"
+                )));
+            }
+        }
+    }
+    cleaned.to_str().map(str::to_string).ok_or_else(|| {
+        RuntimeError::Backend(format!("skill relative_path is not valid UTF-8: {rel}"))
+    })
 }
 
 struct OpenSandboxSession {

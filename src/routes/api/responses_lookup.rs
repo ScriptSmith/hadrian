@@ -13,12 +13,14 @@ use axum::{
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
+use uuid::Uuid;
 
 use super::ApiError;
 use crate::{
     AppState,
     auth::AuthenticatedRequest,
     db::repos::ResponseRecord,
+    middleware::AuthzContext,
     services::{ResponsesStore, ResponsesStoreError},
 };
 
@@ -35,9 +37,10 @@ pub struct WireResponse {
     model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     provider: Option<String>,
-    created_at: f64,
+    /// Unix timestamp in seconds, matching OpenAI's integer encoding.
+    created_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    completed_at: Option<f64>,
+    completed_at: Option<i64>,
     #[serde(skip_serializing_if = "Value::is_null")]
     output: Value,
     #[serde(skip_serializing_if = "Value::is_null")]
@@ -87,8 +90,8 @@ fn record_to_wire(record: &ResponseRecord) -> WireResponse {
         background: record.background,
         model: record.model.clone(),
         provider: record.provider.clone(),
-        created_at: record.created_at.timestamp() as f64,
-        completed_at: record.completed_at.map(|t| t.timestamp() as f64),
+        created_at: record.created_at.timestamp(),
+        completed_at: record.completed_at.map(|t| t.timestamp()),
         output: record.output.clone().unwrap_or(Value::Null),
         usage: record.usage.clone().unwrap_or(Value::Null),
         error: record.error.clone().unwrap_or(Value::Null),
@@ -106,33 +109,92 @@ fn resolve_store(state: &AppState) -> Result<&ResponsesStore, ApiError> {
     })
 }
 
-fn caller_org(auth: Option<&Extension<AuthenticatedRequest>>) -> Option<uuid::Uuid> {
+/// Resolve the caller's org or return 401. Both authenticated and
+/// auth-disabled flows reach this through the API middleware, which
+/// injects an `AuthenticatedRequest` carrying the synthetic default
+/// principal in anonymous-mode deployments. Reject when the middleware
+/// produced nothing — we can't safely scope without an org.
+fn require_caller_org(auth: Option<&Extension<AuthenticatedRequest>>) -> Result<Uuid, ApiError> {
     auth.and_then(|Extension(a)| {
         a.api_key()
             .and_then(|k| k.org_id)
             .or_else(|| a.principal().org_id())
     })
+    .ok_or_else(|| {
+        ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "authentication_required",
+            "An authenticated org is required",
+        )
+    })
 }
 
+/// Run `authz.require_api("response", action, ...)` when authz is
+/// configured. Mirrors the gate `api_v1_responses` applies for
+/// `("model", "use")`, so RBAC policies that allow create-but-deny-
+/// retrieve (or vice versa) can express that.
+async fn enforce_authz(
+    authz: Option<&Extension<AuthzContext>>,
+    auth: Option<&Extension<AuthenticatedRequest>>,
+    action: &str,
+) -> Result<(), ApiError> {
+    let Some(Extension(authz)) = authz else {
+        return Ok(());
+    };
+    let org_id = auth.and_then(|a| {
+        a.api_key()
+            .and_then(|k| k.org_id.map(|id| id.to_string()))
+            .or_else(|| a.identity().and_then(|i| i.org_ids.first().cloned()))
+    });
+    let project_id = auth.and_then(|a| {
+        a.api_key()
+            .and_then(|k| k.project_id.map(|id| id.to_string()))
+            .or_else(|| a.identity().and_then(|i| i.project_ids.first().cloned()))
+    });
+    authz
+        .require_api(
+            "response",
+            action,
+            None,
+            None,
+            org_id.as_deref(),
+            project_id.as_deref(),
+        )
+        .await
+        .map_err(|e| ApiError::new(StatusCode::FORBIDDEN, "authorization_denied", e.to_string()))
+}
+
+/// Convert a [`ResponsesStoreError`] into an `ApiError`, logging
+/// internal details server-side and returning a safe shape to the
+/// caller. Mirrors the canonical `impl From<DbError> for ApiError` in
+/// `src/routes/api/mod.rs` — internal-only errors get a generic
+/// message; expected-shape errors get specific codes.
 fn map_store_err(e: ResponsesStoreError) -> ApiError {
     match e {
         ResponsesStoreError::NotFound => ApiError::new(
             StatusCode::NOT_FOUND,
             "response_not_found",
-            "No such response".to_string(),
+            "No such response",
         ),
         ResponsesStoreError::NotBackground => ApiError::new(
             StatusCode::BAD_REQUEST,
             "response_not_background",
-            "Only responses created with background=true can be cancelled".to_string(),
+            "Only responses created with background=true can be cancelled",
         ),
-        ResponsesStoreError::Database(e) => ApiError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "database_error",
-            e.to_string(),
-        ),
-        ResponsesStoreError::Internal(s) => {
-            ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", s)
+        ResponsesStoreError::Database(db_err) => {
+            // Delegate to the canonical From<DbError> impl so known
+            // variants (NotFound / Conflict / Validation) map to the
+            // same codes everywhere, and unknown ones get logged but
+            // surface a generic message.
+            ApiError::from(db_err)
+        }
+        ResponsesStoreError::Internal(msg) => {
+            tracing::error!(error = %msg, "Responses store internal error");
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "An internal error occurred",
+            )
         }
     }
 }
@@ -145,6 +207,8 @@ fn map_store_err(e: ResponsesStoreError) -> ApiError {
     params(("response_id" = String, Path, description = "ID returned by POST /v1/responses")),
     responses(
         (status = 200, description = "The stored response object"),
+        (status = 401, description = "Authentication required", body = crate::openapi::ErrorResponse),
+        (status = 403, description = "Authorization denied", body = crate::openapi::ErrorResponse),
         (status = 404, description = "Response not found", body = crate::openapi::ErrorResponse),
         (status = 501, description = "Persistence disabled", body = crate::openapi::ErrorResponse),
     ),
@@ -153,10 +217,12 @@ fn map_store_err(e: ResponsesStoreError) -> ApiError {
 pub async fn api_v1_responses_get(
     State(state): State<AppState>,
     auth: Option<Extension<AuthenticatedRequest>>,
+    authz: Option<Extension<AuthzContext>>,
     Path(response_id): Path<String>,
 ) -> Result<Json<WireResponse>, ApiError> {
     let store = resolve_store(&state)?;
-    let org_id = caller_org(auth.as_ref()).or(state.default_org_id);
+    enforce_authz(authz.as_ref(), auth.as_ref(), "read").await?;
+    let org_id = require_caller_org(auth.as_ref())?;
     let record = store
         .get(&response_id, org_id)
         .await
@@ -175,6 +241,8 @@ pub async fn api_v1_responses_get(
     responses(
         (status = 200, description = "The cancelled response object"),
         (status = 400, description = "Response is not in background mode", body = crate::openapi::ErrorResponse),
+        (status = 401, description = "Authentication required", body = crate::openapi::ErrorResponse),
+        (status = 403, description = "Authorization denied", body = crate::openapi::ErrorResponse),
         (status = 404, description = "Response not found", body = crate::openapi::ErrorResponse),
     ),
     security(("api_key" = []))
@@ -182,10 +250,12 @@ pub async fn api_v1_responses_get(
 pub async fn api_v1_responses_cancel(
     State(state): State<AppState>,
     auth: Option<Extension<AuthenticatedRequest>>,
+    authz: Option<Extension<AuthzContext>>,
     Path(response_id): Path<String>,
 ) -> Result<Json<WireResponse>, ApiError> {
     let store = resolve_store(&state)?;
-    let org_id = caller_org(auth.as_ref()).or(state.default_org_id);
+    enforce_authz(authz.as_ref(), auth.as_ref(), "cancel").await?;
+    let org_id = require_caller_org(auth.as_ref())?;
     let record = store
         .cancel(&response_id, org_id)
         .await
@@ -225,6 +295,10 @@ pub struct EventsQuery {
 /// 250ms for new rows; once the row reaches a terminal status and the
 /// caller has caught up to `last_sequence_number`, the stream
 /// terminates with a `data: [DONE]` sentinel.
+///
+/// Each event is emitted with the OpenAI-style named SSE form
+/// (`event: <type>\ndata: <payload>\n\n`) so JS SDK callers see the
+/// typed events they expect.
 #[cfg_attr(feature = "utoipa", utoipa::path(
     get,
     path = "/api/v1/responses/{response_id}/events",
@@ -236,6 +310,8 @@ pub struct EventsQuery {
     ),
     responses(
         (status = 200, description = "SSE stream of response events"),
+        (status = 401, description = "Authentication required", body = crate::openapi::ErrorResponse),
+        (status = 403, description = "Authorization denied", body = crate::openapi::ErrorResponse),
         (status = 404, description = "Response not found", body = crate::openapi::ErrorResponse),
     ),
     security(("api_key" = []))
@@ -243,6 +319,7 @@ pub struct EventsQuery {
 pub async fn api_v1_responses_events(
     State(state): State<AppState>,
     auth: Option<Extension<AuthenticatedRequest>>,
+    authz: Option<Extension<AuthzContext>>,
     Path(response_id): Path<String>,
     axum::extract::Query(query): axum::extract::Query<EventsQuery>,
 ) -> Result<axum::response::Response, ApiError> {
@@ -259,14 +336,16 @@ pub async fn api_v1_responses_events(
         ));
     };
 
+    enforce_authz(authz.as_ref(), auth.as_ref(), "read").await?;
+    let org_id = require_caller_org(auth.as_ref())?;
+
     // Verify the response exists and belongs to the caller's org.
-    let org_id = caller_org(auth.as_ref()).or(state.default_org_id);
     let _record = store
         .get(&response_id, org_id)
         .await
         .map_err(map_store_err)?;
 
-    let starting_after = query.starting_after.unwrap_or(0);
+    let starting_after = query.starting_after.unwrap_or(0).max(0);
     let limit = query.limit.unwrap_or(200).clamp(1, 1000);
     let store_clone = state.responses_store.as_ref().cloned();
     let events_repo = db.response_events();
@@ -276,6 +355,12 @@ pub async fn api_v1_responses_events(
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(8);
 
     crate::compat::spawn_detached(async move {
+        const TERMINAL_EVENT_TYPES: &[&str] = &[
+            "response.completed",
+            "response.failed",
+            "response.cancelled",
+            "response.incomplete",
+        ];
         let mut cursor = starting_after;
         loop {
             // Drain everything past the cursor.
@@ -285,15 +370,48 @@ pub async fn api_v1_responses_events(
             {
                 Ok(e) => e,
                 Err(e) => {
-                    let _ = tx.send(Err(std::io::Error::other(e.to_string()))).await;
+                    tracing::error!(
+                        response_id = %response_id_clone,
+                        error = %e,
+                        "Failed to list response events for SSE replay"
+                    );
+                    // Don't leak DB internals to the caller — terminate
+                    // the stream cleanly. They can reconnect and we'll
+                    // retry.
+                    let _ = tx
+                        .send(Err(std::io::Error::other("event log read failed")))
+                        .await;
                     return;
                 }
             };
 
             let batch_max = events.last().map(|e| e.sequence_number);
+            // Event log is the truth source: if any event in this
+            // batch is a terminal type, we know nothing else is coming
+            // and we can [DONE] right after emitting. This sidesteps
+            // the race where row.status updates before
+            // last_sequence_number does (the persister commits
+            // terminal events via `insert_sync` to make this happen).
+            let mut saw_terminal_event = false;
             for ev in events {
-                let payload_str = serde_json::to_string(&ev.payload).unwrap_or_default();
-                let sse = format!("data: {payload_str}\n\n");
+                let payload_str = match serde_json::to_string(&ev.payload) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!(
+                            response_id = %response_id_clone,
+                            seq = ev.sequence_number,
+                            error = %e,
+                            "Skipping unserialisable response event"
+                        );
+                        continue;
+                    }
+                };
+                if TERMINAL_EVENT_TYPES.contains(&ev.event_type.as_str()) {
+                    saw_terminal_event = true;
+                }
+                // Named-SSE-event form matches OpenAI's Responses API
+                // wire format: `event: <type>\ndata: <payload>\n\n`.
+                let sse = format!("event: {}\ndata: {}\n\n", ev.event_type, payload_str);
                 if tx.send(Ok(Bytes::from(sse))).await.is_err() {
                     return; // client disconnected
                 }
@@ -303,15 +421,22 @@ pub async fn api_v1_responses_events(
                 cursor = seq;
             }
 
-            // Decide whether to keep polling. Re-fetch the response
-            // to see if it's reached a terminal state and we've caught
-            // up to last_sequence_number.
+            if saw_terminal_event {
+                let _ = tx.send(Ok(Bytes::from_static(b"data: [DONE]\n\n"))).await;
+                return;
+            }
+
+            // No terminal event yet. Fall back to the row's status for
+            // responses that never generated any events (non-streaming
+            // requests persisted via `persist_non_streaming`): those
+            // reach terminal status without writing to the event log,
+            // so without this we'd loop forever.
             let Some(ref store) = store_clone else { return };
             let record = match store.get(&response_id_clone, org_id_for_task).await {
                 Ok(r) => r,
                 Err(_) => return,
             };
-            if record.status.is_terminal() && cursor >= record.last_sequence_number {
+            if record.status.is_terminal() && record.last_sequence_number == 0 {
                 let _ = tx.send(Ok(Bytes::from_static(b"data: [DONE]\n\n"))).await;
                 return;
             }
@@ -339,16 +464,22 @@ pub async fn api_v1_responses_events(
     path = "/api/v1/responses/{response_id}",
     tag = "responses",
     params(("response_id" = String, Path, description = "ID of the response to delete")),
-    responses((status = 200, description = "Deletion confirmation")),
+    responses(
+        (status = 200, description = "Deletion confirmation"),
+        (status = 401, description = "Authentication required", body = crate::openapi::ErrorResponse),
+        (status = 403, description = "Authorization denied", body = crate::openapi::ErrorResponse),
+    ),
     security(("api_key" = []))
 ))]
 pub async fn api_v1_responses_delete(
     State(state): State<AppState>,
     auth: Option<Extension<AuthenticatedRequest>>,
+    authz: Option<Extension<AuthzContext>>,
     Path(response_id): Path<String>,
 ) -> Result<Json<DeleteResponse>, ApiError> {
     let store = resolve_store(&state)?;
-    let org_id = caller_org(auth.as_ref()).or(state.default_org_id);
+    enforce_authz(authz.as_ref(), auth.as_ref(), "delete").await?;
+    let org_id = require_caller_org(auth.as_ref())?;
     let deleted = store
         .delete(&response_id, org_id)
         .await

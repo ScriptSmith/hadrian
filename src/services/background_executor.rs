@@ -45,6 +45,24 @@ pub enum BackgroundExecuteError {
     NoStore,
 }
 
+impl BackgroundExecuteError {
+    /// Classify whether this failure could plausibly succeed on a
+    /// retry. Configuration-shaped failures (bad payload, missing
+    /// provider config) won't get better; transport / provider /
+    /// network problems often will.
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // Provider / network / streaming — the same row may
+            // succeed if we wait and try again.
+            Self::Execution(_) => true,
+            // Everything else is a config / structural issue: the
+            // payload won't deserialise differently, the routing
+            // won't resolve a missing provider, etc.
+            Self::BadPayload(_) | Self::Routing(_) | Self::Resolution(_) | Self::NoStore => false,
+        }
+    }
+}
+
 /// Run a claimed response to completion.
 ///
 /// `record` must already be in `in_progress` status (claimed via
@@ -106,7 +124,7 @@ pub async fn execute_persisted_response(
     // returned mounts are threaded into apply_streaming_pipeline so
     // the shell runtime materializes the files when a shell call boots
     // a session.
-    let mounted_skills = resolve_and_inject_skills(&state, &mut payload, record.org_id)
+    let mounted_skills = resolve_and_inject_skills(&state, &mut payload, Some(record.org_id))
         .await
         .map_err(|e| BackgroundExecuteError::BadPayload(format!("skill resolution failed: {e}")))?;
 
@@ -125,47 +143,17 @@ pub async fn execute_persisted_response(
 
     let ExecutionResult { response, .. } = exec_result;
 
-    // Cancellation: merge two sources into a single watch channel.
-    //   1. In-process: `ResponsesStore::subscribe_cancel` for the same
-    //      process — flips immediately when `POST /cancel` is handled
-    //      on this replica.
-    //   2. Cross-process: poll the row's `status` field every 5s; if
-    //      it's `cancelled`, trip the merged channel. Lets cancels
-    //      issued from another replica reach an executor that
-    //      claimed the row.
-    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-    if let Some(mut from_store) = store.subscribe_cancel(&record.id).await {
-        let tx = cancel_tx.clone();
-        crate::compat::spawn_detached(async move {
-            if from_store.changed().await.is_ok() && *from_store.borrow() {
-                let _ = tx.send(true);
-            }
-        });
-    }
-    {
-        let store_for_poll = store.clone();
-        let id_for_poll = record.id.clone();
-        let org_for_poll = record.org_id;
-        let tx = cancel_tx;
-        crate::compat::spawn_detached(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                match store_for_poll.get(&id_for_poll, org_for_poll).await {
-                    Ok(rec) => {
-                        if rec.status == ResponseStatus::Cancelled {
-                            let _ = tx.send(true);
-                            return;
-                        }
-                        if rec.status.is_terminal() {
-                            // Completed/failed/incomplete — no more polling.
-                            return;
-                        }
-                    }
-                    Err(_) => return,
-                }
-            }
-        });
-    }
+    // Cancellation: use the row's in-process watch channel directly.
+    // The cross-replica case is handled by a single replica-wide
+    // poller (`jobs::responses_cancel_poller`) that periodically
+    // queries `WHERE status='cancelled' AND id IN (active set)` and
+    // trips the matching sender — one DB round-trip per poll cycle
+    // no matter how many backgrounds are in-flight. We use
+    // `register_external_execution` so the row's id appears in the
+    // active set even when the row was created on a different
+    // replica (before a restart, for instance) and there's no local
+    // `create()` sender to inherit.
+    let cancel_rx = store.register_external_execution(&record.id).await;
 
     // Reconstruct principal from the persisted row so the shared
     // pipeline applies guardrails / file_search ACLs / shell usage
@@ -173,7 +161,7 @@ pub async fn execute_persisted_response(
     let principal = PipelinePrincipal {
         api_key_id: record.api_key_id,
         user_id: record.user_id,
-        org_id: record.org_id,
+        org_id: Some(record.org_id),
         project_id: record.project_id,
         team_id: None, // teams aren't currently stored on the row
         service_account_id: record.service_account_id,
@@ -192,7 +180,12 @@ pub async fn execute_persisted_response(
         // grouped consistently.
         Some(record.id.clone()),
         response,
-        Some((record.id.clone(), cancel_rx)),
+        Some(crate::services::responses_pipeline::PersistenceHandle {
+            response_id: record.id.clone(),
+            org_id: record.org_id,
+            initial_sequence_number: record.last_sequence_number,
+            cancel_rx,
+        }),
     );
 
     // Drain the body silently. The persister's internal spawned task
@@ -210,8 +203,9 @@ pub async fn execute_persisted_response(
             // received zero terminal events it'll mark the row
             // `incomplete`. Best-effort patch to `failed` here:
             let _ = store
-                .update(
+                .update_within_org(
                     &record.id,
+                    record.org_id,
                     ResponseCompletion {
                         status: Some(ResponseStatus::Failed),
                         completed_at: Some(Utc::now()),
@@ -236,6 +230,7 @@ pub async fn execute_persisted_response(
 pub async fn mark_background_failure(
     store: &ResponsesStore,
     response_id: &str,
+    org_id: uuid::Uuid,
     err: &BackgroundExecuteError,
 ) {
     let error_payload = serde_json::json!({
@@ -249,8 +244,9 @@ pub async fn mark_background_failure(
         "message": err.to_string(),
     });
     if let Err(e) = store
-        .update(
+        .update_within_org(
             response_id,
+            org_id,
             ResponseCompletion {
                 status: Some(ResponseStatus::Failed),
                 completed_at: Some(Utc::now()),

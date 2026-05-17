@@ -100,7 +100,6 @@ standard = [
     "prometheus",
     "redis",
     "response-validation",
-    "runtime-microsandbox",
     "s3-storage",
     "secrets-aws",
     "secrets-azure",
@@ -109,9 +108,15 @@ standard = [
     "utoipa",
     "vault",
 ]
+# `full` pulls in microsandbox (a KVM-based VMM SDK) and opensandbox.
+# Microsandbox is Linux-only, brings ~135 transitive crates (KVM,
+# sea-orm, oci-client, smoltcp, rcgen), and contains substantial
+# unsafe. Keep it out of `standard` so the typical deployment profile
+# stays small and macOS/Windows-portable.
 full = [
     "standard",
     "document-extraction-full",
+    "runtime-microsandbox",
     "runtime-opensandbox",
     "saml",
     "virus-scan",

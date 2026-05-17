@@ -1014,8 +1014,10 @@ pub enum ShellToolType {
 pub struct ShellTool {
     #[serde(rename = "type")]
     pub type_: ShellToolType,
-    /// Optional runtime-environment hints the model can see. Maps to
-    /// OpenAI's `environment` field in their shell tool spec.
+    /// **Hadrian Extension:** Optional runtime-environment hints the
+    /// model can see. Roughly mirrors OpenAI's `environment` field but
+    /// admins can pre-seed values per-request without exposing them as
+    /// real env vars to the sandbox.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<serde_json::Value>,
 }
@@ -1472,8 +1474,10 @@ pub struct CreateResponsesPayload {
 ///
 /// Mirrors the OpenAI Responses API directive — we surface the
 /// `compaction` variant explicitly so callers get type-checked help
-/// when wiring it up; unknown variants fail deserialization with a
-/// clear error rather than silently passing through.
+/// when wiring it up. Unknown variants are accepted via the `Other`
+/// catch-all and forwarded to the upstream provider verbatim; we
+/// prefer that over `deny_unknown` so OpenAI's spec can grow new
+/// types without rejecting requests at the gateway.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -1491,6 +1495,11 @@ pub enum ContextManagementItem {
         )]
         compact_threshold: Option<f64>,
     },
+    /// **Hadrian Extension:** Forward-compatibility catch-all for
+    /// `type` values Hadrian doesn't know about. The raw value is
+    /// preserved and forwarded to the upstream provider unchanged.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1824,6 +1833,9 @@ mod context_management_tests {
             ContextManagementItem::Compaction { compact_threshold } => {
                 assert_eq!(compact_threshold.unwrap() as i64, 200000);
             }
+            ContextManagementItem::Other => {
+                panic!("expected compaction variant, got Other");
+            }
         }
         // Re-serialize and confirm the threshold is emitted as an
         // integer (matches OpenAI's wire format, not float).
@@ -1832,9 +1844,14 @@ mod context_management_tests {
     }
 
     #[test]
-    fn unknown_context_management_variant_is_rejected() {
+    fn unknown_context_management_variant_is_accepted() {
+        // Forward-compatibility: unknown `type` values deserialize into
+        // the catch-all `Other` variant rather than failing the whole
+        // request, so OpenAI can add new context-management directives
+        // without breaking Hadrian.
         let raw = serde_json::json!([{"type": "summarize", "compact_threshold": 1000}]);
-        let parsed: Result<Vec<ContextManagementItem>, _> = serde_json::from_value(raw);
-        assert!(parsed.is_err(), "unknown context_management type must fail");
+        let parsed: Vec<ContextManagementItem> =
+            serde_json::from_value(raw).expect("unknown variants should deserialize to Other");
+        assert!(matches!(parsed[0], ContextManagementItem::Other));
     }
 }

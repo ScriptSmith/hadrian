@@ -68,7 +68,7 @@ impl ResponseStatus {
 #[derive(Debug, Clone)]
 pub struct ResponseRecord {
     pub id: String,
-    pub org_id: Option<Uuid>,
+    pub org_id: Uuid,
     pub project_id: Option<Uuid>,
     pub user_id: Option<Uuid>,
     pub api_key_id: Option<Uuid>,
@@ -94,7 +94,7 @@ pub struct ResponseRecord {
 #[derive(Debug, Clone)]
 pub struct NewResponse {
     pub id: String,
-    pub org_id: Option<Uuid>,
+    pub org_id: Uuid,
     pub project_id: Option<Uuid>,
     pub user_id: Option<Uuid>,
     pub api_key_id: Option<Uuid>,
@@ -130,22 +130,26 @@ pub trait ResponsesRepo: Send + Sync {
 
     /// Org-scoped fetch by ID. Returns `None` when the row is missing
     /// **or** belongs to a different org — the caller can't distinguish
-    /// the two cases, which prevents enumeration attacks. Pass
-    /// `org_id = None` to look up org-less rows (rare; mainly tests).
-    async fn get_by_id_and_org(
+    /// the two cases, which prevents enumeration attacks. The `org_id`
+    /// is required: anonymous-mode deployments populate a synthetic
+    /// default via the auth middleware, so all reachable rows have a
+    /// non-NULL org.
+    async fn get_by_id_and_org(&self, id: &str, org_id: Uuid) -> DbResult<Option<ResponseRecord>>;
+
+    /// Patch lifecycle fields, scoped to a tenant. The repo applies
+    /// only the `Some` fields in `patch`, so callers can advance status
+    /// and set completed_at/output/usage in one call. Returns `None` if
+    /// no row matches `id` AND `org_id` — protects against cross-tenant
+    /// writes even when a caller has the ID.
+    async fn update_within_org(
         &self,
         id: &str,
-        org_id: Option<Uuid>,
+        org_id: Uuid,
+        patch: ResponseCompletion,
     ) -> DbResult<Option<ResponseRecord>>;
 
-    /// Patch lifecycle fields. The repo applies only the `Some` fields
-    /// in `patch`, so callers can advance status and set
-    /// completed_at/output/usage in one call.
-    async fn update(&self, id: &str, patch: ResponseCompletion)
-    -> DbResult<Option<ResponseRecord>>;
-
     /// Org-scoped delete. Returns true if a row was removed.
-    async fn delete_by_id_and_org(&self, id: &str, org_id: Option<Uuid>) -> DbResult<bool>;
+    async fn delete_by_id_and_org(&self, id: &str, org_id: Uuid) -> DbResult<bool>;
 
     /// Delete all rows past `before` whose status is terminal. Run by
     /// the retention worker.
@@ -158,4 +162,24 @@ pub trait ResponsesRepo: Send + Sync {
     /// `SELECT … FOR UPDATE SKIP LOCKED` so concurrent workers never
     /// claim the same row.
     async fn claim_queued(&self, now: DateTime<Utc>) -> DbResult<Option<ResponseRecord>>;
+
+    /// Given a set of in-flight response IDs, return the subset whose
+    /// `status='cancelled'`. Used by the cross-replica cancel poller
+    /// to detect cancels issued on a *different* replica than the one
+    /// executing the response. One batched query per poll cycle
+    /// regardless of in-flight count.
+    async fn list_cancelled_among(&self, ids: &[String]) -> DbResult<Vec<String>>;
+
+    /// Mark rows in `in_progress` whose `started_at` is older than
+    /// `started_before` as `failed`, stamping a `worker_lost` error
+    /// payload. Returns the number of rows updated. Called by the
+    /// reaper to recover from worker crashes — without this, a row
+    /// claimed by a worker that died mid-execution would stay in
+    /// `in_progress` forever (`claim_queued` only picks `queued`).
+    async fn reap_stuck_in_progress(
+        &self,
+        started_before: DateTime<Utc>,
+        completed_at: DateTime<Utc>,
+        retention_expires_at: DateTime<Utc>,
+    ) -> DbResult<u64>;
 }

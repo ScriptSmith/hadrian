@@ -7,12 +7,12 @@
 
 #![cfg(feature = "runtime-microsandbox")]
 
-use std::{collections::VecDeque, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::Stream;
-use microsandbox::{ExecEvent as MsExecEvent, Sandbox};
+use microsandbox::{ExecEvent as MsExecEvent, NetworkPolicy, Sandbox};
 use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -20,83 +20,33 @@ use uuid::Uuid;
 use crate::{
     config::MicrosandboxConfig,
     runtimes::{
-        EgressPolicy, ExecEvent, ExecHandle, ExecRequest, NetworkMode, RuntimeCapabilities,
-        RuntimeError, RuntimeResult, SessionHandle, SessionSpec, ShellRuntime, ShellSession,
+        ExecEvent, ExecHandle, ExecRequest, NetworkMode, RuntimeCapabilities, RuntimeError,
+        RuntimeResult, SessionHandle, SessionSpec, ShellRuntime, ShellSession,
     },
 };
 
 /// `ShellRuntime` implementation backed by microsandbox microVMs.
+///
+/// Each `start_session` boots a fresh VM — the previous pre-warm pool
+/// was removed because pooled VMs were reused across tenants without a
+/// filesystem reset, opening a cross-tenant data leak window for any
+/// session whose `SessionSpec` didn't force a fresh VM. Cold-start
+/// cost is paid per request; revisit pooling later only if we add
+/// per-tenant keying or snapshot-restore.
 pub struct MicrosandboxRuntime {
     config: MicrosandboxConfig,
-    /// Pre-warm pool of booted sandboxes ready for immediate use.
-    /// Only consumed for sessions whose SessionSpec doesn't require
-    /// secrets, skills, or other build-time configuration that would
-    /// invalidate a pre-booted VM.
-    pool: Arc<Mutex<VecDeque<Sandbox>>>,
 }
 
 impl MicrosandboxRuntime {
     pub fn new(config: MicrosandboxConfig) -> Self {
-        let pool: Arc<Mutex<VecDeque<Sandbox>>> = Arc::new(Mutex::new(VecDeque::new()));
-        let runtime = Self {
-            config: config.clone(),
-            pool: pool.clone(),
-        };
-
-        // Kick off the initial pool fill in the background so app
-        // startup isn't blocked on VM boots.
-        let target = config.prewarm_pool_size;
-        if target > 0 {
-            let cfg = config.clone();
-            crate::compat::spawn_detached(async move {
-                info!(pool_target = target, "Filling microsandbox pre-warm pool");
-                for _ in 0..target {
-                    match boot_default_sandbox(&cfg).await {
-                        Ok(sandbox) => {
-                            let mut guard = pool.lock().await;
-                            guard.push_back(sandbox);
-                            debug!(pool_size = guard.len(), "Pre-warmed sandbox added to pool");
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "Pre-warm boot failed; pool may be undersized");
-                        }
-                    }
-                }
-            });
-        }
-
-        runtime
-    }
-
-    /// True if `spec` requires VM-creation-time configuration that
-    /// can't be applied to a pre-warmed sandbox.
-    fn spec_requires_fresh_vm(spec: &SessionSpec) -> bool {
-        let EgressPolicy {
-            ref allow_hosts,
-            ref secrets,
-        } = spec.egress_policy;
-        !allow_hosts.is_empty()
-            || !secrets.is_empty()
-            || !spec.mounted_skills.is_empty()
-            || spec.cpu_limit.is_some()
-            || spec.mem_limit_bytes.is_some()
+        Self { config }
     }
 }
 
-/// Boot one sandbox with the runtime's default image/cpu/memory and a
-/// random name. Used both for pre-warm fill and for fresh-VM fallback.
-async fn boot_default_sandbox(config: &MicrosandboxConfig) -> RuntimeResult<Sandbox> {
-    let name = format!("hadrian-pool-{}", Uuid::new_v4());
-    let cpus = config.cpus as u8;
-    let memory_mb = config.memory_mb;
-    Sandbox::builder(name)
-        .image(config.image.clone())
-        .cpus(cpus)
-        .memory(memory_mb)
-        .replace()
-        .create()
-        .await
-        .map_err(|e| RuntimeError::Backend(format!("microsandbox create (pool): {e}")))
+fn cpus_for_sdk(cpus: u32) -> u8 {
+    // SDK takes u8 (0..=255). Anything beyond 255 vCPUs is operator
+    // error; clamp rather than silently wrapping.
+    cpus.min(u8::MAX as u32) as u8
 }
 
 #[async_trait]
@@ -126,52 +76,14 @@ impl ShellRuntime for MicrosandboxRuntime {
             return Err(RuntimeError::Unsupported("egress_allowlist"));
         }
 
-        // Fast path: if the spec only needs a default-config VM and the
-        // pool has one ready, hand it over and trigger an async refill.
-        if !Self::spec_requires_fresh_vm(&spec) && self.config.prewarm_pool_size > 0 {
-            let pooled = {
-                let mut guard = self.pool.lock().await;
-                guard.pop_front()
-            };
-            if let Some(sandbox) = pooled {
-                let session_id = sandbox.name().to_string();
-                debug!(
-                    stage = "microsandbox_pool_checkout",
-                    session_id = %session_id,
-                    "Reusing pre-warmed sandbox"
-                );
-
-                // Refill in the background.
-                let cfg = self.config.clone();
-                let pool = self.pool.clone();
-                crate::compat::spawn_detached(async move {
-                    match boot_default_sandbox(&cfg).await {
-                        Ok(s) => pool.lock().await.push_back(s),
-                        Err(e) => warn!(error = %e, "Pool refill failed"),
-                    }
-                });
-
-                return Ok(SessionHandle::new(
-                    session_id,
-                    Box::new(MicrosandboxSession {
-                        sandbox: Arc::new(Mutex::new(Some(sandbox))),
-                    }),
-                ));
-            }
-            debug!(
-                stage = "microsandbox_pool_empty",
-                "Pre-warm pool empty; falling back to fresh VM"
-            );
-        }
-
         let session_id = spec
             .session_id_hint
             .unwrap_or_else(|| format!("hadrian-{}", Uuid::new_v4()));
 
         let cpus: u8 = spec
             .cpu_limit
-            .map(|c| c.ceil() as u8)
-            .unwrap_or(self.config.cpus as u8);
+            .map(|c| c.ceil().clamp(1.0, u8::MAX as f64) as u8)
+            .unwrap_or_else(|| cpus_for_sdk(self.config.cpus));
         let memory_mb: u32 = spec
             .mem_limit_bytes
             .map(|b| (b / (1024 * 1024)) as u32)
@@ -186,11 +98,21 @@ impl ShellRuntime for MicrosandboxRuntime {
             "Creating microsandbox VM"
         );
 
+        // Pin an explicit `public_only` network policy: egress allowed
+        // to public internet ranges, denied for private/loopback/
+        // link-local/metadata (the IMDS endpoint at 169.254.169.254
+        // and friends). This makes the network posture independent of
+        // whatever `NetworkConfig::default()` happens to be in the SDK
+        // version we're built against — a future SDK that flipped the
+        // default to allow-all would silently regress us otherwise.
+        // Per-secret allow-host rules still apply on top via
+        // `secret().allow_host()` below.
         let mut builder = Sandbox::builder(session_id.clone())
             .image(self.config.image.clone())
             .cpus(cpus)
             .memory(memory_mb)
-            .replace();
+            .replace()
+            .network(|n| n.policy(NetworkPolicy::public_only()));
 
         // Wire each requested SecretMount into microsandbox's
         // SecretBuilder. Each mount gives the guest a placeholder env
@@ -261,20 +183,67 @@ async fn mount_skill_into_sandbox(
         .await
         .map_err(|e| RuntimeError::Backend(format!("mkdir {}: {e}", skill.mount_path)))?;
     for file in &skill.files {
-        let full_path = join_paths(&skill.mount_path, &file.relative_path);
+        // Reject path traversal: treat the SkillService output as
+        // untrusted on this code path. `..` or absolute prefixes
+        // would let one skill clobber arbitrary paths inside the VM.
+        let safe_rel = sanitize_skill_relative_path(&file.relative_path)?;
+        let full_path = join_paths(&skill.mount_path, &safe_rel);
         // Ensure parent directory exists.
         if let Some(parent) = parent_of(&full_path)
             && parent != skill.mount_path
         {
-            // mkdir is idempotent in microsandbox? If not, the
-            // backend returns AlreadyExists which we ignore.
-            let _ = fs.mkdir(&parent).await;
+            // microsandbox returns an AlreadyExists-style error if
+            // the directory is already there; log other failures so
+            // we don't silently swallow real problems on `write`
+            // later. Per CLAUDE.md memory: prefer correctness + debug
+            // logs over silent error swallowing.
+            if let Err(e) = fs.mkdir(&parent).await {
+                let msg = e.to_string();
+                let already_exists = msg.contains("AlreadyExists")
+                    || msg.contains("already exists")
+                    || msg.contains("EEXIST");
+                if !already_exists {
+                    debug!(
+                        path = %parent,
+                        error = %msg,
+                        "Non-AlreadyExists mkdir error inside sandbox (continuing)"
+                    );
+                }
+            }
         }
         fs.write(&full_path, file.content.as_ref())
             .await
             .map_err(|e| RuntimeError::Backend(format!("write {full_path}: {e}")))?;
     }
     Ok(())
+}
+
+/// Reject path traversal in skill-file relative paths. Returns the
+/// cleaned path (leading slashes stripped) or a `RuntimeError::Backend`
+/// on any `..` segment, absolute prefix, or non-normal component.
+fn sanitize_skill_relative_path(rel: &str) -> RuntimeResult<String> {
+    use std::path::{Component, Path};
+    let path = Path::new(rel);
+    if path.is_absolute() {
+        return Err(RuntimeError::Backend(format!(
+            "skill relative_path must not be absolute: {rel}"
+        )));
+    }
+    let mut cleaned = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => cleaned.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(RuntimeError::Backend(format!(
+                    "skill relative_path must not contain traversal: {rel}"
+                )));
+            }
+        }
+    }
+    cleaned.to_str().map(str::to_string).ok_or_else(|| {
+        RuntimeError::Backend(format!("skill relative_path is not valid UTF-8: {rel}"))
+    })
 }
 
 fn join_paths(base: &str, rel: &str) -> String {
@@ -313,14 +282,19 @@ impl ShellSession for MicrosandboxSession {
         // before exec, but `shell_stream` is the simplest path and
         // doesn't accept stdin. Fall back to redirecting via heredoc in
         // the command when stdin is provided.
+        //
+        // Per-call random terminator: a fixed marker is forge-able
+        // (an adversarial model could embed the literal string in
+        // stdin to escape into shell). The UUID makes collision
+        // probability ~2^-122. Single-quoting prevents variable
+        // expansion inside the body.
         let script = match cmd.stdin {
             Some(bytes) => {
                 let stdin_text = String::from_utf8_lossy(&bytes);
-                // Quote the heredoc terminator with an unlikely marker
-                // so the model's stdin can't accidentally close it.
+                let terminator = format!("__HADRIAN_STDIN_{}__", uuid::Uuid::new_v4().simple());
                 format!(
-                    "{} <<'__HADRIAN_STDIN_EOF__'\n{}\n__HADRIAN_STDIN_EOF__",
-                    cmd.command, stdin_text
+                    "{} <<'{terminator}'\n{stdin_text}\n{terminator}",
+                    cmd.command
                 )
             }
             None => cmd.command.clone(),

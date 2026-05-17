@@ -87,6 +87,23 @@ impl ResponsesStore {
             .map(|sender| sender.subscribe())
     }
 
+    /// Register an in-flight execution that didn't go through
+    /// `create()` on this replica — e.g., a background worker that
+    /// just claimed a row created on another replica or before a
+    /// restart. Returns a receiver that the local replica-wide cancel
+    /// poller can trip via `trip_cancel_in_process`. Idempotent:
+    /// returns a subscriber on the existing sender if the id is
+    /// already registered.
+    pub async fn register_external_execution(&self, response_id: &str) -> CancelSignal {
+        let mut senders = self.cancel_senders.lock().await;
+        if let Some(existing) = senders.get(response_id) {
+            return existing.subscribe();
+        }
+        let (tx, rx) = watch::channel(false);
+        senders.insert(response_id.to_string(), tx);
+        rx
+    }
+
     /// Generate a new response ID matching OpenAI's `resp_<random>`
     /// pattern. The random suffix is a base32-encoded UUID (no padding,
     /// lowercase) to be URL-safe.
@@ -135,11 +152,14 @@ impl ResponsesStore {
         Ok((record, rx))
     }
 
-    /// Patch a response's lifecycle fields. Removes the cancellation
-    /// sender when the response enters a terminal state.
-    pub async fn update(
+    /// Patch a response's lifecycle fields. Tenant-scoped: a wrong
+    /// `org_id` returns `NotFound` rather than writing into someone
+    /// else's row. Removes the cancellation sender when the response
+    /// enters a terminal state.
+    pub async fn update_within_org(
         &self,
         id: &str,
+        org_id: Uuid,
         mut patch: ResponseCompletion,
     ) -> ResponsesStoreResult<ResponseRecord> {
         // When transitioning to a terminal state we also stamp the
@@ -152,7 +172,7 @@ impl ResponsesStore {
         }
         let record = self
             .repo
-            .update(id, patch)
+            .update_within_org(id, org_id, patch)
             .await?
             .ok_or(ResponsesStoreError::NotFound)?;
         if record.status.is_terminal() {
@@ -165,11 +185,7 @@ impl ResponsesStore {
     }
 
     /// Org-scoped fetch.
-    pub async fn get(
-        &self,
-        id: &str,
-        org_id: Option<Uuid>,
-    ) -> ResponsesStoreResult<ResponseRecord> {
+    pub async fn get(&self, id: &str, org_id: Uuid) -> ResponsesStoreResult<ResponseRecord> {
         self.repo
             .get_by_id_and_org(id, org_id)
             .await?
@@ -179,7 +195,7 @@ impl ResponsesStore {
     /// Org-scoped delete. Idempotent — succeeds even when the row is
     /// already gone (we still return Ok so `DELETE` is idempotent per
     /// REST convention).
-    pub async fn delete(&self, id: &str, org_id: Option<Uuid>) -> ResponsesStoreResult<bool> {
+    pub async fn delete(&self, id: &str, org_id: Uuid) -> ResponsesStoreResult<bool> {
         let removed = self.repo.delete_by_id_and_org(id, org_id).await?;
         if removed {
             self.cancel_senders.lock().await.remove(id);
@@ -191,11 +207,7 @@ impl ResponsesStore {
     ///
     /// Per OpenAI's spec, cancel only succeeds when `background=true`.
     /// Returns the updated record.
-    pub async fn cancel(
-        &self,
-        id: &str,
-        org_id: Option<Uuid>,
-    ) -> ResponsesStoreResult<ResponseRecord> {
+    pub async fn cancel(&self, id: &str, org_id: Uuid) -> ResponsesStoreResult<ResponseRecord> {
         let record = self.get(id, org_id).await?;
         if !record.background {
             return Err(ResponsesStoreError::NotBackground);
@@ -205,8 +217,9 @@ impl ResponsesStore {
         if let Some(tx) = self.cancel_senders.lock().await.get(id) {
             let _ = tx.send(true);
         }
-        self.update(
+        self.update_within_org(
             id,
+            org_id,
             ResponseCompletion {
                 status: Some(ResponseStatus::Cancelled),
                 completed_at: Some(Utc::now()),
@@ -220,5 +233,60 @@ impl ResponsesStore {
     /// expiry. Returns the number of rows removed.
     pub async fn prune_expired(&self, before: DateTime<Utc>) -> ResponsesStoreResult<u64> {
         Ok(self.repo.delete_expired(before).await?)
+    }
+
+    /// Reap rows stuck in `in_progress`. Used by the retention
+    /// worker when a worker that claimed a row died mid-execution
+    /// (claim_queued only picks rows in `queued`, so without this
+    /// they'd linger forever). Marks them `failed` with a
+    /// `worker_lost` error payload and stamps a fresh
+    /// retention_expires_at so they're pruned on the normal cycle.
+    pub async fn reap_stuck(&self, max_age: StdDuration) -> ResponsesStoreResult<u64> {
+        let now = Utc::now();
+        let cutoff = match Duration::from_std(max_age) {
+            Ok(d) => now - d,
+            Err(_) => now - Duration::hours(1),
+        };
+        let retention = self.retention_expires_at(now);
+        Ok(self
+            .repo
+            .reap_stuck_in_progress(cutoff, now, retention)
+            .await?)
+    }
+
+    /// Snapshot of response IDs currently registered with an in-flight
+    /// persister. Used by the cross-replica cancel poller to build the
+    /// "active set" it polls each cycle.
+    pub async fn active_response_ids(&self) -> Vec<String> {
+        self.cancel_senders.lock().await.keys().cloned().collect()
+    }
+
+    /// Trip the in-process cancel signal for a response without
+    /// touching the DB. Called by the cross-replica cancel poller
+    /// when another replica has flipped `status='cancelled'`; the
+    /// row update already happened on the originating replica.
+    pub async fn trip_cancel_in_process(&self, id: &str) {
+        if let Some(tx) = self.cancel_senders.lock().await.get(id) {
+            let _ = tx.send(true);
+        }
+    }
+
+    /// Poll the DB once for any `status='cancelled'` rows in the
+    /// in-flight set and trip their watch signals. Designed to be
+    /// driven by a single replica-wide task (see
+    /// `jobs::responses_cancel_poller`), replacing per-execution
+    /// pollers.
+    pub async fn poll_external_cancels(&self) -> ResponsesStoreResult<usize> {
+        let active = self.active_response_ids().await;
+        if active.is_empty() {
+            return Ok(0);
+        }
+        let cancelled = self.repo.list_cancelled_among(&active).await?;
+        let mut tripped = 0;
+        for id in &cancelled {
+            self.trip_cancel_in_process(id).await;
+            tripped += 1;
+        }
+        Ok(tripped)
     }
 }

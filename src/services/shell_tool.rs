@@ -297,6 +297,9 @@ pub struct ShellExecutor {
     /// `SessionSpec` because shell tool calls can repeat and each one
     /// boots a fresh session.
     mounted_skills: Vec<SkillMount>,
+    /// Per-execution limits (timeouts, default CPU/mem). Loaded from
+    /// `[features.server_tools].shell_limits`.
+    limits: crate::config::ShellLimitsConfig,
     /// Usage log buffer. When set, the executor pushes a `record_type:
     /// "tool"` entry per completed call with `tool_runtime_seconds` set.
     #[cfg(feature = "concurrency")]
@@ -304,12 +307,14 @@ pub struct ShellExecutor {
 }
 
 impl ShellExecutor {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         runtime: Arc<dyn ShellRuntime>,
         cost_microcents_per_second: u64,
         runtime_label: &'static str,
         principal: ShellPrincipal,
         mounted_skills: Vec<SkillMount>,
+        limits: crate::config::ShellLimitsConfig,
         #[cfg(feature = "concurrency")] usage_buffer: Option<
             Arc<crate::usage_buffer::UsageLogBuffer>,
         >,
@@ -320,6 +325,7 @@ impl ShellExecutor {
             runtime_label,
             principal,
             mounted_skills,
+            limits,
             #[cfg(feature = "concurrency")]
             usage_buffer,
         }
@@ -406,10 +412,18 @@ impl ServerExecutedTool for ShellExecutor {
         // consuming events while we boot the container.
         let id_for_task = id.clone();
         let command_for_task = command.clone();
+        let exec_timeout = std::time::Duration::from_secs(self.limits.command_timeout_secs.max(1));
+        let default_cpu = self.limits.default_cpu_limit;
+        let default_mem_bytes = self
+            .limits
+            .default_mem_limit_mb
+            .map(|mb| u64::from(mb) * 1024 * 1024);
         crate::compat::spawn_detached(async move {
             let start = Instant::now();
             let spec = SessionSpec {
                 mounted_skills,
+                cpu_limit: default_cpu,
+                mem_limit_bytes: default_mem_bytes,
                 ..SessionSpec::default()
             };
             let session = match runtime.start_session(spec).await {
@@ -448,7 +462,7 @@ impl ServerExecutedTool for ShellExecutor {
                 .exec(ExecRequest {
                     command: command_for_task.clone(),
                     stdin,
-                    timeout: None,
+                    timeout: Some(exec_timeout),
                 })
                 .await
             {

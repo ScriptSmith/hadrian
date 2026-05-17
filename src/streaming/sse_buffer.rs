@@ -26,6 +26,12 @@ use bytes::{Bytes, BytesMut};
 #[derive(Debug, Default)]
 pub struct SseBuffer {
     buffer: BytesMut,
+    /// Offset within `buffer` we've already searched up to. Each
+    /// `extend` only needs to scan from here forward (minus a small
+    /// overlap for the four-byte `\r\n\r\n` delimiter). Reset to 0
+    /// after every `split_to`. Without this, an N-byte buffer with M
+    /// extracted events does M full linear scans — O(N·M).
+    scan_offset: usize,
 }
 
 impl SseBuffer {
@@ -33,6 +39,7 @@ impl SseBuffer {
     pub fn new() -> Self {
         Self {
             buffer: BytesMut::new(),
+            scan_offset: 0,
         }
     }
 
@@ -47,40 +54,51 @@ impl SseBuffer {
     /// and retains any incomplete data for the next call.
     pub fn extract_complete_events(&mut self) -> Vec<Bytes> {
         let mut events = Vec::new();
-
         while let Some(end_pos) = self.find_event_boundary() {
             let event = self.buffer.split_to(end_pos);
+            // split_to invalidated absolute offsets; the next search
+            // starts at the front of what remains.
+            self.scan_offset = 0;
             events.push(event.freeze());
         }
-
         events
     }
 
     /// Find the position of the next event boundary (end of `\n\n` or `\r\n\r\n`).
-    fn find_event_boundary(&self) -> Option<usize> {
+    ///
+    /// Walks the buffer once per appended chunk by tracking
+    /// `scan_offset` — we never re-examine bytes that were already
+    /// proved not to be a boundary on a previous call.
+    fn find_event_boundary(&mut self) -> Option<usize> {
         let bytes = &self.buffer[..];
-
-        for i in 0..bytes.len().saturating_sub(1) {
+        // The boundary check looks at up to 4 bytes (`\r\n\r\n`), so
+        // back off the saved offset enough to cover a delimiter that
+        // straddles the previous extend boundary.
+        let start = self.scan_offset.saturating_sub(3);
+        let mut i = start;
+        while i + 1 < bytes.len() {
             if bytes[i] == b'\n' && bytes[i + 1] == b'\n' {
                 return Some(i + 2);
             }
-        }
-
-        for i in 0..bytes.len().saturating_sub(3) {
-            if bytes[i] == b'\r'
+            if i + 3 < bytes.len()
+                && bytes[i] == b'\r'
                 && bytes[i + 1] == b'\n'
                 && bytes[i + 2] == b'\r'
                 && bytes[i + 3] == b'\n'
             {
                 return Some(i + 4);
             }
+            i += 1;
         }
-
+        // Everything scanned without a hit. Remember how far we got
+        // so the next extend() only walks the new bytes.
+        self.scan_offset = bytes.len();
         None
     }
 
     /// Get any remaining incomplete data in the buffer.
     pub fn take_remaining(&mut self) -> Bytes {
+        self.scan_offset = 0;
         self.buffer.split().freeze()
     }
 

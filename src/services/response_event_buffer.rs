@@ -10,7 +10,10 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use tokio::{sync::mpsc, time::Instant};
+use tokio::{
+    sync::{Mutex, mpsc, watch},
+    time::Instant,
+};
 use tracing::{debug, warn};
 
 use crate::db::repos::{NewResponseEvent, ResponseEventsRepo};
@@ -20,12 +23,22 @@ use crate::db::repos::{NewResponseEvent, ResponseEventsRepo};
 #[derive(Clone)]
 pub struct ResponseEventBuffer {
     tx: mpsc::Sender<NewResponseEvent>,
+    /// A direct repo handle for synchronous insertion. The persister
+    /// uses this for the terminal event so the row's status update
+    /// can't observe a state where status=Completed but the terminal
+    /// event hasn't yet been committed to the log.
+    repo: Arc<dyn ResponseEventsRepo>,
+    /// Watch channel for shutdown coordination. The drainer awaits
+    /// `changed()`; `shutdown()` flips `true` and then awaits the
+    /// `drainer_done` watch.
+    shutdown_tx: watch::Sender<bool>,
+    drainer_done_rx: Arc<Mutex<watch::Receiver<bool>>>,
 }
 
 impl ResponseEventBuffer {
     /// Spawn the drainer task and return a handle for `push`. The task
-    /// runs forever; when the channel is closed (all senders dropped)
-    /// it drains pending events and exits.
+    /// runs until `shutdown()` is called or all senders are dropped,
+    /// flushes pending events, and signals completion.
     pub fn spawn(
         repo: Arc<dyn ResponseEventsRepo>,
         max_batch: usize,
@@ -33,10 +46,30 @@ impl ResponseEventBuffer {
         channel_capacity: usize,
     ) -> Self {
         let (tx, rx) = mpsc::channel(channel_capacity);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (done_tx, done_rx) = watch::channel(false);
+        let drainer_repo = repo.clone();
         crate::compat::spawn_detached(async move {
-            drain_events(rx, repo, max_batch, flush_interval).await;
+            drain_events(rx, drainer_repo, max_batch, flush_interval, shutdown_rx).await;
+            let _ = done_tx.send(true);
         });
-        Self { tx }
+        Self {
+            tx,
+            repo,
+            shutdown_tx,
+            drainer_done_rx: Arc::new(Mutex::new(done_rx)),
+        }
+    }
+
+    /// Trigger an orderly shutdown of the drainer. Waits until the
+    /// drainer has flushed in-flight events and exited. Called by
+    /// `cli::server` during graceful shutdown so buffered events
+    /// aren't lost when the process is killed.
+    pub async fn shutdown(&self) {
+        let _ = self.shutdown_tx.send(true);
+        let mut done = self.drainer_done_rx.lock().await;
+        // wait_for returns immediately if the value is already true.
+        let _ = done.wait_for(|v| *v).await;
     }
 
     /// Non-blocking enqueue. Drops on overflow with a warning — we
@@ -52,6 +85,22 @@ impl ResponseEventBuffer {
             }
         }
     }
+
+    /// Synchronously insert a single event, bypassing the buffer.
+    /// Returns once the row is committed and `last_sequence_number`
+    /// is ratcheted.
+    ///
+    /// The persister uses this for the terminal event so the row's
+    /// status update happens-after the terminal event commit. Without
+    /// this, `GET /v1/responses/{id}/events` readers can observe
+    /// `status=Completed` before the terminal event reaches the log.
+    pub async fn insert_sync(&self, event: NewResponseEvent) -> Result<(), crate::db::DbError> {
+        let response_id = event.response_id.clone();
+        let seq = event.sequence_number;
+        self.repo.insert_batch(vec![event]).await?;
+        self.repo.set_last_sequence(&response_id, seq).await?;
+        Ok(())
+    }
 }
 
 async fn drain_events(
@@ -59,19 +108,28 @@ async fn drain_events(
     repo: Arc<dyn ResponseEventsRepo>,
     max_batch: usize,
     flush_interval: Duration,
+    mut shutdown: watch::Receiver<bool>,
 ) {
     let mut buffer: Vec<NewResponseEvent> = Vec::with_capacity(max_batch);
     let mut next_flush = Instant::now() + flush_interval;
 
     loop {
+        if *shutdown.borrow() {
+            break;
+        }
         let now = Instant::now();
         let timeout = if next_flush > now {
             next_flush - now
         } else {
             Duration::ZERO
         };
-
-        let result = tokio::time::timeout(timeout, rx.recv()).await;
+        let result = tokio::select! {
+            biased;
+            _ = shutdown.changed() => {
+                break;
+            }
+            r = tokio::time::timeout(timeout, rx.recv()) => r,
+        };
         match result {
             Ok(Some(ev)) => {
                 buffer.push(ev);
@@ -82,11 +140,7 @@ async fn drain_events(
             }
             Ok(None) => {
                 // Channel closed — flush remainder and exit.
-                if !buffer.is_empty() {
-                    flush(&repo, &mut buffer).await;
-                }
-                debug!("response_event_buffer drainer exiting");
-                return;
+                break;
             }
             Err(_) => {
                 // Timeout — flush whatever we have.
@@ -97,6 +151,16 @@ async fn drain_events(
             }
         }
     }
+
+    // Final flush: drain anything still in the channel + buffer so
+    // shutdown doesn't lose events.
+    while let Ok(ev) = rx.try_recv() {
+        buffer.push(ev);
+    }
+    if !buffer.is_empty() {
+        flush(&repo, &mut buffer).await;
+    }
+    debug!("response_event_buffer drainer exiting");
 }
 
 async fn flush(repo: &Arc<dyn ResponseEventsRepo>, buffer: &mut Vec<NewResponseEvent>) {

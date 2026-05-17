@@ -196,10 +196,11 @@ pub async fn resolve_and_inject_skills(
 /// Background callers pass the response_id; foreground passes the
 /// HTTP request_id. Either way it's only used as a tracing tag.
 ///
-/// `persistence_id` + `cancel_rx`: when `Some`, the response is also
-/// wrapped with `wrap_streaming_with_persistence`. Background callers
-/// always supply these (they pre-created the row); foreground also
-/// supplies them when `store=true`.
+/// `persistence`: when `Some`, the response is also wrapped with
+/// `wrap_streaming_with_persistence`. Background callers always supply
+/// this (they pre-created the row); foreground also supplies it when
+/// `store=true`. Carries the row's `org_id` so persistence writes are
+/// tenant-scoped — a stale or wrong id can't punch into another org.
 #[allow(clippy::too_many_arguments)] // each arg is load-bearing; bundling adds no clarity
 pub fn apply_streaming_pipeline(
     state: &AppState,
@@ -211,7 +212,7 @@ pub fn apply_streaming_pipeline(
     mounted_skills: Vec<SkillMount>,
     request_id: Option<String>,
     response: Response<Body>,
-    persistence_id_and_cancel: Option<(String, crate::services::CancelSignal)>,
+    persistence: Option<PersistenceHandle>,
 ) -> Response<Body> {
     if !response.status().is_success() {
         return response;
@@ -290,14 +291,19 @@ pub fn apply_streaming_pipeline(
             .map(|t| t.iter().any(|tt| tt.is_shell()))
             .unwrap_or(false);
         if has_shell && !shell_runtime.capabilities().passthrough_only {
-            let pricing = &state.config.features.server_tools.pricing;
             let (rate, label) = match &state.config.features.shell {
                 crate::config::ShellRuntimeConfig::None
                 | crate::config::ShellRuntimeConfig::PassthroughOpenAI => (0, "unknown"),
                 #[cfg(feature = "runtime-microsandbox")]
-                crate::config::ShellRuntimeConfig::Microsandbox(_) => {
-                    (pricing.microsandbox_microcents_per_second, "microsandbox")
-                }
+                crate::config::ShellRuntimeConfig::Microsandbox(_) => (
+                    state
+                        .config
+                        .features
+                        .server_tools
+                        .pricing
+                        .microsandbox_microcents_per_second,
+                    "microsandbox",
+                ),
                 #[cfg(feature = "runtime-opensandbox")]
                 crate::config::ShellRuntimeConfig::OpenSandbox(_) => (0, "opensandbox"),
             };
@@ -307,6 +313,7 @@ pub fn apply_streaming_pipeline(
                 label,
                 principal.clone().into(),
                 mounted_skills,
+                state.config.features.server_tools.shell_limits.clone(),
                 #[cfg(feature = "concurrency")]
                 state.usage_buffer.clone(),
             )));
@@ -341,17 +348,31 @@ pub fn apply_streaming_pipeline(
     };
 
     // ── Persistence wrap ───────────────────────────────────────
-    if let (Some((resp_id, cancel_rx)), Some(store)) =
-        (persistence_id_and_cancel, state.responses_store.as_ref())
-    {
+    if let (Some(handle), Some(store)) = (persistence, state.responses_store.as_ref()) {
         crate::services::response_persister::wrap_streaming_with_persistence(
             after_tools,
             store.clone(),
-            resp_id,
-            cancel_rx,
+            handle.response_id,
+            handle.org_id,
+            handle.initial_sequence_number,
+            handle.cancel_rx,
             state.response_event_buffer.clone(),
         )
     } else {
         after_tools
     }
+}
+
+/// Plumbing handle for the persister wrap. Bundles the row's id and
+/// `org_id` together so the persister can issue tenant-scoped writes
+/// without re-loading the row.
+pub struct PersistenceHandle {
+    pub response_id: String,
+    pub org_id: Uuid,
+    /// Last sequence number already in the event log for this
+    /// response. The persister starts incrementing from this so a
+    /// re-attach can't collide on the `(response_id, sequence_number)`
+    /// primary key.
+    pub initial_sequence_number: i64,
+    pub cancel_rx: crate::services::CancelSignal,
 }

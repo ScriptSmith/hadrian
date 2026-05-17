@@ -198,6 +198,15 @@ impl GatewayConfig {
             .map_err(ConfigError::Validation)?;
         self.features.validate().map_err(ConfigError::Validation)?;
 
+        // SSRF-validate the responses webhook URL with the server's
+        // loopback policy. Done here (not in features.validate) so the
+        // webhook config doesn't need to know about server.allow_*.
+        if let Some(ref webhook) = self.features.responses.webhook {
+            webhook
+                .validate(self.server.allow_loopback_urls)
+                .map_err(ConfigError::Validation)?;
+        }
+
         Ok(())
     }
 

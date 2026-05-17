@@ -23,6 +23,7 @@ use http::Response;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 use crate::{
     db::repos::{NewResponseEvent, ResponseCompletion, ResponseStatus},
@@ -35,10 +36,18 @@ use crate::{
 ///
 /// Returns the same response shape, with body replaced by a stream
 /// that mirrors the original.
+///
+/// `initial_sequence_number` is the row's `last_sequence_number` at
+/// attach time. The persister increments from there so re-attaches
+/// (background retries, hypothetical resume) continue the sequence
+/// instead of restarting at 0 and colliding on the (response_id,
+/// sequence_number) primary key.
 pub fn wrap_streaming_with_persistence(
     response: Response<Body>,
     store: Arc<ResponsesStore>,
     response_id: String,
+    org_id: Uuid,
+    initial_sequence_number: i64,
     mut cancel_rx: CancelSignal,
     event_buffer: Option<Arc<ResponseEventBuffer>>,
 ) -> Response<Body> {
@@ -50,32 +59,21 @@ pub fn wrap_streaming_with_persistence(
         let mut sse_buffer = SseBuffer::new();
         let mut final_response_object: Option<Value> = None;
         let mut terminal_status: Option<ResponseStatus> = None;
-        let mut sequence_number: i64 = 0;
+        let mut terminal_event_persisted = false;
+        let mut sequence_number: i64 = initial_sequence_number;
+        let mut cancelled = false;
 
         loop {
             tokio::select! {
                 _ = cancel_rx.changed() => {
                     if *cancel_rx.borrow() {
+                        cancelled = true;
                         warn!(
                             stage = "persist_cancelled",
                             response_id = %response_id,
-                            "Cancel signal tripped; aborting stream"
+                            "Cancel signal tripped; finalising stream"
                         );
-                        // Persist as cancelled.
-                        if let Err(e) = store
-                            .update(
-                                &response_id,
-                                ResponseCompletion {
-                                    status: Some(ResponseStatus::Cancelled),
-                                    completed_at: Some(Utc::now()),
-                                    ..Default::default()
-                                },
-                            )
-                            .await
-                        {
-                            error!(error = %e, "Failed to mark response cancelled");
-                        }
-                        return;
+                        break;
                     }
                 }
                 chunk = body_stream.next() => {
@@ -89,28 +87,46 @@ pub fn wrap_streaming_with_persistence(
                     };
                     sse_buffer.extend(&chunk);
                     for event in sse_buffer.extract_complete_events() {
+                        let is_terminal = inspect_terminal_event(&event);
                         if final_response_object.is_none()
-                            && let Some((resp_obj, status)) = inspect_terminal_event(&event)
+                            && let Some((resp_obj, status)) = is_terminal.clone()
                         {
                             final_response_object = Some(resp_obj);
                             terminal_status = Some(status);
                         }
 
                         // Append to the event log if a buffer is wired
-                        // up. We extract the event_type for indexing
-                        // and store the parsed JSON for resilient
-                        // replay. Errors don't abort the stream — the
-                        // event log is best-effort.
+                        // up. Terminal events go through `insert_sync`
+                        // so the row's status update later in this
+                        // function happens-after the event commit —
+                        // closes the race where /events readers see
+                        // `status=Completed` before the terminal event
+                        // reaches the log. Non-terminal events ride
+                        // the buffered fast path.
                         if let Some(ref buf) = event_buffer {
                             sequence_number += 1;
                             let (event_type, payload) = parse_event_for_log(&event);
-                            buf.push(NewResponseEvent {
+                            let new_event = NewResponseEvent {
                                 response_id: response_id.clone(),
                                 sequence_number,
                                 event_type,
                                 payload,
                                 created_at: Utc::now(),
-                            });
+                            };
+                            if is_terminal.is_some() {
+                                if let Err(e) = buf.insert_sync(new_event).await {
+                                    warn!(
+                                        error = %e,
+                                        response_id = %response_id,
+                                        "Failed to commit terminal response event; \
+                                         readers may see status=terminal without the event"
+                                    );
+                                } else {
+                                    terminal_event_persisted = true;
+                                }
+                            } else {
+                                buf.push(new_event);
+                            }
                         }
 
                         if tx.send(Ok(event)).await.is_err() {
@@ -124,37 +140,83 @@ pub fn wrap_streaming_with_persistence(
             }
         }
 
-        // Flush any trailing partial.
+        // Flush any trailing partial bytes. On cancel, append a
+        // synthetic `response.cancelled` event so polling clients
+        // observe the terminal status in the event log too.
         if !sse_buffer.is_empty() {
             let _ = tx.send(Ok(sse_buffer.take_remaining())).await;
         }
 
         // Persist the captured state. If we never saw a terminal
         // event, mark as incomplete — the stream ended without a
-        // `response.completed`.
-        let (output, usage, error_field, status) = match final_response_object {
-            Some(resp) => {
-                let status = terminal_status.unwrap_or(ResponseStatus::Completed);
-                (
-                    resp.get("output").cloned(),
-                    resp.get("usage").cloned(),
-                    resp.get("error").cloned().filter(|v| !v.is_null()),
-                    status,
-                )
-            }
-            None => {
-                debug!(
-                    stage = "persist_no_terminal_event",
-                    response_id = %response_id,
-                    "Stream ended without a terminal response event; marking incomplete"
-                );
-                (None, None, None, ResponseStatus::Incomplete)
+        // `response.completed`. Cancel takes precedence regardless of
+        // what events we saw.
+        let (output, usage, error_field, status) = if cancelled {
+            (None, None, None, ResponseStatus::Cancelled)
+        } else {
+            match final_response_object {
+                Some(resp) => {
+                    let status = terminal_status.unwrap_or(ResponseStatus::Completed);
+                    (
+                        resp.get("output").cloned(),
+                        resp.get("usage").cloned(),
+                        resp.get("error").cloned().filter(|v| !v.is_null()),
+                        status,
+                    )
+                }
+                None => {
+                    debug!(
+                        stage = "persist_no_terminal_event",
+                        response_id = %response_id,
+                        "Stream ended without a terminal response event; marking incomplete"
+                    );
+                    (None, None, None, ResponseStatus::Incomplete)
+                }
             }
         };
 
+        // If the row is closing out terminally but no terminal event
+        // landed in the log yet (cancelled mid-stream, or the upstream
+        // closed without one), synthesise one and commit it
+        // synchronously. /events readers can then detect the terminal
+        // event from the log alone, matching the "event-log-as-truth"
+        // contract.
+        if let Some(ref buf) = event_buffer
+            && status.is_terminal()
+            && !terminal_event_persisted
+        {
+            sequence_number += 1;
+            let synth_type = match status {
+                ResponseStatus::Completed => "response.completed",
+                ResponseStatus::Failed => "response.failed",
+                ResponseStatus::Cancelled => "response.cancelled",
+                ResponseStatus::Incomplete => "response.incomplete",
+                _ => "response.completed",
+            };
+            let payload = serde_json::json!({
+                "type": synth_type,
+                "response": { "id": response_id.clone(), "status": status.as_str() },
+            });
+            let synth_event = NewResponseEvent {
+                response_id: response_id.clone(),
+                sequence_number,
+                event_type: synth_type.to_string(),
+                payload,
+                created_at: Utc::now(),
+            };
+            if let Err(e) = buf.insert_sync(synth_event).await {
+                warn!(
+                    error = %e,
+                    response_id = %response_id,
+                    "Failed to commit synthetic terminal event"
+                );
+            }
+        }
+
         if let Err(e) = store
-            .update(
+            .update_within_org(
                 &response_id,
+                org_id,
                 ResponseCompletion {
                     status: Some(status),
                     completed_at: Some(Utc::now()),
@@ -218,7 +280,15 @@ fn inspect_terminal_event(event: &[u8]) -> Option<(Value, ResponseStatus)> {
 /// and the raw bytes as a JSON string so replay never loses data.
 fn parse_event_for_log(event: &[u8]) -> (String, Value) {
     let Ok(s) = std::str::from_utf8(event) else {
-        return ("unknown".to_string(), Value::String(format!("{event:?}")));
+        // Non-UTF-8 bytes get base64-encoded so the audit log is
+        // human-pasteable (Debug-format of `bytes::Bytes` is a hex
+        // array that's hard to recover from).
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(event);
+        return (
+            "unknown_binary".to_string(),
+            serde_json::json!({ "base64": encoded }),
+        );
     };
     for line in s.lines() {
         let Some(data) = line.strip_prefix("data:") else {
@@ -248,6 +318,7 @@ fn parse_event_for_log(event: &[u8]) -> (String, Value) {
 pub async fn persist_non_streaming(
     store: &ResponsesStore,
     response_id: &str,
+    org_id: Uuid,
     body_bytes: &[u8],
     http_status: u16,
 ) {
@@ -266,8 +337,9 @@ pub async fn persist_non_streaming(
         Err(_) => (None, None, None),
     };
     if let Err(e) = store
-        .update(
+        .update_within_org(
             response_id,
+            org_id,
             ResponseCompletion {
                 status: Some(status),
                 completed_at: Some(Utc::now()),

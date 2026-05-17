@@ -94,13 +94,32 @@ pub struct FeaturesConfig {
 #[serde(deny_unknown_fields)]
 pub struct ResponsesPersistenceConfig {
     /// How long a terminal response is kept before pruning.
-    /// Default 86400 (24h).
+    /// Default 86400 (24h). Must be > 0.
     #[serde(default = "default_responses_retention_secs")]
     pub retention_secs: u64,
     /// Interval at which the retention worker scans for expired
-    /// records. Default 3600 (1h).
+    /// records. Default 3600 (1h). Must be > 0.
     #[serde(default = "default_responses_cleanup_interval_secs")]
     pub cleanup_interval_secs: u64,
+    /// Max concurrent in-flight background-mode responses **per
+    /// replica**. Each `background=true` request claims a row and runs
+    /// the LLM stream in its own task; without a cap a burst can pin
+    /// the whole replica. Default 8.
+    #[serde(default = "default_responses_worker_concurrency")]
+    pub worker_concurrency: usize,
+    /// Maximum wall-clock time a response is allowed to remain in
+    /// `status='in_progress'`. The retention worker reaps rows that
+    /// exceed this (mark Failed with `code="worker_lost"`), covering
+    /// the case where a worker crashed mid-execution. Should be
+    /// generously larger than the longest expected execution — a
+    /// real workload should finish well within this. Default 3600
+    /// (1h). Must be > 0.
+    #[serde(default = "default_responses_max_in_progress_secs")]
+    pub max_in_progress_secs: u64,
+    /// Retry policy for background-mode responses. Foreground
+    /// streaming requests don't use this — the client owns the retry.
+    #[serde(default)]
+    pub retry: ResponsesRetryConfig,
     /// Optional webhook fired on terminal-state transitions
     /// (`completed`, `failed`, `cancelled`, `incomplete`). Disabled
     /// when unset.
@@ -113,9 +132,129 @@ impl Default for ResponsesPersistenceConfig {
         Self {
             retention_secs: default_responses_retention_secs(),
             cleanup_interval_secs: default_responses_cleanup_interval_secs(),
+            worker_concurrency: default_responses_worker_concurrency(),
+            max_in_progress_secs: default_responses_max_in_progress_secs(),
+            retry: ResponsesRetryConfig::default(),
             webhook: None,
         }
     }
+}
+
+impl ResponsesPersistenceConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.retention_secs == 0 {
+            return Err("[features.responses] retention_secs must be > 0".into());
+        }
+        if self.cleanup_interval_secs == 0 {
+            return Err("[features.responses] cleanup_interval_secs must be > 0".into());
+        }
+        if self.max_in_progress_secs == 0 {
+            return Err("[features.responses] max_in_progress_secs must be > 0".into());
+        }
+        self.retry.validate()?;
+        Ok(())
+    }
+}
+
+fn default_responses_worker_concurrency() -> usize {
+    8
+}
+
+fn default_responses_max_in_progress_secs() -> u64 {
+    3_600
+}
+
+/// Retry policy for background-mode responses.
+///
+/// Foreground `/v1/responses` requests are streamed back to the
+/// client — retries are the client's responsibility. Background
+/// requests have no client connected during execution, so the
+/// worker handles transient failures (provider 5xx, network blips,
+/// transient DB errors) by re-running the row with exponential
+/// backoff until either the call succeeds or `max_attempts` is hit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ResponsesRetryConfig {
+    /// Master switch. Default `true`.
+    #[serde(default = "default_responses_retry_enabled")]
+    pub enabled: bool,
+    /// Maximum number of execution attempts, including the first.
+    /// `1` means no retry. Default 3.
+    #[serde(default = "default_responses_retry_max_attempts")]
+    pub max_attempts: u32,
+    /// Initial backoff before the second attempt, in milliseconds.
+    /// Default 500ms.
+    #[serde(default = "default_responses_retry_initial_backoff_ms")]
+    pub initial_backoff_ms: u64,
+    /// Backoff multiplier between attempts. Default 2.0.
+    #[serde(default = "default_responses_retry_multiplier")]
+    pub multiplier: f64,
+    /// Cap on a single backoff interval, in milliseconds. Default
+    /// 30000 (30s).
+    #[serde(default = "default_responses_retry_max_backoff_ms")]
+    pub max_backoff_ms: u64,
+}
+
+impl Default for ResponsesRetryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_responses_retry_enabled(),
+            max_attempts: default_responses_retry_max_attempts(),
+            initial_backoff_ms: default_responses_retry_initial_backoff_ms(),
+            multiplier: default_responses_retry_multiplier(),
+            max_backoff_ms: default_responses_retry_max_backoff_ms(),
+        }
+    }
+}
+
+impl ResponsesRetryConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.max_attempts == 0 {
+            return Err("[features.responses.retry] max_attempts must be >= 1".into());
+        }
+        if self.multiplier < 1.0 {
+            return Err("[features.responses.retry] multiplier must be >= 1.0".into());
+        }
+        if self.initial_backoff_ms == 0 {
+            return Err("[features.responses.retry] initial_backoff_ms must be > 0".into());
+        }
+        if self.max_backoff_ms < self.initial_backoff_ms {
+            return Err(
+                "[features.responses.retry] max_backoff_ms must be >= initial_backoff_ms".into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Compute the next backoff interval for `attempt` (1-indexed
+    /// after the first try). Caps at `max_backoff_ms`.
+    pub fn backoff_for_attempt(&self, attempt: u32) -> std::time::Duration {
+        let exp = attempt.saturating_sub(1).min(31) as i32;
+        let ms = (self.initial_backoff_ms as f64) * self.multiplier.powi(exp);
+        let clamped = ms.min(self.max_backoff_ms as f64).max(0.0) as u64;
+        std::time::Duration::from_millis(clamped)
+    }
+}
+
+fn default_responses_retry_enabled() -> bool {
+    true
+}
+
+fn default_responses_retry_max_attempts() -> u32 {
+    3
+}
+
+fn default_responses_retry_initial_backoff_ms() -> u64 {
+    500
+}
+
+fn default_responses_retry_multiplier() -> f64 {
+    2.0
+}
+
+fn default_responses_retry_max_backoff_ms() -> u64 {
+    30_000
 }
 
 /// Webhook delivery settings.
@@ -123,19 +262,57 @@ impl Default for ResponsesPersistenceConfig {
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ResponsesWebhookConfig {
-    /// Target URL. Must be HTTPS or pass `validate_base_url` (no SSRF
-    /// to internal services unless explicitly allowed).
+    /// Target URL. Validated for SSRF at config-load time via
+    /// `validate_base_url` (no private/loopback/metadata addresses by
+    /// default).
     pub url: String,
-    /// Optional bearer token sent in the `Authorization` header.
+    /// Optional bearer token sent in the `Authorization` header. As
+    /// with other secret-bearing config fields, treat this value as
+    /// sensitive: don't log it and prefer routing through the secrets
+    /// manager URI scheme rather than embedding the literal token.
     #[serde(default)]
     pub bearer_token: Option<String>,
     /// Per-request timeout in seconds. Default 10s.
     #[serde(default = "default_webhook_timeout_secs")]
     pub timeout_secs: u64,
+    /// Maximum concurrent in-flight deliveries. A slow target won't
+    /// hold up new deliveries beyond this cap; additional events
+    /// queue in the bounded retry channel. Default 32.
+    #[serde(default = "default_webhook_max_concurrent")]
+    pub max_concurrent_deliveries: usize,
+    /// Bounded retry queue capacity. When full, new events are
+    /// dropped (with a `webhook_dropped_total` counter increment) so
+    /// the gateway doesn't grow memory unboundedly when the target
+    /// is wedged. Default 1000.
+    #[serde(default = "default_webhook_retry_capacity")]
+    pub retry_queue_capacity: usize,
+}
+
+impl ResponsesWebhookConfig {
+    /// Validate the webhook URL against Hadrian's SSRF rules. Called
+    /// from `FeaturesConfig::validate()` at startup so misconfigured
+    /// hooks fail loudly instead of silently sending traffic to
+    /// internal endpoints.
+    pub fn validate(&self, allow_loopback: bool) -> Result<(), String> {
+        crate::validation::validate_base_url(&self.url, allow_loopback).map_err(|e| {
+            format!(
+                "[features.responses.webhook] url failed SSRF validation: {}",
+                e
+            )
+        })
+    }
 }
 
 fn default_webhook_timeout_secs() -> u64 {
     10
+}
+
+fn default_webhook_max_concurrent() -> usize {
+    32
+}
+
+fn default_webhook_retry_capacity() -> usize {
+    1000
 }
 
 fn default_responses_retention_secs() -> u64 {
@@ -173,6 +350,7 @@ impl FeaturesConfig {
                 self.server_tools.max_iterations
             );
         }
+        self.responses.validate()?;
         Ok(())
     }
 }
@@ -205,6 +383,10 @@ pub struct ServerToolsConfig {
     /// is billed by that provider and remains 0 here.
     #[serde(default)]
     pub pricing: ServerToolsPricingConfig,
+
+    /// Shell-tool execution limits.
+    #[serde(default)]
+    pub shell_limits: ShellLimitsConfig,
 }
 
 impl Default for ServerToolsConfig {
@@ -212,12 +394,51 @@ impl Default for ServerToolsConfig {
         Self {
             max_iterations: default_server_tools_max_iterations(),
             pricing: ServerToolsPricingConfig::default(),
+            shell_limits: ShellLimitsConfig::default(),
         }
     }
 }
 
 fn default_server_tools_max_iterations() -> usize {
     10
+}
+
+/// Limits enforced on every shell-tool invocation. Sets soft ceilings
+/// on wall-clock time and resource use so a runaway model can't pin
+/// VM resources indefinitely.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ShellLimitsConfig {
+    /// Per-command timeout in seconds. The runtime aborts the exec
+    /// once this elapses; the persister records the partial output.
+    /// Default 300 (5 min).
+    #[serde(default = "default_shell_command_timeout_secs")]
+    pub command_timeout_secs: u64,
+    /// Default vCPU limit applied when the SessionSpec doesn't
+    /// specify one. The runtime backend's own default applies when
+    /// this is `None`.
+    #[serde(default)]
+    pub default_cpu_limit: Option<f64>,
+    /// Default memory limit (MB) applied when the SessionSpec doesn't
+    /// specify one. The runtime backend's own default applies when
+    /// this is `None`.
+    #[serde(default)]
+    pub default_mem_limit_mb: Option<u32>,
+}
+
+impl Default for ShellLimitsConfig {
+    fn default() -> Self {
+        Self {
+            command_timeout_secs: default_shell_command_timeout_secs(),
+            default_cpu_limit: None,
+            default_mem_limit_mb: None,
+        }
+    }
+}
+
+fn default_shell_command_timeout_secs() -> u64 {
+    300
 }
 
 /// Cost rates for billable server-tool runtimes.

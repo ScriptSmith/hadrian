@@ -1066,8 +1066,10 @@ CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_expires ON oauth_authorization_
 -- evolve without further migrations.
 CREATE TABLE IF NOT EXISTS responses (
     id TEXT PRIMARY KEY,
-    -- Tenancy
-    org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+    -- Tenancy. Org is required: anonymous-mode deployments still set a
+    -- synthetic default org via the auth middleware, so a NULL here
+    -- would indicate a bypass we want to reject at insert time.
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
     project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
     -- Principal attribution
     user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
@@ -1087,7 +1089,11 @@ CREATE TABLE IF NOT EXISTS responses (
     usage TEXT,
     error TEXT,
     -- Retention
-    retention_expires_at TEXT NOT NULL
+    retention_expires_at TEXT NOT NULL,
+    -- Highest event sequence_number persisted by the event buffer for
+    -- this response. Used by the replay endpoint to detect "no more
+    -- events coming" without a separate join.
+    last_sequence_number INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_responses_org_status ON responses(org_id, status);
@@ -1103,7 +1109,9 @@ CREATE INDEX IF NOT EXISTS idx_responses_retention ON responses(retention_expire
 -- `sequence_number` is monotonic per response and assigned in the
 -- gateway (not derived from the upstream provider) so retries don't
 -- create gaps. ON DELETE CASCADE on `response_id` keeps the log in
--- sync with `responses` cleanup.
+-- sync with `responses` cleanup. The composite PRIMARY KEY already
+-- provides the (response_id, sequence_number) b-tree, so no extra
+-- index is needed.
 CREATE TABLE IF NOT EXISTS response_events (
     response_id TEXT NOT NULL REFERENCES responses(id) ON DELETE CASCADE,
     sequence_number INTEGER NOT NULL,
@@ -1112,10 +1120,3 @@ CREATE TABLE IF NOT EXISTS response_events (
     created_at TEXT NOT NULL,
     PRIMARY KEY (response_id, sequence_number)
 );
-
-CREATE INDEX IF NOT EXISTS idx_response_events_response_seq
-    ON response_events(response_id, sequence_number);
-
--- Track the highest sequence number persisted for a response so the
--- replay endpoint can decide when there's nothing more coming.
-ALTER TABLE responses ADD COLUMN last_sequence_number INTEGER NOT NULL DEFAULT 0;

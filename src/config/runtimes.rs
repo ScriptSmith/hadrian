@@ -87,25 +87,14 @@ pub struct MicrosandboxConfig {
     #[serde(default = "default_microsandbox_image")]
     pub image: String,
 
-    /// vCPUs per session. Default 1.
+    /// vCPUs per session. Default 1. Range 1..=255; values above 255
+    /// are clamped at the SDK boundary.
     #[serde(default = "default_microsandbox_cpus")]
     pub cpus: u32,
 
     /// Memory per session in MB. Default 512.
     #[serde(default = "default_microsandbox_memory_mb")]
     pub memory_mb: u32,
-
-    /// Pre-warm pool target size. Hadrian keeps this many sandboxes
-    /// booted and idle, ready to be checked out by the next session
-    /// that needs a clean VM. Each checkout triggers a background
-    /// refill. Pooled sandboxes can only serve sessions that don't
-    /// require secret injection or skill mounts (those are configured
-    /// at VM creation time, so pre-warmed VMs can't be retrofitted).
-    ///
-    /// Default 0 — disabled. Set to 2-4 for production to amortize
-    /// boot latency.
-    #[serde(default)]
-    pub prewarm_pool_size: usize,
 }
 
 #[cfg(feature = "runtime-microsandbox")]
