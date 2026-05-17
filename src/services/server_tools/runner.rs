@@ -12,8 +12,13 @@ use tracing::{Instrument, debug, error, info, info_span, warn};
 
 use super::{DetectedToolCall, ProviderCallback, ServerExecutedTool, ToolCallResult, ToolContext};
 use crate::{
-    api_types::responses::CreateResponsesPayload,
-    observability::metrics::record_server_tool_iteration, streaming::SseBuffer,
+    api_types::responses::{
+        CreateResponsesPayload, EasyInputMessage, EasyInputMessageContent, EasyInputMessageRole,
+        OutputItemFunctionCall, OutputMessage, ResponsesInput, ResponsesInputItem,
+        ResponsesReasoning,
+    },
+    observability::metrics::record_server_tool_iteration,
+    streaming::SseBuffer,
 };
 
 /// Multi-tool orchestrator for streaming Responses API output.
@@ -115,6 +120,16 @@ impl ToolLoopRunner {
 
                 let mut iteration: usize = 0;
                 let mut current_body = body;
+                // Continuation payload carried across iterations. Each
+                // turn appends the assistant items the upstream emitted
+                // plus the tool function-call outputs, so the model
+                // sees its own prior tool_use/tool_result pairs on
+                // subsequent turns. Without this, providers that
+                // translate Responses items into native pairwise
+                // formats (e.g. Anthropic via OpenRouter) drop the
+                // orphan tool outputs on the floor and the model loops
+                // forever as if it had never run anything.
+                let mut continuation_payload = original_payload.clone();
 
                 loop {
                     iteration += 1;
@@ -131,6 +146,11 @@ impl ToolLoopRunner {
                     let mut accumulated = BytesMut::new();
                     let mut detected: Vec<DetectedToolCall> = Vec::new();
                     let mut sse_buffer = SseBuffer::new();
+                    // Assistant items the upstream emitted this turn.
+                    // Threaded into the continuation payload below so
+                    // the function-call outputs from this iteration
+                    // have matching function_call items to anchor to.
+                    let mut captured_assistant_items: Vec<ResponsesInputItem> = Vec::new();
 
                     // Read the current response stream, forwarding events
                     // until we've finished consuming or detected calls.
@@ -154,6 +174,10 @@ impl ToolLoopRunner {
                                                 );
                                                 detected.push(call);
                                             }
+                                        }
+
+                                        if let Some(item) = parse_assistant_item(&event) {
+                                            captured_assistant_items.push(item);
                                         }
 
                                         // Hold back forwarding while we
@@ -320,23 +344,19 @@ impl ToolLoopRunner {
                     };
 
                     let is_final_iteration = iteration == max_iterations;
-                    // Build the continuation from the *original* payload
-                    // each iteration: tool `apply_to_continuation`
-                    // implementations append this iteration's
-                    // function-call outputs onto `payload.input`, so
-                    // reusing the previous iteration's mutated payload
-                    // would double-record prior outputs. Cloning is
-                    // therefore intentional and necessary — but only on
-                    // iterations where a continuation actually fires
-                    // (the early-`break` paths above skip this work).
-                    //
-                    // For requests with large `input` (uploaded files,
-                    // long instructions) the dominant cost here is the
-                    // `Vec<ResponsesInputItem>` clone inside `input`.
-                    // If that becomes hot in profiles, the next step is
-                    // to swap `CreateResponsesPayload.input` for an
-                    // `Arc<Vec<…>>` + copy-on-write on first append.
-                    let mut continuation_payload = original_payload.clone();
+                    // The continuation payload accumulates across
+                    // iterations: each turn it grows by the assistant
+                    // items the upstream emitted plus the function-call
+                    // outputs this turn's tools produced. Pairing the
+                    // assistant's function_call items with their
+                    // corresponding function_call_output items is what
+                    // lets non-OpenAI providers (e.g. Anthropic via
+                    // OpenRouter) reconstruct valid tool_use/tool_result
+                    // pairs on the wire.
+                    normalize_input_to_items(&mut continuation_payload);
+                    if let Some(ResponsesInput::Items(ref mut items)) = continuation_payload.input {
+                        items.append(&mut captured_assistant_items);
+                    }
                     for tool in &enabled_tools {
                         if let Some(results) = results_by_tool.get(tool.name()) {
                             tool.apply_to_continuation(
@@ -346,7 +366,8 @@ impl ToolLoopRunner {
                             );
                         }
                     }
-                    continuation_payload.stream = true;
+                    let mut continuation_payload_for_call = continuation_payload.clone();
+                    continuation_payload_for_call.stream = true;
 
                     info!(
                         stage = "continuation_sent",
@@ -363,7 +384,7 @@ impl ToolLoopRunner {
                         &tool_names,
                     );
 
-                    match callback(continuation_payload).await {
+                    match callback(continuation_payload_for_call).await {
                         Ok(continuation_response) => {
                             let (_, new_body) = continuation_response.into_parts();
                             current_body = new_body;
@@ -412,4 +433,60 @@ fn apply_transforms(tools: &[Arc<dyn ServerExecutedTool>], event: Bytes) -> Byte
         out = t.transform_event(out);
     }
     out
+}
+
+/// Inspect one SSE event and extract the assistant item it carries,
+/// if any. Returns `Some(item)` for `response.output_item.done` events
+/// whose `item` is a model-emitted `message`, `function_call`, or
+/// `reasoning`. Gateway-synthesized items (`shell_call_output`,
+/// `web_search_call`, `file_search_call`) are skipped — tools fold
+/// their own continuation items in via `apply_to_continuation`.
+fn parse_assistant_item(event: &[u8]) -> Option<ResponsesInputItem> {
+    let text = std::str::from_utf8(event).ok()?;
+    let data = text
+        .lines()
+        .find_map(|line| line.strip_prefix("data:").map(str::trim))?;
+    if data == "[DONE]" {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(data).ok()?;
+    if value.get("type").and_then(|t| t.as_str()) != Some("response.output_item.done") {
+        return None;
+    }
+    let item = value.get("item")?;
+    match item.get("type").and_then(|t| t.as_str())? {
+        "message" => serde_json::from_value::<OutputMessage>(item.clone())
+            .ok()
+            .map(ResponsesInputItem::OutputMessage),
+        "function_call" => serde_json::from_value::<OutputItemFunctionCall>(item.clone())
+            .ok()
+            .map(ResponsesInputItem::OutputFunctionCall),
+        "reasoning" => serde_json::from_value::<ResponsesReasoning>(item.clone())
+            .ok()
+            .map(ResponsesInputItem::Reasoning),
+        _ => None,
+    }
+}
+
+/// Ensure `payload.input` is `Items` so callers can append to it.
+/// A `Text` input is rewrapped as a single user `EasyMessage`; `None`
+/// becomes an empty `Items` vec.
+fn normalize_input_to_items(payload: &mut CreateResponsesPayload) {
+    match payload.input.take() {
+        Some(ResponsesInput::Items(items)) => {
+            payload.input = Some(ResponsesInput::Items(items));
+        }
+        Some(ResponsesInput::Text(text)) => {
+            payload.input = Some(ResponsesInput::Items(vec![
+                ResponsesInputItem::EasyMessage(EasyInputMessage {
+                    type_: None,
+                    role: EasyInputMessageRole::User,
+                    content: EasyInputMessageContent::Text(text),
+                }),
+            ]));
+        }
+        None => {
+            payload.input = Some(ResponsesInput::Items(Vec::new()));
+        }
+    }
 }
