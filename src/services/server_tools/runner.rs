@@ -180,10 +180,25 @@ impl ToolLoopRunner {
                                             captured_assistant_items.push(item);
                                         }
 
-                                        // Hold back forwarding while we
-                                        // accumulate a batch — same as
-                                        // current per-tool wrappers do.
-                                        if !detected.is_empty() && has_callback {
+                                        // Once a tool call has been detected for
+                                        // this iteration, hold back only the
+                                        // iteration-terminator events
+                                        // (`response.created`,
+                                        // `response.in_progress`,
+                                        // `response.completed`, ...) — they would
+                                        // confuse a client into thinking the
+                                        // upstream is finished when in fact we're
+                                        // about to continue the loop. Item-level
+                                        // events (`output_item.done`,
+                                        // `content_part.done`, etc.) are
+                                        // informational and must be forwarded so
+                                        // both streaming clients and the
+                                        // non-streaming bridge can reconstruct
+                                        // the full transcript.
+                                        if !detected.is_empty()
+                                            && has_callback
+                                            && is_iteration_terminator(&event)
+                                        {
                                             continue;
                                         }
                                     }
@@ -433,6 +448,40 @@ fn apply_transforms(tools: &[Arc<dyn ServerExecutedTool>], event: Bytes) -> Byte
         out = t.transform_event(out);
     }
     out
+}
+
+/// True for SSE events that mark a turn boundary: the start
+/// (`response.created` / `response.in_progress`) or end
+/// (`response.completed` / `response.failed` / `response.incomplete`)
+/// of one upstream stream. The runner holds these back across
+/// intermediate iterations so the client sees one coherent timeline,
+/// not N concatenated mini-streams.
+fn is_iteration_terminator(event: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(event) else {
+        return false;
+    };
+    let Some(data) = text
+        .lines()
+        .find_map(|line| line.strip_prefix("data:").map(str::trim))
+    else {
+        return false;
+    };
+    if data == "[DONE]" {
+        return false;
+    }
+    let Ok(value): Result<serde_json::Value, _> = serde_json::from_str(data) else {
+        return false;
+    };
+    matches!(
+        value.get("type").and_then(|t| t.as_str()),
+        Some(
+            "response.created"
+                | "response.in_progress"
+                | "response.completed"
+                | "response.failed"
+                | "response.incomplete"
+        )
+    )
 }
 
 /// Inspect one SSE event and extract the assistant item it carries,

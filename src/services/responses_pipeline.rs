@@ -457,3 +457,187 @@ pub struct PersistenceHandle {
     pub initial_sequence_number: i64,
     pub cancel_rx: crate::services::CancelSignal,
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Non-streaming bridge
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Collect a streaming Responses-API SSE body into a single JSON object
+/// matching the OpenAI non-streaming response shape.
+///
+/// Walks each `data:` event and:
+///   - pushes every `response.output_item.done` `item` onto `output[]`,
+///     so the caller sees the full transcript across all server-tool
+///     iterations (function_call + shell_call_output + final message);
+///   - takes the terminal `response.completed` / `response.failed` /
+///     `response.incomplete` event's `response` object as the metadata
+///     envelope (id, model, status, error, etc.);
+///   - sums `usage` across every terminal event observed so the
+///     reported tokens and cost reflect the entire agent loop, not the
+///     final turn alone.
+///
+/// Non-success or non-SSE responses pass through unchanged.
+pub async fn collect_streaming_response_to_json(response: Response<Body>) -> Response<Body> {
+    if !response.status().is_success() {
+        return response;
+    }
+    let is_sse = response
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("text/event-stream"));
+    if !is_sse {
+        return response;
+    }
+
+    let (mut parts, body) = response.into_parts();
+    // The pipeline produces bounded SSE bodies (the runner terminates
+    // when the model stops calling tools or the iteration budget is
+    // hit), so `usize::MAX` is fine here — we already trust the
+    // upstream's per-call output size limits.
+    let bytes = match axum::body::to_bytes(body, usize::MAX).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!(
+                stage = "collect_buffered_failed",
+                error = %e,
+                "Failed to read streaming body for non-streaming bridge"
+            );
+            return Response::builder()
+                .status(http::StatusCode::BAD_GATEWAY)
+                .body(Body::empty())
+                .unwrap_or_else(|_| Response::new(Body::empty()));
+        }
+    };
+
+    let mut output_items: Vec<serde_json::Value> = Vec::new();
+    let mut terminal_response: Option<serde_json::Value> = None;
+    let mut usage_sum: Option<crate::api_types::responses::ResponsesUsage> = None;
+
+    for line in bytes.split(|b| *b == b'\n') {
+        let Ok(line_str) = std::str::from_utf8(line) else {
+            continue;
+        };
+        let Some(data) = line_str.strip_prefix("data:").map(str::trim) else {
+            continue;
+        };
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
+            continue;
+        };
+        let event_type = value.get("type").and_then(|t| t.as_str());
+        match event_type {
+            Some("response.output_item.done") => {
+                if let Some(item) = value.get("item").cloned() {
+                    output_items.push(item);
+                }
+            }
+            Some("response.completed" | "response.failed" | "response.incomplete") => {
+                if let Some(resp) = value.get("response").cloned() {
+                    if let Some(usage_val) = resp.get("usage")
+                        && let Ok(usage) = serde_json::from_value::<
+                            crate::api_types::responses::ResponsesUsage,
+                        >(usage_val.clone())
+                    {
+                        match usage_sum.as_mut() {
+                            None => usage_sum = Some(usage),
+                            Some(acc) => add_usage(acc, &usage),
+                        }
+                    }
+                    terminal_response = Some(resp);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut response_obj = match terminal_response {
+        Some(r) => r,
+        None => {
+            tracing::warn!(
+                stage = "collect_buffered_no_terminal",
+                "No response.completed event in stream; falling back to passthrough"
+            );
+            return Response::from_parts(parts, Body::from(bytes));
+        }
+    };
+    response_obj["output"] = serde_json::Value::Array(output_items);
+    if let Some(usage) = usage_sum
+        && let Ok(usage_val) = serde_json::to_value(&usage)
+    {
+        response_obj["usage"] = usage_val;
+    }
+    let body_bytes = match serde_json::to_vec(&response_obj) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!(
+                stage = "collect_buffered_serialize_failed",
+                error = %e,
+                "Failed to serialize collected response JSON"
+            );
+            return Response::builder()
+                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::empty())
+                .unwrap_or_else(|_| Response::new(Body::empty()));
+        }
+    };
+
+    parts.headers.insert(
+        http::header::CONTENT_TYPE,
+        http::HeaderValue::from_static("application/json"),
+    );
+    // Strip every header that says "this body is being streamed" — once
+    // we've buffered the SSE stream into a fixed JSON blob, hyper will
+    // emit the correct Content-Length itself, and leaving any of these
+    // in place produces a malformed HTTP frame that hyper closes the
+    // connection on (manifests as "Empty reply from server" on the
+    // client).
+    parts.headers.remove(http::header::CONTENT_LENGTH);
+    parts.headers.remove(http::header::TRANSFER_ENCODING);
+    parts.headers.remove(http::header::CACHE_CONTROL);
+    parts.headers.remove("x-accel-buffering");
+    Response::from_parts(parts, Body::from(body_bytes))
+}
+
+fn add_usage(
+    acc: &mut crate::api_types::responses::ResponsesUsage,
+    add: &crate::api_types::responses::ResponsesUsage,
+) {
+    acc.input_tokens += add.input_tokens;
+    acc.output_tokens += add.output_tokens;
+    acc.total_tokens += add.total_tokens;
+    acc.input_tokens_details.cached_tokens += add.input_tokens_details.cached_tokens;
+    acc.output_tokens_details.reasoning_tokens += add.output_tokens_details.reasoning_tokens;
+    match (acc.cost.as_mut(), add.cost) {
+        (Some(a), Some(b)) => *a += b,
+        (None, Some(b)) => acc.cost = Some(b),
+        _ => {}
+    }
+    // is_byok is sticky-true: once any turn was BYOK the response is
+    // marked BYOK (the alternative — a per-turn breakdown — would
+    // change the wire shape).
+    if add.is_byok == Some(true) {
+        acc.is_byok = Some(true);
+    }
+    if let Some(add_details) = &add.cost_details {
+        let target = acc.cost_details.get_or_insert(
+            crate::api_types::responses::ResponsesUsageCostDetails {
+                upstream_inference_cost: None,
+                upstream_inference_input_cost: 0.0,
+                upstream_inference_output_cost: 0.0,
+            },
+        );
+        target.upstream_inference_input_cost += add_details.upstream_inference_input_cost;
+        target.upstream_inference_output_cost += add_details.upstream_inference_output_cost;
+        match (
+            target.upstream_inference_cost.as_mut(),
+            add_details.upstream_inference_cost,
+        ) {
+            (Some(a), Some(b)) => *a += b,
+            (None, Some(b)) => target.upstream_inference_cost = Some(b),
+            _ => {}
+        }
+    }
+}

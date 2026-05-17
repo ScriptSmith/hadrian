@@ -1253,7 +1253,6 @@ pub async fn api_v1_responses(
     // Route the model to a provider with dynamic support
     let model_clone = payload.model.clone();
     let models_clone = payload.models.clone();
-    let is_streaming = payload.stream;
     let routed = route_models_extended(
         model_clone.as_deref(),
         models_clone.as_deref(),
@@ -1319,6 +1318,58 @@ pub async fn api_v1_responses(
             "shell-tool passthrough is configured but the resolved provider is not OpenAI-compatible",
         ));
     }
+
+    // Non-streaming callers that include a server-executed tool need
+    // the runner's loop to mediate the conversation server-side, the
+    // same way OpenAI's hosted Responses API does: the server runs the
+    // tool, threads paired function_call/function_call_output items
+    // into the next provider request, and returns one JSON with the
+    // full transcript. The runner only operates on SSE bodies, so we
+    // flip `payload.stream` on for the upstream call and collect the
+    // resulting stream back into a non-streaming JSON before
+    // responding. `caller_wants_streaming` preserves the caller's
+    // original intent for cache/persist branching below.
+    let caller_wants_streaming = payload.stream;
+    let payload_has_web_search = payload
+        .tools
+        .as_ref()
+        .map(|t| t.iter().any(|tt| tt.is_web_search()))
+        .unwrap_or(false);
+    let payload_has_file_search = payload
+        .tools
+        .as_ref()
+        .map(|t| t.iter().any(|tt| tt.is_file_search()))
+        .unwrap_or(false);
+    let shell_loops = payload_has_shell
+        && state
+            .shell_runtime
+            .as_ref()
+            .is_some_and(|r| !r.capabilities().passthrough_only);
+    let web_search_loops = payload_has_web_search
+        && state
+            .config
+            .features
+            .web_search
+            .as_ref()
+            .is_some_and(|_| true);
+    let file_search_loops = payload_has_file_search
+        && state.file_search_service.is_some()
+        && state
+            .config
+            .features
+            .file_search
+            .as_ref()
+            .is_some_and(|c| c.enabled);
+    let needs_non_streaming_bridge =
+        !caller_wants_streaming && (shell_loops || web_search_loops || file_search_loops);
+    if needs_non_streaming_bridge {
+        payload.stream = true;
+    }
+    // Re-bind so downstream branches that operate on the actual
+    // upstream behavior (guardrails wrap, pipeline wrap) see the
+    // forced-true state. Branches that key off the caller's original
+    // intent (cache, persistence) use `caller_wants_streaming` below.
+    let is_streaming = payload.stream;
 
     // Intersect any per-request shell `environment` overrides with the
     // operator's `[features.server_tools.shell_limits]` envelope before
@@ -1971,6 +2022,17 @@ pub async fn api_v1_responses(
         }
     }
 
+    // If we forced streaming upstream for a non-streaming caller, fold
+    // the SSE transcript back into a single JSON response now — before
+    // cache/persist, so they see the same shape as a native
+    // non-streaming response.
+    let final_response = if needs_non_streaming_bridge {
+        crate::services::responses_pipeline::collect_streaming_response_to_json(final_response)
+            .await
+    } else {
+        final_response
+    };
+
     // Cache and/or persist the response (non-streaming only). The two
     // operations share a materialized body: read it once, hand the
     // bytes to whichever side wants them. Persistence is needed
@@ -1979,10 +2041,11 @@ pub async fn api_v1_responses(
     // stuck `in_progress` until retention pruned it.
     let needs_cache_store = cache_status == CacheStatus::Miss
         && final_response.status().is_success()
-        && !is_streaming
+        && !caller_wants_streaming
         && state.response_cache.is_some();
-    let needs_persist =
-        !is_streaming && persistence_id_and_org.is_some() && state.responses_store.is_some();
+    let needs_persist = !caller_wants_streaming
+        && persistence_id_and_org.is_some()
+        && state.responses_store.is_some();
     let final_response = if needs_cache_store || needs_persist {
         // Extract content-type and body once.
         let content_type = final_response
@@ -2054,8 +2117,11 @@ pub async fn api_v1_responses(
         final_response
     };
 
-    // Create usage entry for streaming cost tracking
-    let usage_entry = if is_streaming {
+    // Create usage entry for streaming cost tracking. Keys off the
+    // caller's original intent: when the non-streaming bridge has
+    // folded the SSE transcript back to JSON, cost injection runs in
+    // its blocking, body-parsing mode.
+    let usage_entry = if caller_wants_streaming {
         build_streaming_usage_entry(&auth, &state, &model_name, &provider_name, {
             headers
                 .get("X-Hadrian-Project")
@@ -2082,7 +2148,7 @@ pub async fn api_v1_responses(
             max_response_body_bytes: state.config.server.max_response_body_bytes,
             streaming_idle_timeout_secs: state.config.server.streaming_idle_timeout_secs,
             validation_config: &state.config.observability.response_validation,
-            response_type: if is_streaming {
+            response_type: if caller_wants_streaming {
                 crate::validation::ResponseType::ResponseStream
             } else {
                 crate::validation::ResponseType::Response
