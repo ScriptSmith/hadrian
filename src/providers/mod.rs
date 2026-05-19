@@ -259,7 +259,7 @@ pub trait Provider: Send + Sync {
     async fn create_responses_compact(
         &self,
         _client: &reqwest::Client,
-        _payload: CreateResponsesPayload,
+        _payload: crate::api_types::CompactRequest,
     ) -> Result<Response, ProviderError> {
         Err(ProviderError::Unsupported(
             "compaction is not supported by this provider".to_string(),

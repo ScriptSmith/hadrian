@@ -266,13 +266,13 @@ impl Provider for AzureOpenAIProvider {
         fields(
             provider = "azure_openai",
             operation = "responses_compact",
-            model = %payload.model.as_deref().unwrap_or("gpt-4o"),
+            model = %payload.model,
         )
     )]
     async fn create_responses_compact(
         &self,
         client: &reqwest::Client,
-        payload: CreateResponsesPayload,
+        payload: crate::api_types::CompactRequest,
     ) -> Result<Response, ProviderError> {
         let (header_name, header_value) = self.get_auth_header().await?;
         let timeout = self.timeout;

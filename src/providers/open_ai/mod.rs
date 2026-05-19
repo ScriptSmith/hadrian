@@ -283,13 +283,13 @@ impl Provider for OpenAICompatibleProvider {
         fields(
             provider = "openai",
             operation = "responses_compact",
-            model = %payload.model.as_deref().unwrap_or("default"),
+            model = %payload.model,
         )
     )]
     async fn create_responses_compact(
         &self,
         client: &reqwest::Client,
-        payload: CreateResponsesPayload,
+        payload: crate::api_types::CompactRequest,
     ) -> Result<Response, ProviderError> {
         let url = format!("{}/responses/compact", self.base_url);
         let stream = payload.stream;

@@ -2466,7 +2466,7 @@ async fn apply_output_guardrails_responses(
     post,
     path = "/api/v1/responses/compact",
     tag = "responses",
-    request_body = api_types::CreateResponsesPayload,
+    request_body = api_types::CompactRequest,
     responses(
         (status = 200, description = "Compacted context window"),
         (status = 400, description = "Bad request", body = crate::openapi::ErrorResponse),
@@ -2477,20 +2477,20 @@ async fn apply_output_guardrails_responses(
 #[tracing::instrument(
     name = "api.responses.compact",
     skip(state, auth, authz, payload),
-    fields(model = %payload.model.as_deref().unwrap_or("default"))
+    fields(model = %payload.model)
 )]
 pub async fn api_v1_responses_compact(
     State(state): State<AppState>,
     auth: Option<Extension<AuthenticatedRequest>>,
     authz: Option<Extension<AuthzContext>>,
-    Valid(Json(mut payload)): Valid<Json<api_types::CreateResponsesPayload>>,
+    Valid(Json(mut payload)): Valid<Json<api_types::CompactRequest>>,
 ) -> Result<Response, ApiError> {
     // Route + resolve the model the same way the main responses
     // handler does so per-org overrides and model-aliasing apply.
     let model_clone = payload.model.clone();
     let models_clone = payload.models.clone();
     let routed = route_models_extended(
-        model_clone.as_deref(),
+        Some(model_clone.as_str()),
         models_clone.as_deref(),
         &state.config.providers,
     )?;
@@ -2515,14 +2515,13 @@ pub async fn api_v1_responses_compact(
         resolved.provider_config,
         resolved.model,
     );
-    payload.model = Some(model_name.clone());
+    payload.model = model_name.clone();
 
     // Per-API-key model restrictions (mirrors api_v1_responses).
     if let Some(Extension(ref auth)) = auth
         && let Some(api_key) = auth.api_key()
     {
-        let model_to_check = model_clone.as_deref().unwrap_or(&model_name);
-        api_key.check_model_allowed(model_to_check).map_err(|e| {
+        api_key.check_model_allowed(&model_clone).map_err(|e| {
             ApiError::new(StatusCode::FORBIDDEN, "model_not_allowed", e.to_string())
         })?;
     }
@@ -2544,7 +2543,7 @@ pub async fn api_v1_responses_compact(
             .require_api(
                 "model",
                 "use",
-                model_clone.as_deref().or(Some(&model_name)),
+                Some(model_clone.as_str()),
                 Some(RequestContext::new().with_stream(payload.stream)),
                 org_id.as_deref(),
                 project_id.as_deref(),

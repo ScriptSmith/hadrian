@@ -195,6 +195,20 @@ impl ApiPayload for api_types::CreateEmbeddingPayload {
     // Embeddings don't support streaming, so we use the default (false)
 }
 
+impl ApiPayload for api_types::CompactRequest {
+    fn model(&self) -> Option<&str> {
+        Some(&self.model)
+    }
+
+    fn set_model(&mut self, model: String) {
+        self.model = model;
+    }
+
+    fn is_streaming(&self) -> bool {
+        self.stream
+    }
+}
+
 // ============================================================================
 // Provider Executor Trait
 // ============================================================================
@@ -446,7 +460,7 @@ impl ProviderExecutor for ResponsesExecutor {
 pub struct CompactExecutor;
 
 impl ProviderExecutor for CompactExecutor {
-    type Payload = api_types::CreateResponsesPayload;
+    type Payload = api_types::CompactRequest;
 
     async fn execute(
         state: &AppState,

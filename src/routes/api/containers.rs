@@ -387,6 +387,7 @@ fn map_service_err(e: ContainersServiceError) -> ApiError {
 
 /// Request body for `POST /v1/containers`.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct CreateContainerRequest {
     /// Optional display name (max 255 chars).
@@ -403,13 +404,19 @@ pub struct CreateContainerRequest {
     #[serde(default)]
     pub expires_after: Option<crate::api_types::responses::ContainerExpiresAfter>,
     /// Optional network policy (same shape as
-    /// `tools.shell.environment.network_policy`).
+    /// `tools.shell.environment.network_policy`). OpenAI types this as
+    /// a `oneOf { Disabled, Allowlist }` discriminated by `type`;
+    /// Hadrian represents it as a single flat object that validates
+    /// the same constraints at request resolution, so the schema is
+    /// rendered as an opaque `object` to avoid spurious diffs.
     #[serde(default)]
+    #[cfg_attr(feature = "utoipa", schema(value_type = Object))]
     pub network_policy: Option<crate::api_types::responses::ShellNetworkPolicy>,
     /// Skills to mount whenever a session is booted against this
     /// container. Matches OpenAI's typed shape — see
     /// [`crate::api_types::RequestSkill`].
     #[serde(default)]
+    #[cfg_attr(feature = "utoipa", schema(value_type = Vec<Object>))]
     pub skills: Vec<crate::api_types::RequestSkill>,
     /// Files-API ids to copy into `/mnt/data` at container creation.
     /// Spec: `CreateContainerBody.file_ids`. Each id is resolved via
@@ -425,7 +432,7 @@ pub struct CreateContainerRequest {
     post,
     path = "/api/v1/containers",
     tag = "containers",
-    request_body(content = Object, description = "Container creation request"),
+    request_body = CreateContainerRequest,
     responses(
         (status = 200, description = "The created container metadata"),
         (status = 400, description = "Request rejected", body = crate::openapi::ErrorResponse),

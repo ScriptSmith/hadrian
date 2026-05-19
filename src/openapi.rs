@@ -815,6 +815,12 @@ requests_per_minute = 120
         api_types::audio::TranslationVerboseResponse,
         // API types - Responses
         api_types::CreateResponsesPayload,
+        api_types::CompactRequest,
+        // API types - Containers
+        api::containers::CreateContainerRequest,
+        api_types::responses::ContainerExpiresAfter,
+        api_types::responses::ContainerExpiresAfterAnchor,
+        api_types::responses::ShellNetworkPolicy,
         // Models response
         api::CombinedModelsResponse,
         // Admin models - Organization

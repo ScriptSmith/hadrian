@@ -227,8 +227,8 @@ fn map_store_err(e: ResponsesStoreError) -> ApiError {
 
 /// Query parameters for `GET /v1/responses/{id}`. Mirrors OpenAI's
 /// retrieve-response spec: `stream` flips to SSE mode, `starting_after`
-/// resumes replay from a sequence number, `include` widens the response
-/// shape, and `limit` caps batch size in poll-replay loops.
+/// resumes replay from a sequence number, and `include` widens the
+/// response shape.
 #[derive(Debug, Default, Deserialize)]
 pub struct RetrieveQuery {
     /// When `true`, the response is streamed as Server-Sent Events
@@ -243,10 +243,6 @@ pub struct RetrieveQuery {
     /// `stream=true`.
     #[serde(default)]
     pub starting_after: Option<i64>,
-    /// Soft cap on events returned per replay page. Default 200.
-    /// Only meaningful with `stream=true`.
-    #[serde(default)]
-    pub limit: Option<i64>,
     /// Pass-through of OpenAI's `include` widening field. Currently
     /// ignored — the persisted shape already returns echoed fields.
     /// Accepted so SDK calls don't 400 on the extra param.
@@ -273,7 +269,6 @@ pub struct RetrieveQuery {
         ("response_id" = String, Path, description = "ID returned by POST /v1/responses"),
         ("stream" = Option<bool>, Query, description = "Stream the event log as SSE"),
         ("starting_after" = Option<i64>, Query, description = "Resume cursor (stream mode)"),
-        ("limit" = Option<i64>, Query, description = "Events per page (stream mode)"),
     ),
     responses(
         (status = 200, description = "Stored response (JSON) or SSE replay when stream=true"),
@@ -301,7 +296,6 @@ pub async fn api_v1_responses_get(
             response_id,
             org_id,
             query.starting_after,
-            query.limit,
         )
         .await;
     }
@@ -370,12 +364,15 @@ pub struct DeleteResponse {
 /// Used by both `GET /v1/responses/{id}?stream=true` (the
 /// spec-conformant entry point) and any clients that supply the cursor
 /// query parameter.
+/// Fixed page size for SSE replay batches. Kept internal so the
+/// wire protocol doesn't expose a knob clients would need to tune.
+const REPLAY_PAGE_SIZE: i64 = 200;
+
 async fn stream_response_events(
     state: AppState,
     response_id: String,
     org_id: Uuid,
     starting_after: Option<i64>,
-    limit: Option<i64>,
 ) -> Result<axum::response::Response, ApiError> {
     use bytes::Bytes;
     use http::Response as HttpResponse;
@@ -396,7 +393,7 @@ async fn stream_response_events(
         .map_err(map_store_err)?;
 
     let starting_after = starting_after.unwrap_or(0).max(0);
-    let limit = limit.unwrap_or(200).clamp(1, 1000);
+    let limit = REPLAY_PAGE_SIZE;
     let store_clone = state.responses_store.as_ref().cloned();
     let events_repo = db.response_events();
     let response_id_clone = response_id.clone();

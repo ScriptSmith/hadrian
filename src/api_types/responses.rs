@@ -1394,6 +1394,7 @@ pub struct LocalSkill {
 /// idle reaper uses), with `minutes` setting the per-container idle
 /// TTL.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ContainerExpiresAfter {
     /// Anchor for the TTL countdown. Today only `"last_active_at"` is
@@ -1406,6 +1407,7 @@ pub struct ContainerExpiresAfter {
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ContainerExpiresAfterAnchor {
     #[default]
@@ -1415,11 +1417,13 @@ pub enum ContainerExpiresAfterAnchor {
 /// Per-domain egress policy. Matches OpenAI's `network_policy` shape:
 /// `{ "type": "allowlist", "allowed_domains": [...], "domain_secrets": [...] }`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ShellNetworkPolicy {
     /// Policy kind. Only `allowlist` is supported today; the field is
     /// here for forward compatibility with future OpenAI additions.
     #[serde(default, rename = "type")]
+    #[cfg_attr(feature = "utoipa", schema(value_type = String, rename = "type"))]
     pub type_: ShellNetworkPolicyType,
     /// Hostnames or hostname patterns (`*.example.com`) the container
     /// may make outbound requests to. Must be a subset of the
@@ -1431,6 +1435,7 @@ pub struct ShellNetworkPolicy {
     /// `{placeholder, allowed_domains}` reference form — see
     /// [`ShellDomainSecret`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "utoipa", schema(value_type = Vec<Object>))]
     pub domain_secrets: Vec<ShellDomainSecret>,
 }
 
@@ -2011,7 +2016,12 @@ pub struct CreateResponsesPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sovereignty_requirements: Option<crate::config::SovereigntyRequirements>,
 
-    /// Skills to mount into the shell-tool session.
+    /// **Hadrian Extension:** Skills to mount into the shell-tool
+    /// session. Hadrian treats skills as a top-level request field
+    /// rather than threading them through the OpenAI shell-tool
+    /// `environment` block, so they're accepted on every responses
+    /// request regardless of whether the upstream provider has its own
+    /// skills surface.
     ///
     /// Mirrors OpenAI's typed shape — each entry is either a reference
     /// to a stored skill or an inline bundle:
@@ -2171,6 +2181,57 @@ pub struct ResponsesReasoningConfigOutput {
 #[serde(rename_all = "lowercase")]
 pub enum ResponseType {
     Response,
+}
+
+/// Request body for `POST /v1/responses/compact`.
+///
+/// Mirrors OpenAI's `CompactResponseMethodPublicBody`: `model` is
+/// required; everything else is optional. Hadrian-specific extensions
+/// (`models`, `stream`, `sovereignty_requirements`) ride alongside
+/// because the gateway still routes, streams, and enforces sovereignty
+/// for compaction requests just like the main `/responses` handler.
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct CompactRequest {
+    /// Model to compact with. Required by OpenAI; Hadrian also accepts
+    /// it as the routing key when the gateway picks an upstream
+    /// provider.
+    pub model: String,
+
+    /// Conversation history to compact. Accepts a plain string or the
+    /// typed item array used by `POST /responses`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "utoipa", schema(value_type = Object))]
+    pub input: Option<ResponsesInput>,
+
+    /// Continue compacting from a previously persisted response. Spec:
+    /// `CompactResponseMethodPublicBody.previous_response_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_response_id: Option<String>,
+
+    /// System instructions threaded into the compaction prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+
+    /// OpenAI prompt-cache key passthrough.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
+
+    /// **Hadrian Extension:** alternate model list for multi-model
+    /// routing. The first entry the gateway resolves successfully wins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<Vec<String>>,
+
+    /// **Hadrian Extension:** stream the compacted response as SSE.
+    /// Forwarded verbatim to the upstream provider when supported.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stream: bool,
+
+    /// **Hadrian Extension:** per-request data-sovereignty requirements.
+    /// Merged with API-key-level requirements; the most restrictive
+    /// wins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sovereignty_requirements: Option<crate::config::SovereigntyRequirements>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

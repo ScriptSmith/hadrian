@@ -16,5 +16,6 @@ pub use images::{
     ImageSize,
 };
 pub use responses::{
-    CreateResponsesPayload, InlineSkill, InlineSkillSource, RequestSkill, ResponsesReasoningEffort,
+    CompactRequest, CreateResponsesPayload, InlineSkill, InlineSkillSource, RequestSkill,
+    ResponsesReasoningEffort,
 };
