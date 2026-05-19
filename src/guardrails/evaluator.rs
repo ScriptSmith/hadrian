@@ -1593,6 +1593,8 @@ fn extract_text_from_input_item(item: &ResponsesInputItem) -> Option<String> {
         ResponsesInputItem::WebSearchCall(_)
         | ResponsesInputItem::FileSearchCall(_)
         | ResponsesInputItem::ShellCall(_)
+        | ResponsesInputItem::ShellCallOutput(_)
+        | ResponsesInputItem::Compaction(_)
         | ResponsesInputItem::ImageGeneration(_) => None,
     }
 }

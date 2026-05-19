@@ -606,6 +606,8 @@ pub(super) fn convert_responses_input_to_bedrock_messages(
                     ResponsesInputItem::WebSearchCall(_)
                     | ResponsesInputItem::FileSearchCall(_)
                     | ResponsesInputItem::ShellCall(_)
+                    | ResponsesInputItem::ShellCallOutput(_)
+                    | ResponsesInputItem::Compaction(_)
                     | ResponsesInputItem::ImageGeneration(_) => {
                         // These are server-side tool calls that don't need translation
                     }

@@ -29,9 +29,9 @@ use uuid::Uuid;
 
 use crate::{
     api_types::responses::{
-        ContainerExpiresAfterAnchor, ContainerFileRef, CreateResponsesPayload, FunctionCallOutput,
-        FunctionCallOutputType, ResponsesAnnotation, ResponsesInput, ResponsesInputItem,
-        ResponsesToolDefinition, ShellDomainSecret, ShellEnvironment,
+        ContainerFileRef, CreateResponsesPayload, FunctionCallOutput, FunctionCallOutputType,
+        KnownShellNetworkPolicyType, ResponsesAnnotation, ResponsesInput, ResponsesInputItem,
+        ResponsesToolDefinition, ShellDomainSecret, ShellEnvironment, ShellNetworkPolicyType,
     },
     config::{ContainersConfig, ShellLimitsConfig},
     models::UsageLogEntry,
@@ -92,13 +92,13 @@ pub enum ShellEnvironmentError {
         "inline domain secret '{name}': host '{host}' is not in operator's allowed_egress_hosts"
     )]
     InlineSecretHostNotAllowed { name: String, host: String },
-    #[error(
-        "expires_after.minutes {requested} exceeds operator cap of {max} minutes \
-         ([features.containers].max_idle_ttl_secs)"
-    )]
-    ExpiresAfterExceedsCap { requested: u32, max: u32 },
     #[error("container_reference.container_id is empty")]
     EmptyContainerReferenceId,
+    #[error(
+        "network_policy.type = 'disabled' does not allow allowed_domains \
+         or domain_secrets to be set"
+    )]
+    DisabledPolicyWithFields,
 }
 
 /// Intersect the per-request environment with the operator-pinned
@@ -126,7 +126,12 @@ pub fn resolve_shell_environment(
         });
     };
 
-    // ── memory + expires_after (auto-only) ──
+    // ── memory (auto-only) ──
+    // Per OpenAI's spec, `expires_after` is only honored on
+    // `POST /v1/containers` — not on the inline `container_auto`
+    // environment. Inline requests fall back to the container's TTL
+    // (when chained) or `[features.containers].default_idle_ttl_secs`
+    // (for fresh auto-provisioned sessions).
     let (mem_limit_bytes, idle_ttl_secs) = match env {
         ShellEnvironment::ContainerAuto(auto) => {
             let mem = match auto.memory_limit.as_deref() {
@@ -146,26 +151,13 @@ pub fn resolve_shell_environment(
                 }
                 None => default_mem_bytes,
             };
-            let ttl = match auto.expires_after.as_ref() {
-                Some(exp) => {
-                    let max_minutes = (containers.max_idle_ttl_secs / 60) as u32;
-                    if exp.minutes > max_minutes {
-                        return Err(ShellEnvironmentError::ExpiresAfterExceedsCap {
-                            requested: exp.minutes,
-                            max: max_minutes,
-                        });
-                    }
-                    // The only anchor variant today is `last_active_at` —
-                    // serde already validated the discriminator.
-                    let _ = ContainerExpiresAfterAnchor::LastActiveAt;
-                    Some(i64::from(exp.minutes) * 60)
-                }
-                None => None,
-            };
-            (mem, ttl)
+            (mem, None)
         }
-        ShellEnvironment::ContainerReference(_) => (default_mem_bytes, None),
+        ShellEnvironment::ContainerReference(_) | ShellEnvironment::Local(_) => {
+            (default_mem_bytes, None)
+        }
     };
+    let _ = containers; // kept for future per-request idle-ttl re-introduction.
 
     let referenced_container_id = match env {
         ShellEnvironment::ContainerReference(r) => {
@@ -175,13 +167,35 @@ pub fn resolve_shell_environment(
             }
             Some(trimmed.to_string())
         }
-        ShellEnvironment::ContainerAuto(_) => None,
+        ShellEnvironment::ContainerAuto(_) | ShellEnvironment::Local(_) => None,
     };
 
     // ── egress hosts + domain secrets ──
     let mut allow_hosts: Vec<String> = Vec::new();
     let mut secrets: Vec<SecretMount> = Vec::new();
     if let Some(policy) = env.network_policy() {
+        // `disabled` ⇒ deny-all egress: no allowed_domains, no
+        // domain_secrets. We treat the disabled policy as authoritative
+        // and refuse to silently ignore allowlist entries the caller
+        // also sent.
+        if matches!(
+            policy.type_,
+            ShellNetworkPolicyType::Known(KnownShellNetworkPolicyType::Disabled)
+        ) {
+            if !policy.allowed_domains.is_empty() || !policy.domain_secrets.is_empty() {
+                return Err(ShellEnvironmentError::DisabledPolicyWithFields);
+            }
+            // allow_hosts stays empty → runtime applies deny-all.
+            return Ok(ResolvedShellEnvironment {
+                mem_limit_bytes,
+                egress_policy: EgressPolicy {
+                    allow_hosts: Vec::new(),
+                    secrets: Vec::new(),
+                },
+                idle_ttl_secs,
+                referenced_container_id,
+            });
+        }
         for host in &policy.allowed_domains {
             if !host_matches_any(host, &operator.allowed_egress_hosts) {
                 return Err(ShellEnvironmentError::HostNotAllowed(host.clone()));
@@ -859,11 +873,71 @@ fn format_file_created(item_id: &str, output_index: usize, file: &ContainerFileR
 }
 
 /// Emit a structured `response.output_item.done` event carrying a
-/// `shell_call_output` item per the OpenAI Responses-API output-item
-/// shape. Mirrors what `passthrough_openai` upstreams emit natively
-/// so non-passthrough modes (`microsandbox`/`opensandbox`) reach the
-/// same wire contract, in particular surfacing the Hadrian-extension
-/// `output_files` array clients use to download captured artifacts.
+/// spec-compliant `shell_call` item. Per OpenAI's `FunctionShellCall`
+/// shape: `{id, call_id, action: {commands, timeout_ms?,
+/// max_output_length?}, status, environment}`.
+///
+/// Hadrian synthesizes this item so non-passthrough runtimes
+/// (`microsandbox` / `opensandbox`) match the wire contract OpenAI's
+/// hosted shell emits natively. For `passthrough_openai` the upstream
+/// already emits this item and we don't double-emit.
+#[allow(clippy::too_many_arguments)]
+fn format_shell_call_item(
+    item_id: &str,
+    call_id: &str,
+    output_index: usize,
+    commands: &[String],
+    timeout_ms: Option<u64>,
+    max_output_length: Option<usize>,
+    env: Option<&HashMap<String, String>>,
+    working_directory: Option<&str>,
+    status: &str,
+    environment: Option<&serde_json::Value>,
+    created_by: Option<&str>,
+) -> Bytes {
+    let mut action = serde_json::json!({
+        "commands": commands,
+    });
+    if let Some(ms) = timeout_ms {
+        action["timeout_ms"] = serde_json::Value::from(ms);
+    }
+    if let Some(n) = max_output_length {
+        action["max_output_length"] = serde_json::Value::from(n);
+    }
+    if let Some(env) = env
+        && !env.is_empty()
+    {
+        action["env"] = serde_json::to_value(env).unwrap_or(serde_json::Value::Null);
+    }
+    if let Some(wd) = working_directory {
+        action["working_directory"] = serde_json::Value::from(wd);
+    }
+    let mut item = serde_json::json!({
+        "type": "shell_call",
+        "id": item_id,
+        "call_id": call_id,
+        "action": action,
+        "status": status,
+    });
+    if let Some(env_val) = environment {
+        item["environment"] = env_val.clone();
+    }
+    if let Some(c) = created_by {
+        item["created_by"] = serde_json::Value::from(c);
+    }
+    sse_event(serde_json::json!({
+        "type": "response.output_item.done",
+        "output_index": output_index,
+        "item": item,
+    }))
+}
+
+/// Emit a structured `response.output_item.done` event carrying a
+/// spec-compliant `shell_call_output` item. Per OpenAI's
+/// `FunctionShellCallOutput` shape: `{id, call_id, status,
+/// output: [{stdout, stderr, outcome: {type: "exit"|"timeout", exit_code?}}],
+/// max_output_length?}`. The Hadrian-extension `output_files` array
+/// rides alongside.
 ///
 /// The standard `function_call_output` continuation item still flows
 /// through `apply_to_continuation` for the model's next-turn input —
@@ -871,46 +945,50 @@ fn format_file_created(item_id: &str, output_index: usize, file: &ContainerFileR
 #[allow(clippy::too_many_arguments)]
 fn format_shell_call_output_item(
     item_id: &str,
+    call_id: &str,
     output_index: usize,
-    commands: &[String],
-    working_directory: Option<&str>,
     exit_code: i32,
     stdout: &str,
     stderr: &str,
     files: &[ContainerFileRef],
-    duration_ms: u64,
     killed: bool,
-    max_output_truncated: bool,
     max_output_length: Option<usize>,
+    created_by: Option<&str>,
 ) -> Bytes {
-    // status: `completed` when the process exited; `failed` when we
-    // never observed an Exit event or had to synthesize `-1`/`124`.
-    let status_str = if exit_code == 0 {
-        "completed"
+    // `incomplete` whenever we never observed a normal exit — i.e. the
+    // call was killed by timeout or the runtime didn't report. Spec
+    // uses `incomplete` for "abandoned mid-flight" outcomes.
+    let status_str = if killed { "incomplete" } else { "completed" };
+    // Outcome discriminator: `timeout` for killed calls (we don't get
+    // a real exit code from the runtime), `exit` otherwise.
+    let outcome = if killed {
+        serde_json::json!({ "type": "timeout" })
     } else {
-        "failed"
+        serde_json::json!({ "type": "exit", "exit_code": exit_code })
     };
+    let mut content = serde_json::json!({
+        "stdout": stdout,
+        "stderr": stderr,
+        "outcome": outcome,
+    });
+    if let Some(c) = created_by {
+        content["created_by"] = serde_json::Value::from(c);
+    }
     let mut item = serde_json::json!({
         "type": "shell_call_output",
         "id": item_id,
-        "commands": commands,
-        "exit_code": exit_code,
+        "call_id": call_id,
         "status": status_str,
-        "stdout": stdout,
-        "stderr": stderr,
-        // Spec outcome fields — present alongside Hadrian's
-        // additive `output_files`.
-        "duration_ms": duration_ms,
-        "killed": killed,
-        "max_output_truncated": max_output_truncated,
-        // Hadrian Extension: captured file manifest.
+        "output": [content],
+        // Hadrian Extension: captured file manifest. Spec leaves the
+        // shell_call_output content array open for additive properties.
         "output_files": files,
     });
-    if let Some(wd) = working_directory {
-        item["working_directory"] = serde_json::Value::from(wd);
-    }
     if let Some(n) = max_output_length {
         item["max_output_length"] = serde_json::Value::from(n);
+    }
+    if let Some(c) = created_by {
+        item["created_by"] = serde_json::Value::from(c);
     }
     sse_event(serde_json::json!({
         "type": "response.output_item.done",
@@ -1338,6 +1416,11 @@ impl ServerExecutedTool for ShellExecutor {
         let command_for_task = command.clone();
         let commands_for_task = commands.clone();
         let working_directory_for_task = model_workdir.clone();
+        // Capture model-side action fields so we can emit a spec-shaped
+        // `shell_call` item after exec completes (`action.timeout_ms`,
+        // `action.env`, `action.max_output_length`).
+        let action_timeout_ms_for_task = model_timeout_ms;
+        let action_env_for_task = model_env.clone();
         // Apply the model's per-call timeout when given; clamp to the
         // operator cap. `timeout_ms < 1000` rounds up to one second.
         let op_timeout_ms = self
@@ -1581,6 +1664,10 @@ impl ServerExecutedTool for ShellExecutor {
             // command.
             let session_guard = session_arc.lock().await;
             let session: &ContainerSession = &session_guard;
+            // Snapshot the container_id now so we can build the
+            // `shell_call.environment.container_reference` after exec
+            // completes — by then `session_guard` has been dropped.
+            let container_id_for_items = session.container_id.clone();
 
             // Drain any `input_file` parts the pipeline staged for us
             // and write them into /mnt/data before the model's command
@@ -1888,38 +1975,61 @@ impl ServerExecutedTool for ShellExecutor {
                 ))
                 .await;
 
-            // Emit the structured `shell_call_output` output item with
-            // the Hadrian-extension `output_files` array. Mirrors the
-            // shape OpenAI's hosted shell tool produces so clients
-            // built against the Responses-API spec get the same item
-            // type regardless of which runtime executed the call.
-            // Snapshot the trimmed stdout/stderr for this event — we
-            // must build it before the buffers are moved into the
-            // continuation text below.
-            // We can't read `stdout_buf` / `stderr_buf` twice (the
-            // `into_trimmed` method consumes them), so swap them out
-            // into local vars first, render the output item, then use
-            // the rendered strings for the continuation text too.
+            // Emit the spec-shaped `shell_call` and `shell_call_output`
+            // items so clients built against the OpenAI Responses-API
+            // spec see the same wire contract regardless of which
+            // runtime executed the call. Hadrian's additive bits
+            // (`output_files` etc.) ride alongside as extra properties.
+            //
+            // Snapshot the trimmed stdout/stderr for this event before
+            // building anything — `into_trimmed` consumes the buffers
+            // and we want them both for the SSE event and the
+            // continuation text.
             let stdout_render =
                 std::mem::replace(&mut stdout_buf, BoundedHeadTail::new(max_chars)).into_trimmed();
             let stderr_render =
                 std::mem::replace(&mut stderr_buf, BoundedHeadTail::new(max_chars)).into_trimmed();
+            // Spec status: `incomplete` when we killed/timed out,
+            // `completed` otherwise (a non-zero exit code still counts
+            // as `completed` per spec).
+            let shell_call_status = if killed { "incomplete" } else { "completed" };
+            let environment_val = serde_json::json!({
+                "type": "container_reference",
+                "container_id": container_id_for_items,
+            });
             let _ = event_tx
-                .send(format_shell_call_output_item(
+                .send(format_shell_call_item(
+                    &id_for_task,
                     &id_for_task,
                     0,
                     &commands_for_task,
+                    action_timeout_ms_for_task,
+                    model_max_output_length,
+                    action_env_for_task.as_ref(),
                     working_directory_for_task.as_deref(),
+                    shell_call_status,
+                    Some(&environment_val),
+                    Some("model"),
+                ))
+                .await;
+            let _ = event_tx
+                .send(format_shell_call_output_item(
+                    &id_for_task,
+                    &id_for_task,
+                    0,
                     exit_for_report,
                     &stdout_render,
                     &stderr_render,
                     &new_files,
-                    duration_ms,
                     killed,
-                    max_output_truncated,
                     model_max_output_length,
+                    Some("gateway"),
                 ))
                 .await;
+            // `duration_ms` / `max_output_truncated` previously rode on
+            // the merged item; they're now only on the
+            // `response.shell_call.completed` event (Hadrian extension).
+            let _ = (duration_ms, max_output_truncated);
 
             info!(
                 stage = "shell_completed",
@@ -2171,15 +2281,12 @@ mod tests {
         ContainersConfig::default()
     }
 
-    fn auto_env(
-        memory_limit: Option<&str>,
-        net: Option<ShellNetworkPolicy>,
-        expires: Option<ContainerExpiresAfter>,
-    ) -> ShellEnvironment {
+    fn auto_env(memory_limit: Option<&str>, net: Option<ShellNetworkPolicy>) -> ShellEnvironment {
         ShellEnvironment::ContainerAuto(ShellContainerAuto {
             memory_limit: memory_limit.map(str::to_string),
-            expires_after: expires,
             network_policy: net,
+            file_ids: None,
+            skills: None,
         })
     }
 
@@ -2208,7 +2315,7 @@ mod tests {
     #[test]
     fn resolver_memory_request_within_cap() {
         let limits = op_limits_with(Some(2048), &[], &[]);
-        let env = auto_env(Some("1g"), None, None);
+        let env = auto_env(Some("1g"), None);
         let r = resolve_shell_environment(Some(&env), &limits, &default_containers()).unwrap();
         assert_eq!(r.mem_limit_bytes, Some(1024 * 1024 * 1024));
     }
@@ -2216,7 +2323,7 @@ mod tests {
     #[test]
     fn resolver_memory_request_exceeds_cap_rejected() {
         let limits = op_limits_with(Some(512), &[], &[]);
-        let env = auto_env(Some("1g"), None, None);
+        let env = auto_env(Some("1g"), None);
         let err =
             resolve_shell_environment(Some(&env), &limits, &default_containers()).unwrap_err();
         assert!(
@@ -2234,7 +2341,7 @@ mod tests {
     #[test]
     fn resolver_memory_no_cap_accepts_anything() {
         let limits = op_limits_with(None, &[], &[]);
-        let env = auto_env(Some("64g"), None, None);
+        let env = auto_env(Some("64g"), None);
         let r = resolve_shell_environment(Some(&env), &limits, &default_containers()).unwrap();
         assert_eq!(r.mem_limit_bytes, Some(64 * 1024 * 1024 * 1024));
     }
@@ -2242,7 +2349,7 @@ mod tests {
     #[test]
     fn resolver_memory_unparseable_rejected() {
         let limits = ShellLimitsConfig::default();
-        let env = auto_env(Some("huge"), None, None);
+        let env = auto_env(Some("huge"), None);
         let err =
             resolve_shell_environment(Some(&env), &limits, &default_containers()).unwrap_err();
         assert!(matches!(err, ShellEnvironmentError::BadMemoryLimit(_)));
@@ -2257,7 +2364,6 @@ mod tests {
                 &["api.openai.com", "foo.example.com"],
                 Vec::new(),
             )),
-            None,
         );
         let r = resolve_shell_environment(Some(&env), &limits, &default_containers()).unwrap();
         assert_eq!(r.egress_policy.allow_hosts.len(), 2);
@@ -2266,7 +2372,7 @@ mod tests {
     #[test]
     fn resolver_egress_apex_does_not_match_wildcard() {
         let limits = op_limits_with(None, &["*.example.com"], &[]);
-        let env = auto_env(None, Some(net_policy(&["example.com"], Vec::new())), None);
+        let env = auto_env(None, Some(net_policy(&["example.com"], Vec::new())));
         let err =
             resolve_shell_environment(Some(&env), &limits, &default_containers()).unwrap_err();
         assert!(matches!(err, ShellEnvironmentError::HostNotAllowed(h) if h == "example.com"));
@@ -2275,11 +2381,7 @@ mod tests {
     #[test]
     fn resolver_egress_host_outside_allowlist_rejected() {
         let limits = op_limits_with(None, &["api.openai.com"], &[]);
-        let env = auto_env(
-            None,
-            Some(net_policy(&["evil.example.com"], Vec::new())),
-            None,
-        );
+        let env = auto_env(None, Some(net_policy(&["evil.example.com"], Vec::new())));
         let err =
             resolve_shell_environment(Some(&env), &limits, &default_containers()).unwrap_err();
         assert!(matches!(err, ShellEnvironmentError::HostNotAllowed(h) if h == "evil.example.com"));
@@ -2288,11 +2390,7 @@ mod tests {
     #[test]
     fn resolver_wildcard_star_allows_everything() {
         let limits = op_limits_with(None, &["*"], &[]);
-        let env = auto_env(
-            None,
-            Some(net_policy(&["anything.example"], Vec::new())),
-            None,
-        );
+        let env = auto_env(None, Some(net_policy(&["anything.example"], Vec::new())));
         assert!(resolve_shell_environment(Some(&env), &limits, &default_containers()).is_ok());
     }
 
@@ -2308,7 +2406,6 @@ mod tests {
                     allowed_domains: vec![],
                 })],
             )),
-            None,
         );
         let err =
             resolve_shell_environment(Some(&env), &limits, &default_containers()).unwrap_err();
@@ -2331,7 +2428,6 @@ mod tests {
                     allowed_domains: vec![],
                 })],
             )),
-            None,
         );
         let r = resolve_shell_environment(Some(&env), &limits, &default_containers()).unwrap();
         assert_eq!(r.egress_policy.secrets.len(), 1);
@@ -2351,7 +2447,6 @@ mod tests {
                     allowed_domains: vec!["evil.example.com".into()],
                 })],
             )),
-            None,
         );
         let err =
             resolve_shell_environment(Some(&env), &limits, &default_containers()).unwrap_err();
@@ -2375,7 +2470,6 @@ mod tests {
                     value: "ghp_inline".into(),
                 })],
             )),
-            None,
         );
         let r = resolve_shell_environment(Some(&env), &limits, &default_containers()).unwrap();
         assert_eq!(r.egress_policy.secrets.len(), 1);
@@ -2403,7 +2497,6 @@ mod tests {
                     value: "y".into(),
                 })],
             }),
-            None,
         );
         let err =
             resolve_shell_environment(Some(&env), &limits, &default_containers()).unwrap_err();
@@ -2437,44 +2530,6 @@ mod tests {
         assert!(matches!(
             err,
             ShellEnvironmentError::EmptyContainerReferenceId
-        ));
-    }
-
-    #[test]
-    fn resolver_expires_after_within_cap_returns_seconds() {
-        let limits = op_limits_with(None, &[], &[]);
-        let env = auto_env(
-            None,
-            None,
-            Some(ContainerExpiresAfter {
-                anchor: ContainerExpiresAfterAnchor::LastActiveAt,
-                minutes: 30,
-            }),
-        );
-        let r = resolve_shell_environment(Some(&env), &limits, &default_containers()).unwrap();
-        assert_eq!(r.idle_ttl_secs, Some(30 * 60));
-    }
-
-    #[test]
-    fn resolver_expires_after_exceeds_cap_rejected() {
-        let limits = op_limits_with(None, &[], &[]);
-        let mut containers = default_containers();
-        containers.max_idle_ttl_secs = 60 * 60; // 1 hour cap
-        let env = auto_env(
-            None,
-            None,
-            Some(ContainerExpiresAfter {
-                anchor: ContainerExpiresAfterAnchor::LastActiveAt,
-                minutes: 120,
-            }),
-        );
-        let err = resolve_shell_environment(Some(&env), &limits, &containers).unwrap_err();
-        assert!(matches!(
-            err,
-            ShellEnvironmentError::ExpiresAfterExceedsCap {
-                requested: 120,
-                max: 60
-            }
         ));
     }
 

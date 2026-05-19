@@ -389,6 +389,13 @@ pub struct CreateContainerRequest {
     /// [`crate::api_types::RequestSkill`].
     #[serde(default)]
     pub skills: Vec<crate::api_types::RequestSkill>,
+    /// Files-API ids to copy into `/mnt/data` at container creation.
+    /// Spec: `CreateContainerBody.file_ids`. Each id is resolved via
+    /// the Files API (same path as `input_file` parts on a response
+    /// request) and the bytes are persisted into `container_files`
+    /// so the model can read them on first attach.
+    #[serde(default)]
+    pub file_ids: Vec<String>,
 }
 
 /// `POST /v1/containers` — create an unattached container.
@@ -488,8 +495,9 @@ pub async fn api_v1_containers_create(
         let env = crate::api_types::responses::ShellEnvironment::ContainerAuto(
             crate::api_types::responses::ShellContainerAuto {
                 memory_limit: None,
-                expires_after: None,
                 network_policy: Some(np.clone()),
+                file_ids: None,
+                skills: None,
             },
         );
         crate::services::shell_tool::resolve_shell_environment(
@@ -556,7 +564,7 @@ pub async fn api_v1_containers_create(
 
     let record = svc
         .create_explicit(
-            container_id,
+            container_id.clone(),
             org_id,
             owner,
             runtime_label,
@@ -568,6 +576,79 @@ pub async fn api_v1_containers_create(
         )
         .await
         .map_err(map_service_err)?;
+
+    // Spec: `CreateContainerBody.file_ids` — copy the named Files-API
+    // uploads into `/mnt/data` immediately so they're present the first
+    // time the container is attached. Fetch via the same Files service
+    // as `input_file` parts, then persist into `container_files`.
+    if !body.file_ids.is_empty() {
+        use std::str::FromStr;
+
+        use sha2::{Digest, Sha256};
+        let services = state.services.as_ref().ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_IMPLEMENTED,
+                "files_unavailable",
+                "Files service is unavailable; cannot resolve file_ids",
+            )
+        })?;
+        let mut to_persist: Vec<crate::services::containers::PersistFileInput> =
+            Vec::with_capacity(body.file_ids.len());
+        for raw in &body.file_ids {
+            let file_id = crate::models::FileId::from_str(raw).map_err(|_| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_file_id",
+                    format!("file_id '{raw}' is not a valid identifier"),
+                )
+            })?;
+            let uuid = file_id.into_inner();
+            let metadata = services
+                .files
+                .get(uuid)
+                .await
+                .map_err(|e| {
+                    ApiError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "file_lookup_failed",
+                        e.to_string(),
+                    )
+                })?
+                .ok_or_else(|| {
+                    ApiError::new(
+                        StatusCode::BAD_REQUEST,
+                        "file_not_found",
+                        format!("file_id '{raw}' not found"),
+                    )
+                })?;
+            let content = services.files.get_content(uuid).await.map_err(|e| {
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "file_lookup_failed",
+                    e.to_string(),
+                )
+            })?;
+            let bytes = bytes::Bytes::from(content);
+            let hash = Sha256::digest(&bytes);
+            let content_hash_hex = hex::encode(hash);
+            to_persist.push(crate::services::containers::PersistFileInput {
+                file_id: format!("cfile_{}", uuid::Uuid::new_v4().simple()),
+                path: format!("/mnt/data/{}", metadata.filename),
+                filename: metadata.filename.clone(),
+                content_type: metadata.content_type.clone(),
+                source: crate::api_types::responses::ContainerFileSource::User,
+                content: bytes,
+                content_hash_hex,
+                source_response_id: None,
+                source_call_id: None,
+            });
+        }
+        let svc_for_files = svc.clone();
+        svc_for_files
+            .persist_files(&container_id, org_id, to_persist)
+            .await
+            .map_err(map_service_err)?;
+    }
 
     Ok(Json(container_to_wire(record)))
 }

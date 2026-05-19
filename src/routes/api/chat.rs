@@ -1358,7 +1358,19 @@ pub async fn api_v1_responses(
         .as_ref()
         .map(|t| t.iter().any(|tt| tt.is_file_search()))
         .unwrap_or(false);
+    // When the request explicitly asks for the `local` environment
+    // (spec name `LocalEnvironmentParam`), the API client — not the
+    // gateway — runs the shell. Skip executor registration regardless
+    // of the operator-configured runtime so the shell_call / shell_call_output
+    // round-trip flows through to the client.
+    let request_env_is_local = payload
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.iter().find_map(|t| t.as_shell()))
+        .and_then(|s| s.environment.as_ref())
+        .is_some_and(|e| e.is_local());
     let shell_loops = payload_has_shell
+        && !request_env_is_local
         && state
             .shell_runtime
             .as_ref()
@@ -1602,6 +1614,40 @@ pub async fn api_v1_responses(
         &state,
         auth.as_ref().map(|e| &e.0),
     );
+
+    // Merge `shell.environment.container_auto.skills` (spec:
+    // ContainerAutoParam.skills) into `payload.skills` so the existing
+    // resolver picks them up. Spec treats per-environment skills as
+    // additive to top-level ones; we drop duplicates on identity.
+    {
+        let inline_skills: Option<Vec<crate::api_types::RequestSkill>> =
+            payload.tools.as_ref().and_then(|tools| {
+                tools.iter().find_map(|t| {
+                    t.as_shell()
+                        .and_then(|s| s.environment.as_ref())
+                        .and_then(|env| match env {
+                            crate::api_types::responses::ShellEnvironment::ContainerAuto(auto) => {
+                                auto.skills.clone()
+                            }
+                            _ => None,
+                        })
+                })
+            });
+        if let Some(extra) = inline_skills
+            && !extra.is_empty()
+        {
+            let mut merged = payload.skills.clone().unwrap_or_default();
+            for incoming in extra {
+                let dup = merged
+                    .iter()
+                    .any(|existing| skills_have_same_identity(existing, &incoming));
+                if !dup {
+                    merged.push(incoming);
+                }
+            }
+            payload.skills = Some(merged);
+        }
+    }
 
     // If the request targets a specific container (via
     // `environment.type = "container_reference"` or implicitly via

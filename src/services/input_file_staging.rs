@@ -183,6 +183,29 @@ struct InputFilePart {
 
 fn collect_input_file_parts(payload: &CreateResponsesPayload) -> Vec<InputFilePart> {
     let mut out = Vec::new();
+    // Files pre-uploaded via `shell.environment.container_auto.file_ids`
+    // (spec: ContainerAutoParam.file_ids) are staged the same way as
+    // `input_file` parts — they end up in /mnt/data before the model's
+    // first shell command. Treated as `file_id`-only parts with no
+    // inline data or remote URL.
+    if let Some(tools) = payload.tools.as_ref() {
+        for tool in tools {
+            if let Some(shell) = tool.as_shell()
+                && let Some(env) = shell.environment.as_ref()
+                && let crate::api_types::responses::ShellEnvironment::ContainerAuto(auto) = env
+                && let Some(ids) = auto.file_ids.as_ref()
+            {
+                for id in ids {
+                    out.push(InputFilePart {
+                        file_id: Some(id.clone()),
+                        file_data: None,
+                        file_url: None,
+                        filename: None,
+                    });
+                }
+            }
+        }
+    }
     let Some(input) = payload.input.as_ref() else {
         return out;
     };

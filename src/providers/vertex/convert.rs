@@ -682,6 +682,8 @@ pub(super) fn convert_responses_input_to_vertex(
                     ResponsesInputItem::WebSearchCall(_)
                     | ResponsesInputItem::FileSearchCall(_)
                     | ResponsesInputItem::ShellCall(_)
+                    | ResponsesInputItem::ShellCallOutput(_)
+                    | ResponsesInputItem::Compaction(_)
                     | ResponsesInputItem::ImageGeneration(_) => {
                         // Server-side tool calls not supported by Vertex
                     }

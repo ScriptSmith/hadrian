@@ -219,6 +219,8 @@ fn item_chars(item: &ResponsesInputItem) -> usize {
         | ResponsesInputItem::WebSearchCall(_)
         | ResponsesInputItem::FileSearchCall(_)
         | ResponsesInputItem::ShellCall(_)
+        | ResponsesInputItem::ShellCallOutput(_)
+        | ResponsesInputItem::Compaction(_)
         | ResponsesInputItem::ImageGeneration(_) => 64, // structural marker
     }
 }
@@ -246,8 +248,12 @@ fn content_item_chars(item: &api_types::responses::ResponseInputContentItem) -> 
 }
 
 /// Build the placeholder item that replaces dropped messages when no
-/// LLM call is involved. Records a count so the model knows context
-/// was elided — better than silent truncation.
+/// LLM call is involved. Emits a spec-shaped `compaction` item
+/// (`CompactionBody`) so SDK consumers can recognise it the same as
+/// they would the upstream-emitted version. Hadrian uses plain-text
+/// English in `encrypted_content` since we can't mint encrypted
+/// tokens the model would natively decode — the field is opaque to
+/// SDK consumers regardless.
 fn truncate_replacement(dropped: &[ResponsesInputItem]) -> Option<ResponsesInputItem> {
     if dropped.is_empty() {
         return None;
@@ -260,10 +266,12 @@ fn truncate_replacement(dropped: &[ResponsesInputItem]) -> Option<ResponsesInput
 }
 
 fn make_summary_item(text: &str) -> ResponsesInputItem {
-    ResponsesInputItem::EasyMessage(EasyInputMessage {
-        type_: None,
-        role: EasyInputMessageRole::System,
-        content: EasyInputMessageContent::Text(text.to_string()),
+    use crate::api_types::responses::{CompactionItem, CompactionItemType};
+    ResponsesInputItem::Compaction(CompactionItem {
+        type_: CompactionItemType::Compaction,
+        id: format!("cmp_{}", uuid::Uuid::new_v4().simple()),
+        encrypted_content: text.to_string(),
+        created_by: Some("gateway".to_string()),
     })
 }
 
@@ -451,22 +459,22 @@ mod tests {
     }
 
     #[test]
-    fn truncate_replacement_emits_marker() {
+    fn truncate_replacement_emits_compaction_item() {
         let dropped = vec![
             text_item(EasyInputMessageRole::User, "x"),
             text_item(EasyInputMessageRole::Assistant, "y"),
         ];
         let r = truncate_replacement(&dropped).unwrap();
         match r {
-            ResponsesInputItem::EasyMessage(m) => {
-                let text = match m.content {
-                    EasyInputMessageContent::Text(t) => t,
-                    _ => panic!("expected text"),
-                };
-                assert!(text.contains("2 earlier conversation item(s)"));
-                assert_eq!(m.role, EasyInputMessageRole::System);
+            ResponsesInputItem::Compaction(item) => {
+                assert!(
+                    item.encrypted_content
+                        .contains("2 earlier conversation item(s)")
+                );
+                assert!(item.id.starts_with("cmp_"));
+                assert_eq!(item.created_by.as_deref(), Some("gateway"));
             }
-            _ => panic!("expected system message"),
+            _ => panic!("expected compaction item"),
         }
     }
 
