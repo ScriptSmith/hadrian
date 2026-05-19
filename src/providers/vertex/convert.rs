@@ -827,6 +827,10 @@ pub(super) fn convert_responses_tool_choice_to_vertex(
                 tracing::warn!("Web search tool choice not supported by Vertex AI");
                 (VertexFunctionCallingMode::Auto, None)
             }
+            ResponsesToolChoice::Shell(_) => (
+                VertexFunctionCallingMode::Any,
+                Some(vec!["shell".to_string()]),
+            ),
         };
         VertexToolConfig {
             function_calling_config: VertexFunctionCallingConfig {

@@ -785,6 +785,9 @@ pub fn convert_responses_tool_choice(
             tracing::warn!("Web search tool choice not supported by Anthropic");
             None
         }
+        ResponsesToolChoice::Shell(_) => Some(AnthropicToolChoice::Tool {
+            name: "shell".to_string(),
+        }),
     })
 }
 

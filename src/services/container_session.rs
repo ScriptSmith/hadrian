@@ -553,8 +553,8 @@ impl ContainerSession {
 
     /// Run one command. On success and when artifact capture is
     /// enabled, snapshot `/mnt/data` afterwards and return the diff
-    /// (new/changed files) so the caller can emit
-    /// `response.shell_call.file_created` events.
+    /// (new/changed files) so the caller can fold them into the
+    /// terminal `shell_call_output` item's `output_files` array.
     pub async fn exec(&self, req: ExecRequest) -> RuntimeResult<ExecOutcome> {
         let exec = self.session()?.exec(req).await?;
         {
@@ -807,9 +807,9 @@ impl ContainerSession {
     ///
     /// No-ops with `Ok(vec![])` when artifact capture is disabled or
     /// the runtime doesn't expose `file_io`. Returns the per-file
-    /// references in input order so the caller can emit
-    /// `response.shell_call.file_created` events or attach them to
-    /// the response output.
+    /// references in input order so the caller can fold them into the
+    /// terminal `shell_call_output` item's `output_files` array or
+    /// surface them as `container_file_citation` annotations.
     pub async fn ingest_user_files(
         &self,
         files: Vec<StagedFile>,

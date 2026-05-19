@@ -114,9 +114,9 @@ impl ContainersService {
     }
 
     /// Insert a container row for a freshly-started session. Caller
-    /// supplies the `cntr_…` id (already emitted in
-    /// `response.shell_call.file_created` events / annotations) and
-    /// the owner derived from the request principal.
+    /// supplies the `cntr_…` id (already emitted in `output_files`
+    /// references / `container_file_citation` annotations) and the
+    /// owner derived from the request principal.
     pub async fn provision(
         &self,
         container_id: String,

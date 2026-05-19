@@ -144,9 +144,10 @@ pub struct UsageLogEntry {
     pub tool_runtime_seconds: Option<f64>,
     /// Process exit code for shell tool records. `None` when the
     /// command never reached an `Exit` event (e.g. client disconnect
-    /// before the runtime signaled completion); a sentinel `-1` is
-    /// what we report to clients in `response.shell_call.completed`
-    /// for that case, but the usage record preserves the distinction.
+    /// before the runtime signaled completion); clients see this
+    /// surfaced as `status: "incomplete"` with a `timeout` outcome on
+    /// the `shell_call_output` item, but the usage record preserves
+    /// the "never reported" vs "exited 0" distinction.
     #[serde(default)]
     pub tool_exit_code: Option<i32>,
 }

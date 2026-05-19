@@ -1337,6 +1337,13 @@ pub struct ShellContainerAuto {
     /// merge with whatever's defined at request scope.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<RequestSkill>>,
+    /// Per-request idle-TTL override. Spec: `ContainerAutoParam.expires_after`
+    /// — `{anchor: "last_active_at", minutes: N}`. Capped by
+    /// `[features.containers].max_idle_ttl_secs / 60`; omitted means
+    /// fall back to the container row's persisted TTL (when chained)
+    /// or `default_idle_ttl_secs` (for a fresh auto session).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_after: Option<ContainerExpiresAfter>,
 }
 
 /// Reference to an existing container created via
@@ -1667,12 +1674,27 @@ pub struct ResponsesWebSearchToolChoice {
     pub type_: WebSearchToolChoiceType,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShellToolChoiceType {
+    Shell,
+}
+
+/// Force the model to call the shell tool. Spec name:
+/// `ToolChoiceShell` — `{"type": "shell"}`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponsesShellToolChoice {
+    #[serde(rename = "type")]
+    pub type_: ShellToolChoiceType,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ResponsesToolChoice {
     String(ResponsesToolChoiceDefault),
-    Named(ResponsesNamedToolChoice),
     WebSearch(ResponsesWebSearchToolChoice),
+    Shell(ResponsesShellToolChoice),
+    Named(ResponsesNamedToolChoice),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

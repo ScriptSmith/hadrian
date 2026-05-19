@@ -794,6 +794,9 @@ pub(super) fn convert_responses_tool_choice_to_bedrock(
             tracing::warn!("Web search tool choice not supported by Bedrock");
             None
         }
+        ResponsesToolChoice::Shell(_) => Some(BedrockToolChoice::Tool {
+            name: "shell".to_string(),
+        }),
     })
 }
 

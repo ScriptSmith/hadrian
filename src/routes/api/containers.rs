@@ -20,7 +20,7 @@
 use axum::{
     Extension, Json,
     body::Body,
-    extract::{Path, Query, State},
+    extract::{FromRequest, Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::Response,
 };
@@ -74,7 +74,15 @@ pub struct WireContainer {
     /// Optional display name set at creation.
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
-    /// Memory ceiling captured at creation, in MiB.
+    /// Memory ceiling captured at creation, formatted as the
+    /// OpenAI-spec string (e.g. `"512m"`, `"1g"`). Picks the largest
+    /// power-of-two unit that yields a clean integer. `None` when no
+    /// limit was set at creation. Matches OpenAI's `Container.memory_limit`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    memory_limit: Option<String>,
+    /// **Hadrian Extension:** memory ceiling in MiB. Stable integer
+    /// form for clients that prefer parsing it directly. Kept alongside
+    /// `memory_limit` so existing Hadrian-aware clients don't break.
     #[serde(skip_serializing_if = "Option::is_none")]
     memory_limit_mb: Option<i64>,
     /// `expires_after` block echoed back per OpenAI's spec.
@@ -188,6 +196,7 @@ fn container_to_wire(record: ContainerRecord) -> WireContainer {
         .as_deref()
         .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
         .unwrap_or_default();
+    let memory_limit = record.memory_limit_mb.map(format_memory_limit_mb);
     WireContainer {
         id: record.id,
         object: OBJECT_CONTAINER,
@@ -198,11 +207,24 @@ fn container_to_wire(record: ContainerRecord) -> WireContainer {
         idle_ttl_secs: record.idle_ttl_secs,
         runtime: record.runtime_label,
         name: record.name,
+        memory_limit,
         memory_limit_mb: record.memory_limit_mb,
         expires_after,
         network_policy,
         skill_ids,
         source_response_id: record.source_response_id,
+    }
+}
+
+/// Render a MiB-denominated memory limit as the spec string form
+/// (`"512m"`, `"1g"`, etc.). Picks `g` when the value is a whole number
+/// of GiB, otherwise `m`. Zero or negative values produce `None`-equivalent
+/// behaviour at the caller (we never pass them in).
+fn format_memory_limit_mb(mb: i64) -> String {
+    if mb > 0 && mb % 1024 == 0 {
+        format!("{}g", mb / 1024)
+    } else {
+        format!("{mb}m")
     }
 }
 
@@ -498,6 +520,7 @@ pub async fn api_v1_containers_create(
                 network_policy: Some(np.clone()),
                 file_ids: None,
                 skills: None,
+                expires_after: None,
             },
         );
         crate::services::shell_tool::resolve_shell_environment(
@@ -953,9 +976,30 @@ pub async fn api_v1_containers_file_content(
     Ok(response)
 }
 
+/// JSON body for `POST /v1/containers/{container_id}/files` when
+/// copying an existing Files-API upload into the container instead of
+/// streaming bytes via multipart. Spec shape: `{file_id: "file_..."}`.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct CreateContainerFileRequest {
+    /// Files-API id of an already-uploaded file to copy into the
+    /// container's `/mnt/data`. Must belong to the caller's org.
+    pub file_id: String,
+    /// Optional override for the destination path. Same rules as the
+    /// multipart variant: rebased under `/mnt/data` and rejects `..`.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
 /// `POST /v1/containers/{container_id}/files` — upload a file into a
-/// container's `/mnt/data`. Accepts `multipart/form-data` with a
-/// `file` part (required) and optional `path` / `content_type` parts.
+/// container's `/mnt/data`. Accepts either:
+///
+/// - `multipart/form-data` with a `file` part (required) and optional
+///   `path` / `content_type` parts — streams bytes directly.
+/// - `application/json` with `{file_id: "file_..."}` — copies an
+///   existing Files-API upload into the container (same resolver as
+///   the `file_ids` array on `POST /v1/containers`).
+///
 /// Matches OpenAI's upload contract.
 #[cfg_attr(feature = "utoipa", utoipa::path(
     post,
@@ -969,6 +1013,7 @@ pub async fn api_v1_containers_file_content(
         (status = 403, description = "Authorization denied", body = crate::openapi::ErrorResponse),
         (status = 404, description = "Container not found", body = crate::openapi::ErrorResponse),
         (status = 413, description = "Payload too large", body = crate::openapi::ErrorResponse),
+        (status = 415, description = "Unsupported Content-Type", body = crate::openapi::ErrorResponse),
         (status = 501, description = "Persistence disabled", body = crate::openapi::ErrorResponse),
     ),
     security(("api_key" = []))
@@ -978,7 +1023,7 @@ pub async fn api_v1_containers_file_upload(
     auth: Option<Extension<AuthenticatedRequest>>,
     authz: Option<Extension<AuthzContext>>,
     Path(container_id): Path<String>,
-    mut multipart: axum::extract::Multipart,
+    request: axum::http::Request<Body>,
 ) -> Result<Json<WireContainerFile>, ApiError> {
     let svc = resolve_service(&state)?;
     enforce_authz(authz.as_ref(), auth.as_ref(), "write").await?;
@@ -999,6 +1044,53 @@ pub async fn api_v1_containers_file_upload(
             ),
         ));
     }
+
+    let content_type = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    if content_type.starts_with("application/json") {
+        let bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
+            .await
+            .map_err(|e| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_body",
+                    format!("failed to read request body: {e}"),
+                )
+            })?;
+        let body: CreateContainerFileRequest = serde_json::from_slice(&bytes).map_err(|e| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_body",
+                format!("invalid JSON body: {e}"),
+            )
+        })?;
+        let record =
+            upload_from_file_id(&state, svc, &container_id, org_id, &body.file_id, body.path)
+                .await?;
+        return Ok(Json(file_to_wire(record)));
+    }
+    if !content_type.starts_with("multipart/") {
+        return Err(ApiError::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "unsupported_content_type",
+            "Content-Type must be 'multipart/form-data' or 'application/json'",
+        ));
+    }
+
+    let mut multipart = axum::extract::Multipart::from_request(request, &state)
+        .await
+        .map_err(|e| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_multipart",
+                format!("malformed multipart request: {e}"),
+            )
+        })?;
 
     let max_bytes = state.config.features.containers.max_bytes_per_file as usize;
     let mut filename: Option<String> = None;
@@ -1059,28 +1151,7 @@ pub async fn api_v1_containers_file_upload(
         )
     })?;
     let filename = filename.unwrap_or_else(|| "upload".to_string());
-    // Normalize path: must live under /mnt/data. Anything else is
-    // rebased to `/mnt/data/<basename>` so callers can't escape the
-    // workdir via `../`.
-    const MNT: &str = crate::services::container_session::MNT_DATA;
-    let path = match path_field {
-        Some(p) if !p.is_empty() => {
-            let normalised = p.trim_start_matches('/').to_string();
-            if normalised.contains("..") {
-                return Err(ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_path",
-                    "path may not contain '..'",
-                ));
-            }
-            if normalised.starts_with("mnt/data/") {
-                format!("/{normalised}")
-            } else {
-                format!("{MNT}/{normalised}")
-            }
-        }
-        _ => format!("{MNT}/{filename}"),
-    };
+    let path = normalize_mnt_path(path_field.as_deref(), &filename)?;
 
     let record = svc
         .upload_file(
@@ -1097,6 +1168,111 @@ pub async fn api_v1_containers_file_upload(
         .await
         .map_err(map_service_err)?;
     Ok(Json(file_to_wire(record)))
+}
+
+/// Resolve the requested destination path under `/mnt/data`. Rebases
+/// anything else and rejects `..` traversal.
+fn normalize_mnt_path(path_field: Option<&str>, filename: &str) -> Result<String, ApiError> {
+    const MNT: &str = crate::services::container_session::MNT_DATA;
+    match path_field {
+        Some(p) if !p.is_empty() => {
+            let normalised = p.trim_start_matches('/').to_string();
+            if normalised.contains("..") {
+                return Err(ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_path",
+                    "path may not contain '..'",
+                ));
+            }
+            if normalised.starts_with("mnt/data/") {
+                Ok(format!("/{normalised}"))
+            } else {
+                Ok(format!("{MNT}/{normalised}"))
+            }
+        }
+        _ => Ok(format!("{MNT}/{filename}")),
+    }
+}
+
+/// Copy bytes from a Files-API upload into the container. Mirrors the
+/// `file_ids` resolution path on `POST /v1/containers` so behaviour is
+/// identical between creation-time staging and post-creation copies.
+async fn upload_from_file_id(
+    state: &AppState,
+    svc: &ContainersService,
+    container_id: &str,
+    org_id: Uuid,
+    raw_file_id: &str,
+    path_override: Option<String>,
+) -> Result<crate::db::repos::ContainerFileRecord, ApiError> {
+    use std::str::FromStr;
+
+    let services = state.services.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::NOT_IMPLEMENTED,
+            "files_unavailable",
+            "Files service is unavailable; cannot resolve file_id",
+        )
+    })?;
+    let file_id = crate::models::FileId::from_str(raw_file_id).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_file_id",
+            format!("file_id '{raw_file_id}' is not a valid identifier"),
+        )
+    })?;
+    let uuid = file_id.into_inner();
+    let metadata = services
+        .files
+        .get(uuid)
+        .await
+        .map_err(|e| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "file_lookup_failed",
+                e.to_string(),
+            )
+        })?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "file_not_found",
+                format!("file_id '{raw_file_id}' not found"),
+            )
+        })?;
+    let content = services.files.get_content(uuid).await.map_err(|e| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "file_lookup_failed",
+            e.to_string(),
+        )
+    })?;
+    let max_bytes = state.config.features.containers.max_bytes_per_file as usize;
+    if content.len() > max_bytes {
+        return Err(ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "file_too_large",
+            format!(
+                "file size {} exceeds operator cap of {} bytes",
+                content.len(),
+                max_bytes
+            ),
+        ));
+    }
+    let path = normalize_mnt_path(path_override.as_deref(), &metadata.filename)?;
+    svc.upload_file(
+        container_id,
+        org_id,
+        path,
+        metadata.filename.clone(),
+        metadata.content_type.clone(),
+        content,
+        crate::api_types::responses::ContainerFileSource::User,
+        None,
+        None,
+    )
+    .await
+    .map_err(map_service_err)
 }
 
 /// `DELETE /v1/containers/{container_id}/files/{file_id}` — remove
@@ -1218,6 +1394,61 @@ mod tests {
         r.expires_at = Some(chrono::Utc.timestamp_opt(1_000_500, 0).unwrap());
         let wire = container_to_wire(r);
         assert_eq!(wire.expires_at, 1_000_500);
+    }
+
+    #[test]
+    fn memory_limit_string_renders_clean_units() {
+        assert_eq!(format_memory_limit_mb(1024), "1g");
+        assert_eq!(format_memory_limit_mb(4096), "4g");
+        assert_eq!(format_memory_limit_mb(512), "512m");
+        assert_eq!(format_memory_limit_mb(1500), "1500m");
+    }
+
+    #[test]
+    fn wire_container_surfaces_memory_limit_string() {
+        let mut r = record(crate::db::repos::ContainerStatus::Active);
+        r.memory_limit_mb = Some(1024);
+        let wire = container_to_wire(r);
+        assert_eq!(wire.memory_limit.as_deref(), Some("1g"));
+        assert_eq!(wire.memory_limit_mb, Some(1024));
+    }
+
+    #[test]
+    fn normalize_mnt_path_rebases_relative_paths() {
+        assert_eq!(
+            normalize_mnt_path(Some("out.csv"), "fallback.txt").unwrap(),
+            "/mnt/data/out.csv"
+        );
+        assert_eq!(
+            normalize_mnt_path(Some("/mnt/data/sub/out.csv"), "fallback.txt").unwrap(),
+            "/mnt/data/sub/out.csv"
+        );
+        assert_eq!(
+            normalize_mnt_path(None, "fallback.txt").unwrap(),
+            "/mnt/data/fallback.txt"
+        );
+    }
+
+    #[test]
+    fn normalize_mnt_path_rejects_traversal() {
+        let err = normalize_mnt_path(Some("../escape.txt"), "x").unwrap_err();
+        assert!(err.to_string().starts_with("invalid_path:"), "{err}");
+    }
+
+    #[test]
+    fn create_container_file_request_parses_file_id_json() {
+        let body: CreateContainerFileRequest =
+            serde_json::from_str(r#"{"file_id":"file_abc"}"#).unwrap();
+        assert_eq!(body.file_id, "file_abc");
+        assert!(body.path.is_none());
+    }
+
+    #[test]
+    fn create_container_file_request_parses_file_id_with_path() {
+        let body: CreateContainerFileRequest =
+            serde_json::from_str(r#"{"file_id":"file_abc","path":"sub/out.csv"}"#).unwrap();
+        assert_eq!(body.file_id, "file_abc");
+        assert_eq!(body.path.as_deref(), Some("sub/out.csv"));
     }
 
     #[test]

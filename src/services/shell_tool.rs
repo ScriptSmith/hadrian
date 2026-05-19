@@ -1,9 +1,10 @@
 //! Shell tool interception service for the Responses API.
 //!
 //! Detects `shell` tool calls in upstream responses, dispatches them to
-//! the configured `ShellRuntime`, streams the runtime's output back to
-//! the client as `response.shell_call.*` SSE events, and folds the
-//! final result into the next provider continuation request.
+//! the configured `ShellRuntime`, emits the spec-canonical
+//! `response.output_item.added` / `.done` events carrying `shell_call`
+//! and `shell_call_output` items, and folds the final result into the
+//! next provider continuation request.
 //!
 //! Passthrough mode is handled at registration time: the orchestrator
 //! simply doesn't register a `ShellExecutor` when the configured
@@ -99,6 +100,11 @@ pub enum ShellEnvironmentError {
          or domain_secrets to be set"
     )]
     DisabledPolicyWithFields,
+    #[error(
+        "expires_after.minutes {requested} exceeds operator cap of {max} minutes \
+         ([features.containers].max_idle_ttl_secs)"
+    )]
+    ExpiresAfterExceedsCap { requested: u32, max: u32 },
 }
 
 /// Intersect the per-request environment with the operator-pinned
@@ -126,12 +132,14 @@ pub fn resolve_shell_environment(
         });
     };
 
-    // ── memory (auto-only) ──
-    // Per OpenAI's spec, `expires_after` is only honored on
-    // `POST /v1/containers` — not on the inline `container_auto`
-    // environment. Inline requests fall back to the container's TTL
-    // (when chained) or `[features.containers].default_idle_ttl_secs`
-    // (for fresh auto-provisioned sessions).
+    // ── memory + expires_after (auto-only) ──
+    // OpenAI's `ContainerAutoParam` includes `expires_after`; the
+    // resolver honors it here so a per-request idle TTL flows into the
+    // container row at provision time. Inline requests with no
+    // `expires_after` fall back to the container's persisted TTL (when
+    // chained) or `[features.containers].default_idle_ttl_secs` (for a
+    // fresh auto-provisioned session).
+    let max_idle_minutes = (containers.max_idle_ttl_secs / 60) as u32;
     let (mem_limit_bytes, idle_ttl_secs) = match env {
         ShellEnvironment::ContainerAuto(auto) => {
             let mem = match auto.memory_limit.as_deref() {
@@ -151,13 +159,24 @@ pub fn resolve_shell_environment(
                 }
                 None => default_mem_bytes,
             };
-            (mem, None)
+            let ttl = match auto.expires_after.as_ref() {
+                Some(exp) => {
+                    if exp.minutes > max_idle_minutes {
+                        return Err(ShellEnvironmentError::ExpiresAfterExceedsCap {
+                            requested: exp.minutes,
+                            max: max_idle_minutes,
+                        });
+                    }
+                    Some(i64::from(exp.minutes) * 60)
+                }
+                None => None,
+            };
+            (mem, ttl)
         }
         ShellEnvironment::ContainerReference(_) | ShellEnvironment::Local(_) => {
             (default_mem_bytes, None)
         }
     };
-    let _ = containers; // kept for future per-request idle-ttl re-introduction.
 
     let referenced_container_id = match env {
         ShellEnvironment::ContainerReference(r) => {
@@ -784,108 +803,34 @@ fn sse_event(payload: Value) -> Bytes {
     Bytes::from(format!("data: {}\n\n", s))
 }
 
-/// Spec-canonical: `response.shell_call.in_progress` — emitted when
-/// the gateway has accepted a shell call and started booting the
-/// container. SDKs that hook OpenAI's typed event stream resolve this
-/// to their `ResponseShellCallInProgressEvent` type.
-fn format_in_progress(item_id: &str, output_index: usize) -> Bytes {
-    sse_event(serde_json::json!({
-        "type": "response.shell_call.in_progress",
-        "output_index": output_index,
-        "item_id": item_id,
-    }))
+/// Item lifecycle stage. Drives the `response.output_item.<verb>` event
+/// type Hadrian emits and the corresponding `status` on the carried item.
+/// Spec lifecycle is `added → done`; SDK consumers hook the typed event
+/// stream off these names.
+#[derive(Debug, Clone, Copy)]
+enum ItemLifecycle {
+    Added,
+    Done,
 }
 
-/// **Hadrian Extension:** `response.shell_call.command_started`.
-/// Fires once with the resolved command list before any output
-/// streams. OpenAI's hosted shell tool doesn't ship an equivalent
-/// event today; SDK consumers unfamiliar with the type see a harmless
-/// extra event in the stream and skip it.
-fn format_command_started(item_id: &str, output_index: usize, commands: &[String]) -> Bytes {
-    sse_event(serde_json::json!({
-        "type": "response.shell_call.command_started",
-        "output_index": output_index,
-        "item_id": item_id,
-        "commands": commands,
-    }))
+impl ItemLifecycle {
+    fn event_type(self) -> &'static str {
+        match self {
+            ItemLifecycle::Added => "response.output_item.added",
+            ItemLifecycle::Done => "response.output_item.done",
+        }
+    }
 }
 
-/// **Hadrian Extension:** `response.shell_call.output_chunk`. Carries
-/// raw stdout/stderr deltas keyed by `stream`. Necessary because
-/// Hadrian runs the container in-process and streams its output to
-/// the client; OpenAI's hosted runtime emits an equivalent text-delta
-/// flavoured event that SDKs handle generically.
-fn format_output_chunk(item_id: &str, output_index: usize, stream: &str, data: &[u8]) -> Bytes {
-    // Encode chunk bytes as UTF-8 with replacement to keep SSE
-    // line-safe; binary data should be rare in shell stdout.
-    let text = String::from_utf8_lossy(data).to_string();
-    sse_event(serde_json::json!({
-        "type": "response.shell_call.output_chunk",
-        "output_index": output_index,
-        "item_id": item_id,
-        "stream": stream, // "stdout" | "stderr"
-        "data": text,
-    }))
-}
-
-fn format_completed(
-    item_id: &str,
-    output_index: usize,
-    exit_code: i32,
-    duration_ms: u64,
-    killed: bool,
-    max_output_truncated: bool,
-) -> Bytes {
-    sse_event(serde_json::json!({
-        "type": "response.shell_call.completed",
-        "output_index": output_index,
-        "item_id": item_id,
-        "exit_code": exit_code,
-        // Hadrian Extension — OpenAI's `response.shell_call.completed`
-        // historically only carried the exit code. We surface the
-        // additional outcome fields here because the model can
-        // condition follow-up decisions on them, and SDKs that don't
-        // know about them just see extra harmless properties.
-        "duration_ms": duration_ms,
-        "killed": killed,
-        "max_output_truncated": max_output_truncated,
-    }))
-}
-
-/// **Hadrian Extension:** `response.shell_call.file_created`. Fires
-/// for every artifact captured under `/mnt/data` by this shell call.
-/// Lets clients hook a download UI without parsing the trailing
-/// `shell_call_output` item. SDKs that don't recognise the type get a
-/// harmless extra event.
-fn format_file_created(item_id: &str, output_index: usize, file: &ContainerFileRef) -> Bytes {
-    sse_event(serde_json::json!({
-        "type": "response.shell_call.file_created",
-        "output_index": output_index,
-        "item_id": item_id,
-        "container_id": file.container_id,
-        "file_id": file.file_id,
-        "filename": file.filename,
-        "path": file.path,
-        "bytes": file.bytes,
-        "content_type": file.content_type,
-        "source": file.source,
-    }))
-}
-
-/// Emit a structured `response.output_item.done` event carrying a
-/// spec-compliant `shell_call` item. Per OpenAI's `FunctionShellCall`
-/// shape: `{id, call_id, action: {commands, timeout_ms?,
-/// max_output_length?}, status, environment}`.
-///
-/// Hadrian synthesizes this item so non-passthrough runtimes
-/// (`microsandbox` / `opensandbox`) match the wire contract OpenAI's
-/// hosted shell emits natively. For `passthrough_openai` the upstream
-/// already emits this item and we don't double-emit.
+/// Build the `shell_call` item JSON, shared between `output_item.added`
+/// (status `in_progress`) and `output_item.done` (status
+/// `completed` / `incomplete`). Per OpenAI's `FunctionShellCall` shape:
+/// `{id, call_id, action: {commands, timeout_ms?, max_output_length?},
+/// status, environment}`.
 #[allow(clippy::too_many_arguments)]
-fn format_shell_call_item(
+fn build_shell_call_item(
     item_id: &str,
     call_id: &str,
-    output_index: usize,
     commands: &[String],
     timeout_ms: Option<u64>,
     max_output_length: Option<usize>,
@@ -894,7 +839,7 @@ fn format_shell_call_item(
     status: &str,
     environment: Option<&serde_json::Value>,
     created_by: Option<&str>,
-) -> Bytes {
+) -> serde_json::Value {
     let mut action = serde_json::json!({
         "commands": commands,
     });
@@ -925,8 +870,46 @@ fn format_shell_call_item(
     if let Some(c) = created_by {
         item["created_by"] = serde_json::Value::from(c);
     }
+    item
+}
+
+/// Emit a structured `response.output_item.<lifecycle>` event carrying
+/// a spec-compliant `shell_call` item.
+///
+/// Hadrian synthesizes both `added` (status `in_progress`) and `done`
+/// (terminal status) events so non-passthrough runtimes (`microsandbox`
+/// / `opensandbox`) match the wire contract OpenAI's hosted shell emits
+/// natively. For `passthrough_openai` the upstream already emits these
+/// items and we don't double-emit.
+#[allow(clippy::too_many_arguments)]
+fn format_shell_call_item(
+    lifecycle: ItemLifecycle,
+    item_id: &str,
+    call_id: &str,
+    output_index: usize,
+    commands: &[String],
+    timeout_ms: Option<u64>,
+    max_output_length: Option<usize>,
+    env: Option<&HashMap<String, String>>,
+    working_directory: Option<&str>,
+    status: &str,
+    environment: Option<&serde_json::Value>,
+    created_by: Option<&str>,
+) -> Bytes {
+    let item = build_shell_call_item(
+        item_id,
+        call_id,
+        commands,
+        timeout_ms,
+        max_output_length,
+        env,
+        working_directory,
+        status,
+        environment,
+        created_by,
+    );
     sse_event(serde_json::json!({
-        "type": "response.output_item.done",
+        "type": lifecycle.event_type(),
         "output_index": output_index,
         "item": item,
     }))
@@ -944,6 +927,7 @@ fn format_shell_call_item(
 /// this event is purely additive on the client-facing SSE stream.
 #[allow(clippy::too_many_arguments)]
 fn format_shell_call_output_item(
+    lifecycle: ItemLifecycle,
     item_id: &str,
     call_id: &str,
     output_index: usize,
@@ -957,8 +941,13 @@ fn format_shell_call_output_item(
 ) -> Bytes {
     // `incomplete` whenever we never observed a normal exit — i.e. the
     // call was killed by timeout or the runtime didn't report. Spec
-    // uses `incomplete` for "abandoned mid-flight" outcomes.
-    let status_str = if killed { "incomplete" } else { "completed" };
+    // uses `incomplete` for "abandoned mid-flight" outcomes. The added
+    // lifecycle always carries `in_progress` per the spec.
+    let status_str = match lifecycle {
+        ItemLifecycle::Added => "in_progress",
+        ItemLifecycle::Done if killed => "incomplete",
+        ItemLifecycle::Done => "completed",
+    };
     // Outcome discriminator: `timeout` for killed calls (we don't get
     // a real exit code from the runtime), `exit` otherwise.
     let outcome = if killed {
@@ -991,10 +980,59 @@ fn format_shell_call_output_item(
         item["created_by"] = serde_json::Value::from(c);
     }
     sse_event(serde_json::json!({
-        "type": "response.output_item.done",
+        "type": lifecycle.event_type(),
         "output_index": output_index,
         "item": item,
     }))
+}
+
+/// Emit the spec-canonical `output_item.done` events for both the
+/// `shell_call` and `shell_call_output` items when a shell call fails
+/// before producing real output (boot failure, passthrough misconfig,
+/// exec error). Both items carry `status: "incomplete"`; the output
+/// item's stderr surfaces the error message so the model can react.
+#[allow(clippy::too_many_arguments)]
+async fn emit_failure_done(
+    event_tx: &mpsc::Sender<Bytes>,
+    id: &str,
+    commands: &[String],
+    timeout_ms: Option<u64>,
+    max_output_length: Option<usize>,
+    env: Option<&HashMap<String, String>>,
+    working_directory: Option<&str>,
+    stderr: &str,
+) {
+    let _ = event_tx
+        .send(format_shell_call_item(
+            ItemLifecycle::Done,
+            id,
+            id,
+            0,
+            commands,
+            timeout_ms,
+            max_output_length,
+            env,
+            working_directory,
+            "incomplete",
+            None,
+            Some("model"),
+        ))
+        .await;
+    let _ = event_tx
+        .send(format_shell_call_output_item(
+            ItemLifecycle::Done,
+            id,
+            id,
+            0,
+            -1,
+            "",
+            stderr,
+            &[],
+            true,
+            max_output_length,
+            Some("gateway"),
+        ))
+        .await;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1404,11 +1442,45 @@ impl ServerExecutedTool for ShellExecutor {
         let (result_tx, result_rx) =
             tokio::sync::oneshot::channel::<Result<ToolCallResult, ToolError>>();
 
-        // Emit initial progress events before doing any I/O.
-        let _ = event_tx.send(format_in_progress(&id, 0)).await;
-        let _ = event_tx
-            .send(format_command_started(&id, 0, &commands))
-            .await;
+        // Emit the spec-canonical `output_item.added` lifecycle events
+        // for the `shell_call` and (placeholder) `shell_call_output`
+        // items before any I/O. SDKs typed against the Responses API
+        // stream pick the items up here; the matching `output_item.done`
+        // events fire from the exec-complete branch below with the
+        // final status and content.
+        //
+        // `environment` is omitted on the `added` event because the
+        // resolved container_id isn't known until boot completes; the
+        // `done` event carries it.
+        let added_shell_call = format_shell_call_item(
+            ItemLifecycle::Added,
+            &id,
+            &id,
+            0,
+            &commands,
+            model_timeout_ms,
+            model_max_output_length,
+            model_env.as_ref(),
+            model_workdir.as_deref(),
+            "in_progress",
+            None,
+            Some("model"),
+        );
+        let _ = event_tx.send(added_shell_call).await;
+        let added_shell_output = format_shell_call_output_item(
+            ItemLifecycle::Added,
+            &id,
+            &id,
+            0,
+            0,
+            "",
+            "",
+            &[],
+            false,
+            model_max_output_length,
+            Some("gateway"),
+        );
+        let _ = event_tx.send(added_shell_output).await;
 
         // Spawn the actual session work so the orchestrator can start
         // consuming events while we boot the container.
@@ -1541,16 +1613,18 @@ impl ServerExecutedTool for ShellExecutor {
                                         "Passthrough runtime received an execute() call; \
                                          this indicates a misconfiguration in chat.rs registration"
                                     );
-                                    let _ = event_tx
-                                        .send(format_completed(
-                                            &id_for_task,
-                                            0,
-                                            -1,
-                                            0,
-                                            false,
-                                            false,
-                                        ))
-                                        .await;
+                                    emit_failure_done(
+                                        &event_tx,
+                                        &id_for_task,
+                                        &commands_for_task,
+                                        action_timeout_ms_for_task,
+                                        model_max_output_length,
+                                        action_env_for_task.as_ref(),
+                                        working_directory_for_task.as_deref(),
+                                        "shell runtime is configured for passthrough but \
+                                         executor was invoked",
+                                    )
+                                    .await;
                                     let _ = result_tx.send(Err(ToolError::ExecutionFailed(
                                         "shell runtime is configured for passthrough but \
                                          executor was invoked"
@@ -1565,18 +1639,20 @@ impl ServerExecutedTool for ShellExecutor {
                                         error = %e,
                                         "Failed to start shell session"
                                     );
-                                    let _ = event_tx
-                                        .send(format_completed(
-                                            &id_for_task,
-                                            0,
-                                            -1,
-                                            0,
-                                            false,
-                                            false,
-                                        ))
-                                        .await;
-                                    let _ = result_tx
-                                        .send(Err(ToolError::ExecutionFailed(e.to_string())));
+                                    let err_text = e.to_string();
+                                    emit_failure_done(
+                                        &event_tx,
+                                        &id_for_task,
+                                        &commands_for_task,
+                                        action_timeout_ms_for_task,
+                                        model_max_output_length,
+                                        action_env_for_task.as_ref(),
+                                        working_directory_for_task.as_deref(),
+                                        &err_text,
+                                    )
+                                    .await;
+                                    let _ =
+                                        result_tx.send(Err(ToolError::ExecutionFailed(err_text)));
                                     return;
                                 }
                             }
@@ -1603,16 +1679,18 @@ impl ServerExecutedTool for ShellExecutor {
                                         "Passthrough runtime received an execute() call; \
                                          this indicates a misconfiguration in chat.rs registration"
                                     );
-                                    let _ = event_tx
-                                        .send(format_completed(
-                                            &id_for_task,
-                                            0,
-                                            -1,
-                                            0,
-                                            false,
-                                            false,
-                                        ))
-                                        .await;
+                                    emit_failure_done(
+                                        &event_tx,
+                                        &id_for_task,
+                                        &commands_for_task,
+                                        action_timeout_ms_for_task,
+                                        model_max_output_length,
+                                        action_env_for_task.as_ref(),
+                                        working_directory_for_task.as_deref(),
+                                        "shell runtime is configured for passthrough but \
+                                         executor was invoked",
+                                    )
+                                    .await;
                                     let _ = result_tx.send(Err(ToolError::ExecutionFailed(
                                         "shell runtime is configured for passthrough but \
                                          executor was invoked"
@@ -1627,18 +1705,20 @@ impl ServerExecutedTool for ShellExecutor {
                                         error = %e,
                                         "Failed to start shell session"
                                     );
-                                    let _ = event_tx
-                                        .send(format_completed(
-                                            &id_for_task,
-                                            0,
-                                            -1,
-                                            0,
-                                            false,
-                                            false,
-                                        ))
-                                        .await;
-                                    let _ = result_tx
-                                        .send(Err(ToolError::ExecutionFailed(e.to_string())));
+                                    let err_text = e.to_string();
+                                    emit_failure_done(
+                                        &event_tx,
+                                        &id_for_task,
+                                        &commands_for_task,
+                                        action_timeout_ms_for_task,
+                                        model_max_output_length,
+                                        action_env_for_task.as_ref(),
+                                        working_directory_for_task.as_deref(),
+                                        &err_text,
+                                    )
+                                    .await;
+                                    let _ =
+                                        result_tx.send(Err(ToolError::ExecutionFailed(err_text)));
                                     return;
                                 }
                             };
@@ -1689,9 +1769,6 @@ impl ServerExecutedTool for ShellExecutor {
                                 "Staged input_file parts into /mnt/data"
                             );
                         }
-                        for r in &refs {
-                            let _ = event_tx.send(format_file_created(&id_for_task, 0, r)).await;
-                        }
                         // Mirror into captured_files so the very first
                         // assistant message picks them up in
                         // annotations, even if the shell command
@@ -1736,18 +1813,20 @@ impl ServerExecutedTool for ShellExecutor {
                         error = %e,
                         "Failed to exec shell command"
                     );
-                    let elapsed_ms = start.elapsed().as_millis() as u64;
-                    let _ = event_tx
-                        .send(format_completed(
-                            &id_for_task,
-                            0,
-                            -1,
-                            elapsed_ms,
-                            false,
-                            false,
-                        ))
-                        .await;
-                    let _ = result_tx.send(Err(ToolError::ExecutionFailed(e.to_string())));
+                    let _ = start.elapsed();
+                    let err_text = e.to_string();
+                    emit_failure_done(
+                        &event_tx,
+                        &id_for_task,
+                        &commands_for_task,
+                        action_timeout_ms_for_task,
+                        model_max_output_length,
+                        action_env_for_task.as_ref(),
+                        working_directory_for_task.as_deref(),
+                        &err_text,
+                    )
+                    .await;
+                    let _ = result_tx.send(Err(ToolError::ExecutionFailed(err_text)));
                     return;
                 }
             };
@@ -1790,38 +1869,29 @@ impl ServerExecutedTool for ShellExecutor {
                     }
                     maybe_ev = output.next() => {
                         let Some(ev) = maybe_ev else { break };
-                        let send_result = match ev {
+                        // OpenAI's Responses API spec has no per-delta
+                        // streaming event for `shell_call`; stdout/stderr
+                        // surface in a single `shell_call_output` item via
+                        // `response.output_item.done` after exec. We
+                        // accumulate into bounded head/tail buffers here
+                        // and rely on the `event_tx.closed()` arm above
+                        // for client-disconnect detection.
+                        match ev {
                             ExecEvent::Stdout(bytes) => {
                                 let decoded = stdout_decoder.push(&bytes);
                                 if !decoded.is_empty() {
                                     stdout_buf.push_str(&decoded);
                                 }
-                                event_tx
-                                    .send(format_output_chunk(&id_for_task, 0, "stdout", &bytes))
-                                    .await
                             }
                             ExecEvent::Stderr(bytes) => {
                                 let decoded = stderr_decoder.push(&bytes);
                                 if !decoded.is_empty() {
                                     stderr_buf.push_str(&decoded);
                                 }
-                                event_tx
-                                    .send(format_output_chunk(&id_for_task, 0, "stderr", &bytes))
-                                    .await
                             }
                             ExecEvent::Exit { code, .. } => {
                                 final_exit = Some(code);
-                                Ok(())
                             }
-                        };
-                        if send_result.is_err() {
-                            warn!(
-                                stage = "client_disconnected",
-                                call_id = %id_for_task,
-                                "Client disconnected mid-output; terminating session"
-                            );
-                            client_disconnected = true;
-                            break;
                         }
                     }
                 }
@@ -1853,9 +1923,7 @@ impl ServerExecutedTool for ShellExecutor {
                         "Failed to snapshot /mnt/data after exec"
                     ),
                 }
-                for r in &new_files {
-                    let _ = event_tx.send(format_file_created(&id_for_task, 0, r)).await;
-                }
+                let _ = &new_files;
             }
 
             // Replace the global captured_files map for this response
@@ -1888,12 +1956,12 @@ impl ServerExecutedTool for ShellExecutor {
             // billed for what they consumed.
             // Resolve the exit code for downstream reporting. `final_exit
             // == None` means the runtime stream closed without an `Exit`
-            // event — surface that as `-1` to clients and metrics (the
-            // sentinel the existing `record_shell_execution` and
-            // `response.shell_call.completed` already use for error
-            // exits) but preserve `None` on the usage row so a later
-            // audit can tell "process exited 0" from "process never
-            // reported an exit."
+            // event — surface that as `-1` to metrics (the sentinel
+            // `record_shell_execution` uses for error exits) but preserve
+            // `None` on the usage row so a later audit can tell "process
+            // exited 0" from "process never reported an exit." Clients
+            // see this case as `status: "incomplete"` with a `timeout`
+            // outcome on the `shell_call_output` item.
             let exit_for_report = final_exit.unwrap_or(-1);
 
             #[cfg(feature = "concurrency")]
@@ -1958,22 +2026,11 @@ impl ServerExecutedTool for ShellExecutor {
                 return;
             }
 
-            let duration_ms = (duration_secs * 1000.0) as u64;
             // `killed` ≈ runtime returned the timeout sentinel (124 is
             // the canonical `timeout(1)` exit code; we also surface
             // `None` exits — the process didn't report — as killed.
             let killed = final_exit == Some(124) || final_exit.is_none();
-            let max_output_truncated = stdout_buf.was_truncated() || stderr_buf.was_truncated();
-            let _ = event_tx
-                .send(format_completed(
-                    &id_for_task,
-                    0,
-                    exit_for_report,
-                    duration_ms,
-                    killed,
-                    max_output_truncated,
-                ))
-                .await;
+            let _ = stdout_buf.was_truncated() || stderr_buf.was_truncated();
 
             // Emit the spec-shaped `shell_call` and `shell_call_output`
             // items so clients built against the OpenAI Responses-API
@@ -1999,6 +2056,7 @@ impl ServerExecutedTool for ShellExecutor {
             });
             let _ = event_tx
                 .send(format_shell_call_item(
+                    ItemLifecycle::Done,
                     &id_for_task,
                     &id_for_task,
                     0,
@@ -2014,6 +2072,7 @@ impl ServerExecutedTool for ShellExecutor {
                 .await;
             let _ = event_tx
                 .send(format_shell_call_output_item(
+                    ItemLifecycle::Done,
                     &id_for_task,
                     &id_for_task,
                     0,
@@ -2026,11 +2085,6 @@ impl ServerExecutedTool for ShellExecutor {
                     Some("gateway"),
                 ))
                 .await;
-            // `duration_ms` / `max_output_truncated` previously rode on
-            // the merged item; they're now only on the
-            // `response.shell_call.completed` event (Hadrian extension).
-            let _ = (duration_ms, max_output_truncated);
-
             info!(
                 stage = "shell_completed",
                 call_id = %id_for_task,
@@ -2287,6 +2341,7 @@ mod tests {
             network_policy: net,
             file_ids: None,
             skills: None,
+            expires_after: None,
         })
     }
 
@@ -2344,6 +2399,46 @@ mod tests {
         let env = auto_env(Some("64g"), None);
         let r = resolve_shell_environment(Some(&env), &limits, &default_containers()).unwrap();
         assert_eq!(r.mem_limit_bytes, Some(64 * 1024 * 1024 * 1024));
+    }
+
+    #[test]
+    fn resolver_expires_after_within_cap_flows_through() {
+        let limits = op_limits_with(None, &[], &[]);
+        let containers = default_containers();
+        let env = ShellEnvironment::ContainerAuto(ShellContainerAuto {
+            expires_after: Some(ContainerExpiresAfter {
+                anchor: ContainerExpiresAfterAnchor::LastActiveAt,
+                minutes: 30,
+            }),
+            ..Default::default()
+        });
+        let r = resolve_shell_environment(Some(&env), &limits, &containers).unwrap();
+        assert_eq!(r.idle_ttl_secs, Some(30 * 60));
+    }
+
+    #[test]
+    fn resolver_expires_after_exceeds_cap_rejected() {
+        let limits = op_limits_with(None, &[], &[]);
+        let mut containers = default_containers();
+        containers.max_idle_ttl_secs = 600; // 10 min cap
+        let env = ShellEnvironment::ContainerAuto(ShellContainerAuto {
+            expires_after: Some(ContainerExpiresAfter {
+                anchor: ContainerExpiresAfterAnchor::LastActiveAt,
+                minutes: 30,
+            }),
+            ..Default::default()
+        });
+        let err = resolve_shell_environment(Some(&env), &limits, &containers).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ShellEnvironmentError::ExpiresAfterExceedsCap {
+                    requested: 30,
+                    max: 10,
+                }
+            ),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]
@@ -2818,18 +2913,87 @@ mod tests {
     }
 
     #[test]
-    fn file_created_event_has_expected_fields() {
-        let f = sample_file("cfile_abc", "out.csv", "/mnt/data/out.csv");
-        let bytes = format_file_created("call_1", 0, &f);
+    fn shell_call_done_carries_container_reference_environment() {
+        let env = serde_json::json!({
+            "type": "container_reference",
+            "container_id": "cntr_abc123",
+        });
+        let bytes = format_shell_call_item(
+            ItemLifecycle::Done,
+            "call_1",
+            "call_1",
+            0,
+            &["echo hi".to_string()],
+            None,
+            None,
+            None,
+            None,
+            "completed",
+            Some(&env),
+            Some("model"),
+        );
         let s = std::str::from_utf8(&bytes).unwrap();
         let json_str = s.trim().strip_prefix("data: ").unwrap();
         let v: Value = serde_json::from_str(json_str).unwrap();
-        assert_eq!(v["type"], "response.shell_call.file_created");
-        assert_eq!(v["item_id"], "call_1");
-        assert_eq!(v["file_id"], "cfile_abc");
-        assert_eq!(v["filename"], "out.csv");
-        assert_eq!(v["path"], "/mnt/data/out.csv");
-        assert_eq!(v["container_id"], "cntr_test");
-        assert_eq!(v["source"], "assistant");
+        assert_eq!(v["type"], "response.output_item.done");
+        let item = &v["item"];
+        assert_eq!(item["type"], "shell_call");
+        assert_eq!(item["status"], "completed");
+        assert_eq!(item["environment"]["type"], "container_reference");
+        assert_eq!(item["environment"]["container_id"], "cntr_abc123");
+    }
+
+    #[test]
+    fn shell_call_added_omits_environment_when_unknown() {
+        let bytes = format_shell_call_item(
+            ItemLifecycle::Added,
+            "call_1",
+            "call_1",
+            0,
+            &["echo hi".to_string()],
+            None,
+            None,
+            None,
+            None,
+            "in_progress",
+            None,
+            Some("model"),
+        );
+        let s = std::str::from_utf8(&bytes).unwrap();
+        let json_str = s.trim().strip_prefix("data: ").unwrap();
+        let v: Value = serde_json::from_str(json_str).unwrap();
+        assert_eq!(v["type"], "response.output_item.added");
+        let item = &v["item"];
+        assert_eq!(item["status"], "in_progress");
+        assert!(item.get("environment").is_none());
+    }
+
+    #[test]
+    fn shell_call_output_done_includes_captured_files() {
+        let f = sample_file("cfile_abc", "out.csv", "/mnt/data/out.csv");
+        let bytes = format_shell_call_output_item(
+            ItemLifecycle::Done,
+            "call_1",
+            "call_1",
+            0,
+            0,
+            "",
+            "",
+            std::slice::from_ref(&f),
+            false,
+            None,
+            Some("gateway"),
+        );
+        let s = std::str::from_utf8(&bytes).unwrap();
+        let json_str = s.trim().strip_prefix("data: ").unwrap();
+        let v: Value = serde_json::from_str(json_str).unwrap();
+        assert_eq!(v["type"], "response.output_item.done");
+        let item = &v["item"];
+        assert_eq!(item["type"], "shell_call_output");
+        assert_eq!(item["status"], "completed");
+        let files = item["output_files"].as_array().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["file_id"], "cfile_abc");
+        assert_eq!(files[0]["container_id"], "cntr_test");
     }
 }

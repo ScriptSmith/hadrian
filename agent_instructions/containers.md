@@ -63,9 +63,10 @@ Two paths depending on the configured runtime (`[features.shell].type`):
 2. `ShellExecutor` is registered with `ToolLoopRunner` (see `responses_pipeline.rs`). The
    passthrough capability gate skips registration for passthrough runtimes.
 3. On detection of a `function_call` with `name="shell"`, the executor boots (or reattaches)
-   the container, runs the command, streams `response.shell_call.*` SSE events, and folds the
-   trimmed stdout/stderr/exit + a file manifest back as a `function_call_output` continuation
-   item.
+   the container, runs the command, emits the spec-canonical `response.output_item.added`
+   and `response.output_item.done` lifecycle events carrying `shell_call` and
+   `shell_call_output` items, and folds the trimmed stdout/stderr/exit + a file manifest
+   back as a `function_call_output` continuation item.
 
 ### Passthrough (`passthrough_openai`, `client_passthrough`)
 
@@ -154,9 +155,14 @@ JSON-encoded `Vec<RequestSkill>`). At request time the merge logic in
   `ContainerRecord` + `NewContainer` + `ContainerPatch` as needed, surface in
   `routes/api/containers.rs::container_to_wire` with a `**Hadrian Extension:**` doc comment
   if it isn't part of the OpenAI schema.
-- **New SSE event** from the shell tool: add a `format_*` helper in `shell_tool.rs` and emit
-  it from the `execute()` body. Mirror the `response.shell_call.<verb>` naming and document
-  the schema in `docs/content/docs/features/agents.mdx`.
+- **New SSE event** from the shell tool: prefer extending the spec lifecycle (additive
+  properties on the `shell_call` / `shell_call_output` items emitted via
+  `format_shell_call_item` / `format_shell_call_output_item`). Avoid inventing new
+  `response.shell_call.<verb>` events — Hadrian dropped its earlier `in_progress`,
+  `command_started`, `output_chunk`, `completed`, and `file_created` extensions to align
+  with OpenAI's streaming reference. If you must add one, document it in
+  `docs/content/docs/features/agents.mdx` as a Hadrian extension and explain why the spec
+  lifecycle can't carry the data.
 - **Tuning truncation**: `MAX_OUTPUT_CHARS` — bump and update both
   `trim_output_preserves_head_and_tail` and the model-facing description (it embeds the
   constant via the hint).
