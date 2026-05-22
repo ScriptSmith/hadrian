@@ -28,9 +28,36 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct StorageConfig {
-    /// File storage configuration.
+    /// Storage for the Files API (`/v1/files`) — the same resource that
+    /// backs Knowledge Bases and Responses-API `input_file` references.
     #[serde(default)]
     pub files: FileStorageConfig,
+
+    /// Storage for container output files — artifacts the agentic shell
+    /// tool captures under `/mnt/data` and serves from
+    /// `/v1/containers/{id}/files/{id}/content`.
+    ///
+    /// Defaults to the `database` backend (bytes inline in
+    /// `container_files.file_data`), which is simple but scales poorly for
+    /// large or numerous artifacts. Point it at `filesystem` or `s3` to
+    /// offload the bytes. Independent from `[storage.files]` so operators
+    /// can keep small uploaded files in the DB while routing bulky
+    /// agent-generated artifacts to object storage.
+    #[serde(default)]
+    pub container_files: FileStorageConfig,
+}
+
+impl StorageConfig {
+    /// Validate every configured storage target.
+    pub fn validate(&self) -> Result<(), String> {
+        self.files
+            .validate()
+            .map_err(|e| format!("[storage.files]: {e}"))?;
+        self.container_files
+            .validate()
+            .map_err(|e| format!("[storage.container_files]: {e}"))?;
+        Ok(())
+    }
 }
 
 /// File storage backend configuration for the Files API.
@@ -302,6 +329,83 @@ mod tests {
         assert!(matches!(config.files.backend, FileStorageBackend::Database));
         assert!(config.files.s3.is_none());
         assert!(config.files.filesystem.is_none());
+        // container_files defaults to the database backend too, preserving
+        // the historical "bytes inline in container_files.file_data" behavior.
+        assert!(matches!(
+            config.container_files.backend,
+            FileStorageBackend::Database
+        ));
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_container_files_independent_of_files() {
+        // Files API in the DB, container artifacts offloaded to S3.
+        let config: StorageConfig = toml::from_str(
+            r#"
+            [files]
+            backend = "database"
+
+            [container_files]
+            backend = "s3"
+
+            [container_files.s3]
+            bucket = "hadrian-container-artifacts"
+            region = "us-east-1"
+            key_prefix = "containers/"
+            "#,
+        )
+        .unwrap();
+
+        assert!(matches!(config.files.backend, FileStorageBackend::Database));
+        assert!(matches!(
+            config.container_files.backend,
+            FileStorageBackend::S3
+        ));
+        assert_eq!(
+            config.container_files.s3.as_ref().unwrap().bucket,
+            "hadrian-container-artifacts"
+        );
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_container_files_filesystem_backend() {
+        let config: StorageConfig = toml::from_str(
+            r#"
+            [container_files]
+            backend = "filesystem"
+
+            [container_files.filesystem]
+            path = "/var/hadrian/container-files"
+            "#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            config.container_files.backend,
+            FileStorageBackend::Filesystem
+        ));
+        assert_eq!(
+            config.container_files.filesystem.as_ref().unwrap().path,
+            "/var/hadrian/container-files"
+        );
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_storage_validate_surfaces_section() {
+        // A misconfigured container_files section must name itself in the error.
+        let config: StorageConfig = toml::from_str(
+            r#"
+            [container_files]
+            backend = "filesystem"
+            "#,
+        )
+        .unwrap();
+
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("[storage.container_files]"), "got: {err}");
     }
 
     #[test]

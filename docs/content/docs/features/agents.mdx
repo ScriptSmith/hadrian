@@ -193,6 +193,11 @@ surfaced two ways:
   endpoint and re-upload via `/v1/files`.
 </Callout>
 
+Where the captured bytes physically live is configurable. By default they sit inline in the
+database, which scales poorly for large or numerous artifacts; point
+`[storage.container_files]` at the local filesystem or an S3-compatible bucket to offload
+them. See [Storage configuration](/docs/configuration/storage).
+
 ## Containers
 
 Every shell-tool response provisions a container. You can also create one explicitly with

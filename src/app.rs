@@ -1111,9 +1111,30 @@ impl AppState {
         // is configured. Without it the live shell tool still works
         // (the in-memory session capture path stays available), but
         // the GET endpoints return 404 because no rows exist.
-        let containers_service: Option<Arc<services::containers::ContainersService>> = db
-            .as_ref()
-            .map(|db| Arc::new(services::containers::ContainersService::new(db.clone())));
+        let containers_service: Option<Arc<services::containers::ContainersService>> =
+            match db.as_ref() {
+                Some(db) => {
+                    // Container artifacts get their own storage backend
+                    // (`[storage.container_files]`) so operators can offload
+                    // bulky `/mnt/data` outputs to filesystem / S3 while
+                    // keeping the Files API wherever they like.
+                    let container_file_storage =
+                        services::create_file_storage(&config.storage.container_files, db.clone())
+                            .await
+                            .map_err(|e| {
+                                format!("Failed to initialize container file storage: {}", e)
+                            })?;
+                    tracing::info!(
+                        backend = %container_file_storage.backend_name(),
+                        "Container file storage backend initialized"
+                    );
+                    Some(Arc::new(services::containers::ContainersService::new(
+                        db.clone(),
+                        container_file_storage,
+                    )))
+                }
+                None => None,
+            };
 
         // Always construct a registry. In DB-less deployments it
         // stays empty (sessions never get inserted), but wiring it in

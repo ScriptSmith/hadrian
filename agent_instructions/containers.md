@@ -20,7 +20,7 @@ OpenAI's docs for the shell tool and hosted computer environment we mirror:
 | Resource         | Lifecycle                | Storage                                                              |
 |------------------|--------------------------|----------------------------------------------------------------------|
 | `container`      | `active` → `expired` → `deleted` | `containers` table (Postgres / SQLite parity).                |
-| `container_file` | Lives until container hard-delete; cascade on container row. | `container_files.content` (Database backend) today. `Filesystem` / `S3` enum variants reserved for a future phase. **Bytes in the DB scales poorly — call this out when reviewing.** |
+| `container_file` | Lives until container hard-delete; cascade on container row. | Bytes routed through `[storage.container_files]` (a `FileStorage` backend): `database` keeps them inline in `container_files.file_data`, `filesystem` / `s3` offload them and persist only `storage_path`. The row's `storage_backend` column records which path produced it. **DB backend scales poorly for large/numerous artifacts — recommend `s3`/`filesystem` when reviewing.** |
 
 Container IDs are `cntr_<32hex>`; file IDs are `cfile_<32hex>`. Both prefixes are stable
 and surfaced to clients verbatim.
@@ -96,7 +96,12 @@ Inputs and outputs use **different** storage:
 - **Output** files captured from `/mnt/data` after each exec land in `container_files`, a
   **separate** table from `vector_store_files`. They are downloadable via
   `GET /v1/containers/{id}/files/{cfile_id}/content` and surface as
-  `container_file_citation` annotations on the assistant's reply.
+  `container_file_citation` annotations on the assistant's reply. The metadata row always
+  lives in the DB; the bytes go wherever `[storage.container_files]` points (database /
+  filesystem / s3). `ContainersService` owns this routing via an `Arc<dyn FileStorage>` —
+  `stage_content` on write, `read_external` on read, both keyed by the row's `storage_path`
+  (falling back to the `cfile_…` id). See `services/file_storage.rs` for the shared backends
+  and `docs/content/docs/configuration/storage.mdx` for the operator-facing config.
 
 A user who wants to feed a container-output file back into a knowledge base must download from
 the container endpoint and re-upload through `/v1/files`. There is no bridge endpoint yet —

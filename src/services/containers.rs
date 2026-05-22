@@ -2,11 +2,14 @@
 //! layer. Sits between the in-memory `ContainerSession` and the
 //! database repos.
 //!
-//! Write-through every captured file into the database and expose
-//! read paths for the `/v1/containers/*` GET endpoints. Storage
-//! backend is always `Database` for now — a separate
-//! `[storage.container_files]` config for routing large artifacts to
-//! filesystem/S3 is a future enhancement.
+//! Write-through every captured file and expose read paths for the
+//! `/v1/containers/*` GET endpoints. Where the bytes physically live is
+//! governed by `[storage.container_files]`: the `database` backend keeps
+//! them inline in `container_files.file_data` (simple, scales poorly),
+//! while `filesystem` / `s3` offload the bytes to a [`FileStorage`]
+//! backend and persist only a `storage_path` reference on the row. The
+//! row's `storage_backend` column records which path produced it so reads
+//! route correctly even if the operator later switches backends.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -35,6 +38,7 @@ use crate::{
         },
     },
     models::StorageBackend,
+    services::{FileStorage, FileStorageError},
 };
 
 /// Errors emitted by `ContainersService`. Distinct from `DbError` so
@@ -91,8 +95,10 @@ pub struct PersistFileInput {
     pub filename: String,
     pub content_type: Option<String>,
     pub source: ContainerFileSource,
-    /// File bytes. Stored inline in the row today (Database backend);
-    /// future work may route through a `FileStorage` adapter.
+    /// File bytes. Routed through the configured `[storage.container_files]`
+    /// [`FileStorage`] backend: stored inline in the row for the `database`
+    /// backend, or offloaded to `filesystem` / `s3` with only a
+    /// `storage_path` kept on the row.
     pub content: Bytes,
     pub content_hash_hex: String,
     pub source_response_id: Option<String>,
@@ -102,15 +108,77 @@ pub struct PersistFileInput {
 #[derive(Clone)]
 pub struct ContainersService {
     db: Arc<DbPool>,
+    /// Where container-file bytes live, from `[storage.container_files]`.
+    /// The `database` backend is a thin shim that stores nothing here and
+    /// signals the row to keep bytes inline; `filesystem` / `s3` persist the
+    /// bytes and return a `storage_path`.
+    file_storage: Arc<dyn FileStorage>,
+    /// The configured backend, recorded on every row this service writes so
+    /// reads can route without re-deriving it. Derived from
+    /// `file_storage.backend_name()` at construction.
+    storage_backend: StorageBackend,
 }
 
 impl ContainersService {
-    pub fn new(db: Arc<DbPool>) -> Self {
-        Self { db }
+    pub fn new(db: Arc<DbPool>, file_storage: Arc<dyn FileStorage>) -> Self {
+        let storage_backend = file_storage
+            .backend_name()
+            .parse()
+            .unwrap_or(StorageBackend::Database);
+        Self {
+            db,
+            file_storage,
+            storage_backend,
+        }
     }
 
     fn repo(&self) -> Arc<dyn ContainersRepo> {
         self.db.containers()
+    }
+
+    /// Persist `content` to the configured backend and return the column
+    /// values for the new row: the recorded `storage_backend`, the inline
+    /// `file_data` (only for the `database` backend), and the external
+    /// `storage_path` (only for `filesystem` / `s3`).
+    ///
+    /// The two are mutually exclusive — the `database` shim returns `None`
+    /// from `store()`, every external backend returns `Some(path)`.
+    async fn stage_content(
+        &self,
+        file_id: &str,
+        content: &[u8],
+    ) -> ContainersServiceResult<(StorageBackend, Option<Vec<u8>>, Option<String>)> {
+        let storage_path = self
+            .file_storage
+            .store(file_id, content)
+            .await
+            .map_err(|e| {
+                ContainersServiceError::ContentUnavailable(format!(
+                    "failed to store container file via {} backend: {e}",
+                    self.storage_backend.as_str()
+                ))
+            })?;
+        match storage_path {
+            Some(path) => Ok((self.storage_backend, None, Some(path))),
+            None => Ok((StorageBackend::Database, Some(content.to_vec()), None)),
+        }
+    }
+
+    /// Fetch the bytes for an external-backend (`filesystem` / `s3`) record.
+    /// Returns `Ok(None)` when the underlying object is gone so callers can
+    /// mirror the "metadata-only row" handling used for dropped DB content.
+    async fn read_external(
+        &self,
+        record: &ContainerFileRecord,
+    ) -> ContainersServiceResult<Option<Vec<u8>>> {
+        // Prefer the stored path; fall back to the file id so a backend that
+        // derives keys from ids (S3 without an explicit path) still resolves.
+        let key = record.storage_path.as_deref().unwrap_or(&record.id);
+        match self.file_storage.retrieve(key).await {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(FileStorageError::NotFound(_)) => Ok(None),
+            Err(e) => Err(ContainersServiceError::ContentUnavailable(e.to_string())),
+        }
     }
 
     /// Insert a container row for a freshly-started session. Caller
@@ -200,6 +268,21 @@ impl ContainersService {
         let repo = self.repo();
         let mut out = Vec::with_capacity(files.len());
         for input in files {
+            let (storage_backend, file_data, storage_path) =
+                match self.stage_content(&input.file_id, &input.content).await {
+                    Ok(staged) => staged,
+                    Err(e) => {
+                        error!(
+                            stage = "container_file_store_failed",
+                            container_id,
+                            path = %input.path,
+                            file_id = %input.file_id,
+                            error = %e,
+                            "Failed to store container file bytes; skipping"
+                        );
+                        continue;
+                    }
+                };
             let new = NewContainerFile {
                 id: input.file_id.clone(),
                 container_id: container_id.to_string(),
@@ -213,9 +296,9 @@ impl ContainersService {
                     ContainerFileSource::User => ContainerFileSourceKind::User,
                     ContainerFileSource::Assistant => ContainerFileSourceKind::Assistant,
                 },
-                storage_backend: StorageBackend::Database,
-                file_data: Some(input.content.to_vec()),
-                storage_path: None,
+                storage_backend,
+                file_data,
+                storage_path,
                 source_response_id: input.source_response_id,
                 source_call_id: input.source_call_id,
                 created_at: truncate_to_millis(Utc::now()),
@@ -310,10 +393,10 @@ impl ContainersService {
             .ok_or(ContainersServiceError::NotFound)
     }
 
-    /// Org-scoped file content read. Today only files stored inline in
-    /// the row (`storage_backend = database`) are served; the schema
-    /// supports filesystem/S3 backends but those paths are reserved
-    /// for future work.
+    /// Org-scoped file content read. Routes by the row's recorded
+    /// `storage_backend`: `database` reads the inline `file_data` column,
+    /// `filesystem` / `s3` fetch the bytes from the configured
+    /// [`FileStorage`] backend by `storage_path`.
     pub async fn read_content(
         &self,
         file_id: &str,
@@ -330,10 +413,14 @@ impl ContainersService {
                         "row exists but file_data is NULL".into(),
                     )
                 }),
-            other => Err(ContainersServiceError::ContentUnavailable(format!(
-                "storage backend {} not yet supported for container_files",
-                other.as_str()
-            ))),
+            StorageBackend::Filesystem | StorageBackend::S3 => {
+                self.read_external(&record).await?.ok_or_else(|| {
+                    ContainersServiceError::ContentUnavailable(format!(
+                        "{} object for container file is missing",
+                        record.storage_backend.as_str()
+                    ))
+                })
+            }
         }
     }
 
@@ -364,16 +451,19 @@ impl ContainersService {
     /// Used by `ContainerSession::replay_from_db` to fetch raw bytes
     /// at reattach time. Same rationale as `list_files_for_replay` —
     /// skips the org gate because the caller has already authorized
-    /// via the parent container row.
+    /// via the parent container row. Takes the already-fetched record so
+    /// it can route by `storage_backend` without a second metadata query.
     pub async fn read_content_for_replay(
         &self,
-        container_id: &str,
-        file_id: &str,
+        record: &ContainerFileRecord,
     ) -> ContainersServiceResult<Option<Vec<u8>>> {
-        Ok(self
-            .repo()
-            .read_file_data_for_replay(container_id, file_id)
-            .await?)
+        match record.storage_backend {
+            StorageBackend::Database => Ok(self
+                .repo()
+                .read_file_data_for_replay(&record.container_id, &record.id)
+                .await?),
+            StorageBackend::Filesystem | StorageBackend::S3 => self.read_external(record).await,
+        }
     }
 
     /// Patch lifecycle fields on a container row, org-scoped.
@@ -422,15 +512,39 @@ impl ContainersService {
         file_id: &str,
         org_id: Uuid,
     ) -> ContainersServiceResult<()> {
+        // Capture the storage location before dropping the row so we can
+        // clean up an external object. Tolerate a missing record here — the
+        // delete below is the authoritative not-found check.
+        let record = self.get_file(file_id, org_id).await.ok();
         let removed = self
             .repo()
             .delete_file_by_id_and_org(file_id, container_id, org_id)
             .await?;
-        if removed {
-            Ok(())
-        } else {
-            Err(ContainersServiceError::NotFound)
+        if !removed {
+            return Err(ContainersServiceError::NotFound);
         }
+        // Best-effort external cleanup. The row is already gone, so a storage
+        // hiccup orphans bytes rather than failing the API call — log and move
+        // on instead of resurrecting a deleted file.
+        if let Some(record) = record
+            && matches!(
+                record.storage_backend,
+                StorageBackend::Filesystem | StorageBackend::S3
+            )
+        {
+            let key = record.storage_path.as_deref().unwrap_or(&record.id);
+            if let Err(e) = self.file_storage.delete(key).await {
+                error!(
+                    stage = "container_file_storage_delete_failed",
+                    container_id,
+                    file_id,
+                    backend = record.storage_backend.as_str(),
+                    error = %e,
+                    "Deleted container_files row but failed to remove backing object"
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Upsert one file under an existing container. Used by
@@ -455,6 +569,8 @@ impl ContainersService {
         let content_hash_hex = sha256_hex(&content);
         let file_id = format!("cfile_{}", uuid::Uuid::new_v4().simple());
         let now = truncate_to_millis(Utc::now());
+        let (storage_backend, file_data, storage_path) =
+            self.stage_content(&file_id, &content).await?;
         let new = NewContainerFile {
             id: file_id,
             container_id: container_id.to_string(),
@@ -468,9 +584,9 @@ impl ContainersService {
                 ContainerFileSource::User => ContainerFileSourceKind::User,
                 ContainerFileSource::Assistant => ContainerFileSourceKind::Assistant,
             },
-            storage_backend: StorageBackend::Database,
-            file_data: Some(content),
-            storage_path: None,
+            storage_backend,
+            file_data,
+            storage_path,
             source_response_id,
             source_call_id,
             created_at: now,
@@ -517,5 +633,180 @@ pub fn record_to_api_ref(record: &ContainerFileRecord) -> ContainerFileRef {
         bytes: record.size_bytes.max(0) as u64,
         content_type: record.content_type.clone(),
         source,
+    }
+}
+
+#[cfg(all(test, feature = "database-sqlite", feature = "server"))]
+mod tests {
+    use tempfile::TempDir;
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::{
+        config::FilesystemStorageConfig,
+        db::{DbPool, repos::ResponseOwner, tests::harness},
+        models::CreateOrganization,
+        services::{DatabaseFileStorage, FilesystemFileStorage},
+    };
+
+    /// Stand up an in-memory SQLite DbPool with a seeded org + an active
+    /// container, ready for file persistence assertions.
+    async fn seed() -> (Arc<DbPool>, Uuid, String) {
+        let pool = harness::create_sqlite_pool().await;
+        harness::run_sqlite_migrations(&pool).await;
+        let db = Arc::new(DbPool::from_sqlite(pool));
+
+        let org = db
+            .organizations()
+            .create(CreateOrganization {
+                slug: "acme".to_string(),
+                name: "Acme".to_string(),
+            })
+            .await
+            .expect("create org");
+
+        let container_id = format!("cntr_{}", Uuid::new_v4().simple());
+        db.containers()
+            .insert(NewContainer::from_owner(
+                container_id.clone(),
+                org.id,
+                ResponseOwner::Organization(org.id),
+                "test",
+                None,
+                1200,
+                truncate_to_millis(Utc::now()),
+            ))
+            .await
+            .expect("insert container");
+
+        (db, org.id, container_id)
+    }
+
+    async fn upload(
+        svc: &ContainersService,
+        container_id: &str,
+        org_id: Uuid,
+        content: &[u8],
+    ) -> ContainerFileRecord {
+        svc.upload_file(
+            container_id,
+            org_id,
+            "/mnt/data/out.bin".to_string(),
+            "out.bin".to_string(),
+            Some("application/octet-stream".to_string()),
+            content.to_vec(),
+            ContainerFileSource::Assistant,
+            None,
+            None,
+        )
+        .await
+        .expect("upload_file")
+    }
+
+    #[tokio::test]
+    async fn database_backend_stores_inline() {
+        let (db, org_id, container_id) = seed().await;
+        let svc =
+            ContainersService::new(db.clone(), Arc::new(DatabaseFileStorage::new(db.clone())));
+
+        let rec = upload(&svc, &container_id, org_id, b"hello db").await;
+        assert_eq!(rec.storage_backend, StorageBackend::Database);
+        assert!(
+            rec.storage_path.is_none(),
+            "DB backend keeps no storage_path"
+        );
+
+        // Bytes live inline in the row and read back through the service.
+        let inline = db
+            .containers()
+            .read_file_data(&rec.id, org_id)
+            .await
+            .unwrap();
+        assert_eq!(inline.as_deref(), Some(b"hello db".as_ref()));
+        assert_eq!(
+            svc.read_content(&rec.id, org_id).await.unwrap(),
+            b"hello db"
+        );
+    }
+
+    #[tokio::test]
+    async fn filesystem_backend_offloads_bytes() {
+        let (db, org_id, container_id) = seed().await;
+        let dir = TempDir::new().unwrap();
+        let storage = FilesystemFileStorage::new(FilesystemStorageConfig {
+            path: dir.path().to_string_lossy().to_string(),
+            create_dir: true,
+            file_mode: 0o600,
+            dir_mode: 0o700,
+        })
+        .unwrap();
+        let svc = ContainersService::new(db.clone(), Arc::new(storage));
+
+        let rec = upload(&svc, &container_id, org_id, b"hello fs").await;
+
+        // Bytes are offloaded: backend recorded, path set, nothing inline.
+        assert_eq!(rec.storage_backend, StorageBackend::Filesystem);
+        let path = rec
+            .storage_path
+            .as_deref()
+            .expect("filesystem storage_path");
+        assert!(
+            std::path::Path::new(path).exists(),
+            "object written to disk"
+        );
+        let inline = db
+            .containers()
+            .read_file_data(&rec.id, org_id)
+            .await
+            .unwrap();
+        assert!(inline.is_none(), "filesystem backend leaves file_data NULL");
+
+        // Round-trips through the read path.
+        assert_eq!(
+            svc.read_content(&rec.id, org_id).await.unwrap(),
+            b"hello fs"
+        );
+
+        // Replay path resolves the same bytes from the record.
+        let replayed = svc.read_content_for_replay(&rec).await.unwrap();
+        assert_eq!(replayed.as_deref(), Some(b"hello fs".as_ref()));
+
+        // Delete removes both the row and the backing object.
+        svc.delete_file(&container_id, &rec.id, org_id)
+            .await
+            .unwrap();
+        assert!(
+            !std::path::Path::new(path).exists(),
+            "object removed on delete"
+        );
+        assert!(matches!(
+            svc.read_content(&rec.id, org_id).await,
+            Err(ContainersServiceError::NotFound)
+        ));
+    }
+
+    #[tokio::test]
+    async fn missing_filesystem_object_surfaces_unavailable() {
+        let (db, org_id, container_id) = seed().await;
+        let dir = TempDir::new().unwrap();
+        let storage = FilesystemFileStorage::new(FilesystemStorageConfig {
+            path: dir.path().to_string_lossy().to_string(),
+            create_dir: true,
+            file_mode: 0o600,
+            dir_mode: 0o700,
+        })
+        .unwrap();
+        let svc = ContainersService::new(db.clone(), Arc::new(storage));
+
+        let rec = upload(&svc, &container_id, org_id, b"transient").await;
+        // Remove the backing object out from under the row.
+        std::fs::remove_file(rec.storage_path.as_deref().unwrap()).unwrap();
+
+        assert!(matches!(
+            svc.read_content(&rec.id, org_id).await,
+            Err(ContainersServiceError::ContentUnavailable(_))
+        ));
+        // Replay tolerates the gap (metadata-only) rather than erroring.
+        assert!(svc.read_content_for_replay(&rec).await.unwrap().is_none());
     }
 }

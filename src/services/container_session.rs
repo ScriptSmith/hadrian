@@ -471,10 +471,7 @@ impl ContainerSession {
         let mut bytes_total: u64 = 0;
         for rec in records.into_iter().rev() {
             // Reverse so an overwrite history applies in time order.
-            let bytes = match svc
-                .read_content_for_replay(&self.container_id, &rec.id)
-                .await
-            {
+            let bytes = match svc.read_content_for_replay(&rec).await {
                 Ok(Some(b)) => Bytes::from(b),
                 Ok(None) => {
                     // Metadata-only row (oversized; content was

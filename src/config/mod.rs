@@ -192,10 +192,7 @@ impl GatewayConfig {
         self.cache.validate()?;
         self.auth.validate()?;
         self.providers.validate()?;
-        self.storage
-            .files
-            .validate()
-            .map_err(ConfigError::Validation)?;
+        self.storage.validate().map_err(ConfigError::Validation)?;
         self.features.validate().map_err(ConfigError::Validation)?;
 
         // SSRF-validate the responses webhook URL with the server's
