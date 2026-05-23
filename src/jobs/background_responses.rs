@@ -85,7 +85,13 @@ pub async fn start_background_response_worker(state: AppState, shutdown: Cancell
                 let exec_state = state.clone();
                 let store = store.clone();
                 let retry_config = state.config.features.responses.retry.clone();
-                tokio::spawn(async move {
+                // Track the execution on the shared task tracker so a
+                // SIGTERM drains an in-flight background response instead
+                // of abandoning it mid-stream (later force-reaped as
+                // `worker_lost`). The claim loop above stops on the
+                // shutdown token; this keeps the work it already claimed.
+                let tracker = exec_state.task_tracker.clone();
+                tracker.spawn(async move {
                     let result =
                         run_with_retry(&exec_state, store.clone(), record, retry_config).await;
                     if let Err(e) = result {

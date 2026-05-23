@@ -256,10 +256,15 @@ pub async fn execute_persisted_response(
     // memory unused. Errors bubble up as `BadPayload` so the row
     // ends in `failed` with the resolver's diagnostic preserved.
     let staged_input_files = if shell_tool_requested(&payload) {
+        // Scope file_id references to the row's owner so a background
+        // response can't stage another tenant's Files-API uploads.
+        let staging_owner =
+            crate::db::repos::ResponseOwner::from_parts(record.owner_type, record.owner_id);
         crate::services::input_file_staging::stage_input_files(
             &state,
             &payload,
             &state.config.features.containers,
+            Some(staging_owner),
         )
         .await
         .map_err(|e| {

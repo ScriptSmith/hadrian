@@ -1,16 +1,19 @@
 //! Idle-container reaper for the shell-tool `/mnt/data` workspace.
 //!
-//! Every pass under the cluster-wide leader lock:
-//! 1. Mark `containers` rows whose `last_active_at + idle_ttl_secs`
-//!    has elapsed as `expired`.
-//! 2. Evict the corresponding entries from the in-memory
-//!    [`ContainerSessionRegistry`] so their `ContainerSession::drop`
-//!    detaches a terminate task and the underlying VM is torn down.
+//! Every pass does two things with different scopes:
+//! 1. **Leader only** — under the cluster-wide leader lock, mark
+//!    `containers` rows whose `last_active_at + idle_ttl_secs` has
+//!    elapsed as `expired`. Exactly one replica flips the rows.
+//! 2. **Every replica** — reconcile this process's in-memory
+//!    [`ContainerSessionRegistry`] against the DB: any locally-held
+//!    session whose row is now terminal (`expired`/`deleted`) is
+//!    removed so `ContainerSession::drop` detaches a terminate task and
+//!    the underlying VM is torn down.
 //!
-//! On non-leader replicas the registry eviction step still runs — each
-//! replica only knows about its own sessions, so per-replica eviction
-//! is required to actually free VMs even when a different replica
-//! flipped the DB row.
+//! The registry is process-local, so the reconcile step must NOT be
+//! gated on leadership — only the replica hosting a VM can free it, and
+//! that is usually not the replica that won the lock and flipped the
+//! row.
 
 use std::{sync::Arc, time::Duration as StdDuration};
 
@@ -55,23 +58,43 @@ pub async fn start_containers_reaper_worker(
         };
         let is_leader = !matches!(leader_guard, Some(None));
 
+        // Step 1 (leader only): flip expired rows in the DB.
         if is_leader {
-            let now = Utc::now();
-            match containers.mark_expired_idle(now).await {
+            match containers.mark_expired_idle(Utc::now()).await {
                 Ok(expired_ids) if !expired_ids.is_empty() => {
-                    tracing::info!(count = expired_ids.len(), "Reaped idle containers");
-                    for id in &expired_ids {
-                        if registry.remove(id).is_some() {
-                            tracing::debug!(
-                                container_id = %id,
-                                "Evicted idle container session from registry"
-                            );
-                        }
-                    }
+                    tracing::info!(count = expired_ids.len(), "Marked idle containers expired");
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    tracing::warn!(error = %e, "Containers reaper pass failed");
+                    tracing::warn!(error = %e, "Containers reaper DB pass failed");
+                }
+            }
+        }
+
+        // Step 2 (every replica): reconcile the process-local session
+        // registry against terminal rows. This is what actually frees
+        // VMs, and it must run regardless of leadership because only the
+        // replica holding a session can drop it.
+        let local_ids = registry.ids();
+        if !local_ids.is_empty() {
+            match containers.expired_among(&local_ids).await {
+                Ok(expired) => {
+                    let mut evicted = 0usize;
+                    for id in &expired {
+                        if registry.remove(id).is_some() {
+                            evicted += 1;
+                            tracing::debug!(
+                                container_id = %id,
+                                "Evicted expired container session from registry"
+                            );
+                        }
+                    }
+                    if evicted > 0 {
+                        tracing::info!(count = evicted, "Evicted expired container sessions");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Containers reaper registry reconcile failed");
                 }
             }
         }

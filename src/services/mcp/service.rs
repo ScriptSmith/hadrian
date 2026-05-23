@@ -501,7 +501,7 @@ impl McpService {
         // is cheap relative to the call it precedes (it also re-resolves
         // DNS, catching rebinding to a private IP after warm-up). The
         // cache key isn't poisoned because we only stash on success.
-        validate_base_url_opts(server_url, self.inner.url_validation_opts)
+        let validated = validate_base_url_opts(server_url, self.inner.url_validation_opts)
             .map_err(|e| McpClientError::Transport(format!("blocked server_url: {e}")))?;
 
         // Try the pool. We can't return early from inside the closure, so
@@ -511,9 +511,14 @@ impl McpService {
             return Ok(entry.client.clone());
         }
 
-        // Cold path: open a fresh connection and stash it.
+        // Cold path: open a fresh connection and stash it. Pin the HTTP
+        // client to the IPs we just validated so reqwest can't re-resolve
+        // the host to a private/loopback/metadata address between the
+        // SSRF check and the actual connection (DNS-rebinding TOCTOU).
         let client = McpClient::connect(
             server_url,
+            &validated.host,
+            &validated.addrs,
             authorization.map(str::to_string),
             headers.clone(),
         )

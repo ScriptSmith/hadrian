@@ -62,6 +62,11 @@ pub fn wrap_streaming_with_persistence(
         let mut terminal_event_persisted = false;
         let mut sequence_number: i64 = initial_sequence_number;
         let mut cancelled = false;
+        // Liveness heartbeat: stamp `last_heartbeat_at` at most once per
+        // interval while the stream is live so the in-progress reaper can
+        // tell a healthy long-running response from a dead worker.
+        const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+        let mut last_heartbeat = std::time::Instant::now();
         // Lazily filled when the first terminal event is detected so
         // we can inject `container_id` into the response payload (the
         // upstream provider doesn't know about Hadrian containers).
@@ -92,6 +97,10 @@ pub fn wrap_streaming_with_persistence(
                         }
                     };
                     sse_buffer.extend(&chunk);
+                    if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
+                        store.touch_heartbeat(&response_id).await;
+                        last_heartbeat = std::time::Instant::now();
+                    }
                     for event in sse_buffer.extract_complete_events() {
                         let is_terminal = inspect_terminal_event(&event);
 
@@ -144,6 +153,14 @@ pub fn wrap_streaming_with_persistence(
                                 created_at: Utc::now(),
                             };
                             if is_terminal.is_some() {
+                                // Flush all buffered non-terminal events
+                                // first so the terminal event (and its
+                                // `last_sequence_number` ratchet) can't
+                                // commit ahead of earlier events still in
+                                // the drainer — otherwise a reconnecting
+                                // ?stream=true reader emits [DONE] and
+                                // drops the un-flushed tail.
+                                buf.flush().await;
                                 if let Err(e) = buf.insert_sync(new_event).await {
                                     warn!(
                                         error = %e,

@@ -3,15 +3,15 @@
 use async_trait::async_trait;
 
 use super::{
-    backend::{Pool, RowExt, query},
+    backend::{Pool, RowExt, begin, query},
     common::parse_uuid,
 };
 use crate::db::{
     error::{DbError, DbResult},
     repos::{
         ContainerFileRecord, ContainerFileSourceKind, ContainerPatch, ContainerRecord,
-        ContainerStatus, ContainersRepo, NewContainer, NewContainerFile, ResponseOwnerType,
-        truncate_to_millis,
+        ContainerStatus, ContainersRepo, DeletedFileObject, HardDeleteExpiredOutcome, NewContainer,
+        NewContainerFile, ResponseOwnerType, truncate_to_millis,
     },
 };
 
@@ -428,20 +428,43 @@ impl ContainersRepo for SqliteContainersRepo {
         Ok(rows.iter().map(|r| r.col("id")).collect())
     }
 
+    async fn expired_among(&self, ids: &[String]) -> DbResult<Vec<String>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // SQLite has no ANY(array) operator, so build a placeholder
+        // list. Bounded by the caller (the local registry size).
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let sql = format!(
+            "SELECT id FROM containers \
+             WHERE status IN ('expired', 'deleted') AND id IN ({placeholders})"
+        );
+        let mut q = query(&sql);
+        for id in ids {
+            q = q.bind(id);
+        }
+        let rows = q.fetch_all(&self.pool).await?;
+        Ok(rows.iter().map(|r| r.col::<String>("id")).collect())
+    }
+
     async fn hard_delete_expired(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
         limit: i64,
-    ) -> DbResult<Vec<String>> {
+    ) -> DbResult<HardDeleteExpiredOutcome> {
         // `expires_at` is a TEXT timestamp; `truncate_to_millis` keeps the
         // bound value in the same `YYYY-MM-DD HH:MM:SS.fff+00:00` shape the
         // column was written with, and wrapping both sides in `datetime()`
         // normalizes the suffix the same way `mark_expired_idle` does so the
         // boundary comparison is apples-to-apples.
         let cutoff_ts = truncate_to_millis(cutoff);
-        // Select the victims first so we can delete their `container_files`
-        // explicitly (the FK is `ON DELETE CASCADE`, but the test harness
-        // pool doesn't enable `PRAGMA foreign_keys`, so we don't rely on it).
+        // Wrap the select-then-delete in a transaction so a mid-loop failure
+        // can't leave a partially-deleted batch, and so the captured
+        // external-storage refs are consistent with the rows we remove. We
+        // delete `container_files` explicitly because the test harness pool
+        // doesn't enable `PRAGMA foreign_keys`, so the `ON DELETE CASCADE`
+        // can't be relied on.
+        let mut tx = begin(&self.pool).await?;
         let rows = query(
             r#"
             SELECT id FROM containers
@@ -454,19 +477,44 @@ impl ContainersRepo for SqliteContainersRepo {
         )
         .bind(cutoff_ts)
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await?;
         let ids: Vec<String> = rows.iter().map(|r| r.col("id")).collect();
+        if ids.is_empty() {
+            tx.commit().await?;
+            return Ok(HardDeleteExpiredOutcome::default());
+        }
+
+        let mut file_objects = Vec::new();
         for id in &ids {
+            let file_rows = query(
+                "SELECT id, storage_backend, storage_path \
+                 FROM container_files WHERE container_id = ?",
+            )
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await?;
+            for r in &file_rows {
+                file_objects.push(DeletedFileObject {
+                    file_id: r.col("id"),
+                    storage_backend: parse_storage_backend(&r.col::<String>("storage_backend"))?,
+                    storage_path: r.col::<Option<String>>("storage_path"),
+                });
+            }
             query("DELETE FROM container_files WHERE container_id = ?")
                 .bind(id)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await?;
             query("DELETE FROM containers WHERE id = ?")
                 .bind(id)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await?;
         }
-        Ok(ids)
+        tx.commit().await?;
+
+        Ok(HardDeleteExpiredOutcome {
+            container_ids: ids,
+            file_objects,
+        })
     }
 }

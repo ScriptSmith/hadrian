@@ -44,7 +44,7 @@ const RESPONSE_COLUMNS: &str = "id, org_id, owner_type::TEXT, owner_id, \
     status, background, model, provider, \
     created_at, started_at, completed_at, \
     request_payload, output, usage, error, \
-    retention_expires_at, last_sequence_number, container_id";
+    retention_expires_at, last_sequence_number, last_heartbeat_at, container_id";
 
 pub struct PostgresResponsesRepo {
     write_pool: PgPool,
@@ -57,6 +57,94 @@ impl PostgresResponsesRepo {
         Self {
             write_pool,
             read_pool,
+        }
+    }
+
+    /// Shared body for `update_within_org` / `complete_within_org`.
+    /// When `guard_non_terminal` is set, the UPDATE only matches rows
+    /// whose current status is non-terminal, so a `Some` result means
+    /// this call performed the transition.
+    async fn update_within_org_inner(
+        &self,
+        id: &str,
+        org_id: Uuid,
+        patch: ResponseCompletion,
+        guard_non_terminal: bool,
+    ) -> DbResult<Option<ResponseRecord>> {
+        // Build the SET clause dynamically. Org id is $1 (referenced
+        // by the cascade scope filter), so dynamic columns start at
+        // $2 and the id placeholder slots in after them.
+        let mut setters: Vec<String> = Vec::new();
+        let mut idx = 2usize;
+
+        macro_rules! add {
+            ($cond:expr, $col:expr) => {
+                if $cond {
+                    setters.push(format!("{} = ${}", $col, idx));
+                    idx += 1;
+                }
+            };
+        }
+        add!(patch.status.is_some(), "status");
+        add!(patch.started_at.is_some(), "started_at");
+        add!(patch.completed_at.is_some(), "completed_at");
+        add!(patch.output.is_some(), "output");
+        add!(patch.usage.is_some(), "usage");
+        add!(patch.error.is_some(), "error");
+        add!(patch.retention_expires_at.is_some(), "retention_expires_at");
+        add!(patch.container_id.is_some(), "container_id");
+        if setters.is_empty() {
+            return self.get_by_id_and_org(id, org_id).await;
+        }
+
+        // Terminal guard is a static literal fragment with no extra
+        // binds — see `ResponseStatus::is_terminal`.
+        let guard = if guard_non_terminal {
+            " AND status NOT IN ('completed', 'failed', 'cancelled', 'incomplete')"
+        } else {
+            ""
+        };
+        let id_placeholder = idx;
+        let sql = format!(
+            "UPDATE responses SET {set} WHERE id = ${id}{scope}{guard} RETURNING {cols}",
+            set = setters.join(", "),
+            id = id_placeholder,
+            scope = ORG_SCOPE_FILTER,
+            guard = guard,
+            cols = RESPONSE_COLUMNS,
+        );
+        let mut q = sqlx::query(&sql);
+        q = q.bind(org_id);
+        if let Some(status) = patch.status {
+            q = q.bind(status.as_str().to_string());
+        }
+        if let Some(ts) = patch.started_at {
+            q = q.bind(ts);
+        }
+        if let Some(ts) = patch.completed_at {
+            q = q.bind(ts);
+        }
+        if let Some(output) = patch.output {
+            q = q.bind(output);
+        }
+        if let Some(usage) = patch.usage {
+            q = q.bind(usage);
+        }
+        if let Some(error) = patch.error {
+            q = q.bind(error);
+        }
+        if let Some(ts) = patch.retention_expires_at {
+            q = q.bind(ts);
+        }
+        if let Some(cid) = patch.container_id {
+            q = q.bind(cid);
+        }
+        q = q.bind(id);
+
+        let result = q.fetch_optional(&self.write_pool).await?;
+        match result {
+            Some(row) => Ok(Some(row_to_record(&row)?)),
+            None => Ok(None),
         }
     }
 }
@@ -94,6 +182,7 @@ fn row_to_record(row: &sqlx::postgres::PgRow) -> DbResult<ResponseRecord> {
         error: row.get("error"),
         retention_expires_at: row.get("retention_expires_at"),
         last_sequence_number: row.get("last_sequence_number"),
+        last_heartbeat_at: row.get("last_heartbeat_at"),
         container_id: row.get("container_id"),
     })
 }
@@ -158,6 +247,7 @@ impl ResponsesRepo for PostgresResponsesRepo {
             error: None,
             retention_expires_at: input.retention_expires_at,
             last_sequence_number: 0,
+            last_heartbeat_at: None,
             container_id: None,
         })
     }
@@ -185,73 +275,16 @@ impl ResponsesRepo for PostgresResponsesRepo {
         org_id: Uuid,
         patch: ResponseCompletion,
     ) -> DbResult<Option<ResponseRecord>> {
-        // Build the SET clause dynamically. Org id is $1 (referenced
-        // by the cascade scope filter), so dynamic columns start at
-        // $2 and the id placeholder slots in after them.
-        let mut setters: Vec<String> = Vec::new();
-        let mut idx = 2usize;
+        self.update_within_org_inner(id, org_id, patch, false).await
+    }
 
-        macro_rules! add {
-            ($cond:expr, $col:expr) => {
-                if $cond {
-                    setters.push(format!("{} = ${}", $col, idx));
-                    idx += 1;
-                }
-            };
-        }
-        add!(patch.status.is_some(), "status");
-        add!(patch.started_at.is_some(), "started_at");
-        add!(patch.completed_at.is_some(), "completed_at");
-        add!(patch.output.is_some(), "output");
-        add!(patch.usage.is_some(), "usage");
-        add!(patch.error.is_some(), "error");
-        add!(patch.retention_expires_at.is_some(), "retention_expires_at");
-        add!(patch.container_id.is_some(), "container_id");
-        if setters.is_empty() {
-            return self.get_by_id_and_org(id, org_id).await;
-        }
-
-        let id_placeholder = idx;
-        let sql = format!(
-            "UPDATE responses SET {set} WHERE id = ${id}{scope} RETURNING {cols}",
-            set = setters.join(", "),
-            id = id_placeholder,
-            scope = ORG_SCOPE_FILTER,
-            cols = RESPONSE_COLUMNS,
-        );
-        let mut q = sqlx::query(&sql);
-        q = q.bind(org_id);
-        if let Some(status) = patch.status {
-            q = q.bind(status.as_str().to_string());
-        }
-        if let Some(ts) = patch.started_at {
-            q = q.bind(ts);
-        }
-        if let Some(ts) = patch.completed_at {
-            q = q.bind(ts);
-        }
-        if let Some(output) = patch.output {
-            q = q.bind(output);
-        }
-        if let Some(usage) = patch.usage {
-            q = q.bind(usage);
-        }
-        if let Some(error) = patch.error {
-            q = q.bind(error);
-        }
-        if let Some(ts) = patch.retention_expires_at {
-            q = q.bind(ts);
-        }
-        if let Some(cid) = patch.container_id {
-            q = q.bind(cid);
-        }
-        q = q.bind(id);
-
-        let result = q.fetch_optional(&self.write_pool).await?;
-        match result {
-            Some(row) => Ok(Some(row_to_record(&row)?)),
-            None => Ok(None),
-        }
+    async fn complete_within_org(
+        &self,
+        id: &str,
+        org_id: Uuid,
+        patch: ResponseCompletion,
+    ) -> DbResult<Option<ResponseRecord>> {
+        self.update_within_org_inner(id, org_id, patch, true).await
     }
 
     async fn delete_by_id_and_org(&self, id: &str, org_id: Uuid) -> DbResult<bool> {
@@ -339,6 +372,10 @@ impl ResponsesRepo for PostgresResponsesRepo {
             "code": "worker_lost",
             "message": "Worker died mid-execution; reaped by retention worker",
         });
+        // Compare against the liveness heartbeat, falling back to
+        // `started_at` for rows whose worker never stamped one — only
+        // genuinely stalled workers are reaped, never a healthy
+        // long-running response.
         let result = sqlx::query(
             r#"
             UPDATE responses
@@ -348,7 +385,7 @@ impl ResponsesRepo for PostgresResponsesRepo {
                 retention_expires_at = $3
             WHERE status = 'in_progress'
               AND started_at IS NOT NULL
-              AND started_at < $4
+              AND COALESCE(last_heartbeat_at, started_at) < $4
             "#,
         )
         .bind(completed_at)
@@ -358,5 +395,17 @@ impl ResponsesRepo for PostgresResponsesRepo {
         .execute(&self.write_pool)
         .await?;
         Ok(result.rows_affected())
+    }
+
+    async fn touch_heartbeat(&self, id: &str, now: DateTime<Utc>) -> DbResult<()> {
+        // Best-effort liveness ping; only meaningful while `in_progress`.
+        sqlx::query(
+            "UPDATE responses SET last_heartbeat_at = $1 WHERE id = $2 AND status = 'in_progress'",
+        )
+        .bind(now)
+        .bind(id)
+        .execute(&self.write_pool)
+        .await?;
+        Ok(())
     }
 }

@@ -630,6 +630,17 @@ pub async fn api_v1_containers_create(
                 "Files service is unavailable; cannot resolve file_ids",
             )
         })?;
+        // Scope file_id lookups to the container owner so a caller can't
+        // stage another tenant's Files-API uploads. A missing owner
+        // scope (service-account owner) fails closed as not-found.
+        let (file_owner_type, file_owner_id) = owner.as_file_owner().ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "file_not_found",
+                "file_ids are not available for this owner",
+            )
+        })?;
+        let max_bytes = state.config.features.containers.max_bytes_per_file as usize;
         let mut to_persist: Vec<crate::services::containers::PersistFileInput> =
             Vec::with_capacity(body.file_ids.len());
         for raw in &body.file_ids {
@@ -643,7 +654,7 @@ pub async fn api_v1_containers_create(
             let uuid = file_id.into_inner();
             let metadata = services
                 .files
-                .get(uuid)
+                .get_for_owner(uuid, file_owner_type, file_owner_id)
                 .await
                 .map_err(|e| {
                     ApiError::new(
@@ -666,6 +677,18 @@ pub async fn api_v1_containers_create(
                     e.to_string(),
                 )
             })?;
+            if content.len() > max_bytes {
+                return Err(ApiError::new(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "file_too_large",
+                    format!(
+                        "file_id '{}' size {} exceeds operator cap of {} bytes",
+                        raw,
+                        content.len(),
+                        max_bytes
+                    ),
+                ));
+            }
             let bytes = bytes::Bytes::from(content);
             let hash = Sha256::digest(&bytes);
             let content_hash_hex = hex::encode(hash);
@@ -1084,9 +1107,27 @@ pub async fn api_v1_containers_file_upload(
                 format!("invalid JSON body: {e}"),
             )
         })?;
-        let record =
-            upload_from_file_id(&state, svc, &container_id, org_id, &body.file_id, body.path)
-                .await?;
+        let owner = crate::services::responses_pipeline::derive_response_owner(
+            &state,
+            auth.as_ref().map(|e| &e.0),
+        )
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::UNAUTHORIZED,
+                "owner_unresolved",
+                "could not resolve an owner for this request",
+            )
+        })?;
+        let record = upload_from_file_id(
+            &state,
+            svc,
+            &container_id,
+            org_id,
+            owner,
+            &body.file_id,
+            body.path,
+        )
+        .await?;
         return Ok(Json(file_to_wire(record)));
     }
     if !content_type.starts_with("multipart/") {
@@ -1217,6 +1258,7 @@ async fn upload_from_file_id(
     svc: &ContainersService,
     container_id: &str,
     org_id: Uuid,
+    owner: crate::db::repos::ResponseOwner,
     raw_file_id: &str,
     path_override: Option<String>,
 ) -> Result<crate::db::repos::ContainerFileRecord, ApiError> {
@@ -1237,9 +1279,18 @@ async fn upload_from_file_id(
         )
     })?;
     let uuid = file_id.into_inner();
+    // Scope to the caller's owner so a file_id belonging to another
+    // tenant resolves as not-found (no info leak).
+    let (file_owner_type, file_owner_id) = owner.as_file_owner().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "file_not_found",
+            format!("file_id '{raw_file_id}' not found"),
+        )
+    })?;
     let metadata = services
         .files
-        .get(uuid)
+        .get_for_owner(uuid, file_owner_type, file_owner_id)
         .await
         .map_err(|e| {
             ApiError::new(

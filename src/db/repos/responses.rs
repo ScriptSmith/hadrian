@@ -82,6 +82,35 @@ impl ResponseOwner {
             | Self::ServiceAccount(id) => *id,
         }
     }
+
+    /// Rebuild an owner from the flat (`owner_type`, `owner_id`) pair a
+    /// repo row stores.
+    pub fn from_parts(owner_type: ResponseOwnerType, owner_id: Uuid) -> Self {
+        match owner_type {
+            ResponseOwnerType::Organization => Self::Organization(owner_id),
+            ResponseOwnerType::Team => Self::Team(owner_id),
+            ResponseOwnerType::Project => Self::Project(owner_id),
+            ResponseOwnerType::User => Self::User(owner_id),
+            ResponseOwnerType::ServiceAccount => Self::ServiceAccount(owner_id),
+        }
+    }
+
+    /// Map to the Files / Vector-Store owner pair used for tenant
+    /// scoping. Returns `None` for `ServiceAccount`, which has no
+    /// file-owner equivalent (files are owned by org/team/project/user) —
+    /// callers treat `None` as "no file is in this scope" and fail
+    /// closed, so a service-account-owned request can't reference
+    /// Files-API uploads by id.
+    pub fn as_file_owner(&self) -> Option<(crate::models::VectorStoreOwnerType, Uuid)> {
+        use crate::models::VectorStoreOwnerType as V;
+        match self {
+            Self::Organization(id) => Some((V::Organization, *id)),
+            Self::Team(id) => Some((V::Team, *id)),
+            Self::Project(id) => Some((V::Project, *id)),
+            Self::User(id) => Some((V::User, *id)),
+            Self::ServiceAccount(_) => None,
+        }
+    }
 }
 
 /// Lifecycle states for a stored response, mirroring OpenAI's
@@ -168,6 +197,10 @@ pub struct ResponseRecord {
     /// Highest event sequence_number persisted. Set by the event
     /// buffer drainer on each batch flush.
     pub last_sequence_number: i64,
+    /// Liveness heartbeat for `in_progress` rows, stamped periodically
+    /// by the executing worker. `None` until the first heartbeat (the
+    /// reaper falls back to `started_at`).
+    pub last_heartbeat_at: Option<DateTime<Utc>>,
     /// Container the shell-tool session for this response was attached
     /// to. `None` when the request had no shell tool, when containers
     /// persistence is disabled, or before the shell tool first runs.
@@ -242,6 +275,29 @@ pub trait ResponsesRepo: Send + Sync {
         patch: ResponseCompletion,
     ) -> DbResult<Option<ResponseRecord>>;
 
+    /// Like [`update_within_org`](Self::update_within_org) but the
+    /// UPDATE additionally requires the row's *current* status to be
+    /// non-terminal. Returns `Some(record)` only when this call actually
+    /// performed the transition; `None` when the row was already
+    /// terminal (a lost race) or doesn't match `org_id`.
+    ///
+    /// This makes terminal lifecycle transitions atomic at the DB layer:
+    /// a late `completed` write from the persister cannot clobber an
+    /// earlier `cancelled`, and the affected-row outcome is what drives
+    /// exactly-once webhook firing — never a read-then-write.
+    async fn complete_within_org(
+        &self,
+        id: &str,
+        org_id: Uuid,
+        patch: ResponseCompletion,
+    ) -> DbResult<Option<ResponseRecord>>;
+
+    /// Stamp the liveness heartbeat for an `in_progress` row. No-op for
+    /// rows in any other status (so a late ping can't resurrect a
+    /// terminal row's heartbeat). Best-effort: drives the in-progress
+    /// reaper's dead-worker detection.
+    async fn touch_heartbeat(&self, id: &str, now: DateTime<Utc>) -> DbResult<()>;
+
     /// Org-scoped delete. Returns true if a row was removed.
     async fn delete_by_id_and_org(&self, id: &str, org_id: Uuid) -> DbResult<bool>;
 
@@ -276,4 +332,46 @@ pub trait ResponsesRepo: Send + Sync {
         completed_at: DateTime<Utc>,
         retention_expires_at: DateTime<Utc>,
     ) -> DbResult<u64>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::VectorStoreOwnerType as V;
+
+    #[test]
+    fn response_owner_maps_to_file_owner_for_tenant_scoping() {
+        let id = Uuid::new_v4();
+        // Org/team/project/user map straight across.
+        assert_eq!(
+            ResponseOwner::Organization(id).as_file_owner(),
+            Some((V::Organization, id))
+        );
+        assert_eq!(ResponseOwner::Team(id).as_file_owner(), Some((V::Team, id)));
+        assert_eq!(
+            ResponseOwner::Project(id).as_file_owner(),
+            Some((V::Project, id))
+        );
+        assert_eq!(ResponseOwner::User(id).as_file_owner(), Some((V::User, id)));
+        // Service accounts have no file-owner equivalent → fail closed:
+        // an SA-owned request can't reference Files-API uploads by id.
+        assert_eq!(ResponseOwner::ServiceAccount(id).as_file_owner(), None);
+    }
+
+    #[test]
+    fn response_owner_from_parts_roundtrips() {
+        let id = Uuid::new_v4();
+        for owner in [
+            ResponseOwner::Organization(id),
+            ResponseOwner::Team(id),
+            ResponseOwner::Project(id),
+            ResponseOwner::User(id),
+            ResponseOwner::ServiceAccount(id),
+        ] {
+            assert_eq!(
+                ResponseOwner::from_parts(owner.owner_type(), owner.owner_id()),
+                owner
+            );
+        }
+    }
 }

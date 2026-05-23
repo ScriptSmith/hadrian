@@ -50,7 +50,7 @@ const RESPONSE_COLUMNS: &str = "id, org_id, owner_type, owner_id, \
     status, background, model, provider, \
     created_at, started_at, completed_at, \
     request_payload, output, usage, error, \
-    retention_expires_at, last_sequence_number, container_id";
+    retention_expires_at, last_sequence_number, last_heartbeat_at, container_id";
 
 pub struct SqliteResponsesRepo {
     pool: Pool,
@@ -59,6 +59,100 @@ pub struct SqliteResponsesRepo {
 impl SqliteResponsesRepo {
     pub fn new(pool: Pool) -> Self {
         Self { pool }
+    }
+
+    /// Shared body for `update_within_org` / `complete_within_org`.
+    /// When `guard_non_terminal` is set, the UPDATE only matches rows
+    /// whose current status is non-terminal, so a `Some` result means
+    /// this call performed the transition.
+    async fn update_within_org_inner(
+        &self,
+        id: &str,
+        org_id: Uuid,
+        patch: ResponseCompletion,
+        guard_non_terminal: bool,
+    ) -> DbResult<Option<ResponseRecord>> {
+        // Build the SET clause dynamically. SQLite handles this fine
+        // with one bind per Some field.
+        let mut setters: Vec<&str> = Vec::new();
+        if patch.status.is_some() {
+            setters.push("status = ?");
+        }
+        if patch.started_at.is_some() {
+            setters.push("started_at = ?");
+        }
+        if patch.completed_at.is_some() {
+            setters.push("completed_at = ?");
+        }
+        if patch.output.is_some() {
+            setters.push("output = ?");
+        }
+        if patch.usage.is_some() {
+            setters.push("usage = ?");
+        }
+        if patch.error.is_some() {
+            setters.push("error = ?");
+        }
+        if patch.retention_expires_at.is_some() {
+            setters.push("retention_expires_at = ?");
+        }
+        if patch.container_id.is_some() {
+            setters.push("container_id = ?");
+        }
+        if setters.is_empty() {
+            return self.get_by_id_and_org(id, org_id).await;
+        }
+
+        // Terminal guard is a static literal fragment with no extra
+        // binds — see `ResponseStatus::is_terminal`.
+        let guard = if guard_non_terminal {
+            " AND status NOT IN ('completed', 'failed', 'cancelled', 'incomplete')"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "UPDATE responses SET {set} WHERE id = ?{scope}{guard} RETURNING {cols}",
+            set = setters.join(", "),
+            scope = ORG_SCOPE_FILTER,
+            guard = guard,
+            cols = RESPONSE_COLUMNS,
+        );
+        let mut q = query(&sql);
+        if let Some(status) = patch.status {
+            q = q.bind(status.as_str().to_string());
+        }
+        if let Some(ts) = patch.started_at {
+            q = q.bind(truncate_to_millis(ts));
+        }
+        if let Some(ts) = patch.completed_at {
+            q = q.bind(truncate_to_millis(ts));
+        }
+        if let Some(output) = patch.output {
+            q = q.bind(serde_json::to_string(&output)?);
+        }
+        if let Some(usage) = patch.usage {
+            q = q.bind(serde_json::to_string(&usage)?);
+        }
+        if let Some(error) = patch.error {
+            q = q.bind(serde_json::to_string(&error)?);
+        }
+        if let Some(ts) = patch.retention_expires_at {
+            q = q.bind(truncate_to_millis(ts));
+        }
+        if let Some(cid) = patch.container_id {
+            q = q.bind(cid);
+        }
+        q = q.bind(id);
+        let org_str = org_id.to_string();
+        for _ in 0..ORG_SCOPE_BINDS {
+            q = q.bind(org_str.clone());
+        }
+
+        let result = q.fetch_optional(&self.pool).await?;
+        match result {
+            Some(row) => Ok(Some(row_to_record(&row)?)),
+            None => Ok(None),
+        }
     }
 }
 
@@ -108,6 +202,7 @@ fn row_to_record(row: &super::backend::Row) -> DbResult<ResponseRecord> {
         error: parse_json(row.col("error"))?,
         retention_expires_at: row.col("retention_expires_at"),
         last_sequence_number: row.col("last_sequence_number"),
+        last_heartbeat_at: row.col("last_heartbeat_at"),
         container_id: row.col("container_id"),
     })
 }
@@ -171,6 +266,7 @@ impl ResponsesRepo for SqliteResponsesRepo {
             error: None,
             retention_expires_at,
             last_sequence_number: 0,
+            last_heartbeat_at: None,
             container_id: None,
         })
     }
@@ -199,79 +295,16 @@ impl ResponsesRepo for SqliteResponsesRepo {
         org_id: Uuid,
         patch: ResponseCompletion,
     ) -> DbResult<Option<ResponseRecord>> {
-        // Build the SET clause dynamically. SQLite handles this fine
-        // with one bind per Some field.
-        let mut setters: Vec<&str> = Vec::new();
-        if patch.status.is_some() {
-            setters.push("status = ?");
-        }
-        if patch.started_at.is_some() {
-            setters.push("started_at = ?");
-        }
-        if patch.completed_at.is_some() {
-            setters.push("completed_at = ?");
-        }
-        if patch.output.is_some() {
-            setters.push("output = ?");
-        }
-        if patch.usage.is_some() {
-            setters.push("usage = ?");
-        }
-        if patch.error.is_some() {
-            setters.push("error = ?");
-        }
-        if patch.retention_expires_at.is_some() {
-            setters.push("retention_expires_at = ?");
-        }
-        if patch.container_id.is_some() {
-            setters.push("container_id = ?");
-        }
-        if setters.is_empty() {
-            return self.get_by_id_and_org(id, org_id).await;
-        }
+        self.update_within_org_inner(id, org_id, patch, false).await
+    }
 
-        let sql = format!(
-            "UPDATE responses SET {set} WHERE id = ?{scope} RETURNING {cols}",
-            set = setters.join(", "),
-            scope = ORG_SCOPE_FILTER,
-            cols = RESPONSE_COLUMNS,
-        );
-        let mut q = query(&sql);
-        if let Some(status) = patch.status {
-            q = q.bind(status.as_str().to_string());
-        }
-        if let Some(ts) = patch.started_at {
-            q = q.bind(truncate_to_millis(ts));
-        }
-        if let Some(ts) = patch.completed_at {
-            q = q.bind(truncate_to_millis(ts));
-        }
-        if let Some(output) = patch.output {
-            q = q.bind(serde_json::to_string(&output)?);
-        }
-        if let Some(usage) = patch.usage {
-            q = q.bind(serde_json::to_string(&usage)?);
-        }
-        if let Some(error) = patch.error {
-            q = q.bind(serde_json::to_string(&error)?);
-        }
-        if let Some(ts) = patch.retention_expires_at {
-            q = q.bind(truncate_to_millis(ts));
-        }
-        if let Some(cid) = patch.container_id {
-            q = q.bind(cid);
-        }
-        q = q.bind(id);
-        let org_str = org_id.to_string();
-        for _ in 0..ORG_SCOPE_BINDS {
-            q = q.bind(org_str.clone());
-        }
-
-        let result = q.fetch_optional(&self.pool).await?;
-        match result {
-            Some(row) => Ok(Some(row_to_record(&row)?)),
-            None => Ok(None),
-        }
+    async fn complete_within_org(
+        &self,
+        id: &str,
+        org_id: Uuid,
+        patch: ResponseCompletion,
+    ) -> DbResult<Option<ResponseRecord>> {
+        self.update_within_org_inner(id, org_id, patch, true).await
     }
 
     async fn delete_by_id_and_org(&self, id: &str, org_id: Uuid) -> DbResult<bool> {
@@ -363,6 +396,12 @@ impl ResponsesRepo for SqliteResponsesRepo {
             "code": "worker_lost",
             "message": "Worker died mid-execution; reaped by retention worker",
         }))?;
+        // Compare against the liveness heartbeat, falling back to
+        // `started_at` for rows whose worker never stamped one. This stops
+        // the reaper from force-failing a healthy long-running response —
+        // only rows whose worker has genuinely gone quiet past the cutoff
+        // are reaped. Wrap both sides in `datetime()` so the suffix
+        // normalization matches (see `mark_expired_idle`).
         let result = query(
             r#"
             UPDATE responses
@@ -372,7 +411,7 @@ impl ResponsesRepo for SqliteResponsesRepo {
                 retention_expires_at = ?
             WHERE status = 'in_progress'
               AND started_at IS NOT NULL
-              AND started_at < ?
+              AND datetime(COALESCE(last_heartbeat_at, started_at)) < datetime(?)
             "#,
         )
         .bind(completed_at)
@@ -382,5 +421,15 @@ impl ResponsesRepo for SqliteResponsesRepo {
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected())
+    }
+
+    async fn touch_heartbeat(&self, id: &str, now: DateTime<Utc>) -> DbResult<()> {
+        // Best-effort liveness ping; only meaningful while `in_progress`.
+        query("UPDATE responses SET last_heartbeat_at = ? WHERE id = ? AND status = 'in_progress'")
+            .bind(truncate_to_millis(now))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 }

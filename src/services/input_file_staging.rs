@@ -27,6 +27,7 @@ use crate::{
         ResponsesInputItem,
     },
     config::ContainersConfig,
+    db::repos::ResponseOwner,
 };
 
 /// One resolved input file, ready to write into `/mnt/data`.
@@ -111,10 +112,17 @@ impl StageError {
 /// Skips staging entirely when `config.enabled = false`. Skips
 /// resolution when no `input_file` parts are present (returns `Ok([])`
 /// without touching the network or DB).
+///
+/// `owner` is the request's response owner; `file_id` references are
+/// resolved only when the referenced file belongs to that same owner
+/// (cross-tenant access prevention). `None` (no resolvable owner, or a
+/// service-account owner that has no file scope) fails closed for
+/// `file_id` parts.
 pub async fn stage_input_files(
     state: &AppState,
     payload: &CreateResponsesPayload,
     config: &ContainersConfig,
+    owner: Option<ResponseOwner>,
 ) -> Result<Vec<StagedFile>, StageError> {
     if !config.enabled {
         return Ok(Vec::new());
@@ -137,7 +145,7 @@ pub async fn stage_input_files(
     let mut out: Vec<StagedFile> = Vec::with_capacity(parts.len());
 
     for part in parts {
-        let resolved = resolve_one(state, &part).await?;
+        let resolved = resolve_one(state, &part, owner).await?;
         let bytes_len = resolved.bytes.len() as u64;
         if total_bytes.saturating_add(bytes_len) > config.max_input_bytes_per_request {
             return Err(StageError::FileTooLarge {
@@ -260,11 +268,15 @@ fn push_if_input_file(part: &ResponseInputContentItem, out: &mut Vec<InputFilePa
     }
 }
 
-async fn resolve_one(state: &AppState, part: &InputFilePart) -> Result<ResolvedFile, StageError> {
+async fn resolve_one(
+    state: &AppState,
+    part: &InputFilePart,
+    owner: Option<ResponseOwner>,
+) -> Result<ResolvedFile, StageError> {
     validate_source_count(part)?;
 
     if let Some(ref id) = part.file_id {
-        return resolve_file_id(state, id, part.filename.as_deref()).await;
+        return resolve_file_id(state, id, part.filename.as_deref(), owner).await;
     }
     if let Some(ref data) = part.file_data {
         return resolve_file_data(data, part.filename.as_deref());
@@ -331,6 +343,7 @@ async fn resolve_file_id(
     state: &AppState,
     raw_id: &str,
     override_filename: Option<&str>,
+    owner: Option<ResponseOwner>,
 ) -> Result<ResolvedFile, StageError> {
     use std::str::FromStr;
 
@@ -343,9 +356,17 @@ async fn resolve_file_id(
         .as_ref()
         .ok_or_else(|| StageError::Storage("files service unavailable".into()))?;
 
+    // Tenant scope: the referenced file must belong to the request's
+    // owner. A missing owner scope (no resolvable owner, or a
+    // service-account owner) fails closed — `FileNotFound`, the same
+    // shape as a genuinely absent file, so we never leak whether a file
+    // exists in another tenant.
+    let (owner_type, owner_id) = owner
+        .and_then(|o| o.as_file_owner())
+        .ok_or_else(|| StageError::FileNotFound(raw_id.to_string()))?;
     let metadata = services
         .files
-        .get(uuid)
+        .get_for_owner(uuid, owner_type, owner_id)
         .await
         .map_err(|e| StageError::Storage(e.to_string()))?
         .ok_or_else(|| StageError::FileNotFound(raw_id.to_string()))?;

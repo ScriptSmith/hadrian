@@ -277,7 +277,7 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         let max_in_progress =
             std::time::Duration::from_secs(config.features.responses.max_in_progress_secs);
         let cancel = shutdown_token.clone();
-        tokio::spawn(async move {
+        state.task_tracker.spawn(async move {
             jobs::start_responses_retention_worker(store, db, interval, max_in_progress, cancel)
                 .await;
         });
@@ -293,7 +293,7 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         let raw = config.features.containers.default_idle_ttl_secs / 4;
         let interval = std::time::Duration::from_secs(raw.clamp(10, 300));
         let cancel = shutdown_token.clone();
-        tokio::spawn(async move {
+        state.task_tracker.spawn(async move {
             jobs::start_containers_reaper_worker(containers, registry, db, interval, cancel).await;
         });
     }
@@ -304,7 +304,7 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
     if state.responses_store.is_some() && state.db.is_some() {
         let worker_state = state.clone();
         let cancel = shutdown_token.clone();
-        tokio::spawn(async move {
+        state.task_tracker.spawn(async move {
             jobs::start_background_response_worker(worker_state, cancel).await;
         });
     }
@@ -314,7 +314,7 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
     // replaces the previous per-execution polling.
     if let Some(store) = state.responses_store.clone() {
         let cancel = shutdown_token.clone();
-        tokio::spawn(async move {
+        state.task_tracker.spawn(async move {
             jobs::start_responses_cancel_poller(store, cancel).await;
         });
     }
@@ -340,8 +340,9 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
     // terminal rows don't accumulate forever.
     if let (Some(db), Some(containers)) = (state.db.clone(), state.containers_service.clone()) {
         let cleanup_config = config.features.containers_cleanup.clone();
-        tokio::spawn(async move {
-            jobs::start_containers_cleanup_worker(containers, db, cleanup_config).await;
+        let cancel = shutdown_token.clone();
+        state.task_tracker.spawn(async move {
+            jobs::start_containers_cleanup_worker(containers, db, cleanup_config, cancel).await;
         });
     }
 

@@ -11,7 +11,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use tokio::{
-    sync::{Mutex, mpsc, watch},
+    sync::{Mutex, mpsc, oneshot, watch},
     time::Instant,
 };
 use tracing::{debug, warn};
@@ -33,6 +33,11 @@ pub struct ResponseEventBuffer {
     /// `drainer_done` watch.
     shutdown_tx: watch::Sender<bool>,
     drainer_done_rx: Arc<Mutex<watch::Receiver<bool>>>,
+    /// Flush-barrier channel. `flush()` sends a oneshot ack sender; the
+    /// drainer drains everything currently queued, commits it, then
+    /// acks. Used by the persister to ensure all buffered events are
+    /// durably committed *before* the synchronous terminal-event insert.
+    flush_tx: mpsc::Sender<oneshot::Sender<()>>,
 }
 
 impl ResponseEventBuffer {
@@ -48,9 +53,18 @@ impl ResponseEventBuffer {
         let (tx, rx) = mpsc::channel(channel_capacity);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (done_tx, done_rx) = watch::channel(false);
+        let (flush_tx, flush_rx) = mpsc::channel(8);
         let drainer_repo = repo.clone();
         crate::compat::spawn_detached(async move {
-            drain_events(rx, drainer_repo, max_batch, flush_interval, shutdown_rx).await;
+            drain_events(
+                rx,
+                flush_rx,
+                drainer_repo,
+                max_batch,
+                flush_interval,
+                shutdown_rx,
+            )
+            .await;
             let _ = done_tx.send(true);
         });
         Self {
@@ -58,7 +72,29 @@ impl ResponseEventBuffer {
             repo,
             shutdown_tx,
             drainer_done_rx: Arc::new(Mutex::new(done_rx)),
+            flush_tx,
         }
+    }
+
+    /// Synchronously drain and commit every event the drainer currently
+    /// holds — both its in-memory batch and anything queued on the
+    /// channel at the time of the call. Returns once those events are
+    /// durably committed (and `last_sequence_number` ratcheted).
+    ///
+    /// The persister calls this before `insert_sync` for a terminal
+    /// event: every prior non-terminal event was already `push`ed
+    /// (synchronous `try_send`), so they are guaranteed to land in the
+    /// log before the terminal event. Without it, a reconnecting
+    /// `?stream=true` reader could see the terminal event (and emit
+    /// `[DONE]`) while earlier events are still buffered, dropping the
+    /// tail of the stream.
+    pub async fn flush(&self) {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        if self.flush_tx.send(ack_tx).await.is_err() {
+            // Drainer has exited (shutting down); nothing to flush.
+            return;
+        }
+        let _ = ack_rx.await;
     }
 
     /// Trigger an orderly shutdown of the drainer. Waits until the
@@ -105,6 +141,7 @@ impl ResponseEventBuffer {
 
 async fn drain_events(
     mut rx: mpsc::Receiver<NewResponseEvent>,
+    mut flush_rx: mpsc::Receiver<oneshot::Sender<()>>,
     repo: Arc<dyn ResponseEventsRepo>,
     max_batch: usize,
     flush_interval: Duration,
@@ -127,6 +164,28 @@ async fn drain_events(
             biased;
             _ = shutdown.changed() => {
                 break;
+            }
+            req = flush_rx.recv() => {
+                match req {
+                    Some(ack) => {
+                        // Pull everything currently queued so all events
+                        // sent before this flush request land before we
+                        // ack — the caller `push`ed them synchronously,
+                        // so they are already in the channel buffer.
+                        while let Ok(ev) = rx.try_recv() {
+                            buffer.push(ev);
+                        }
+                        flush(&repo, &mut buffer).await;
+                        next_flush = Instant::now() + flush_interval;
+                        let _ = ack.send(());
+                        continue;
+                    }
+                    // All flush handles dropped (shutting down). The
+                    // data channel lives in the same struct and closes
+                    // with it, so exit to the final drain rather than
+                    // busy-looping on the closed flush channel.
+                    None => break,
+                }
             }
             r = tokio::time::timeout(timeout, rx.recv()) => r,
         };

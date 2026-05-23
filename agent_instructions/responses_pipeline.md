@@ -100,6 +100,36 @@ A `ServerExecutedTool` is the unit of work. To add one:
    `response.<tool>.in_progress` / `.completed` shapes.
 4. Update `[features.server_tools].pricing` if there's a per-call cost dimension.
 
+## Invariants (don't regress these)
+
+- **Terminal-state transitions are DB-guarded.** Writing a terminal status
+  (`completed`/`failed`/`cancelled`/`incomplete`) goes through
+  `ResponsesRepo::complete_within_org`, whose UPDATE carries `WHERE status NOT IN (<terminal
+  set>)`. The webhook-once decision and lost-cancel prevention are driven off the affected-row
+  count — never a read-then-write. Without this a late `completed` from the persister clobbers
+  an earlier `cancelled`, and webhooks double-fire under concurrency. `ResponsesStore::cancel`
+  and `response_persister` both rely on this.
+- **Event-log ordering invariant** (`response_event_buffer.rs`): non-terminal events ride the
+  async drainer (`push`); the terminal event is committed synchronously (`insert_sync`), which
+  ratchets `last_sequence_number`. The persister **must** call `buf.flush().await` before the
+  terminal `insert_sync` so all buffered events land first — otherwise a reconnecting
+  `?stream=true` reader sees the terminal event, emits `[DONE]`, and drops the un-flushed tail.
+  The replay loop (`responses_lookup.rs`) treats the log as the truth source and stops on the
+  first terminal event type.
+- **In-progress heartbeat**: while a response streams, the persister stamps
+  `responses.last_heartbeat_at` (throttled). `reap_stuck_in_progress` compares against
+  `COALESCE(last_heartbeat_at, started_at)` so it force-`failed`s only genuinely dead workers,
+  not healthy long-running responses.
+- **Background-worker lifecycle**: the retention / reaper / background-response / cancel-poller /
+  cleanup workers are spawned on `state.task_tracker` (not raw `tokio::spawn`) and select on the
+  shutdown `CancellationToken` rather than a bare `sleep`. `drain_background_tasks` only awaits
+  the tracker, so an untracked worker is abandoned on SIGTERM and its in-flight `background=true`
+  response gets force-reaped as `worker_lost`. The per-execution task in
+  `background_responses.rs` is also tracked so it drains.
+- **Background retry** (`run_with_retry`): a failed attempt's partial events stay in
+  `response_events`; the next attempt re-loads the row and continues from
+  `last_sequence_number` (and bumps `started_at`/heartbeat so the reaper doesn't kill the retry).
+
 ## Common edits
 
 - **Reorder pipeline stages**: only do this with a real reason. Guardrails-before-tools is

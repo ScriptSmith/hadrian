@@ -235,6 +235,18 @@ impl McpConfig {
     pub fn is_hadrian_hosted(&self) -> bool {
         self.enabled && matches!(self.mode, McpMode::HadrianHosted)
     }
+
+    pub fn validate(&self) -> Result<(), String> {
+        // A zero call timeout would expire every `tools/call` immediately;
+        // a zero tool-search cap would return nothing from `tool_search`.
+        if self.call_timeout_secs == 0 {
+            return Err("[features.mcp] call_timeout_secs must be > 0".into());
+        }
+        if self.tool_search.max_results == 0 {
+            return Err("[features.mcp.tool_search] max_results must be > 0".into());
+        }
+        Ok(())
+    }
 }
 
 impl Default for McpConfig {
@@ -645,6 +657,11 @@ impl FeaturesConfig {
             );
         }
         self.responses.validate()?;
+        self.containers.validate()?;
+        self.containers_cleanup.validate()?;
+        if let Some(ref mcp) = self.mcp {
+            mcp.validate()?;
+        }
         Ok(())
     }
 }
@@ -888,6 +905,27 @@ impl Default for ContainersConfig {
             max_input_files_per_request: default_containers_max_input_files_per_request(),
             max_input_bytes_per_request: default_containers_max_input_bytes_per_request(),
         }
+    }
+}
+
+impl ContainersConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        // The reaper derives its poll interval from `default_idle_ttl_secs`,
+        // and both TTLs gate session/expiry math — a zero would expire
+        // sessions instantly and make the caps meaningless.
+        if self.default_idle_ttl_secs == 0 {
+            return Err("[features.containers] default_idle_ttl_secs must be > 0".into());
+        }
+        if self.max_idle_ttl_secs == 0 {
+            return Err("[features.containers] max_idle_ttl_secs must be > 0".into());
+        }
+        if self.default_idle_ttl_secs > self.max_idle_ttl_secs {
+            return Err(
+                "[features.containers] default_idle_ttl_secs must not exceed max_idle_ttl_secs"
+                    .into(),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -3498,6 +3536,20 @@ impl ContainersCleanupConfig {
             Some(std::time::Duration::from_secs(self.max_duration_secs))
         }
     }
+
+    pub fn validate(&self) -> Result<(), String> {
+        // Only meaningful when enabled, but validate unconditionally so a
+        // misconfigured-but-disabled job surfaces the error if it's later
+        // turned on. A zero interval is a tight DB-hammering loop; a zero
+        // batch makes no progress.
+        if self.interval_secs == 0 {
+            return Err("[features.containers_cleanup] interval_secs must be > 0".into());
+        }
+        if self.batch_size == 0 {
+            return Err("[features.containers_cleanup] batch_size must be > 0".into());
+        }
+        Ok(())
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4853,6 +4905,53 @@ mod tests {
         assert_eq!(config.batch_size, 100);
         assert_eq!(config.max_duration_secs, 60);
         assert!(!config.dry_run);
+    }
+
+    #[test]
+    fn test_zero_interval_configs_rejected() {
+        // Defaults validate.
+        assert!(ContainersCleanupConfig::default().validate().is_ok());
+        assert!(ContainersConfig::default().validate().is_ok());
+        assert!(McpConfig::default().validate().is_ok());
+
+        // A zero cleanup interval (tight DB-hammering loop) is rejected.
+        assert!(
+            ContainersCleanupConfig {
+                interval_secs: 0,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        // Zero container TTLs are rejected.
+        assert!(
+            ContainersConfig {
+                default_idle_ttl_secs: 0,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        // Zero MCP call timeout / tool-search cap are rejected.
+        assert!(
+            McpConfig {
+                call_timeout_secs: 0,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            McpConfig {
+                tool_search: ToolSearchConfig {
+                    max_results: 0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]

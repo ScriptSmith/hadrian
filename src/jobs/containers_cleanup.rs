@@ -18,6 +18,7 @@
 use std::{sync::Arc, time::Instant};
 
 use chrono::{Duration, Utc};
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     config::ContainersCleanupConfig,
@@ -46,11 +47,14 @@ impl CleanupRunResult {
 /// Starts the container cleanup worker as a background task.
 ///
 /// The worker runs in a loop, hard-deleting terminal containers at the
-/// configured interval. It will run indefinitely until the task is cancelled.
+/// configured interval. It runs until `shutdown` fires, so a SIGTERM
+/// stops it promptly instead of letting it keep hitting the DB while the
+/// rest of the process drains.
 pub async fn start_containers_cleanup_worker(
     containers: Arc<ContainersService>,
     db: Arc<DbPool>,
     config: ContainersCleanupConfig,
+    shutdown: CancellationToken,
 ) {
     if !config.enabled {
         tracing::info!("Container cleanup worker disabled by configuration");
@@ -72,13 +76,20 @@ pub async fn start_containers_cleanup_worker(
     let interval = config.interval();
 
     loop {
+        if shutdown.is_cancelled() {
+            tracing::info!("Container cleanup worker received shutdown signal");
+            return;
+        }
         // Skip ticks where another replica already holds the cleanup lock —
         // running deletes from two replicas would race on the same rows.
         let _guard = match leader_lock::try_acquire(&db, keys::CONTAINERS_CLEANUP).await {
             LeadershipOutcome::Leader(g) => Some(g),
             LeadershipOutcome::NotLeader => {
                 tracing::trace!("containers_cleanup: not leader this tick, skipping");
-                tokio::time::sleep(interval).await;
+                tokio::select! {
+                    _ = shutdown.cancelled() => return,
+                    _ = tokio::time::sleep(interval) => {}
+                }
                 continue;
             }
             LeadershipOutcome::NoCoordination => None,
@@ -108,7 +119,10 @@ pub async fn start_containers_cleanup_worker(
             }
         }
 
-        tokio::time::sleep(interval).await;
+        tokio::select! {
+            _ = shutdown.cancelled() => return,
+            _ = tokio::time::sleep(interval) => {}
+        }
     }
 }
 

@@ -193,6 +193,14 @@ impl ContainerSessionRegistry {
         self.sessions.remove(container_id).map(|(_, v)| v)
     }
 
+    /// Snapshot of the ids of all live sessions. Used by the reaper to
+    /// reconcile this replica's local registry against expired DB rows
+    /// (the registry is process-local, so every replica must evict its
+    /// own sessions even when a different replica flipped the row).
+    pub fn ids(&self) -> Vec<String> {
+        self.sessions.iter().map(|e| e.key().clone()).collect()
+    }
+
     /// Number of live sessions. Used by tests and the
     /// `hadrian_container_session_count` gauge.
     pub fn len(&self) -> usize {

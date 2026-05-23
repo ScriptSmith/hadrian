@@ -188,52 +188,55 @@ impl ResponsesStore {
 
     /// Patch a response's lifecycle fields. Tenant-scoped: a wrong
     /// `org_id` returns `NotFound` rather than writing into someone
-    /// else's row. Removes the cancellation sender when the response
-    /// enters a terminal state.
+    /// else's row.
     ///
-    /// Webhook firing is gated on the *first* terminal transition:
-    /// the prior status is read before patching, and the webhook only
-    /// enqueues when `!was_terminal && now_terminal`. Without that
-    /// check, a cancel() race with the persister (both patch
-    /// status=Cancelled) or a no-op patch on an already-terminal row
-    /// would fire the webhook twice.
+    /// Terminal transitions go through the DB-guarded
+    /// [`ResponsesRepo::complete_within_org`], which only matches a
+    /// non-terminal row. This makes the transition atomic: a late
+    /// `completed` write from the persister can't clobber an earlier
+    /// `cancelled` (lost-cancel), and exactly-once webhook firing is
+    /// driven off whether *this* call actually flipped the row — never
+    /// a read-then-write that two racing writers could both pass.
     pub async fn update_within_org(
         &self,
         id: &str,
         org_id: Uuid,
         mut patch: ResponseCompletion,
     ) -> ResponsesStoreResult<ResponseRecord> {
+        let to_terminal = patch.status.is_some_and(|s| s.is_terminal());
+        if !to_terminal {
+            // Non-terminal patch (started_at, container_id, …): plain update.
+            return self
+                .repo
+                .update_within_org(id, org_id, patch)
+                .await?
+                .ok_or(ResponsesStoreError::NotFound);
+        }
+
         // When transitioning to a terminal state we also stamp the
         // retention expiry so the cleanup worker has a deadline.
-        if let Some(status) = patch.status
-            && status.is_terminal()
-            && patch.retention_expires_at.is_none()
-        {
+        if patch.retention_expires_at.is_none() {
             patch.retention_expires_at = Some(self.retention_expires_at(Utc::now()));
         }
-        // Read the prior status only when a webhook is configured —
-        // otherwise the answer doesn't matter and we can save the
-        // round-trip.
-        let was_terminal = if self.webhook.is_some() {
-            self.repo
+        match self.repo.complete_within_org(id, org_id, patch).await? {
+            // We won the race to flip the row terminal: drop the cancel
+            // sender and fire the webhook exactly once.
+            Some(record) => {
+                self.cancel_senders.lock().await.remove(id);
+                if let Some(ref webhook) = self.webhook {
+                    webhook.enqueue(record.id.clone(), record.status, record.background);
+                }
+                Ok(record)
+            }
+            // Row was already terminal (lost race) or wrong org. Don't
+            // overwrite, don't fire the webhook — return the current
+            // record (NotFound if it doesn't exist in this org).
+            None => self
+                .repo
                 .get_by_id_and_org(id, org_id)
                 .await?
-                .is_some_and(|r| r.status.is_terminal())
-        } else {
-            false
-        };
-        let record = self
-            .repo
-            .update_within_org(id, org_id, patch)
-            .await?
-            .ok_or(ResponsesStoreError::NotFound)?;
-        if record.status.is_terminal() {
-            self.cancel_senders.lock().await.remove(id);
-            if !was_terminal && let Some(ref webhook) = self.webhook {
-                webhook.enqueue(record.id.clone(), record.status, record.background);
-            }
+                .ok_or(ResponsesStoreError::NotFound),
         }
-        Ok(record)
     }
 
     /// Org-scoped fetch.
@@ -284,6 +287,16 @@ impl ResponsesStore {
             },
         )
         .await
+    }
+
+    /// Stamp the liveness heartbeat for an in-progress response. Called
+    /// periodically by the persister while a response streams so the
+    /// in-progress reaper can tell a healthy long-running response from a
+    /// dead worker. Best-effort: a failure is logged, not propagated.
+    pub async fn touch_heartbeat(&self, id: &str) {
+        if let Err(e) = self.repo.touch_heartbeat(id, Utc::now()).await {
+            tracing::debug!(response_id = %id, error = %e, "heartbeat stamp failed");
+        }
     }
 
     /// Run by the retention worker — delete records past their

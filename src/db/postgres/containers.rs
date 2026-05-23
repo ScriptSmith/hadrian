@@ -8,7 +8,8 @@ use crate::db::{
     error::{DbError, DbResult},
     repos::{
         ContainerFileRecord, ContainerFileSourceKind, ContainerPatch, ContainerRecord,
-        ContainerStatus, ContainersRepo, NewContainer, NewContainerFile, ResponseOwnerType,
+        ContainerStatus, ContainersRepo, DeletedFileObject, HardDeleteExpiredOutcome, NewContainer,
+        NewContainerFile, ResponseOwnerType,
     },
 };
 
@@ -387,34 +388,88 @@ impl ContainersRepo for PostgresContainersRepo {
         Ok(rows.iter().map(|r| r.get::<String, _>("id")).collect())
     }
 
+    async fn expired_among(&self, ids: &[String]) -> DbResult<Vec<String>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            r#"
+            SELECT id FROM containers
+            WHERE status IN ('expired', 'deleted')
+              AND id = ANY($1)
+            "#,
+        )
+        .bind(ids)
+        .fetch_all(&self.read_pool)
+        .await?;
+        Ok(rows.iter().map(|r| r.get::<String, _>("id")).collect())
+    }
+
     async fn hard_delete_expired(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
         limit: i64,
-    ) -> DbResult<Vec<String>> {
-        // `container_files.container_id` is `ON DELETE CASCADE`, so deleting
-        // the container row drops its files too. `expires_at` is the
-        // transition timestamp (stamped when the row left `active`), so the
-        // retention delay is measured from when it became terminal. The
-        // subquery + `LIMIT` caps how many rows one pass removes.
-        let rows = sqlx::query(
+    ) -> DbResult<HardDeleteExpiredOutcome> {
+        // `expires_at` is the transition timestamp (stamped when the row left
+        // `active`), so the retention delay is measured from when it became
+        // terminal. The `LIMIT` caps how many rows one pass removes. We do
+        // the whole thing in a transaction so the captured file-storage refs
+        // and the row deletions are atomic: select victims, capture their
+        // files' external-storage refs, then delete the containers (the
+        // `ON DELETE CASCADE` drops `container_files` with them).
+        let mut tx = self.write_pool.begin().await?;
+        let victim_rows = sqlx::query(
             r#"
-            DELETE FROM containers
-            WHERE id IN (
-                SELECT id FROM containers
-                WHERE status IN ('expired', 'deleted')
-                  AND expires_at IS NOT NULL
-                  AND expires_at <= $1
-                ORDER BY expires_at DESC
-                LIMIT $2
-            )
-            RETURNING id
+            SELECT id FROM containers
+            WHERE status IN ('expired', 'deleted')
+              AND expires_at IS NOT NULL
+              AND expires_at <= $1
+            ORDER BY expires_at DESC
+            LIMIT $2
+            FOR UPDATE SKIP LOCKED
             "#,
         )
         .bind(cutoff)
         .bind(limit)
-        .fetch_all(&self.write_pool)
+        .fetch_all(&mut *tx)
         .await?;
-        Ok(rows.iter().map(|r| r.get::<String, _>("id")).collect())
+        let ids: Vec<String> = victim_rows
+            .iter()
+            .map(|r| r.get::<String, _>("id"))
+            .collect();
+        if ids.is_empty() {
+            tx.commit().await?;
+            return Ok(HardDeleteExpiredOutcome::default());
+        }
+
+        let file_rows = sqlx::query(
+            r#"
+            SELECT id, storage_backend::TEXT AS storage_backend, storage_path
+            FROM container_files
+            WHERE container_id = ANY($1)
+            "#,
+        )
+        .bind(&ids)
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut file_objects = Vec::with_capacity(file_rows.len());
+        for r in &file_rows {
+            file_objects.push(DeletedFileObject {
+                file_id: r.get::<String, _>("id"),
+                storage_backend: parse_storage_backend(&r.get::<String, _>("storage_backend"))?,
+                storage_path: r.get::<Option<String>, _>("storage_path"),
+            });
+        }
+
+        sqlx::query("DELETE FROM containers WHERE id = ANY($1)")
+            .bind(&ids)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+
+        Ok(HardDeleteExpiredOutcome {
+            container_ids: ids,
+            file_objects,
+        })
     }
 }

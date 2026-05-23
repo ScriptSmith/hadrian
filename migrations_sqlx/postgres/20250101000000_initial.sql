@@ -1338,6 +1338,12 @@ CREATE TABLE IF NOT EXISTS responses (
     error JSONB,
     retention_expires_at TIMESTAMPTZ NOT NULL,
     last_sequence_number BIGINT NOT NULL DEFAULT 0,
+    -- Liveness heartbeat for `in_progress` rows. The executing worker
+    -- stamps this periodically; the in-progress reaper compares against
+    -- COALESCE(last_heartbeat_at, started_at) so it only force-fails rows
+    -- whose worker has actually gone away, never a healthy long-running
+    -- response.
+    last_heartbeat_at TIMESTAMPTZ,
     -- Container the shell-tool session for this response wrote files
     -- into. Set when a `[features.shell]` runtime captures artifacts
     -- under `/mnt/data`. Drives `previous_response_id`-based reuse:

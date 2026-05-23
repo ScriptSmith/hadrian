@@ -500,6 +500,14 @@ impl ContainersService {
         Ok(self.repo().mark_expired_idle(now).await?)
     }
 
+    /// Return the subset of `ids` whose container row is terminal
+    /// (`expired` / `deleted`). The reaper calls this on every replica
+    /// to evict process-local sessions whose rows another replica
+    /// already expired.
+    pub async fn expired_among(&self, ids: &[String]) -> ContainersServiceResult<Vec<String>> {
+        Ok(self.repo().expired_among(ids).await?)
+    }
+
     /// Hard-delete terminal (`expired` / `deleted`) containers whose
     /// `expires_at` is at or before `cutoff`, cascading their
     /// `container_files`. Called by the cleanup job. Returns the ids that
@@ -510,7 +518,31 @@ impl ContainersService {
         cutoff: chrono::DateTime<chrono::Utc>,
         limit: i64,
     ) -> ContainersServiceResult<Vec<String>> {
-        Ok(self.repo().hard_delete_expired(cutoff, limit).await?)
+        let outcome = self.repo().hard_delete_expired(cutoff, limit).await?;
+        // Best-effort external cleanup, mirroring `delete_file`: the rows are
+        // already gone (atomically, in the repo), so a storage hiccup orphans
+        // bytes rather than failing the GC pass. Without this the bulk path
+        // leaks every filesystem/S3 object forever (the cascade only drops
+        // the DB rows).
+        for file in &outcome.file_objects {
+            if !matches!(
+                file.storage_backend,
+                StorageBackend::Filesystem | StorageBackend::S3
+            ) {
+                continue;
+            }
+            let key = file.storage_path.as_deref().unwrap_or(&file.file_id);
+            if let Err(e) = self.file_storage.delete(key).await {
+                error!(
+                    stage = "container_file_storage_delete_failed",
+                    file_id = %file.file_id,
+                    backend = file.storage_backend.as_str(),
+                    error = %e,
+                    "Hard-deleted container_files row but failed to remove backing object"
+                );
+            }
+        }
+        Ok(outcome.container_ids)
     }
 
     /// Org-scoped delete of one container_file row. Returns

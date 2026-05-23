@@ -12,10 +12,33 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::db::{
-    error::DbResult,
-    repos::{ResponseOwner, ResponseOwnerType},
+use crate::{
+    db::{
+        error::DbResult,
+        repos::{ResponseOwner, ResponseOwnerType},
+    },
+    models::StorageBackend,
 };
+
+/// One external storage object whose `container_files` row was removed
+/// by [`ContainersRepo::hard_delete_expired`]. The DB cascade drops the
+/// row but not the backing bytes in filesystem/S3 storage, so the
+/// service deletes these explicitly.
+#[derive(Debug, Clone)]
+pub struct DeletedFileObject {
+    pub file_id: String,
+    pub storage_backend: StorageBackend,
+    pub storage_path: Option<String>,
+}
+
+/// Outcome of one `hard_delete_expired` pass: the container rows that
+/// were removed and the external storage objects their files
+/// referenced.
+#[derive(Debug, Default)]
+pub struct HardDeleteExpiredOutcome {
+    pub container_ids: Vec<String>,
+    pub file_objects: Vec<DeletedFileObject>,
+}
 
 /// Lifecycle states for a container row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -311,6 +334,12 @@ pub trait ContainersRepo: Send + Sync {
     /// session registry.
     async fn mark_expired_idle(&self, now: DateTime<Utc>) -> DbResult<Vec<String>>;
 
+    /// Return the subset of `ids` whose row is in a terminal state
+    /// (`expired` / `deleted`). Used by the reaper on *every* replica to
+    /// reconcile its process-local session registry against rows a
+    /// (possibly different) leader replica already flipped to `expired`.
+    async fn expired_among(&self, ids: &[String]) -> DbResult<Vec<String>>;
+
     /// Hard-`DELETE` terminal (`expired` / `deleted`) container rows whose
     /// transition timestamp (`expires_at`) is at or before `cutoff`,
     /// cascading their `container_files` rows. `expires_at` is stamped
@@ -318,10 +347,16 @@ pub trait ContainersRepo: Send + Sync {
     /// retention delay from when the container became terminal.
     ///
     /// At most `limit` rows are removed per call so a backlog can't turn
-    /// into one long-running statement. Returns the ids that were
-    /// deleted, newest transition first.
-    async fn hard_delete_expired(&self, cutoff: DateTime<Utc>, limit: i64)
-    -> DbResult<Vec<String>>;
+    /// into one long-running statement. Returns the deleted container
+    /// ids plus the external storage objects their files referenced, so
+    /// the caller can delete the backing bytes the cascade can't reach.
+    /// Atomic: rows and the returned object list are captured in a
+    /// single transaction.
+    async fn hard_delete_expired(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: i64,
+    ) -> DbResult<HardDeleteExpiredOutcome>;
 
     /// Org-scoped delete of one `container_files` row. Returns true
     /// when a row was removed. Bytes inside the row are dropped along

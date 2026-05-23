@@ -111,8 +111,16 @@ impl McpClient {
     /// header on every request — caller is responsible for the
     /// `Bearer ` prefix (or whatever the upstream expects).
     /// `headers` are merged into every request.
+    ///
+    /// `host` / `addrs` are the hostname and the IP addresses it was
+    /// validated to resolve to. The underlying reqwest client is pinned
+    /// to those addresses so it cannot independently re-resolve the host
+    /// (closing the DNS-rebinding TOCTOU between SSRF validation and the
+    /// connection). When `addrs` is empty the default resolver is used.
     pub async fn connect(
         server_url: impl Into<Arc<str>>,
+        host: &str,
+        addrs: &[std::net::SocketAddr],
         authorization: Option<String>,
         headers: std::collections::HashMap<String, String>,
     ) -> Result<Self, McpClientError> {
@@ -135,7 +143,21 @@ impl McpClient {
         }
         cfg = cfg.custom_headers(custom_headers);
 
-        let transport = StreamableHttpClientTransport::from_config(cfg);
+        // Mirror rmcp's default client (`pool_max_idle_per_host(0)`) but
+        // pin DNS for the validated host to the validated IPs. reqwest
+        // ignores the port in these socket addrs (it uses the URL's), so
+        // we override resolution to exactly the addresses the SSRF guard
+        // approved. Built with `reqwest_mcp` (reqwest 0.12) — the version
+        // rmcp's `StreamableHttpClient` is implemented for.
+        let mut builder = reqwest_mcp::Client::builder().pool_max_idle_per_host(0);
+        if !addrs.is_empty() {
+            builder = builder.resolve_to_addrs(host, addrs);
+        }
+        let http_client = builder
+            .build()
+            .map_err(|e| McpClientError::Transport(format!("failed to build HTTP client: {e}")))?;
+
+        let transport = StreamableHttpClientTransport::with_client(http_client, cfg);
         let service =
             ().serve(transport)
                 .await

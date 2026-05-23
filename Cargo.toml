@@ -220,7 +220,7 @@ runtime-opensandbox = []
 # the loop. The `passthrough_openai` mode is pure forwarding and does
 # not need this dep, so the feature gate keeps it out of `tiny` and
 # `minimal` builds.
-mcp = ["dep:rmcp"]
+mcp = ["dep:rmcp", "dep:reqwest_mcp"]
 
 # Auth
 sso = ["dep:hickory-resolver"]
@@ -425,6 +425,16 @@ rmcp = { version = "1.7", default-features = false, features = [
     "auth",
     "reqwest",
 ], optional = true }
+
+# rmcp 1.7's `StreamableHttpClient` is implemented for reqwest 0.13's
+# `Client`, while Hadrian's primary HTTP client is reqwest 0.12. To pin
+# the MCP transport's DNS to validated IPs (SSRF / DNS-rebinding guard)
+# we must hand rmcp a client of *its* reqwest version, so depend on 0.13
+# under an alias. Cargo unifies this with rmcp's transitive 0.13.x, so
+# it's the same crate instance (and inherits rmcp's TLS features) — no
+# duplicate compile. `default-features = false`: we only build a client
+# with custom DNS resolution; TLS comes from rmcp's enabled features.
+reqwest_mcp = { package = "reqwest", version = "0.13", default-features = false, optional = true }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Target-specific: WASM needs JS-backed getrandom for uuid/rand

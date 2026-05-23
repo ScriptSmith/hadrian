@@ -1107,6 +1107,10 @@ CREATE TABLE IF NOT EXISTS responses (
     -- this response. Used by the replay endpoint to detect "no more
     -- events coming" without a separate join.
     last_sequence_number INTEGER NOT NULL DEFAULT 0,
+    -- Liveness heartbeat for `in_progress` rows; the in-progress reaper
+    -- compares against COALESCE(last_heartbeat_at, started_at). See the
+    -- Postgres migration for the rationale.
+    last_heartbeat_at TEXT,
     -- Container the shell-tool session for this response wrote files
     -- into. See Postgres migration for the design rationale.
     container_id TEXT

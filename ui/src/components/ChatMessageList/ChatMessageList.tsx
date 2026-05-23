@@ -669,7 +669,11 @@ export function ChatMessageList({
                             <MCPApprovalRequest
                               key={`${m.id}:${approval.approvalRequestId}`}
                               approval={approval}
-                              disabled={!onRespondMcpApproval}
+                              // Disable while a turn is streaming: resolving
+                              // an approval starts a new turn, which would
+                              // race the in-flight stream (the handler also
+                              // guards, but this stops the click entirely).
+                              disabled={!onRespondMcpApproval || isStreaming}
                               onRespond={(approve) =>
                                 onRespondMcpApproval?.(m.id, approval.approvalRequestId, approve)
                               }

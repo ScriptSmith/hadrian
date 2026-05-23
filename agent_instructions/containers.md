@@ -36,15 +36,39 @@ and surfaced to clients verbatim.
    adapter's owned VM handle).
 3. **Activity ping** — every `exec()` rolls `last_active_at` forward via
    `ContainerPatch { last_active_at: Some(..) }`.
-4. **Expiry** — `containers_reaper` job (leader-locked) flags rows where
-   `now > last_active_at + idle_ttl_secs` as `expired` and evicts the registry entry. The
-   `ContainerSession::drop` impl detaches a terminate task.
+4. **Expiry** — `containers_reaper` job. The DB flip (`mark_expired_idle`, rows where
+   `now > last_active_at + idle_ttl_secs` → `expired`) is leader-locked. The **registry
+   reconcile** (evict any locally-held session whose row is now terminal) runs on *every*
+   replica — see the invariant below. `ContainerSession::drop` detaches a terminate task.
 5. **Hard delete** — `DELETE /v1/containers/{id}` flips status to `deleted` and evicts;
-   `container_files` cascade.
+   `container_files` cascade. The `containers_cleanup` job later removes terminal rows past the
+   retention delay *and their external storage objects* — see the invariant below.
 
 **Idle TTL** comes from `[features.containers].default_idle_ttl_secs` (default 1200s = 20 min,
 matching OpenAI). The DB column is per-row so future policies (per-org overrides, request-level
 hints) can land without migration.
+
+## Invariants (don't regress these)
+
+- **Per-replica registry reconcile** (`jobs::containers_reaper`): `ContainerSessionRegistry` is
+  process-local, so only the replica hosting a VM can free it — and that's usually *not* the
+  leader that flipped the row. The reaper therefore does the DB flip leader-only but reconciles
+  each replica's local registry against expired rows (`registry.ids()` → `expired_among` →
+  `registry.remove`) on **every** pass regardless of leadership. Gating the eviction on
+  `is_leader` leaks microVMs on non-leaders.
+- **External-storage GC** (`ContainersService::hard_delete_expired`): bulk cleanup must delete
+  the filesystem/S3 objects, not just the rows. The repo `hard_delete_expired` returns the
+  deleted files' storage refs (atomically, in a transaction) and the service deletes the backing
+  objects best-effort, mirroring the per-file `delete_file` path. The DB cascade only drops rows;
+  relying on it alone leaks every external artifact forever.
+- **Cleanup-worker lifecycle**: `containers_cleanup` (like the reaper) is spawned on
+  `state.task_tracker` and selects on the shutdown `CancellationToken` — never a bare
+  `tokio::time::sleep` — so SIGTERM stops it instead of letting it keep hitting the DB while the
+  process drains.
+- **`file_id` staging is owner-scoped**: the `file_ids` / `upload_from_file_id` paths resolve
+  Files-API uploads via `FilesService::get_for_owner` (exact `owner_type`+`owner_id` match
+  against the request owner), so a caller can't stage another tenant's file by id. A
+  service-account owner has no file-owner equivalent and fails closed.
 
 ## TTL surfacing (Hadrian extension)
 

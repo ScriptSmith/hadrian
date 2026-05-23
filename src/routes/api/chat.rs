@@ -254,6 +254,7 @@ fn provider_supports_passthrough_shell(provider: &crate::config::ProviderConfig)
 async fn stage_input_files_if_shell(
     state: &crate::AppState,
     payload: &crate::api_types::CreateResponsesPayload,
+    owner: Option<crate::db::repos::ResponseOwner>,
 ) -> Result<Vec<crate::services::input_file_staging::StagedFile>, ApiError> {
     let shell_requested = payload
         .tools
@@ -276,6 +277,7 @@ async fn stage_input_files_if_shell(
         state,
         payload,
         &state.config.features.containers,
+        owner,
     )
     .await
     .map_err(|e| {
@@ -1908,7 +1910,13 @@ pub async fn api_v1_responses(
     // model's first shell command. Skipped (resolved to an empty Vec)
     // when the request doesn't carry a shell tool or `[features.
     // containers]` is disabled.
-    let staged_input_files = stage_input_files_if_shell(&state, &payload).await?;
+    // Scope file_id references to the caller's owner so a request can't
+    // stage another tenant's Files-API uploads into its container.
+    let staging_owner = crate::services::responses_pipeline::derive_response_owner(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+    );
+    let staged_input_files = stage_input_files_if_shell(&state, &payload, staging_owner).await?;
 
     // Track cache status for response headers
     let mut cache_status = CacheStatus::None;

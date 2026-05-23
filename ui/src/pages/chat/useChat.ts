@@ -2574,9 +2574,18 @@ export function useChat({
    */
   const respondToMcpApproval = useCallback(
     async (assistantMessageId: string, approvalRequestId: string, approve: boolean) => {
-      const idx = messages.findIndex((m) => m.id === assistantMessageId);
+      // Don't start an approval-resume turn while another turn is
+      // streaming — it would clobber the active AbortController and race
+      // the in-flight stream. The button is also disabled in this state
+      // (see ChatMessageList), this is the belt-and-suspenders guard.
+      if (useStreamingStore.getState().isStreaming) return;
+      // Read messages live from the store rather than the closed-over
+      // snapshot so the resumed request is built from current state, not
+      // whatever was rendered when the handler was created.
+      const liveMessages = useConversationStore.getState().messages;
+      const idx = liveMessages.findIndex((m) => m.id === assistantMessageId);
       if (idx === -1) return;
-      const assistantMessage = messages[idx];
+      const assistantMessage = liveMessages[idx];
       if (assistantMessage.role !== "assistant") return;
 
       const model = assistantMessage.model ?? models[0];
@@ -2592,7 +2601,7 @@ export function useChat({
       updateMessage(assistantMessageId, { pendingMcpApprovals: resolvedApprovals });
 
       // Build history through this assistant turn, then echo the approval back.
-      const messagesThroughAssistant = messages.slice(0, idx + 1);
+      const messagesThroughAssistant = liveMessages.slice(0, idx + 1);
       const filtered = filterMessagesForModel(messagesThroughAssistant, model, historyMode);
       const inputItems = [
         ...filtered.map(messageToApiInput),
@@ -2635,15 +2644,11 @@ export function useChat({
       streamingStore.clearStreams();
       abortControllersRef.current = [];
     },
-    [
-      messages,
-      models,
-      settings,
-      historyMode,
-      streamWithToolExecution,
-      streamingStore,
-      updateMessage,
-    ]
+    // `messages` is intentionally not a dep: the handler reads live store
+    // state (useConversationStore.getState()) so it can't act on a stale
+    // snapshot, and keeping the callback identity stable lets the
+    // disabled-while-streaming guard in ChatMessageList stay reliable.
+    [models, settings, historyMode, streamWithToolExecution, streamingStore, updateMessage]
   );
 
   /**

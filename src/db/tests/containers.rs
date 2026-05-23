@@ -65,8 +65,9 @@ pub async fn hard_delete_removes_old_terminal_containers(repo: &dyn ContainersRe
     make_terminal(repo, &deleted_id, org_id, ContainerStatus::Deleted, old).await;
 
     // Attach a file to the expired container so we can assert the cascade.
+    let file_id = format!("cfile_{}", Uuid::new_v4().simple());
     repo.upsert_file(NewContainerFile {
-        id: format!("cfile_{}", Uuid::new_v4().simple()),
+        id: file_id.clone(),
         container_id: expired_id.clone(),
         org_id,
         path: "/mnt/data/out.bin".to_string(),
@@ -87,11 +88,18 @@ pub async fn hard_delete_removes_old_terminal_containers(repo: &dyn ContainersRe
 
     // Cutoff: anything terminal more than 1h ago.
     let cutoff = now - Duration::hours(1);
-    let mut deleted = repo.hard_delete_expired(cutoff, 100).await.expect("delete");
+    let outcome = repo.hard_delete_expired(cutoff, 100).await.expect("delete");
+    let mut deleted = outcome.container_ids.clone();
     deleted.sort();
     let mut want = vec![expired_id.clone(), deleted_id.clone()];
     want.sort();
     assert_eq!(deleted, want, "both old terminal containers deleted");
+    // The file under `expired_id` must be reported so the service layer can
+    // delete its backing object (the DB cascade only drops the row).
+    assert!(
+        outcome.file_objects.iter().any(|f| f.file_id == file_id),
+        "deleted file reported in outcome for external-storage cleanup"
+    );
 
     assert!(
         repo.get_by_id_and_org(&expired_id, org_id)
@@ -140,7 +148,11 @@ pub async fn hard_delete_spares_active_and_recent(repo: &dyn ContainersRepo, org
 
     let cutoff = now - Duration::hours(1);
     let deleted = repo.hard_delete_expired(cutoff, 100).await.expect("delete");
-    assert_eq!(deleted, vec![old_id.clone()], "only the old row is deleted");
+    assert_eq!(
+        deleted.container_ids,
+        vec![old_id.clone()],
+        "only the old row is deleted"
+    );
 
     assert!(
         repo.get_by_id_and_org(&active_id, org_id)
@@ -176,11 +188,15 @@ pub async fn hard_delete_respects_limit(repo: &dyn ContainersRepo, org_id: Uuid)
 
     let cutoff = now - Duration::hours(1);
     let first = repo.hard_delete_expired(cutoff, 2).await.expect("delete");
-    assert_eq!(first.len(), 2, "first pass capped at limit");
+    assert_eq!(first.container_ids.len(), 2, "first pass capped at limit");
     let second = repo.hard_delete_expired(cutoff, 2).await.expect("delete");
-    assert_eq!(second.len(), 1, "second pass drains remainder");
+    assert_eq!(
+        second.container_ids.len(),
+        1,
+        "second pass drains remainder"
+    );
     let third = repo.hard_delete_expired(cutoff, 2).await.expect("delete");
-    assert!(third.is_empty(), "nothing left to delete");
+    assert!(third.container_ids.is_empty(), "nothing left to delete");
 }
 
 // ============================================================================
