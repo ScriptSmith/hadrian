@@ -117,7 +117,13 @@ impl ShellRuntimeConfig {
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct MicrosandboxConfig {
-    /// Container image to boot for each session. Default `alpine`.
+    /// Container image to boot for each session. Default `alpine` — small and
+    /// fast to pull/boot as a microVM. The base image is minimal; agents are
+    /// told how to `apk add` toolchains via
+    /// `[features.server_tools.shell_limits].environment_description`. Use a
+    /// fatter image (e.g. `ghcr.io/openai/codex-universal`) if you'd rather
+    /// trade boot time for pre-installed toolchains — and update the
+    /// `environment_description` to match.
     #[serde(default = "default_microsandbox_image")]
     pub image: String,
 

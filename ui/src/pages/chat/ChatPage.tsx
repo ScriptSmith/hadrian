@@ -29,8 +29,6 @@ import {
   useMaxToolIterations,
   useCaptureRawSSEEvents,
   useSubAgentModel,
-  useAgentContainerMode,
-  useAgentContainerId,
   useAgentMemoryLimit,
   useAgentExpiresAfterMinutes,
   useAgentAllowedDomains,
@@ -73,8 +71,6 @@ export default function ChatPage() {
   const maxToolIterations = useMaxToolIterations();
   const captureRawSSEEvents = useCaptureRawSSEEvents();
   const subAgentModel = useSubAgentModel();
-  const agentContainerMode = useAgentContainerMode();
-  const agentContainerId = useAgentContainerId();
   const agentMemoryLimit = useAgentMemoryLimit();
   const agentExpiresAfterMinutes = useAgentExpiresAfterMinutes();
   const agentAllowedDomains = useAgentAllowedDomains();
@@ -85,8 +81,6 @@ export default function ChatPage() {
     () => ({
       // The shell tool is enabled via the `agent` entry in the tools bar.
       enabled: enabledTools.includes("agent"),
-      containerMode: agentContainerMode,
-      containerId: agentContainerId,
       memoryLimit: agentMemoryLimit,
       expiresAfterMinutes: agentExpiresAfterMinutes,
       allowedDomains: agentAllowedDomains,
@@ -95,8 +89,6 @@ export default function ChatPage() {
     }),
     [
       enabledTools,
-      agentContainerMode,
-      agentContainerId,
       agentMemoryLimit,
       agentExpiresAfterMinutes,
       agentAllowedDomains,

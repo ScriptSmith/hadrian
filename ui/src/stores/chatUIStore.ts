@@ -226,11 +226,9 @@ interface ChatUIState {
 
   // --- Agent mode (shell tool + container) ---
   // The shell tool is enabled via the `agent` entry in `enabledTools`
-  // (ToolsBar); these fields configure the container it runs in.
-  /** Provision a fresh container (`container_auto`) or attach an existing one. */
-  agentContainerMode: "auto" | "reference";
-  /** Container id to attach when `agentContainerMode === "reference"`. */
-  agentContainerId: string | null;
+  // (ToolsBar); these fields configure the container a new conversation
+  // provisions. The conversation then reuses that container until it expires
+  // (handled in useChat), so there's no manual container picker.
   /** Memory ceiling (OpenAI string, e.g. "512m"/"1g"). Empty = operator default. */
   agentMemoryLimit: string;
   /** Idle TTL in minutes for a new container. Null = operator default. */
@@ -377,8 +375,6 @@ interface ChatUIActions {
   toggleCompactMode: () => void;
 
   // --- Agent mode setters ---
-  setAgentContainerMode: (mode: "auto" | "reference") => void;
-  setAgentContainerId: (id: string | null) => void;
   setAgentMemoryLimit: (value: string) => void;
   setAgentExpiresAfterMinutes: (minutes: number | null) => void;
   setAgentAllowedDomains: (value: string) => void;
@@ -447,8 +443,6 @@ const initialState: ChatUIState = {
   pendingPrompt: null,
   subAgentModel: null,
   compactMode: loadCompactMode(),
-  agentContainerMode: "auto",
-  agentContainerId: null,
   agentMemoryLimit: "",
   agentExpiresAfterMinutes: null,
   agentAllowedDomains: "*",
@@ -747,8 +741,6 @@ export const useChatUIStore = create<ChatUIStore>((set) => ({
       return { compactMode: next };
     }),
 
-  setAgentContainerMode: (mode) => set({ agentContainerMode: mode }),
-  setAgentContainerId: (id) => set({ agentContainerId: id }),
   setAgentMemoryLimit: (value) => set({ agentMemoryLimit: value }),
   setAgentExpiresAfterMinutes: (minutes) => set({ agentExpiresAfterMinutes: minutes }),
   setAgentAllowedDomains: (value) => set({ agentAllowedDomains: value }),
@@ -900,10 +892,6 @@ export const useMCPConfigModalOpen = () =>
   useChatUIStore((state: ChatUIState) => state.mcpConfigModalOpen);
 
 // --- Agent mode selectors ---
-export const useAgentContainerMode = () =>
-  useChatUIStore((state: ChatUIState) => state.agentContainerMode);
-export const useAgentContainerId = () =>
-  useChatUIStore((state: ChatUIState) => state.agentContainerId);
 export const useAgentMemoryLimit = () =>
   useChatUIStore((state: ChatUIState) => state.agentMemoryLimit);
 export const useAgentExpiresAfterMinutes = () =>

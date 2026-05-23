@@ -2710,6 +2710,14 @@ export interface ToolMetadata {
  */
 export const TOOL_METADATA: ToolMetadata[] = [
   {
+    id: "agent",
+    name: "Agent (Shell)",
+    description:
+      "Run shell commands in a persistent server-side container. Files persist across turns in /mnt/data, and the whole conversation reuses one container until it expires. Configure the container in this tool's settings.",
+    icon: "SquareTerminal",
+    implemented: true,
+  },
+  {
     id: "file_search",
     name: "File Search",
     description: "Search attached knowledge bases using semantic search",
@@ -2783,14 +2791,6 @@ export const TOOL_METADATA: ToolMetadata[] = [
     description:
       "Search and fetch structured knowledge from Wikidata. Community-curated data may be incomplete or outdated. Licensed under CC0 (public domain, no attribution required).",
     icon: "Database",
-    implemented: true,
-  },
-  {
-    id: "agent",
-    name: "Agent (Shell)",
-    description:
-      "Run shell commands in a persistent server-side container. Files persist across turns in /mnt/data; create a fresh container or reuse an existing one. Configure the container in this tool's settings.",
-    icon: "SquareTerminal",
     implemented: true,
   },
   {

@@ -165,11 +165,15 @@ export interface ResponsesStreamEvent {
     tools?: Array<{ name: string }>;
     /** Shell-call action object (`shell_call` items): the commands to run. */
     action?: { commands?: string[] };
+    /** Call id that pairs a shell_call with its shell_call_output. */
+    call_id?: string;
   };
   response?: {
     id: string;
     model: string;
     status: string;
+    /** Container the shell tool used, injected on terminal events. */
+    container_id?: string;
     output_text?: string;
     output?: Array<{
       type: string;

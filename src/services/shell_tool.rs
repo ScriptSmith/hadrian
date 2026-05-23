@@ -398,6 +398,11 @@ pub struct ShellToolHint {
     /// Names of skill bundles mounted under `/skills/<id>` for this
     /// request.
     pub mounted_skill_ids: Vec<String>,
+    /// Operator-supplied description of the container environment
+    /// (`[features.server_tools.shell_limits].environment_description`):
+    /// pre-installed toolchains, how to install packages, etc. Appended
+    /// verbatim to the tool description. `None` appends nothing.
+    pub environment_description: Option<String>,
 }
 
 /// Network access summary for the model. Tone matches OpenAI's
@@ -425,6 +430,7 @@ impl Default for ShellToolHint {
             command_timeout_secs: 300,
             max_output_chars: DEFAULT_MAX_OUTPUT_CHARS,
             mounted_skill_ids: Vec::new(),
+            environment_description: None,
         }
     }
 }
@@ -539,6 +545,16 @@ impl ShellToolHint {
              `cmd > /mnt/data/log.txt`) and grep / tail it on a follow-up call.",
             self.max_output_chars
         ));
+
+        // Operator-supplied environment notes (pre-installed toolchains, how to
+        // install packages, etc.) so the model doesn't waste turns probing.
+        if let Some(desc) = self.environment_description.as_deref() {
+            let desc = desc.trim();
+            if !desc.is_empty() {
+                s.push_str("\n\nEnvironment:\n");
+                s.push_str(desc);
+            }
+        }
 
         s
     }

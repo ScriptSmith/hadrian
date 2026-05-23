@@ -93,6 +93,7 @@ fn build_shell_tool_hint(
         network_summary,
         mem_limit_mb,
         command_timeout_secs: shell_limits.command_timeout_secs,
+        environment_description: shell_limits.environment_description.clone(),
         ..ShellToolHint::default()
     }
 }

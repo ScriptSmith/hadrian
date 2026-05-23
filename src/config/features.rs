@@ -740,6 +740,31 @@ pub struct ShellLimitsConfig {
     /// lower it to bound context spend. Default 8000.
     #[serde(default = "default_shell_max_output_chars")]
     pub max_output_chars: usize,
+    /// Free-text description of the container environment, appended to the
+    /// shell tool's description the model sees. Use it to explain which
+    /// toolchains are available and how to install packages, so the model
+    /// doesn't waste turns probing. Defaults to instructions for the default
+    /// `alpine` image (how to `apk add` curl, uv, pnpm, etc.); set to `""` to
+    /// append nothing, or override it to match a different image.
+    #[serde(default = "default_environment_description")]
+    pub environment_description: Option<String>,
+}
+
+/// Default shell-tool environment notes, written for the default `alpine`
+/// microsandbox image. Override when using a different base image.
+pub fn default_environment_description() -> Option<String> {
+    Some(
+        "Alpine Linux (musl libc), minimal base image. Install what you need at the start of a \
+         session; nothing beyond busybox + a shell is guaranteed. **Always try `apk` first** — \
+         most tools are packaged and it's the fastest, most reliable option: `apk add --no-cache \
+         <pkg>`, e.g. `apk add --no-cache curl git python3 py3-pip nodejs npm build-base uv pnpm` \
+         (uv and pnpm are in the Alpine community repo on recent releases). Only if a package \
+         isn't available via apk, fall back to a language-specific installer: uv via `curl -LsSf \
+         https://astral.sh/uv/install.sh | sh`, pnpm via `npm install -g pnpm`, Python libs via \
+         `uv pip`/`pip`, Node libs via `pnpm`/`npm`, Rust crates via `cargo`. Installs need \
+         network egress to be allowed."
+            .to_string(),
+    )
 }
 
 impl Default for ShellLimitsConfig {
@@ -752,6 +777,7 @@ impl Default for ShellLimitsConfig {
             allowed_egress_hosts: Vec::new(),
             allowed_domain_secrets: HashMap::new(),
             max_output_chars: default_shell_max_output_chars(),
+            environment_description: default_environment_description(),
         }
     }
 }

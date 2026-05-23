@@ -118,8 +118,6 @@ interface UseChatOptions {
    */
   agentConfig?: {
     enabled: boolean;
-    containerMode: "auto" | "reference";
-    containerId: string | null;
     /** OpenAI memory string (e.g. "512m"); empty = operator default. */
     memoryLimit: string;
     /** Idle TTL in minutes; null = operator default. */
@@ -303,6 +301,10 @@ export function useChat({
 }: UseChatOptions): UseChatReturn {
   const { token } = useAuth();
   const abortControllersRef = useRef<AbortController[]>([]);
+  // Active shell container per conversation, so the whole conversation reuses
+  // one container (via `container_reference`) until it expires — then the next
+  // turn provisions a fresh one. Keyed by conversation id.
+  const activeContainerRef = useRef<Map<string, string>>(new Map());
 
   // Use zustand stores instead of local state
   const messages = useMessages();
@@ -956,14 +958,16 @@ export function useChat({
           }
         }
 
-        // Agent mode: attach the shell tool (+ container environment).
+        // Agent mode: attach the shell tool. Reuse the conversation's existing
+        // container if one is live; otherwise provision a fresh one with the
+        // configured limits. The captured id is refreshed from each response's
+        // terminal event (and cleared on error) below.
         if (agentConfig?.enabled) {
+          const conv = conversationIdRef.current;
+          const reuseId = conv ? activeContainerRef.current.get(conv) : undefined;
           let environment: Record<string, unknown>;
-          if (agentConfig.containerMode === "reference" && agentConfig.containerId) {
-            environment = {
-              type: "container_reference",
-              container_id: agentConfig.containerId,
-            };
+          if (reuseId) {
+            environment = { type: "container_reference", container_id: reuseId };
           } else {
             environment = { type: "container_auto" };
             if (agentConfig.memoryLimit.trim()) {
@@ -1032,6 +1036,35 @@ export function useChat({
         // completed round instead of overwriting it. `null` until the first
         // reasoning item is seen.
         let currentReasoningItemId: string | null = null;
+        // Server-side tool executions for the current turn, surfaced in the
+        // "reasoning & tools" disclosure. Built from the spec items the gateway
+        // streams (shell_call/shell_call_output, mcp_call, tool_search) and
+        // attached to each completed round so they persist on the message.
+        let serverRound = 0;
+        let roundExecutions: ToolExecution[] = [];
+        const pendingShell = new Map<string, { command: string; startTime: number }>();
+        let lastToolSearchQuery = "";
+        const codeArtifact = (
+          id: string,
+          role: "input" | "output",
+          language: string,
+          code: string,
+          title?: string
+        ): Artifact => ({ id, type: "code", role, title, data: { language, code } });
+        const recordServerExecution = (exec: ToolExecution) => {
+          roundExecutions.push(exec);
+        };
+        const takeRoundExecution = (): ToolExecutionRound | undefined => {
+          if (roundExecutions.length === 0) return undefined;
+          const round: ToolExecutionRound = {
+            round: serverRound,
+            executions: roundExecutions,
+            hasError: roundExecutions.some((e) => e.status === "error"),
+          };
+          roundExecutions = [];
+          return round;
+        };
+
         const flushServerTurn = (nextItemId?: string) => {
           if (!nextItemId) return;
           if (currentReasoningItemId === null) {
@@ -1044,12 +1077,15 @@ export function useChat({
           const round: CompletedRound = {};
           if (reasoningContent.trim()) round.reasoning = reasoningContent;
           if (content.trim()) round.content = content;
-          if (round.reasoning || round.content) {
+          const toolExecution = takeRoundExecution();
+          if (toolExecution) round.toolExecution = toolExecution;
+          if (round.reasoning || round.content || round.toolExecution) {
             streamingStore.pushCompletedRound(storeKey, round);
             reasoningContent = "";
             content = "";
             hasOutputText = false;
           }
+          serverRound += 1;
           currentReasoningItemId = nextItemId;
         };
         // Spec-compliant SSE parser — handles `\r\n`/`\r`/`\n`, multi-line
@@ -1191,10 +1227,11 @@ export function useChat({
                 };
                 streamingStore.addArtifacts(storeKey, [artifact]);
               } else if (event.item.type === "mcp_list_tools") {
-                // Gateway MCP discovered a server's tools — surface as a
-                // completed tool-call indicator.
+                // Gateway MCP discovered a server's tools.
                 const itemId = event.item.id ?? `mcp_list_${Date.now()}`;
                 const label = event.item.server_label ?? "mcp";
+                const count = event.item.tools?.length ?? 0;
+                const ts = Date.now();
                 streamingStore.addToolCall(storeKey, {
                   id: itemId,
                   callId: itemId,
@@ -1203,15 +1240,31 @@ export function useChat({
                   argumentsBuffer: "",
                   status: "pending",
                 });
-                streamingStore.completeToolCall(storeKey, itemId, {
-                  count: event.item.tools?.length ?? 0,
+                streamingStore.completeToolCall(storeKey, itemId, { count });
+                recordServerExecution({
+                  id: itemId,
+                  toolName: `${label}: list tools`,
+                  status: "success",
+                  startTime: ts,
+                  endTime: ts,
+                  input: { server_label: label },
+                  inputArtifacts: [],
+                  outputArtifacts: [
+                    codeArtifact(
+                      `${itemId}-out`,
+                      "output",
+                      "text",
+                      `Loaded ${count} tool${count === 1 ? "" : "s"} from ${label}`
+                    ),
+                  ],
+                  round: serverRound,
                 });
               } else if (event.item.type === "mcp_call") {
-                // Gateway-executed MCP tool call. Render as a tool-call
-                // indicator carrying the arguments; surface errors as failures.
+                // Gateway-executed MCP tool call.
                 const itemId = event.item.id ?? `mcp_call_${Date.now()}`;
                 const label = event.item.server_label ?? "mcp";
                 const name = event.item.name ?? "tool";
+                const ts = Date.now();
                 streamingStore.addToolCall(storeKey, {
                   id: itemId,
                   callId: itemId,
@@ -1226,11 +1279,35 @@ export function useChat({
                 } catch {
                   // Leave args unparsed; the buffer still renders.
                 }
-                if (event.item.error) {
-                  streamingStore.setToolCallError(storeKey, itemId, event.item.error);
+                const errored = !!event.item.error;
+                if (errored) {
+                  streamingStore.setToolCallError(storeKey, itemId, event.item.error!);
                 } else {
                   streamingStore.completeToolCall(storeKey, itemId, parsedArgs);
                 }
+                recordServerExecution({
+                  id: itemId,
+                  toolName: `${label}.${name}`,
+                  status: errored ? "error" : "success",
+                  startTime: ts,
+                  endTime: ts,
+                  input: parsedArgs,
+                  error: event.item.error ?? undefined,
+                  inputArtifacts: event.item.arguments?.trim()
+                    ? [
+                        codeArtifact(
+                          `${itemId}-in`,
+                          "input",
+                          "json",
+                          JSON.stringify(parsedArgs, null, 2)
+                        ),
+                      ]
+                    : [],
+                  outputArtifacts: event.item.output
+                    ? [codeArtifact(`${itemId}-out`, "output", "text", event.item.output)]
+                    : [],
+                  round: serverRound,
+                });
               } else if (
                 event.item.type === "mcp_approval_request" &&
                 event.item.approval_request_id
@@ -1253,8 +1330,8 @@ export function useChat({
                   parsedArguments: parsedArgs,
                 });
               } else if (event.item.type === "shell_call") {
-                // Hadrian-hosted shell tool ran a command. Render the command
-                // as a completed tool-call indicator in the transcript.
+                // Hadrian-hosted shell tool ran a command. Show the command as a
+                // live indicator; the paired shell_call_output carries the result.
                 const itemId = event.item.id ?? `shell_${Date.now()}`;
                 const commands = event.item.action?.commands ?? [];
                 streamingStore.addToolCall(storeKey, {
@@ -1266,6 +1343,51 @@ export function useChat({
                   status: "pending",
                 });
                 streamingStore.completeToolCall(storeKey, itemId, { commands });
+                const callId = event.item.call_id ?? itemId;
+                pendingShell.set(callId, {
+                  command: commands.join("\n"),
+                  startTime: Date.now(),
+                });
+              } else if (event.item.type === "shell_call_output") {
+                // Result of a shell_call. Pair with the command and record a
+                // completed execution carrying the command + stdout/stderr/exit.
+                const callId = event.item.call_id ?? event.item.id ?? `shell_${Date.now()}`;
+                const pending = pendingShell.get(callId);
+                pendingShell.delete(callId);
+                const blocks =
+                  (
+                    event.item as {
+                      output?: Array<{
+                        stdout?: string;
+                        stderr?: string;
+                        outcome?: { type?: string; exit_code?: number };
+                      }>;
+                    }
+                  ).output ?? [];
+                const stdout = blocks.map((b) => b.stdout ?? "").join("");
+                const stderr = blocks.map((b) => b.stderr ?? "").join("");
+                const outcome = blocks[0]?.outcome;
+                const exitCode = outcome?.exit_code ?? 0;
+                const errored = (!!outcome?.type && outcome.type !== "exit") || exitCode !== 0;
+                const outText =
+                  [stdout, stderr.trim() ? `[stderr]\n${stderr}` : "", `[exit ${exitCode}]`]
+                    .filter(Boolean)
+                    .join("\n") || "(no output)";
+                const now = Date.now();
+                recordServerExecution({
+                  id: event.item.id ?? `shellout_${now}`,
+                  toolName: "shell",
+                  status: errored ? "error" : "success",
+                  startTime: pending?.startTime ?? now,
+                  endTime: now,
+                  input: { command: pending?.command ?? "" },
+                  inputArtifacts: pending?.command
+                    ? [codeArtifact(`${callId}-in`, "input", "bash", pending.command)]
+                    : [],
+                  outputArtifacts: [codeArtifact(`${callId}-out`, "output", "text", outText)],
+                  error: errored ? `exit ${exitCode}` : undefined,
+                  round: serverRound,
+                });
               } else if (event.item.type === "tool_search_call") {
                 // Model searched the deferred tool catalog. Show the query.
                 const itemId = event.item.id ?? `ts_${Date.now()}`;
@@ -1284,9 +1406,12 @@ export function useChat({
                   // Leave unparsed; the buffer still renders.
                 }
                 streamingStore.completeToolCall(storeKey, itemId, parsedArgs);
+                lastToolSearchQuery = typeof parsedArgs.query === "string" ? parsedArgs.query : "";
               } else if (event.item.type === "tool_search_output") {
-                // Tools were loaded from the search — show how many.
+                // Tools were loaded from the search — show the query + how many.
                 const itemId = event.item.id ?? `tso_${Date.now()}`;
+                const count = event.item.tools?.length ?? 0;
+                const now = Date.now();
                 streamingStore.addToolCall(storeKey, {
                   id: itemId,
                   callId: itemId,
@@ -1295,9 +1420,28 @@ export function useChat({
                   argumentsBuffer: "",
                   status: "pending",
                 });
-                streamingStore.completeToolCall(storeKey, itemId, {
-                  count: event.item.tools?.length ?? 0,
+                streamingStore.completeToolCall(storeKey, itemId, { count });
+                recordServerExecution({
+                  id: itemId,
+                  toolName: "tool_search",
+                  status: "success",
+                  startTime: now,
+                  endTime: now,
+                  input: { query: lastToolSearchQuery },
+                  inputArtifacts: lastToolSearchQuery
+                    ? [codeArtifact(`${itemId}-in`, "input", "text", lastToolSearchQuery)]
+                    : [],
+                  outputArtifacts: [
+                    codeArtifact(
+                      `${itemId}-out`,
+                      "output",
+                      "text",
+                      `Loaded ${count} tool${count === 1 ? "" : "s"}`
+                    ),
+                  ],
+                  round: serverRound,
                 });
+                lastToolSearchQuery = "";
               }
             } else if (event.type === "response.file_search_call.in_progress") {
               // Server-side file search starting - add tool call to streaming store
@@ -1356,6 +1500,13 @@ export function useChat({
                 streamingStore.completeToolCall(storeKey, event.item_id, {});
               }
             } else if (event.type === "response.completed" && event.response) {
+              // Remember the container this response used so the rest of the
+              // conversation reuses it (until it expires and a turn fails — see
+              // the catch below, which clears it so the next turn starts fresh).
+              const convId = conversationIdRef.current;
+              if (event.response.container_id && convId) {
+                activeContainerRef.current.set(convId, event.response.container_id);
+              }
               // Extract final text from completed response
               // First try output_text, then message content, then reasoning content as fallback
               const outputText =
@@ -1512,12 +1663,17 @@ export function useChat({
         const trackerToolCalls = toolTracker ? toolTracker.getCompletedToolCalls() : [];
         const toolCalls = trackerToolCalls.length > 0 ? trackerToolCalls : completedToolCalls;
 
+        // The final server turn's tool executions never hit a turn boundary,
+        // so hand them to the caller to attach to the last completed round.
+        const finalServerRound = takeRoundExecution();
+
         return {
           content,
           hasOutputText,
           usage,
           reasoningContent: reasoningContent || undefined,
           toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+          toolExecutionRounds: finalServerRound ? [finalServerRound] : undefined,
           requestBody,
           responseOutput,
         };
@@ -1527,6 +1683,11 @@ export function useChat({
         }
 
         const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        // Drop the reused container so the next turn provisions a fresh one —
+        // an expired/deleted container is the most likely cause of a failure
+        // mid-conversation once agent mode is on.
+        const convId = conversationIdRef.current;
+        if (convId) activeContainerRef.current.delete(convId);
         streamingStore.setError(storeKey, errorMessage);
         return null;
       }
@@ -1668,6 +1829,12 @@ export function useChat({
           const roundData: CompletedRound = {};
           if (result.reasoningContent) roundData.reasoning = result.reasoningContent;
           if (result.hasOutputText && result.content?.trim()) roundData.content = result.content;
+          // Attach the final server turn's tool executions (shell/MCP/tool_search)
+          // so they render in the "reasoning & tools" disclosure and persist.
+          if (result.toolExecutionRounds?.length) {
+            roundData.toolExecution =
+              result.toolExecutionRounds[result.toolExecutionRounds.length - 1];
+          }
           streamingStore.pushCompletedRound(storeKey, roundData);
           result.completedRounds = [roundData];
         }
