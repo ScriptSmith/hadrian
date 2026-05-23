@@ -113,6 +113,25 @@ interface UseChatOptions {
    */
   enabledTools?: string[];
   /**
+   * Agent mode: attaches the shell tool (+ container) and optional tool
+   * search to the request. Built from `chatUIStore` agent state in ChatPage.
+   */
+  agentConfig?: {
+    enabled: boolean;
+    containerMode: "auto" | "reference";
+    containerId: string | null;
+    /** OpenAI memory string (e.g. "512m"); empty = operator default. */
+    memoryLimit: string;
+    /** Idle TTL in minutes; null = operator default. */
+    expiresAfterMinutes: number | null;
+    /** Egress allowlist (comma/newline separated); empty = inherit. */
+    allowedDomains: string;
+    /** Attach a `tool_search` tool + defer-load gateway MCP tools. */
+    toolSearch: boolean;
+    /** Tool-search ranker override; "default" omits it (deployment default). */
+    toolSearchRanker: "default" | "hybrid" | "semantic" | "lexical";
+  };
+  /**
    * Skills enabled for this session. Each skill's name + description is
    * listed in the `Skill` tool's description so the model can match user
    * intent against them. Full SKILL.md bodies are loaded on demand via
@@ -219,6 +238,15 @@ interface UseChatReturn {
    * For assistant messages: updates content only (preserves sibling model responses).
    */
   editAndRerun: (messageId: string, newContent: string) => void;
+  /**
+   * Resume a gateway MCP tool call that paused for human approval by echoing
+   * back an `mcp_approval_response`. Single-model turns only.
+   */
+  respondToMcpApproval: (
+    assistantMessageId: string,
+    approvalRequestId: string,
+    approve: boolean
+  ) => void;
 }
 
 /** Default maximum number of tool execution iterations to prevent infinite loops */
@@ -250,6 +278,7 @@ function commitFieldsFromStream(stream: StreamingResponse | undefined) {
     artifacts: stream?.artifacts,
     toolExecutionRounds: stream?.toolExecutionRounds,
     completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
+    pendingMcpApprovals: stream?.mcpApprovals?.length ? stream.mcpApprovals : undefined,
   };
 }
 
@@ -263,6 +292,7 @@ export function useChat({
   vectorStoreIds,
   clientSideToolExecution = false,
   enabledTools = [],
+  agentConfig,
   enabledSkills = [],
   dataFiles = [],
   maxToolIterations = DEFAULT_maxToolIterations,
@@ -848,14 +878,48 @@ export function useChat({
           });
         }
 
-        // Add MCP tools from connected servers
+        // Add MCP tools from configured servers.
         if (enabledTools.includes("mcp")) {
-          // Ensure enabled servers are connected before building tools list
-          await useMCPStore.getState().ensureConnected();
+          const allServers = useMCPStore.getState().servers;
+
+          // Gateway servers run server-side: emit a single `mcp` tool object
+          // per server and let Hadrian connect + execute. No browser
+          // connection is required, so these work for background/agent runs.
+          for (const server of allServers) {
+            if (!server.enabled || (server.runsOn ?? "browser") !== "gateway") continue;
+            const mcpTool: { type: string; [key: string]: unknown } = {
+              type: "mcp",
+              server_label: server.name || server.id,
+              server_url: server.url,
+              require_approval: server.requireApproval ?? "never",
+            };
+            if (server.headers && Object.keys(server.headers).length > 0) {
+              mcpTool.headers = server.headers;
+            }
+            if (server.allowedTools && server.allowedTools.length > 0) {
+              mcpTool.allowed_tools = server.allowedTools;
+            }
+            // With tool search on, defer-load this server's catalog so the
+            // model discovers tools lazily instead of loading every definition.
+            if (agentConfig?.toolSearch) {
+              mcpTool.defer_loading = true;
+            }
+            tools.push(mcpTool);
+          }
+
+          // Browser servers execute client-side: connect, discover, and expose
+          // each discovered tool as a `function` tool the client fulfils.
+          const hasBrowserServer = allServers.some(
+            (s) => s.enabled && (s.runsOn ?? "browser") === "browser"
+          );
+          if (hasBrowserServer) {
+            await useMCPStore.getState().ensureConnected();
+          }
           const mcpState = useMCPStore.getState();
           for (const server of mcpState.servers) {
-            // Skip disabled or disconnected servers
-            if (!server.enabled || server.status !== "connected") continue;
+            // Skip disabled, gateway, or disconnected servers
+            if (!server.enabled || (server.runsOn ?? "browser") !== "browser") continue;
+            if (server.status !== "connected") continue;
 
             for (const tool of server.tools) {
               // Check if this specific tool is enabled (default to enabled)
@@ -890,6 +954,48 @@ export function useChat({
               });
             }
           }
+        }
+
+        // Agent mode: attach the shell tool (+ container environment).
+        if (agentConfig?.enabled) {
+          let environment: Record<string, unknown>;
+          if (agentConfig.containerMode === "reference" && agentConfig.containerId) {
+            environment = {
+              type: "container_reference",
+              container_id: agentConfig.containerId,
+            };
+          } else {
+            environment = { type: "container_auto" };
+            if (agentConfig.memoryLimit.trim()) {
+              environment.memory_limit = agentConfig.memoryLimit.trim();
+            }
+            if (agentConfig.expiresAfterMinutes && agentConfig.expiresAfterMinutes > 0) {
+              environment.expires_after = {
+                anchor: "last_active_at",
+                minutes: agentConfig.expiresAfterMinutes,
+              };
+            }
+            const allowedDomains = agentConfig.allowedDomains
+              .split(/[\n,]/)
+              .map((d) => d.trim())
+              .filter(Boolean);
+            if (allowedDomains.length > 0) {
+              environment.network_policy = {
+                type: "allowlist",
+                allowed_domains: allowedDomains,
+              };
+            }
+          }
+          tools.push({ type: "shell", environment });
+        }
+
+        // Tool search: let the model search for / lazily load tools.
+        if (agentConfig?.toolSearch) {
+          const toolSearchTool: { type: string; [key: string]: unknown } = { type: "tool_search" };
+          if (agentConfig.toolSearchRanker && agentConfig.toolSearchRanker !== "default") {
+            toolSearchTool.ranker = agentConfig.toolSearchRanker;
+          }
+          tools.push(toolSearchTool);
         }
 
         // Add tools to request if any are configured
@@ -1053,6 +1159,114 @@ export function useChat({
                   role: "output",
                 };
                 streamingStore.addArtifacts(storeKey, [artifact]);
+              } else if (event.item.type === "mcp_list_tools") {
+                // Gateway MCP discovered a server's tools — surface as a
+                // completed tool-call indicator.
+                const itemId = event.item.id ?? `mcp_list_${Date.now()}`;
+                const label = event.item.server_label ?? "mcp";
+                streamingStore.addToolCall(storeKey, {
+                  id: itemId,
+                  callId: itemId,
+                  name: `${label}: list tools`,
+                  outputIndex: event.output_index ?? 0,
+                  argumentsBuffer: "",
+                  status: "pending",
+                });
+                streamingStore.completeToolCall(storeKey, itemId, {
+                  count: event.item.tools?.length ?? 0,
+                });
+              } else if (event.item.type === "mcp_call") {
+                // Gateway-executed MCP tool call. Render as a tool-call
+                // indicator carrying the arguments; surface errors as failures.
+                const itemId = event.item.id ?? `mcp_call_${Date.now()}`;
+                const label = event.item.server_label ?? "mcp";
+                const name = event.item.name ?? "tool";
+                streamingStore.addToolCall(storeKey, {
+                  id: itemId,
+                  callId: itemId,
+                  name: `${label}.${name}`,
+                  outputIndex: event.output_index ?? 0,
+                  argumentsBuffer: event.item.arguments ?? "",
+                  status: "pending",
+                });
+                let parsedArgs: Record<string, unknown> = {};
+                try {
+                  parsedArgs = event.item.arguments ? JSON.parse(event.item.arguments) : {};
+                } catch {
+                  // Leave args unparsed; the buffer still renders.
+                }
+                if (event.item.error) {
+                  streamingStore.setToolCallError(storeKey, itemId, event.item.error);
+                } else {
+                  streamingStore.completeToolCall(storeKey, itemId, parsedArgs);
+                }
+              } else if (
+                event.item.type === "mcp_approval_request" &&
+                event.item.approval_request_id
+              ) {
+                // Gateway MCP paused for human approval. Record it on the
+                // stream so it commits to the message and renders an
+                // approve/deny prompt the user can resume from.
+                let parsedArgs: Record<string, unknown> = {};
+                try {
+                  parsedArgs = event.item.arguments ? JSON.parse(event.item.arguments) : {};
+                } catch {
+                  // Non-JSON args — render the raw string instead.
+                }
+                streamingStore.addMcpApproval(storeKey, {
+                  id: event.item.id ?? event.item.approval_request_id,
+                  approvalRequestId: event.item.approval_request_id,
+                  serverLabel: event.item.server_label ?? "mcp",
+                  toolName: event.item.name ?? "tool",
+                  argumentsJson: event.item.arguments ?? "",
+                  parsedArguments: parsedArgs,
+                });
+              } else if (event.item.type === "shell_call") {
+                // Hadrian-hosted shell tool ran a command. Render the command
+                // as a completed tool-call indicator in the transcript.
+                const itemId = event.item.id ?? `shell_${Date.now()}`;
+                const commands = event.item.action?.commands ?? [];
+                streamingStore.addToolCall(storeKey, {
+                  id: itemId,
+                  callId: itemId,
+                  name: "shell",
+                  outputIndex: event.output_index ?? 0,
+                  argumentsBuffer: commands.join("\n"),
+                  status: "pending",
+                });
+                streamingStore.completeToolCall(storeKey, itemId, { commands });
+              } else if (event.item.type === "tool_search_call") {
+                // Model searched the deferred tool catalog. Show the query.
+                const itemId = event.item.id ?? `ts_${Date.now()}`;
+                streamingStore.addToolCall(storeKey, {
+                  id: itemId,
+                  callId: itemId,
+                  name: "tool_search",
+                  outputIndex: event.output_index ?? 0,
+                  argumentsBuffer: event.item.arguments ?? "",
+                  status: "pending",
+                });
+                let parsedArgs: Record<string, unknown> = {};
+                try {
+                  parsedArgs = event.item.arguments ? JSON.parse(event.item.arguments) : {};
+                } catch {
+                  // Leave unparsed; the buffer still renders.
+                }
+                streamingStore.completeToolCall(storeKey, itemId, parsedArgs);
+              } else if (event.item.type === "tool_search_output") {
+                // Tools were loaded from the search — show how many.
+                const itemId = event.item.id ?? `tso_${Date.now()}`;
+                streamingStore.addToolCall(storeKey, {
+                  id: itemId,
+                  callId: itemId,
+                  name: "tool_search: loaded tools",
+                  outputIndex: event.output_index ?? 0,
+                  argumentsBuffer: "",
+                  status: "pending",
+                });
+                streamingStore.completeToolCall(storeKey, itemId, {
+                  count: event.item.tools?.length ?? 0,
+                });
               }
             } else if (event.type === "response.file_search_call.in_progress") {
               // Server-side file search starting - add tool call to streaming store
@@ -1292,6 +1506,7 @@ export function useChat({
       perModelSettings,
       vectorStoreIds,
       enabledTools,
+      agentConfig,
       enabledSkills,
       dataFiles,
     ]
@@ -2083,6 +2298,89 @@ export function useChat({
   );
 
   /**
+   * Resume a gateway MCP tool call that paused for human approval.
+   *
+   * Re-streams the assistant turn with an `mcp_approval_response` input item
+   * appended; Hadrian claims the parked approval by `approvalRequestId`,
+   * runs (or refuses) the call, and continues the model loop. The continued
+   * output is appended to the same assistant message. Single-model turns only
+   * — gateway MCP approvals aren't surfaced in multi-model modes.
+   */
+  const respondToMcpApproval = useCallback(
+    async (assistantMessageId: string, approvalRequestId: string, approve: boolean) => {
+      const idx = messages.findIndex((m) => m.id === assistantMessageId);
+      if (idx === -1) return;
+      const assistantMessage = messages[idx];
+      if (assistantMessage.role !== "assistant") return;
+
+      const model = assistantMessage.model ?? models[0];
+      if (!model) return;
+      const sendEpoch = conversationIdRef.current;
+
+      // Optimistically record the decision so the prompt flips to resolved.
+      const resolvedApprovals = (assistantMessage.pendingMcpApprovals ?? []).map((a) =>
+        a.approvalRequestId === approvalRequestId
+          ? { ...a, resolved: approve ? ("approved" as const) : ("denied" as const) }
+          : a
+      );
+      updateMessage(assistantMessageId, { pendingMcpApprovals: resolvedApprovals });
+
+      // Build history through this assistant turn, then echo the approval back.
+      const messagesThroughAssistant = messages.slice(0, idx + 1);
+      const filtered = filterMessagesForModel(messagesThroughAssistant, model, historyMode);
+      const inputItems = [
+        ...filtered.map(messageToApiInput),
+        {
+          type: "mcp_approval_response",
+          approval_request_id: approvalRequestId,
+          approve,
+        },
+      ];
+
+      streamingStore.initStreaming([model]);
+      const controller = new AbortController();
+      abortControllersRef.current = [controller];
+      const debugMessageId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
+      const result = await streamWithToolExecution(
+        model,
+        inputItems,
+        controller,
+        settings,
+        model,
+        debugMessageId
+      );
+
+      if (result !== null && sendEpoch === conversationIdRef.current) {
+        const stream = useStreamingStore.getState().streams.get(model);
+        const committed = commitFieldsFromStream(stream);
+        const continued = result.content
+          ? `${assistantMessage.content ? `${assistantMessage.content}\n\n` : ""}${result.content}`
+          : assistantMessage.content;
+        updateMessage(assistantMessageId, {
+          content: continued,
+          usage: result.usage ?? assistantMessage.usage,
+          ...committed,
+          // Preserve the resolved decision unless the continuation parked a new one.
+          pendingMcpApprovals: committed.pendingMcpApprovals ?? resolvedApprovals,
+        });
+      }
+
+      streamingStore.clearStreams();
+      abortControllersRef.current = [];
+    },
+    [
+      messages,
+      models,
+      settings,
+      historyMode,
+      streamWithToolExecution,
+      streamingStore,
+      updateMessage,
+    ]
+  );
+
+  /**
    * Edit a message and re-run the conversation from that point.
    * For user messages: updates content, deletes all subsequent messages, and streams new responses.
    * For assistant messages: updates content only (preserves sibling model responses).
@@ -2227,5 +2525,6 @@ export function useChat({
     setMessages,
     regenerateResponse,
     editAndRerun,
+    respondToMcpApproval,
   };
 }

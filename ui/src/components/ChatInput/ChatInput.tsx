@@ -34,6 +34,7 @@ import { Textarea } from "@/components/Textarea/Textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/Tooltip/Tooltip";
 import { TemplatesButton } from "@/components/PromptsButton";
 import { SkillsButton } from "@/components/SkillsButton/SkillsButton";
+import { AgentButton } from "@/components/AgentButton/AgentButton";
 import { SlashCommandPopover } from "@/components/ChatInput/SlashCommandPopover";
 import { ToolsBar } from "@/components/ToolsBar";
 import { useUserSkills } from "@/hooks/useUserSkills";
@@ -616,6 +617,9 @@ export function ChatInput({
 
             {/* Skills */}
             <SkillsButton disabled={disabled || isStreaming} />
+
+            {/* Agent tools (shell + container, tool search) */}
+            <AgentButton disabled={disabled || isStreaming} />
 
             {/* History mode toggle - only show when multiple models */}
             {hasMultipleModels && onHistoryModeChange && (

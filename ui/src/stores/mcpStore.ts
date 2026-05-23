@@ -492,7 +492,12 @@ export const useMCPStore = create<MCPStore>()(
       ensureConnected: async () => {
         const { servers } = get();
         const needsConnect = servers.filter(
-          (s) => s.enabled && s.status !== "connected" && s.status !== "connecting"
+          (s) =>
+            s.enabled &&
+            // Gateway servers run server-side — never connect them in the browser.
+            (s.runsOn ?? "browser") === "browser" &&
+            s.status !== "connected" &&
+            s.status !== "connecting"
         );
         await Promise.all(
           needsConnect.map((s) =>
@@ -549,6 +554,9 @@ export const useMCPStore = create<MCPStore>()(
           timeout: s.timeout,
           authType: s.authType,
           oauth: s.oauth,
+          runsOn: s.runsOn,
+          requireApproval: s.requireApproval,
+          allowedTools: s.allowedTools,
           // Persist tool enable/disable preferences
           toolsEnabled: s.toolsEnabled,
         })),

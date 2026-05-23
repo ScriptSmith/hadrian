@@ -13,6 +13,8 @@ const AccountPage = lazy(() => import("@/pages/AccountPage"));
 const ProjectsPage = lazy(() => import("@/pages/ProjectsPage"));
 const TeamsPage = lazy(() => import("@/pages/TeamsPage"));
 const KnowledgeBasesPage = lazy(() => import("@/pages/KnowledgeBasesPage"));
+const ContainersPage = lazy(() => import("@/pages/ContainersPage"));
+const ContainerDetailPage = lazy(() => import("@/pages/ContainerDetailPage"));
 const ApiKeysPage = lazy(() => import("@/pages/ApiKeysPage"));
 const ApiKeyDetailPage = lazy(() => import("@/pages/ApiKeyDetailPage"));
 const MyUsagePage = lazy(() => import("@/pages/MyUsagePage"));
@@ -170,6 +172,28 @@ export function AppRoutes() {
             <Suspense fallback={<PageLoader />}>
               <PageGuard pageKey="knowledge_bases" pageTitle="Knowledge Bases">
                 <KnowledgeBasesPage />
+              </PageGuard>
+            </Suspense>
+          }
+        />
+
+        {/* Containers routes */}
+        <Route
+          path="/containers"
+          element={
+            <Suspense fallback={<PageLoader />}>
+              <PageGuard pageKey="containers" pageTitle="Containers">
+                <ContainersPage />
+              </PageGuard>
+            </Suspense>
+          }
+        />
+        <Route
+          path="/containers/:containerId"
+          element={
+            <Suspense fallback={<PageLoader />}>
+              <PageGuard pageKey="containers" pageTitle="Containers">
+                <ContainerDetailPage />
               </PageGuard>
             </Suspense>
           }

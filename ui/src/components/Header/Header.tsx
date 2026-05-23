@@ -2,6 +2,7 @@ import { Link, NavLink, useLocation } from "react-router-dom";
 import {
   BarChart3,
   BookOpen,
+  Box,
   FolderOpen,
   Key,
   Menu,
@@ -37,6 +38,7 @@ export const navItems: NavItem[] = [
   { to: "/projects", icon: FolderOpen, label: "Projects", pageKey: "projects" },
   { to: "/teams", icon: UsersRound, label: "Teams", pageKey: "teams" },
   { to: "/knowledge-bases", icon: BookOpen, label: "Knowledge", pageKey: "knowledge_bases" },
+  { to: "/containers", icon: Box, label: "Containers", pageKey: "containers" },
   { to: "/api-keys", icon: Key, label: "API Keys", pageKey: "api_keys" },
   { to: "/providers", icon: Server, label: "Providers", pageKey: "providers" },
   { to: "/usage", icon: BarChart3, label: "Usage", pageKey: "usage" },

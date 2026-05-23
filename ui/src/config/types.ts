@@ -11,6 +11,7 @@ export interface PagesConfig {
   projects: PageConfig;
   teams: PageConfig;
   knowledge_bases: PageConfig;
+  containers: PageConfig;
   api_keys: PageConfig;
   providers: PageConfig;
   usage: PageConfig;

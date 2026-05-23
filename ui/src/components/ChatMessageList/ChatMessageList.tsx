@@ -22,6 +22,7 @@ import { useAutoScroll } from "@/hooks/useAutoScroll";
 import type { ChatMessage as ChatMessageType } from "@/components/chat-types";
 import { EmptyChat } from "@/components/EmptyChat/EmptyChat";
 import { MultiModelResponse } from "@/components/MultiModelResponse/MultiModelResponse";
+import { MCPApprovalRequest } from "@/components/MCPApprovalRequest/MCPApprovalRequest";
 import {
   useMessages,
   useConversationStore,
@@ -113,6 +114,8 @@ interface ChatMessageListProps {
   onEditAndRerun?: (messageId: string, newContent: string) => void;
   /** Callback to regenerate all responses for a user message (same as edit & resend with unchanged content) */
   onRegenerateAll?: (messageId: string) => void;
+  /** Callback to respond to a gateway MCP approval request */
+  onRespondMcpApproval?: (messageId: string, approvalRequestId: string, approve: boolean) => void;
 }
 
 export function ChatMessageList({
@@ -122,6 +125,7 @@ export function ChatMessageList({
   onForkFromMessage,
   onEditAndRerun,
   onRegenerateAll,
+  onRespondMcpApproval,
 }: ChatMessageListProps) {
   // ============================================================================
   // STORE SUBSCRIPTIONS (Surgical Selectors)
@@ -659,6 +663,19 @@ export function ChatMessageList({
                           actionConfig={actionConfig}
                           historyMode={group.userMessage.historyMode}
                         />
+                        {/* Gateway MCP approval prompts for this group's responses */}
+                        {committedResponses.flatMap((m) =>
+                          (m.pendingMcpApprovals ?? []).map((approval) => (
+                            <MCPApprovalRequest
+                              key={`${m.id}:${approval.approvalRequestId}`}
+                              approval={approval}
+                              disabled={!onRespondMcpApproval}
+                              onRespond={(approve) =>
+                                onRespondMcpApproval?.(m.id, approval.approvalRequestId, approve)
+                              }
+                            />
+                          ))
+                        )}
                       </>
                     )}
                   </div>

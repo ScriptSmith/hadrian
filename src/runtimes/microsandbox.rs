@@ -94,10 +94,10 @@ impl ShellRuntime for MicrosandboxRuntime {
         // `NetworkPolicy`. The shapes we accept (from the OpenAI shell
         // tool spec via `resolve_shell_environment`):
         //   - `[]`        → no egress (deny-all). Matches opensandbox.
-        //   - `["*"]`     → unrestricted public egress. The SDK's
-        //                   `public_only()` denies private/loopback/
-        //                   metadata so the IMDS endpoint at
-        //                   169.254.169.254 stays blocked.
+        //   - `["*"]`     → public internet + DNS to the gateway resolver.
+        //                   Other private egress and the IMDS endpoint at
+        //                   169.254.169.254 stay blocked. See
+        //                   `build_network_policy`.
         //   - exact name  → `allow_domains([name])`.
         //   - `*.suffix`  → `allow_domain_suffixes([suffix])`.
         // Per-secret allow-host rules still apply on top via
@@ -186,9 +186,10 @@ impl ShellRuntime for MicrosandboxRuntime {
 ///   `NetworkPolicy::none()`; matches opensandbox's default semantics
 ///   so the model can't quietly assume the public internet is reachable
 ///   when no per-request `network_policy` was supplied.
-/// - `"*"` anywhere in the list → `public_only()` (allow public, deny
-///   private/loopback/link-local/metadata). Equivalent of "open internet,
-///   no SSRF risk."
+/// - `"*"` anywhere in the list → public internet on any port plus DNS to
+///   the per-sandbox gateway resolver (a private/CGN address `public_only()`
+///   would otherwise refuse). All other private/loopback/link-local/metadata
+///   egress stays denied, so SSRF surface is limited to name resolution.
 /// - Otherwise → deny by default, allow only the supplied hostnames /
 ///   `*.suffix` patterns. Patterns are normalized: a leading `*.` is
 ///   recognised as a `Destination::DomainSuffix`; everything else is
@@ -198,7 +199,25 @@ fn build_network_policy(allow_hosts: &[String]) -> NetworkPolicy {
         return NetworkPolicy::none();
     }
     if allow_hosts.iter().any(|h| h == "*") {
-        return NetworkPolicy::public_only();
+        // Public internet on any port, plus DNS to the per-sandbox gateway
+        // resolver. `public_only()` alone denies the gateway (a private/CGN
+        // address in the 100.96.0.0/11 pool), so name resolution is refused;
+        // the explicit `Host` rule on :53 reaches the resolver without
+        // opening any other private/LAN egress. IMDS (169.254.169.254) and
+        // loopback stay blocked.
+        return NetworkPolicy::builder()
+            .default_deny()
+            .egress(|e| e.allow_public())
+            .egress(|e| e.allow_host().udp().tcp().port(53))
+            .build()
+            .unwrap_or_else(|err| {
+                warn!(
+                    stage = "microsandbox_public_policy_build_failed",
+                    error = %err,
+                    "public egress policy build failed; falling back to public_only"
+                );
+                NetworkPolicy::public_only()
+            });
     }
 
     let mut domains: Vec<String> = Vec::new();

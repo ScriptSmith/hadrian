@@ -29,6 +29,14 @@ import {
   useMaxToolIterations,
   useCaptureRawSSEEvents,
   useSubAgentModel,
+  useAgentEnabled,
+  useAgentContainerMode,
+  useAgentContainerId,
+  useAgentMemoryLimit,
+  useAgentExpiresAfterMinutes,
+  useAgentAllowedDomains,
+  useToolSearchEnabled,
+  useToolSearchRanker,
 } from "@/stores/chatUIStore";
 import { useUserSkills } from "@/hooks/useUserSkills";
 import { setSkillCatalog } from "./utils/skillCache";
@@ -66,6 +74,37 @@ export default function ChatPage() {
   const maxToolIterations = useMaxToolIterations();
   const captureRawSSEEvents = useCaptureRawSSEEvents();
   const subAgentModel = useSubAgentModel();
+  const agentEnabled = useAgentEnabled();
+  const agentContainerMode = useAgentContainerMode();
+  const agentContainerId = useAgentContainerId();
+  const agentMemoryLimit = useAgentMemoryLimit();
+  const agentExpiresAfterMinutes = useAgentExpiresAfterMinutes();
+  const agentAllowedDomains = useAgentAllowedDomains();
+  const toolSearchEnabled = useToolSearchEnabled();
+  const toolSearchRanker = useToolSearchRanker();
+
+  const agentConfig = useMemo(
+    () => ({
+      enabled: agentEnabled,
+      containerMode: agentContainerMode,
+      containerId: agentContainerId,
+      memoryLimit: agentMemoryLimit,
+      expiresAfterMinutes: agentExpiresAfterMinutes,
+      allowedDomains: agentAllowedDomains,
+      toolSearch: toolSearchEnabled,
+      toolSearchRanker,
+    }),
+    [
+      agentEnabled,
+      agentContainerMode,
+      agentContainerId,
+      agentMemoryLimit,
+      agentExpiresAfterMinutes,
+      agentAllowedDomains,
+      toolSearchEnabled,
+      toolSearchRanker,
+    ]
+  );
 
   const { setSelectedModels } = useConversationStore();
 
@@ -175,6 +214,7 @@ export default function ChatPage() {
     clearMessages,
     regenerateResponse,
     editAndRerun,
+    respondToMcpApproval,
   } = useChat({
     models: activeModels,
     settings: modelSettings,
@@ -185,6 +225,7 @@ export default function ChatPage() {
     vectorStoreIds: vectorStoreIds.length > 0 ? vectorStoreIds : undefined,
     clientSideToolExecution,
     enabledTools,
+    agentConfig,
     enabledSkills,
     dataFiles: registeredDataFiles.length > 0 ? registeredDataFiles : undefined,
     maxToolIterations,
@@ -315,6 +356,7 @@ export default function ChatPage() {
           pendingProjectName={pendingProject.name}
           pendingProjectId={pendingProject.id}
           onEditAndRerun={editAndRerun}
+          onRespondMcpApproval={respondToMcpApproval}
         />
       </ErrorBoundary>
       {currentConversation && (

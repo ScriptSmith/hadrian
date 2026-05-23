@@ -798,6 +798,29 @@ export interface ChunkCitation extends BaseCitation {
 /** Union type for all citation types */
 export type Citation = FileCitation | UrlCitation | ChunkCitation;
 
+/**
+ * A gateway MCP tool call that paused for human approval
+ * (`require_approval`). The user approves/denies it and the chat resumes the
+ * response by echoing back an `mcp_approval_response` keyed by
+ * `approvalRequestId`.
+ */
+export interface McpApprovalRequest {
+  /** Output item id of the approval request. */
+  id: string;
+  /** Id echoed back in the `mcp_approval_response` to resume. */
+  approvalRequestId: string;
+  /** MCP server label that requested the call. */
+  serverLabel: string;
+  /** Tool the model wants to call. */
+  toolName: string;
+  /** Raw JSON arguments string (for display when not parseable). */
+  argumentsJson: string;
+  /** Parsed arguments, when the JSON was valid. */
+  parsedArguments?: Record<string, unknown>;
+  /** Set once the user responds; absent while still pending. */
+  resolved?: "approved" | "denied";
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
@@ -834,6 +857,8 @@ export interface ChatMessage {
   completedRounds?: CompletedRound[];
   /** Debug message ID for looking up debug info in debugStore (assistant messages only) */
   debugMessageId?: string;
+  /** Gateway MCP approval requests this response paused on (assistant messages only) */
+  pendingMcpApprovals?: McpApprovalRequest[];
 }
 
 export interface ChatFile {

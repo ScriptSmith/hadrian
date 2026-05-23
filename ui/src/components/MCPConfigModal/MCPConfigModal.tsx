@@ -111,6 +111,10 @@ const serverFormSchema = z.object({
   oauthScopes: z.string(),
   headers: z.string(),
   timeout: z.number().int().min(1, "Must be at least 1 second"),
+  runsOn: z.enum(["browser", "gateway"]),
+  requireApproval: z.enum(["always", "never"]),
+  /** Comma/newline separated tool names; empty = all tools allowed. */
+  allowedTools: z.string(),
 });
 
 type ServerFormValues = z.infer<typeof serverFormSchema>;
@@ -527,6 +531,9 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
           ? JSON.stringify(mergedExtraHeaders, null, 2)
           : "",
       timeout: Math.round((editingServer?.timeout ?? 300000) / 1000),
+      runsOn: editingServer?.runsOn ?? "browser",
+      requireApproval: editingServer?.requireApproval ?? "never",
+      allowedTools: (editingServer?.allowedTools ?? []).join(", "),
     },
   });
 
@@ -553,6 +560,8 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
   const watchedUrl = form.watch("url");
   const watchedHeaders = form.watch("headers");
   const watchedAuthType = form.watch("authType") as MCPAuthType;
+  const watchedRunsOn = form.watch("runsOn");
+  const watchedRequireApproval = form.watch("requireApproval");
   // Debounce URL so network-touching effects (auth probe, template checks) run
   // only after the user stops typing.
   const debouncedUrl = useDebouncedValue(watchedUrl, 500);
@@ -812,6 +821,86 @@ function ServerForm({ editingServer, onSubmit, onCancel, prefill }: ServerFormPr
       >
         <Input id="server-name" {...form.register("name")} placeholder="My MCP Server" />
       </FormField>
+
+      {/* Where the server runs: browser (client-side) vs gateway (server-side) */}
+      <FormField
+        label="Runs on"
+        htmlFor="server-runs-on"
+        helpText={
+          watchedRunsOn === "gateway"
+            ? "Hadrian connects and runs tool calls server-side. Works for API clients and background/agent runs; credentials are sent with the request."
+            : "Your browser connects and runs tool calls. Only works inside this chat UI."
+        }
+      >
+        <div className="flex gap-1.5" role="radiogroup" aria-label="Where the server runs">
+          {[
+            { value: "browser" as const, label: "Browser" },
+            { value: "gateway" as const, label: "Gateway" },
+          ].map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              role="radio"
+              aria-checked={watchedRunsOn === opt.value}
+              onClick={() => form.setValue("runsOn", opt.value)}
+              className={cn(
+                "px-3 py-1.5 rounded-md text-sm border transition-colors",
+                watchedRunsOn === opt.value
+                  ? "border-primary bg-primary/10 text-primary font-medium"
+                  : "border-input text-muted-foreground hover:bg-muted"
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </FormField>
+
+      {/* Gateway-only: approval gating + allowed tools */}
+      {watchedRunsOn === "gateway" && (
+        <>
+          <FormField
+            label="Tool approval"
+            htmlFor="server-require-approval"
+            helpText="Pause for your approval before each tool call, or run them automatically."
+          >
+            <div className="flex gap-1.5" role="radiogroup" aria-label="Tool approval">
+              {[
+                { value: "never" as const, label: "Run automatically" },
+                { value: "always" as const, label: "Require approval" },
+              ].map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={watchedRequireApproval === opt.value}
+                  onClick={() => form.setValue("requireApproval", opt.value)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-md text-sm border transition-colors",
+                    watchedRequireApproval === opt.value
+                      ? "border-primary bg-primary/10 text-primary font-medium"
+                      : "border-input text-muted-foreground hover:bg-muted"
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </FormField>
+
+          <FormField
+            label="Allowed tools"
+            htmlFor="server-allowed-tools"
+            helpText="Optional. Comma-separated tool names to allow; leave blank for all."
+          >
+            <Input
+              id="server-allowed-tools"
+              {...form.register("allowedTools")}
+              placeholder="create_issue, list_repos"
+            />
+          </FormField>
+        </>
+      )}
 
       {/* Auth detection indicator */}
       {detectionStatus === "detecting" && (
@@ -1191,6 +1280,18 @@ export function MCPConfigModal({ open, onClose, prefill }: MCPConfigModalProps) 
 
       const timeout = values.timeout * 1000;
 
+      // Gateway-only fields. `allowedTools` is a comma/newline list; empty = all.
+      const allowedTools = values.allowedTools
+        .split(/[\n,]/)
+        .map((t) => t.trim())
+        .filter(Boolean);
+      const gatewayFields = {
+        runsOn: values.runsOn,
+        requireApproval: values.runsOn === "gateway" ? values.requireApproval : undefined,
+        allowedTools:
+          values.runsOn === "gateway" && allowedTools.length > 0 ? allowedTools : undefined,
+      };
+
       if (editingServer) {
         updateServer(editingServer.id, {
           name: values.name,
@@ -1199,6 +1300,7 @@ export function MCPConfigModal({ open, onClose, prefill }: MCPConfigModalProps) 
           headers,
           timeout,
           oauth,
+          ...gatewayFields,
         });
       } else {
         addServer({
@@ -1209,6 +1311,7 @@ export function MCPConfigModal({ open, onClose, prefill }: MCPConfigModalProps) 
           headers,
           timeout,
           oauth,
+          ...gatewayFields,
         });
       }
 

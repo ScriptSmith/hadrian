@@ -149,6 +149,22 @@ export interface ResponsesStreamEvent {
       score: number;
       content?: Array<{ type: string; text: string }>;
     }>;
+    /** Server label for gateway MCP items (mcp_call, mcp_list_tools, mcp_approval_request) */
+    server_label?: string;
+    /** Tool name for mcp_call / mcp_approval_request items */
+    name?: string;
+    /** JSON-encoded arguments for mcp_call / mcp_approval_request items */
+    arguments?: string;
+    /** Tool output for completed mcp_call items */
+    output?: string;
+    /** Error message for failed mcp_call items */
+    error?: string | null;
+    /** Approval request id to echo back in an mcp_approval_response */
+    approval_request_id?: string;
+    /** Tools discovered by an mcp_list_tools item */
+    tools?: Array<{ name: string }>;
+    /** Shell-call action object (`shell_call` items): the commands to run. */
+    action?: { commands?: string[] };
   };
   response?: {
     id: string;

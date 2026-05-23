@@ -75,6 +75,8 @@ export interface ChatViewProps {
   pendingProjectId?: string | null;
   /** Callback to edit a message and re-run from that point */
   onEditAndRerun?: (messageId: string, newContent: string) => void;
+  /** Callback to respond to a gateway MCP approval request */
+  onRespondMcpApproval?: (messageId: string, approvalRequestId: string, approve: boolean) => void;
   /** Owner type for vector store filtering (e.g., "user", "organization") */
   vectorStoreOwnerType?: VectorStoreOwnerType;
   /** Owner ID for vector store filtering (e.g., user id, org id) */
@@ -98,6 +100,7 @@ export function ChatView({
   pendingProjectName,
   pendingProjectId,
   onEditAndRerun,
+  onRespondMcpApproval,
   vectorStoreOwnerType,
   vectorStoreOwnerId,
 }: ChatViewProps) {
@@ -250,6 +253,7 @@ export function ChatView({
           onRegenerateAll={onRegenerateAll}
           onForkFromMessage={onForkFromMessage}
           onEditAndRerun={onEditAndRerun}
+          onRespondMcpApproval={onRespondMcpApproval}
         />
       </main>
 
