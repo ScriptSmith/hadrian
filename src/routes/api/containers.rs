@@ -1229,23 +1229,24 @@ pub async fn api_v1_containers_file_upload(
 /// anything else and rejects `..` traversal.
 fn normalize_mnt_path(path_field: Option<&str>, filename: &str) -> Result<String, ApiError> {
     const MNT: &str = crate::services::container_session::MNT_DATA;
-    match path_field {
-        Some(p) if !p.is_empty() => {
-            let normalised = p.trim_start_matches('/').to_string();
-            if normalised.contains("..") {
-                return Err(ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_path",
-                    "path may not contain '..'",
-                ));
-            }
-            if normalised.starts_with("mnt/data/") {
-                Ok(format!("/{normalised}"))
-            } else {
-                Ok(format!("{MNT}/{normalised}"))
-            }
-        }
-        _ => Ok(format!("{MNT}/{filename}")),
+    // The relative target comes from the explicit `path` field when
+    // present, otherwise from the (user-controlled) upload filename.
+    // Both are untrusted, so the traversal guard applies uniformly.
+    let normalised = match path_field {
+        Some(p) if !p.is_empty() => p.trim_start_matches('/').to_string(),
+        _ => filename.trim_start_matches('/').to_string(),
+    };
+    if normalised.contains("..") {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_path",
+            "path may not contain '..'",
+        ));
+    }
+    if normalised.starts_with("mnt/data/") {
+        Ok(format!("/{normalised}"))
+    } else {
+        Ok(format!("{MNT}/{normalised}"))
     }
 }
 
@@ -1497,6 +1498,14 @@ mod tests {
     #[test]
     fn normalize_mnt_path_rejects_traversal() {
         let err = normalize_mnt_path(Some("../escape.txt"), "x").unwrap_err();
+        assert!(err.to_string().starts_with("invalid_path:"), "{err}");
+    }
+
+    #[test]
+    fn normalize_mnt_path_rejects_traversal_in_filename_fallback() {
+        // No `path` field: the untrusted upload filename must still be
+        // guarded against `..` traversal.
+        let err = normalize_mnt_path(None, "../../etc/passwd").unwrap_err();
         assert!(err.to_string().starts_with("invalid_path:"), "{err}");
     }
 

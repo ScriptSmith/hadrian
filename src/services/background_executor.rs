@@ -508,24 +508,14 @@ pub async fn execute_persisted_response(
                 error = %e,
                 "Stream error during background drain"
             );
-            // Persister still owns the final-state update; if it
-            // received zero terminal events it'll mark the row
-            // `incomplete`. Best-effort patch to `failed` here:
-            let _ = store
-                .update_within_org(
-                    &record.id,
-                    record.org_id,
-                    ResponseCompletion {
-                        status: Some(ResponseStatus::Failed),
-                        completed_at: Some(Utc::now()),
-                        error: Some(serde_json::json!({
-                            "code": "stream_error",
-                            "message": e.to_string(),
-                        })),
-                        ..Default::default()
-                    },
-                )
-                .await;
+            // Do NOT write a terminal state here. A stream error is a
+            // transient `Execution` failure that `run_with_retry` will
+            // re-attempt; writing `failed` + `completed_at` now would
+            // flip the row to a terminal state mid-retry, so a polling
+            // client would see `failed` and stop watching before the
+            // retry has a chance to succeed. The terminal write is
+            // owned by `mark_background_failure`, which runs only after
+            // retries are exhausted.
             return Err(BackgroundExecuteError::Execution(e.to_string()));
         }
     }

@@ -19,7 +19,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     AppState,
-    db::repos::ResponseCompletion,
+    db::repos::{ResponseCompletion, ResponseStatus},
     services::background_executor::{
         BackgroundExecuteError, execute_persisted_response, mark_background_failure,
     },
@@ -164,12 +164,17 @@ async fn run_with_retry(
                 // up-to-date `last_sequence_number` (the previous
                 // attempt's persister wrote partial events). Refresh
                 // `started_at` while we're at it so the reaper sees
-                // this as fresh work.
+                // this as fresh work, and reset `status` to
+                // `in_progress` in case the previous attempt's persister
+                // marked the row `incomplete` (a terminal state) — that
+                // would otherwise stop clients polling before this
+                // retry completes.
                 if let Err(update_err) = store
                     .update_within_org(
                         &response_id,
                         org_id,
                         ResponseCompletion {
+                            status: Some(ResponseStatus::InProgress),
                             started_at: Some(Utc::now()),
                             ..Default::default()
                         },
