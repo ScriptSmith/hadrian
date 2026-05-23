@@ -1117,6 +1117,11 @@ CREATE TABLE IF NOT EXISTS responses (
 );
 
 CREATE INDEX IF NOT EXISTS idx_responses_org_status ON responses(org_id, status);
+-- Gateway-wide background-worker queries (claim_queued, reap_stuck_in_progress,
+-- list_cancelled_among) filter on `status` without `org_id`, so the org-leading
+-- index above is unusable for them. This (status, created_at) index serves those
+-- polls without a full table scan + sort.
+CREATE INDEX IF NOT EXISTS idx_responses_status ON responses(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_responses_owner_created ON responses(owner_type, owner_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_responses_retention ON responses(retention_expires_at);
 
@@ -1171,6 +1176,11 @@ CREATE TABLE IF NOT EXISTS containers (
 
 CREATE INDEX IF NOT EXISTS idx_containers_org_active
     ON containers(org_id, status, last_active_at);
+-- Gateway-wide reaper queries (mark_expired_idle, hard_delete_expired) filter on
+-- `status` without `org_id` and order by `expires_at`; the org-leading index above
+-- can't serve them. This index avoids a sequential scan + sort on every poll.
+CREATE INDEX IF NOT EXISTS idx_containers_status_expires
+    ON containers(status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_containers_source_response
     ON containers(source_response_id)
     WHERE source_response_id IS NOT NULL;

@@ -1055,6 +1055,78 @@ async fn emit_failure_done(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Per-call env / working_directory threading
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// POSIX-ish environment variable name check: starts with a letter or
+/// underscore, followed by letters, digits, or underscores. Rejects names
+/// that could break out of the synthesized `export` statement.
+fn is_valid_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Single-quotes a string for safe inclusion in a POSIX shell command,
+/// escaping embedded single quotes (`'` → `'\''`).
+fn shell_single_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        if c == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// Builds the effective shell script honoring the model's per-call
+/// `working_directory` and `env`. Runtimes accept only a single command
+/// string and expose no separate cwd/env channel, so we prepend a
+/// validated, shell-escaped `cd`/`export` preamble to `command`. A
+/// missing working directory fails the call loudly (`|| exit 1`) rather
+/// than silently running in the default cwd. Returns `InvalidCall` for a
+/// malformed env name.
+fn build_effective_command(
+    command: &str,
+    env: Option<&HashMap<String, String>>,
+    working_directory: Option<&str>,
+) -> Result<String, ToolError> {
+    let mut preamble = String::new();
+    if let Some(wd) = working_directory.map(str::trim).filter(|s| !s.is_empty()) {
+        preamble.push_str(&format!("cd {} || exit 1\n", shell_single_quote(wd)));
+    }
+    if let Some(env) = env {
+        // Deterministic order so the synthesized script is stable.
+        let mut names: Vec<&String> = env.keys().collect();
+        names.sort();
+        for name in names {
+            if !is_valid_env_name(name) {
+                return Err(ToolError::InvalidCall(format!(
+                    "invalid environment variable name: {name}"
+                )));
+            }
+            preamble.push_str(&format!(
+                "export {}={}\n",
+                name,
+                shell_single_quote(&env[name])
+            ));
+        }
+    }
+    if preamble.is_empty() {
+        Ok(command.to_string())
+    } else {
+        Ok(format!("{preamble}{command}"))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Output trimming for continuation payload
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1444,6 +1516,12 @@ impl ServerExecutedTool for ShellExecutor {
             .get("working_directory")
             .and_then(|v| v.as_str())
             .map(str::to_string);
+        // Honor the model's per-call working_directory/env by synthesizing a
+        // validated `cd`/`export` preamble — runtimes accept only a single
+        // command string with no separate cwd/env channel. The echoed
+        // shell_call item still reports the raw `model_env`/`model_workdir`.
+        let command =
+            build_effective_command(&command, model_env.as_ref(), model_workdir.as_deref())?;
         let id = call.call_id.clone();
         let runtime = self.runtime.clone();
         let cost_per_sec = self.cost_microcents_per_second;
@@ -1535,7 +1613,6 @@ impl ServerExecutedTool for ShellExecutor {
             Some(n) if n > 0 => n.min(op_max_chars).max(64),
             _ => op_max_chars,
         };
-        let _ = (&model_env, &model_workdir); // reserved for future runtime threading
         // Per-request override (already intersected with operator's
         // limits at request-acceptance time) wins; fall back to the
         // operator default. `egress_policy` is taken from the resolved
@@ -2738,6 +2815,52 @@ mod tests {
         let args =
             ShellToolArguments::parse("{\"action\": {\"commands\": [\"   \", \"\"]}}").unwrap();
         assert!(args.resolve().is_none());
+    }
+
+    #[test]
+    fn build_effective_command_prepends_cd_and_exports() {
+        let mut env = HashMap::new();
+        env.insert("FOO".to_string(), "bar".to_string());
+        env.insert("BAZ".to_string(), "with 'quote'".to_string());
+        let out = build_effective_command("ls /", Some(&env), Some("/tmp")).unwrap();
+        // cd preamble first, then exports in sorted order, then command.
+        assert_eq!(
+            out,
+            "cd '/tmp' || exit 1\nexport BAZ='with '\\''quote'\\'''\nexport FOO='bar'\nls /"
+        );
+    }
+
+    #[test]
+    fn build_effective_command_noop_without_env_or_cwd() {
+        assert_eq!(build_effective_command("ls /", None, None).unwrap(), "ls /");
+        // Blank working_directory is ignored.
+        assert_eq!(
+            build_effective_command("ls /", None, Some("   ")).unwrap(),
+            "ls /"
+        );
+    }
+
+    #[test]
+    fn build_effective_command_rejects_bad_env_name() {
+        let mut env = HashMap::new();
+        env.insert("BAD NAME".to_string(), "x".to_string());
+        assert!(matches!(
+            build_effective_command("ls", Some(&env), None),
+            Err(ToolError::InvalidCall(_))
+        ));
+        let mut env2 = HashMap::new();
+        env2.insert("1FOO".to_string(), "x".to_string());
+        assert!(build_effective_command("ls", Some(&env2), None).is_err());
+    }
+
+    #[test]
+    fn env_name_validation() {
+        assert!(is_valid_env_name("FOO"));
+        assert!(is_valid_env_name("_foo_BAR9"));
+        assert!(!is_valid_env_name(""));
+        assert!(!is_valid_env_name("9foo"));
+        assert!(!is_valid_env_name("FO O"));
+        assert!(!is_valid_env_name("FOO=BAR"));
     }
 
     #[test]

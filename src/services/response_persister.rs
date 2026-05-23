@@ -172,7 +172,7 @@ pub fn wrap_streaming_with_persistence(
                                     terminal_event_persisted = true;
                                 }
                             } else {
-                                buf.push(new_event);
+                                buf.push(new_event).await;
                             }
                         }
 

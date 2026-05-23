@@ -1618,6 +1618,17 @@ impl crate::services::server_tools::ServerExecutedTool for FileSearchExecutor {
         if is_final_iteration && let Some(ref mut tools) = payload.tools {
             let before = tools.len();
             tools.retain(|t| !t.is_file_search());
+            // Preprocessing rewrites the spec `file_search` tool into a
+            // `Function{name:"file_search"}` form, which `is_file_search()`
+            // does not match — strip that form too, otherwise the model can
+            // keep calling file_search past `max_iterations`.
+            tools.retain(|t| {
+                if let ResponsesToolDefinition::Function(f) = t {
+                    f.name != FileSearchToolArguments::FUNCTION_NAME
+                } else {
+                    true
+                }
+            });
             if tools.len() < before {
                 info!(
                     stage = "tools_removed",

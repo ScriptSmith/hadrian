@@ -471,7 +471,9 @@ impl ContainersRepo for SqliteContainersRepo {
             WHERE status IN ('expired', 'deleted')
               AND expires_at IS NOT NULL
               AND datetime(expires_at) <= datetime(?)
-            ORDER BY expires_at DESC
+            -- Oldest-expired first: a full backlog must not starve the
+            -- earliest terminal rows by repeatedly deleting the newest.
+            ORDER BY expires_at ASC
             LIMIT ?
             "#,
         )

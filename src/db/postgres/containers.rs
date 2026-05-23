@@ -424,7 +424,9 @@ impl ContainersRepo for PostgresContainersRepo {
             WHERE status IN ('expired', 'deleted')
               AND expires_at IS NOT NULL
               AND expires_at <= $1
-            ORDER BY expires_at DESC
+            -- Oldest-expired first: a full backlog must not starve the
+            -- earliest terminal rows by repeatedly deleting the newest.
+            ORDER BY expires_at ASC
             LIMIT $2
             FOR UPDATE SKIP LOCKED
             "#,

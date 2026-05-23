@@ -108,17 +108,32 @@ impl ResponseEventBuffer {
         let _ = done.wait_for(|v| *v).await;
     }
 
-    /// Non-blocking enqueue. Drops on overflow with a warning — we
-    /// favor responsiveness over completeness for the event log.
-    pub fn push(&self, event: NewResponseEvent) {
-        match self.tx.try_send(event) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                warn!("response_event_buffer: channel full; event dropped");
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                // Drainer has exited; system is shutting down.
-            }
+    /// Enqueue one event. On overflow we never silently drop: a dropped
+    /// event leaves a permanent hole in the replay log while the terminal
+    /// event still commits, so a reconnecting `?stream=true` reader
+    /// replays a complete-looking response that is missing content.
+    /// Instead we `flush()` the drainer (which commits everything
+    /// currently queued, in order) and retry once; if the channel is
+    /// still full (drainer contended), we commit the event synchronously.
+    pub async fn push(&self, event: NewResponseEvent) {
+        let event = match self.tx.try_send(event) {
+            Ok(()) => return,
+            Err(mpsc::error::TrySendError::Full(event)) => event,
+            // Drainer has exited; system is shutting down.
+            Err(mpsc::error::TrySendError::Closed(_)) => return,
+        };
+        // Channel full — drain everything queued (preserving order) and
+        // retry the fast path once.
+        warn!("response_event_buffer: channel full; flushing and retrying");
+        self.flush().await;
+        let event = match self.tx.try_send(event) {
+            Ok(()) => return,
+            Err(mpsc::error::TrySendError::Full(event)) => event,
+            Err(mpsc::error::TrySendError::Closed(_)) => return,
+        };
+        // Still full after a flush: commit synchronously rather than drop.
+        if let Err(e) = self.insert_sync(event).await {
+            warn!(error = %e, "response_event_buffer: synchronous fallback insert failed");
         }
     }
 

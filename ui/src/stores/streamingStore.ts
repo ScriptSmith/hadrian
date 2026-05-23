@@ -777,12 +777,6 @@ interface StreamingActions {
   // Gateway MCP approval actions
   /** Append a pending gateway MCP approval request to a model's stream */
   addMcpApproval: (model: string, approval: McpApprovalRequest) => void;
-  /** Mark a pending MCP approval as approved/denied (keeps it for the record) */
-  resolveMcpApproval: (
-    model: string,
-    approvalRequestId: string,
-    resolved: "approved" | "denied"
-  ) => void;
 
   // Artifact management actions
   /** Add artifacts to a model's stream (appends to existing) */
@@ -1261,21 +1255,6 @@ export const useStreamingStore = create<StreamingStore>((set) => ({
 
       const newStreams = new Map(state.streams);
       newStreams.set(model, { ...existing, mcpApprovals: [...current, approval] });
-      return { streams: newStreams };
-    }),
-
-  resolveMcpApproval: (model, approvalRequestId, resolved) =>
-    set((state) => {
-      const existing = state.streams.get(model);
-      if (!existing?.mcpApprovals) return state;
-
-      const newStreams = new Map(state.streams);
-      newStreams.set(model, {
-        ...existing,
-        mcpApprovals: existing.mcpApprovals.map((a) =>
-          a.approvalRequestId === approvalRequestId ? { ...a, resolved } : a
-        ),
-      });
       return { streams: newStreams };
     }),
 

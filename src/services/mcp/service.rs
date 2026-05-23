@@ -477,13 +477,29 @@ impl McpService {
         self.inner.pool.remove(&key);
     }
 
-    /// Drop pool entries idle past their TTL. Called opportunistically
-    /// on every `acquire_client`; no background task.
+    /// Drop entries idle past their TTL across every per-endpoint map.
+    /// Called opportunistically on every `acquire_client`; no background
+    /// task. The endpoint key folds in `server_url + sha256(auth||headers)`,
+    /// so without this a caller rotating a token/header/path would mint
+    /// unbounded permanent entries (each holding a full tool catalog).
     fn reap_expired(&self) {
         let now = Instant::now();
         self.inner
             .pool
             .retain(|_, v| now.duration_since(v.last_used) < CLIENT_IDLE_TTL);
+        self.inner
+            .tools_cache
+            .retain(|_, v| now.duration_since(v.refreshed_at) < TOOLS_CACHE_TTL);
+        self.inner
+            .tools_errors
+            .retain(|_, v| now.duration_since(v.at) < TOOLS_CACHE_TTL);
+        // Single-flight guards have no TTL; drop those nobody is holding
+        // (strong_count == 1 means only the map references it, so no fetch
+        // is in flight). A later fetch re-creates the lock atomically via
+        // get-or-insert, so dropping an idle guard is safe.
+        self.inner
+            .tools_fetch_locks
+            .retain(|_, v| Arc::strong_count(v) > 1);
     }
 
     /// Get or open a client for the given endpoint key.

@@ -145,7 +145,7 @@ pub async fn stage_input_files(
     let mut out: Vec<StagedFile> = Vec::with_capacity(parts.len());
 
     for part in parts {
-        let resolved = resolve_one(state, &part, owner).await?;
+        let resolved = resolve_one(state, &part, owner, config.max_input_bytes_per_request).await?;
         let bytes_len = resolved.bytes.len() as u64;
         if total_bytes.saturating_add(bytes_len) > config.max_input_bytes_per_request {
             return Err(StageError::FileTooLarge {
@@ -272,6 +272,7 @@ async fn resolve_one(
     state: &AppState,
     part: &InputFilePart,
     owner: Option<ResponseOwner>,
+    max_bytes: u64,
 ) -> Result<ResolvedFile, StageError> {
     validate_source_count(part)?;
 
@@ -282,7 +283,7 @@ async fn resolve_one(
         return resolve_file_data(data, part.filename.as_deref());
     }
     if let Some(ref url) = part.file_url {
-        return resolve_file_url(state, url, part.filename.as_deref()).await;
+        return resolve_file_url(state, url, part.filename.as_deref(), max_bytes).await;
     }
     unreachable!("validate_source_count guarantees exactly one source is set")
 }
@@ -421,6 +422,7 @@ async fn resolve_file_url(
     state: &AppState,
     url: &str,
     override_filename: Option<&str>,
+    max_bytes: u64,
 ) -> Result<ResolvedFile, StageError> {
     // SSRF guard — same options the image fetcher uses. Loopback is
     // forbidden because content URLs in user requests are untrusted.
@@ -454,14 +456,38 @@ async fn resolve_file_url(
         Some(&url_filename),
     );
 
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| StageError::FetchFailed(e.to_string()))?;
+    // Reject up front if the advertised size already blows the budget,
+    // then stream and abort the moment we cross it — a malicious upstream
+    // must not be able to burn server memory proportional to whatever the
+    // 30s timeout allows. Mirrors `providers::image::fetch_image_from_url`.
+    if let Some(content_length) = resp.content_length()
+        && content_length > max_bytes
+    {
+        return Err(StageError::FileTooLarge {
+            filename,
+            bytes: content_length,
+            limit: max_bytes,
+        });
+    }
+
+    use futures::StreamExt;
+    let mut buf = bytes::BytesMut::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| StageError::FetchFailed(e.to_string()))?;
+        if buf.len() as u64 + chunk.len() as u64 > max_bytes {
+            return Err(StageError::FileTooLarge {
+                filename,
+                bytes: buf.len() as u64 + chunk.len() as u64,
+                limit: max_bytes,
+            });
+        }
+        buf.extend_from_slice(&chunk);
+    }
 
     Ok(ResolvedFile {
         filename,
-        bytes,
+        bytes: buf.freeze(),
         content_type,
         source_file_id: None,
     })
