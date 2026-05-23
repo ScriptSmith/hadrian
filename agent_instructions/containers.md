@@ -160,6 +160,26 @@ JSON-encoded `Vec<RequestSkill>`). At request time the merge logic in
   `migrations_sqlx/postgres/...` AND `migrations_sqlx/sqlite/...` plus both repo
   implementations.
 
+## Local debugging (`hadrian container`)
+
+`src/cli/container.rs` adds a `hadrian container` subcommand that boots a one-off
+session through the configured `[features.shell]` runtime — the same
+`ShellRuntime::start_session` / `SessionHandle::exec` path the Responses-API shell tool
+uses — so you can reproduce agent behavior without driving the HTTP API:
+
+```bash
+# Interactive shell in a microsandbox/opensandbox container
+cargo run --features runtime-microsandbox -- container
+
+# Run commands non-interactively, stage a file, restrict egress
+hadrian container -e "apk add python3" -e "python3 /mnt/data/x.py" \
+  -f ./x.py --allow-host pypi.org --allow-host files.pythonhosted.org
+```
+
+Egress defaults to the operator's `allowed_egress_hosts` (or `*` if unset). Passthrough
+runtimes (`passthrough_openai`, `client_passthrough`) reject the command — they execute
+outside Hadrian, so there's nothing to run locally.
+
 ## Common edits
 
 - **Adding a runtime backend**: see `adding_runtime.md`.

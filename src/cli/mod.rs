@@ -1,4 +1,6 @@
 mod bootstrap;
+#[cfg(feature = "server")]
+mod container;
 mod features;
 #[cfg(feature = "server")]
 mod healthcheck;
@@ -116,6 +118,34 @@ enum Command {
         #[arg(long, default_value = "3")]
         timeout_secs: u64,
     },
+    /// Boot a one-off shell container for testing/debugging.
+    ///
+    /// Uses the configured `[features.shell]` runtime (microsandbox /
+    /// opensandbox) to start a sandbox the same way the Responses-API shell
+    /// tool does, stage files into `/mnt/data`, and run commands or an
+    /// interactive shell. Passthrough runtimes have nothing to run locally.
+    #[cfg(feature = "server")]
+    Container {
+        /// Command to run (repeatable). If omitted, opens an interactive shell.
+        #[arg(short = 'e', long = "exec")]
+        exec: Vec<String>,
+        /// File to stage into `/mnt/data` before running (repeatable).
+        #[arg(short = 'f', long = "file")]
+        file: Vec<String>,
+        /// Allowed egress host (repeatable; `*` for all). Defaults to the
+        /// operator's `allowed_egress_hosts`, or `*` if unset.
+        #[arg(long = "allow-host")]
+        allow_host: Vec<String>,
+        /// Memory limit in MB (overrides the runtime default).
+        #[arg(long)]
+        memory_mb: Option<u64>,
+        /// CPU limit in cores (overrides the runtime default).
+        #[arg(long)]
+        cpus: Option<f64>,
+        /// Per-command wall-clock timeout in seconds.
+        #[arg(long, default_value = "120")]
+        timeout_secs: u64,
+    },
 }
 
 /// Dispatch to the appropriate subcommand handler.
@@ -181,6 +211,26 @@ pub async fn dispatch(args: Args) {
         #[cfg(feature = "server")]
         Some(Command::Healthcheck { url, timeout_secs }) => {
             healthcheck::run_healthcheck(args.config.as_deref(), url, timeout_secs).await;
+        }
+        #[cfg(feature = "server")]
+        Some(Command::Container {
+            exec,
+            file,
+            allow_host,
+            memory_mb,
+            cpus,
+            timeout_secs,
+        }) => {
+            container::run_container(
+                args.config.as_deref(),
+                exec,
+                file,
+                allow_host,
+                memory_mb,
+                cpus,
+                timeout_secs,
+            )
+            .await;
         }
         Some(Command::Serve) | None => {
             server::run_server(args.config.as_deref(), args.no_browser).await;
