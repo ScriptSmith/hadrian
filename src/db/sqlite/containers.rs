@@ -427,4 +427,46 @@ impl ContainersRepo for SqliteContainersRepo {
         .await?;
         Ok(rows.iter().map(|r| r.col("id")).collect())
     }
+
+    async fn hard_delete_expired(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+        limit: i64,
+    ) -> DbResult<Vec<String>> {
+        // `expires_at` is a TEXT timestamp; `truncate_to_millis` keeps the
+        // bound value in the same `YYYY-MM-DD HH:MM:SS.fff+00:00` shape the
+        // column was written with, and wrapping both sides in `datetime()`
+        // normalizes the suffix the same way `mark_expired_idle` does so the
+        // boundary comparison is apples-to-apples.
+        let cutoff_ts = truncate_to_millis(cutoff);
+        // Select the victims first so we can delete their `container_files`
+        // explicitly (the FK is `ON DELETE CASCADE`, but the test harness
+        // pool doesn't enable `PRAGMA foreign_keys`, so we don't rely on it).
+        let rows = query(
+            r#"
+            SELECT id FROM containers
+            WHERE status IN ('expired', 'deleted')
+              AND expires_at IS NOT NULL
+              AND datetime(expires_at) <= datetime(?)
+            ORDER BY expires_at DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(cutoff_ts)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        let ids: Vec<String> = rows.iter().map(|r| r.col("id")).collect();
+        for id in &ids {
+            query("DELETE FROM container_files WHERE container_id = ?")
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+            query("DELETE FROM containers WHERE id = ?")
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(ids)
+    }
 }

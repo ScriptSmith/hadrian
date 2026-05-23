@@ -386,4 +386,35 @@ impl ContainersRepo for PostgresContainersRepo {
         .await?;
         Ok(rows.iter().map(|r| r.get::<String, _>("id")).collect())
     }
+
+    async fn hard_delete_expired(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+        limit: i64,
+    ) -> DbResult<Vec<String>> {
+        // `container_files.container_id` is `ON DELETE CASCADE`, so deleting
+        // the container row drops its files too. `expires_at` is the
+        // transition timestamp (stamped when the row left `active`), so the
+        // retention delay is measured from when it became terminal. The
+        // subquery + `LIMIT` caps how many rows one pass removes.
+        let rows = sqlx::query(
+            r#"
+            DELETE FROM containers
+            WHERE id IN (
+                SELECT id FROM containers
+                WHERE status IN ('expired', 'deleted')
+                  AND expires_at IS NOT NULL
+                  AND expires_at <= $1
+                ORDER BY expires_at DESC
+                LIMIT $2
+            )
+            RETURNING id
+            "#,
+        )
+        .bind(cutoff)
+        .bind(limit)
+        .fetch_all(&self.write_pool)
+        .await?;
+        Ok(rows.iter().map(|r| r.get::<String, _>("id")).collect())
+    }
 }

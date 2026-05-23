@@ -40,6 +40,12 @@ pub struct FeaturesConfig {
     #[serde(default)]
     pub vector_store_cleanup: VectorStoreCleanupConfig,
 
+    /// Container cleanup job configuration.
+    /// Hard-deletes `expired` / `deleted` containers (and their captured
+    /// files) after a configurable delay so terminal rows don't accumulate.
+    #[serde(default)]
+    pub containers_cleanup: ContainersCleanupConfig,
+
     /// File processing configuration for RAG document ingestion.
     /// Controls how uploaded files are chunked and embedded into vector stores.
     #[serde(default)]
@@ -3400,6 +3406,100 @@ fn default_cleanup_max_duration_secs() -> u64 {
     60
 }
 
+/// Configuration for the container cleanup job.
+///
+/// Containers move `active` → `expired` (idle reaper) → `deleted` (explicit
+/// `DELETE /v1/containers/{id}`). Both terminal states stamp `expires_at` with
+/// the transition time but never remove the row, so without this job `expired`
+/// / `deleted` rows (and their `container_files`) accumulate forever. This
+/// worker hard-deletes terminal rows whose `expires_at` is older than
+/// `cleanup_delay_secs`, cascading their files.
+///
+/// # Example Configuration
+///
+/// ```toml
+/// [features.containers_cleanup]
+/// enabled = true
+/// interval_secs = 300
+/// cleanup_delay_secs = 3600
+/// batch_size = 100
+/// max_duration_secs = 60
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ContainersCleanupConfig {
+    /// Enable the cleanup job.
+    /// When disabled, terminal containers remain in the database indefinitely.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// How often to run the cleanup job (in seconds).
+    /// Default: 300 (5 minutes)
+    #[serde(default = "default_cleanup_interval_secs")]
+    pub interval_secs: u64,
+
+    /// Time to wait after a container becomes terminal (`expired` /
+    /// `deleted`) before hard deleting it (in seconds). Measured from
+    /// `expires_at`. Gives clients time to download captured files.
+    /// Default: 3600 (1 hour)
+    #[serde(default = "default_cleanup_delay_secs")]
+    pub cleanup_delay_secs: u64,
+
+    /// Maximum number of containers to hard-delete per run.
+    /// Prevents long-running cleanup operations.
+    /// Default: 100
+    #[serde(default = "default_cleanup_batch_size")]
+    pub batch_size: u32,
+
+    /// Maximum duration for a single cleanup run (in seconds).
+    /// If exceeded, cleanup stops gracefully and continues next run.
+    /// Set to 0 for unlimited.
+    /// Default: 60
+    #[serde(default = "default_cleanup_max_duration_secs")]
+    pub max_duration_secs: u64,
+
+    /// Dry run mode - log what would be deleted without actually deleting.
+    /// Useful for testing cleanup configuration.
+    /// Default: false
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+impl Default for ContainersCleanupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_secs: default_cleanup_interval_secs(),
+            cleanup_delay_secs: default_cleanup_delay_secs(),
+            batch_size: default_cleanup_batch_size(),
+            max_duration_secs: default_cleanup_max_duration_secs(),
+            dry_run: false,
+        }
+    }
+}
+
+impl ContainersCleanupConfig {
+    /// Get the interval as a Duration.
+    pub fn interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.interval_secs)
+    }
+
+    /// Get the cleanup delay as a Duration.
+    pub fn cleanup_delay(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.cleanup_delay_secs)
+    }
+
+    /// Get the max duration as a Duration, or None if unlimited.
+    pub fn max_duration(&self) -> Option<std::time::Duration> {
+        if self.max_duration_secs == 0 {
+            None
+        } else {
+            Some(std::time::Duration::from_secs(self.max_duration_secs))
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Model Catalog
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4737,6 +4837,92 @@ mod tests {
         // Defaults for unset values
         assert_eq!(config.vector_store_cleanup.batch_size, 100);
         assert_eq!(config.vector_store_cleanup.max_duration_secs, 60);
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // Containers Cleanup Config Tests
+    // ───────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_containers_cleanup_config_defaults() {
+        let config: ContainersCleanupConfig = toml::from_str("").unwrap();
+
+        assert!(!config.enabled);
+        assert_eq!(config.interval_secs, 300);
+        assert_eq!(config.cleanup_delay_secs, 3600);
+        assert_eq!(config.batch_size, 100);
+        assert_eq!(config.max_duration_secs, 60);
+        assert!(!config.dry_run);
+    }
+
+    #[test]
+    fn test_containers_cleanup_config_custom_values() {
+        let config: ContainersCleanupConfig = toml::from_str(
+            r#"
+            enabled = true
+            interval_secs = 600
+            cleanup_delay_secs = 7200
+            batch_size = 50
+            max_duration_secs = 120
+            dry_run = true
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.enabled);
+        assert_eq!(config.interval_secs, 600);
+        assert_eq!(config.cleanup_delay_secs, 7200);
+        assert_eq!(config.batch_size, 50);
+        assert_eq!(config.max_duration_secs, 120);
+        assert!(config.dry_run);
+    }
+
+    #[test]
+    fn test_containers_cleanup_config_durations() {
+        let config = ContainersCleanupConfig {
+            enabled: true,
+            interval_secs: 300,
+            cleanup_delay_secs: 3600,
+            batch_size: 100,
+            max_duration_secs: 60,
+            dry_run: false,
+        };
+
+        assert_eq!(config.interval(), std::time::Duration::from_secs(300));
+        assert_eq!(config.cleanup_delay(), std::time::Duration::from_secs(3600));
+        assert_eq!(
+            config.max_duration(),
+            Some(std::time::Duration::from_secs(60))
+        );
+    }
+
+    #[test]
+    fn test_containers_cleanup_config_unlimited_duration() {
+        let config = ContainersCleanupConfig {
+            max_duration_secs: 0,
+            ..Default::default()
+        };
+
+        assert!(config.max_duration().is_none());
+    }
+
+    #[test]
+    fn test_features_config_with_containers_cleanup() {
+        let config: FeaturesConfig = toml::from_str(
+            r#"
+            [containers_cleanup]
+            enabled = true
+            interval_secs = 180
+            cleanup_delay_secs = 1800
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.containers_cleanup.enabled);
+        assert_eq!(config.containers_cleanup.interval_secs, 180);
+        assert_eq!(config.containers_cleanup.cleanup_delay_secs, 1800);
+        assert_eq!(config.containers_cleanup.batch_size, 100);
+        assert_eq!(config.containers_cleanup.max_duration_secs, 60);
     }
 
     // ───────────────────────────────────────────────────────────────────────────

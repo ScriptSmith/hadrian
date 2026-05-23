@@ -334,6 +334,17 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         });
     }
 
+    // Start the container cleanup worker if configured and a containers
+    // service + database are available. Hard-deletes `expired` / `deleted`
+    // container rows (and their captured files) past the configured delay so
+    // terminal rows don't accumulate forever.
+    if let (Some(db), Some(containers)) = (state.db.clone(), state.containers_service.clone()) {
+        let cleanup_config = config.features.containers_cleanup.clone();
+        tokio::spawn(async move {
+            jobs::start_containers_cleanup_worker(containers, db, cleanup_config).await;
+        });
+    }
+
     // Start model catalog sync worker if enabled
     {
         let catalog_config = config.features.model_catalog.clone();

@@ -311,6 +311,18 @@ pub trait ContainersRepo: Send + Sync {
     /// session registry.
     async fn mark_expired_idle(&self, now: DateTime<Utc>) -> DbResult<Vec<String>>;
 
+    /// Hard-`DELETE` terminal (`expired` / `deleted`) container rows whose
+    /// transition timestamp (`expires_at`) is at or before `cutoff`,
+    /// cascading their `container_files` rows. `expires_at` is stamped
+    /// when a row transitions out of `active`, so the caller measures the
+    /// retention delay from when the container became terminal.
+    ///
+    /// At most `limit` rows are removed per call so a backlog can't turn
+    /// into one long-running statement. Returns the ids that were
+    /// deleted, newest transition first.
+    async fn hard_delete_expired(&self, cutoff: DateTime<Utc>, limit: i64)
+    -> DbResult<Vec<String>>;
+
     /// Org-scoped delete of one `container_files` row. Returns true
     /// when a row was removed. Bytes inside the row are dropped along
     /// with the metadata.

@@ -500,6 +500,19 @@ impl ContainersService {
         Ok(self.repo().mark_expired_idle(now).await?)
     }
 
+    /// Hard-delete terminal (`expired` / `deleted`) containers whose
+    /// `expires_at` is at or before `cutoff`, cascading their
+    /// `container_files`. Called by the cleanup job. Returns the ids that
+    /// were removed so the caller can log/meter them. At most `limit`
+    /// rows are deleted per call.
+    pub async fn hard_delete_expired(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+        limit: i64,
+    ) -> ContainersServiceResult<Vec<String>> {
+        Ok(self.repo().hard_delete_expired(cutoff, limit).await?)
+    }
+
     /// Org-scoped delete of one container_file row. Returns
     /// `NotFound` when the row doesn't exist (or belongs to a
     /// different container / org).
