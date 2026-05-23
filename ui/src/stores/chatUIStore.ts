@@ -225,8 +225,8 @@ interface ChatUIState {
   compactMode: boolean;
 
   // --- Agent mode (shell tool + container) ---
-  /** Master toggle: attach the shell tool so the model can run commands. */
-  agentEnabled: boolean;
+  // The shell tool is enabled via the `agent` entry in `enabledTools`
+  // (ToolsBar); these fields configure the container it runs in.
   /** Provision a fresh container (`container_auto`) or attach an existing one. */
   agentContainerMode: "auto" | "reference";
   /** Container id to attach when `agentContainerMode === "reference"`. */
@@ -377,7 +377,6 @@ interface ChatUIActions {
   toggleCompactMode: () => void;
 
   // --- Agent mode setters ---
-  setAgentEnabled: (enabled: boolean) => void;
   setAgentContainerMode: (mode: "auto" | "reference") => void;
   setAgentContainerId: (id: string | null) => void;
   setAgentMemoryLimit: (value: string) => void;
@@ -448,7 +447,6 @@ const initialState: ChatUIState = {
   pendingPrompt: null,
   subAgentModel: null,
   compactMode: loadCompactMode(),
-  agentEnabled: false,
   agentContainerMode: "auto",
   agentContainerId: null,
   agentMemoryLimit: "",
@@ -749,7 +747,6 @@ export const useChatUIStore = create<ChatUIStore>((set) => ({
       return { compactMode: next };
     }),
 
-  setAgentEnabled: (enabled) => set({ agentEnabled: enabled }),
   setAgentContainerMode: (mode) => set({ agentContainerMode: mode }),
   setAgentContainerId: (id) => set({ agentContainerId: id }),
   setAgentMemoryLimit: (value) => set({ agentMemoryLimit: value }),
@@ -903,7 +900,6 @@ export const useMCPConfigModalOpen = () =>
   useChatUIStore((state: ChatUIState) => state.mcpConfigModalOpen);
 
 // --- Agent mode selectors ---
-export const useAgentEnabled = () => useChatUIStore((state: ChatUIState) => state.agentEnabled);
 export const useAgentContainerMode = () =>
   useChatUIStore((state: ChatUIState) => state.agentContainerMode);
 export const useAgentContainerId = () =>

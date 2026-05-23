@@ -1025,6 +1025,33 @@ export function useChat({
         const decoder = new TextDecoder();
         let content = "";
         let reasoningContent = "";
+        // Server-side multi-turn tracking. A single `/v1/responses` can carry
+        // several model turns (the gateway runs its own tool loop for shell /
+        // MCP). Each turn is a distinct reasoning item; when a new reasoning
+        // item id appears we flush the prior turn's reasoning+content as a
+        // completed round instead of overwriting it. `null` until the first
+        // reasoning item is seen.
+        let currentReasoningItemId: string | null = null;
+        const flushServerTurn = (nextItemId?: string) => {
+          if (!nextItemId) return;
+          if (currentReasoningItemId === null) {
+            currentReasoningItemId = nextItemId;
+            return;
+          }
+          if (nextItemId === currentReasoningItemId) return;
+          // New reasoning item → previous server turn finished. Commit it as a
+          // round so its reasoning isn't overwritten by the next turn.
+          const round: CompletedRound = {};
+          if (reasoningContent.trim()) round.reasoning = reasoningContent;
+          if (content.trim()) round.content = content;
+          if (round.reasoning || round.content) {
+            streamingStore.pushCompletedRound(storeKey, round);
+            reasoningContent = "";
+            content = "";
+            hasOutputText = false;
+          }
+          currentReasoningItemId = nextItemId;
+        };
         // Spec-compliant SSE parser — handles `\r\n`/`\r`/`\n`, multi-line
         // `data:` fields joined with `\n`, and dispatches events on blank
         // lines instead of every `data:` line.
@@ -1109,6 +1136,9 @@ export function useChat({
                 event.type === "response.reasoning_summary_text.delta") &&
               event.delta
             ) {
+              // A new reasoning item id means a new server-side turn — commit
+              // the prior turn before accumulating this one.
+              flushServerTurn(event.item_id);
               // Stream reasoning content (extended thinking)
               reasoningContent += event.delta;
               streamingStore.appendReasoningContent(storeKey, event.delta);
@@ -1117,6 +1147,7 @@ export function useChat({
                 event.type === "response.reasoning_summary_text.done") &&
               event.text
             ) {
+              flushServerTurn(event.item_id);
               // Final reasoning text
               reasoningContent = event.text;
               streamingStore.setReasoningContent(storeKey, reasoningContent);

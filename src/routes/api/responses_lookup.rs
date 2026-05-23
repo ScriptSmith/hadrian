@@ -135,17 +135,19 @@ fn resolve_store(state: &AppState) -> Result<&ResponsesStore, ApiError> {
     })
 }
 
-/// Resolve the caller's org or return 401. Both authenticated and
-/// auth-disabled flows reach this through the API middleware, which
-/// injects an `AuthenticatedRequest` carrying the synthetic default
-/// principal in anonymous-mode deployments. Reject when the middleware
-/// produced nothing — we can't safely scope without an org.
-fn require_caller_org(auth: Option<&Extension<AuthenticatedRequest>>) -> Result<Uuid, ApiError> {
+/// Resolve the caller's org, falling back to the deployment `default_org_id`
+/// (no-auth / anonymous dev mode) so response lookups work locally without
+/// credentials — same fallback the responses pipeline uses for usage.
+fn require_caller_org(
+    auth: Option<&Extension<AuthenticatedRequest>>,
+    default_org: Option<Uuid>,
+) -> Result<Uuid, ApiError> {
     auth.and_then(|Extension(a)| {
         a.api_key()
             .and_then(|k| k.org_id)
             .or_else(|| a.principal().org_id())
     })
+    .or(default_org)
     .ok_or_else(|| {
         ApiError::new(
             StatusCode::UNAUTHORIZED,
@@ -288,7 +290,7 @@ pub async fn api_v1_responses_get(
 ) -> Result<axum::response::Response, ApiError> {
     let store = resolve_store(&state)?;
     enforce_authz(authz.as_ref(), auth.as_ref(), "read").await?;
-    let org_id = require_caller_org(auth.as_ref())?;
+    let org_id = require_caller_org(auth.as_ref(), state.default_org_id)?;
 
     if query.stream.unwrap_or(false) {
         return stream_response_events(state.clone(), response_id, org_id, query.starting_after)
@@ -327,7 +329,7 @@ pub async fn api_v1_responses_cancel(
 ) -> Result<Json<WireResponse>, ApiError> {
     let store = resolve_store(&state)?;
     enforce_authz(authz.as_ref(), auth.as_ref(), "cancel").await?;
-    let org_id = require_caller_org(auth.as_ref())?;
+    let org_id = require_caller_org(auth.as_ref(), state.default_org_id)?;
     let record = store
         .cancel(&response_id, org_id)
         .await
@@ -521,7 +523,7 @@ pub async fn api_v1_responses_delete(
 ) -> Result<Json<DeleteResponse>, ApiError> {
     let store = resolve_store(&state)?;
     enforce_authz(authz.as_ref(), auth.as_ref(), "delete").await?;
-    let org_id = require_caller_org(auth.as_ref())?;
+    let org_id = require_caller_org(auth.as_ref(), state.default_org_id)?;
     let deleted = store
         .delete(&response_id, org_id)
         .await

@@ -45,6 +45,14 @@ interface ConversationSettingsModalProps {
   maxToolIterations?: number;
   /** Callback when max tool iterations changes */
   onMaxToolIterationsChange?: (iterations: number) => void;
+  /** Whether tool search / deferred tool loading is enabled */
+  toolSearchEnabled?: boolean;
+  /** Callback when tool search setting changes */
+  onToolSearchEnabledChange?: (enabled: boolean) => void;
+  /** Tool search ranker override */
+  toolSearchRanker?: "default" | "hybrid" | "semantic" | "lexical";
+  /** Callback when tool search ranker changes */
+  onToolSearchRankerChange?: (ranker: "default" | "hybrid" | "semantic" | "lexical") => void;
   /** Whether to capture raw SSE events for debugging */
   captureRawSSEEvents?: boolean;
   /** Callback when SSE capture setting changes */
@@ -80,6 +88,10 @@ export function ConversationSettingsModal({
   onClientSideRAGChange,
   maxToolIterations = 25,
   onMaxToolIterationsChange,
+  toolSearchEnabled = false,
+  onToolSearchEnabledChange,
+  toolSearchRanker = "default",
+  onToolSearchRankerChange,
   captureRawSSEEvents,
   onCaptureRawSSEEventsChange,
   ttsVoice = DEFAULT_TTS_VOICE,
@@ -347,7 +359,9 @@ export function ConversationSettingsModal({
         )}
 
         {/* Advanced Section */}
-        {(onMaxToolIterationsChange || onCaptureRawSSEEventsChange) && (
+        {(onMaxToolIterationsChange ||
+          onCaptureRawSSEEventsChange ||
+          onToolSearchEnabledChange) && (
           <div className="space-y-3 mb-6">
             <div>
               <h3 className="text-sm font-medium mb-1">Advanced</h3>
@@ -356,6 +370,36 @@ export function ConversationSettingsModal({
               </p>
             </div>
             <div className="rounded-lg border p-4 space-y-4">
+              {onToolSearchEnabledChange && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-sm">Tool search</span>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Let the model search for tools and load them on demand. Keeps context small
+                        when many MCP tools are attached.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={toolSearchEnabled}
+                      onChange={(e) => onToolSearchEnabledChange(e.target.checked)}
+                      aria-label="Enable tool search"
+                    />
+                  </div>
+                  {toolSearchEnabled && onToolSearchRankerChange && (
+                    <Select<"default" | "hybrid" | "semantic" | "lexical">
+                      value={toolSearchRanker}
+                      onChange={(v) => onToolSearchRankerChange(v ?? "default")}
+                      options={[
+                        { value: "default", label: "Ranker: Default" },
+                        { value: "hybrid", label: "Ranker: Hybrid" },
+                        { value: "semantic", label: "Ranker: Semantic" },
+                        { value: "lexical", label: "Ranker: Lexical" },
+                      ]}
+                    />
+                  )}
+                </div>
+              )}
               {onMaxToolIterationsChange && (
                 <Slider
                   label="Max tool iterations"

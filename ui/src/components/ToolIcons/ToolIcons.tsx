@@ -5,7 +5,16 @@
  * and ArtifactThumbnail for consistent tool identification.
  */
 
-import { FileSearch, Globe, BarChart3, Wrench, Bot, Plug, Download } from "lucide-react";
+import {
+  FileSearch,
+  Globe,
+  BarChart3,
+  Wrench,
+  Users,
+  Plug,
+  Download,
+  SquareTerminal,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 /** Python icon - "Py" text in a rounded box */
@@ -197,7 +206,9 @@ export const TOOL_ICON_MAP: Record<string, ToolIconComponent> = {
   web_fetch: Download,
   wikipedia: WikipediaIcon,
   wikidata: WikidataIcon,
-  sub_agent: Bot,
+  agent: SquareTerminal,
+  shell: SquareTerminal,
+  sub_agent: Users,
   mcp: Plug,
   display_artifacts: Wrench,
 };
@@ -220,7 +231,9 @@ export const TOOL_SHORT_NAMES: Record<string, string> = {
   web_fetch: "Fetch",
   wikipedia: "Wikipedia",
   wikidata: "Wikidata",
-  sub_agent: "Agent",
+  agent: "Agent",
+  shell: "Shell",
+  sub_agent: "Sub-agent",
   mcp: "MCP",
   display_artifacts: "Display",
 };
@@ -247,7 +260,9 @@ const TOOL_STATUS_LABELS: Record<string, string> = {
   web_fetch: "Fetching URL",
   wikipedia: "Searching Wikipedia",
   wikidata: "Querying Wikidata",
-  sub_agent: "Running agent",
+  agent: "Running command",
+  shell: "Running command",
+  sub_agent: "Running sub-agent",
   mcp: "Calling tool",
 };
 

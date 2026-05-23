@@ -236,15 +236,27 @@ fn build_network_policy(allow_hosts: &[String]) -> NetworkPolicy {
     // Egress is the only thing this allowlist gates. We don't publish
     // inbound ports for shell-tool VMs, so denying ingress is benign
     // (avoids the extra `Action` import path).
-    let policy = NetworkPolicy::builder().default_deny().egress(|e| {
-        if !suffixes.is_empty() {
-            e.allow_domain_suffixes(suffixes.iter().cloned());
-        }
-        if !domains.is_empty() {
-            e.allow_domains(domains.iter().cloned());
-        }
-        e
-    });
+    //
+    // The `Host` rule on :53 is required for the SAME reason as the `*`
+    // branch above: the guest resolves these domains through the per-sandbox
+    // gateway resolver, which `default_deny` (and `public_only`) classify as
+    // `Host` and refuse — so without it DNS for `allowed_domains` fails and
+    // the domains are unreachable even though the policy "allows" them. The
+    // SDK's own `public_only_preset_denies_host_gateway` test confirms the
+    // gateway is denied by default. This opens DNS to the gateway only, not
+    // any other private/LAN egress.
+    let policy = NetworkPolicy::builder()
+        .default_deny()
+        .egress(|e| e.allow_host().udp().tcp().port(53))
+        .egress(|e| {
+            if !suffixes.is_empty() {
+                e.allow_domain_suffixes(suffixes.iter().cloned());
+            }
+            if !domains.is_empty() {
+                e.allow_domains(domains.iter().cloned());
+            }
+            e
+        });
     match policy.build() {
         Ok(p) => p,
         Err(err) => {

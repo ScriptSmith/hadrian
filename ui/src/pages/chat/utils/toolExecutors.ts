@@ -2786,11 +2786,19 @@ export const TOOL_METADATA: ToolMetadata[] = [
     implemented: true,
   },
   {
-    id: "sub_agent",
-    name: "Sub-Agent",
+    id: "agent",
+    name: "Agent (Shell)",
     description:
-      "Delegate investigative tasks to a separate AI agent. Best for research, analysis, or focused subtasks that benefit from isolated context.",
-    icon: "Bot",
+      "Run shell commands in a persistent server-side container. Files persist across turns in /mnt/data; create a fresh container or reuse an existing one. Configure the container in this tool's settings.",
+    icon: "SquareTerminal",
+    implemented: true,
+  },
+  {
+    id: "sub_agent",
+    name: "Sub-agent",
+    description:
+      "Delegate a focused subtask to a separate model that runs its own tool loop and reports back. Unlike the Agent (Shell) tool, this spawns a nested LLM with isolated context — it does not run shell commands itself. Best for research and analysis.",
+    icon: "Users",
     implemented: true,
   },
   {

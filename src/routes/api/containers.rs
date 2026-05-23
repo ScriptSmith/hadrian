@@ -252,12 +252,20 @@ fn resolve_service(state: &AppState) -> Result<&ContainersService, ApiError> {
     })
 }
 
-fn require_caller_org(auth: Option<&Extension<AuthenticatedRequest>>) -> Result<Uuid, ApiError> {
+/// Resolve the org the request operates in. Falls back to the deployment's
+/// `default_org_id` (set in no-auth / anonymous dev mode) so the same
+/// endpoints work locally without credentials — mirroring how the responses
+/// pipeline attributes anonymous usage to the default org.
+fn require_caller_org(
+    auth: Option<&Extension<AuthenticatedRequest>>,
+    default_org: Option<Uuid>,
+) -> Result<Uuid, ApiError> {
     auth.and_then(|Extension(a)| {
         a.api_key()
             .and_then(|k| k.org_id)
             .or_else(|| a.principal().org_id())
     })
+    .or(default_org)
     .ok_or_else(|| {
         ApiError::new(
             StatusCode::UNAUTHORIZED,
@@ -450,7 +458,7 @@ pub async fn api_v1_containers_create(
 ) -> Result<Json<WireContainer>, ApiError> {
     let svc = resolve_service(&state)?;
     enforce_authz(authz.as_ref(), auth.as_ref(), "write").await?;
-    let org_id = require_caller_org(auth.as_ref())?;
+    let org_id = require_caller_org(auth.as_ref(), state.default_org_id)?;
 
     let owner = crate::services::responses_pipeline::derive_response_owner(
         &state,
@@ -709,7 +717,7 @@ pub async fn api_v1_containers_list(
 ) -> Result<Json<WireList<WireContainer>>, ApiError> {
     let svc = resolve_service(&state)?;
     enforce_authz(authz.as_ref(), auth.as_ref(), "read").await?;
-    let org_id = require_caller_org(auth.as_ref())?;
+    let org_id = require_caller_org(auth.as_ref(), state.default_org_id)?;
 
     let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let mut rows = svc
@@ -753,7 +761,7 @@ pub async fn api_v1_containers_get(
 ) -> Result<Json<WireContainer>, ApiError> {
     let svc = resolve_service(&state)?;
     enforce_authz(authz.as_ref(), auth.as_ref(), "read").await?;
-    let org_id = require_caller_org(auth.as_ref())?;
+    let org_id = require_caller_org(auth.as_ref(), state.default_org_id)?;
     let record = svc
         .get_container(&container_id, org_id)
         .await
@@ -788,7 +796,7 @@ pub async fn api_v1_containers_list_files(
 ) -> Result<Json<WireList<WireContainerFile>>, ApiError> {
     let svc = resolve_service(&state)?;
     enforce_authz(authz.as_ref(), auth.as_ref(), "read").await?;
-    let org_id = require_caller_org(auth.as_ref())?;
+    let org_id = require_caller_org(auth.as_ref(), state.default_org_id)?;
 
     // 404 the listing when the container itself isn't reachable from
     // this org. Without this an enumerator could distinguish "no
@@ -841,7 +849,7 @@ pub async fn api_v1_containers_file_get(
 ) -> Result<Json<WireContainerFile>, ApiError> {
     let svc = resolve_service(&state)?;
     enforce_authz(authz.as_ref(), auth.as_ref(), "read").await?;
-    let org_id = require_caller_org(auth.as_ref())?;
+    let org_id = require_caller_org(auth.as_ref(), state.default_org_id)?;
     let record = svc
         .get_file(&file_id, org_id)
         .await
@@ -886,7 +894,7 @@ pub async fn api_v1_containers_delete(
 ) -> Result<StatusCode, ApiError> {
     let svc = resolve_service(&state)?;
     enforce_authz(authz.as_ref(), auth.as_ref(), "delete").await?;
-    let org_id = require_caller_org(auth.as_ref())?;
+    let org_id = require_caller_org(auth.as_ref(), state.default_org_id)?;
 
     // Mark the row deleted first so a concurrent reuse attempt fails
     // the active-status check before we evict the session. The
@@ -942,7 +950,7 @@ pub async fn api_v1_containers_file_content(
 ) -> Result<Response<Body>, ApiError> {
     let svc = resolve_service(&state)?;
     enforce_authz(authz.as_ref(), auth.as_ref(), "read").await?;
-    let org_id = require_caller_org(auth.as_ref())?;
+    let org_id = require_caller_org(auth.as_ref(), state.default_org_id)?;
 
     // Two-step fetch so we get the content-type + container check from
     // the row before reading bytes — keeps the 404 path cheap.
@@ -1034,7 +1042,7 @@ pub async fn api_v1_containers_file_upload(
 ) -> Result<Json<WireContainerFile>, ApiError> {
     let svc = resolve_service(&state)?;
     enforce_authz(authz.as_ref(), auth.as_ref(), "write").await?;
-    let org_id = require_caller_org(auth.as_ref())?;
+    let org_id = require_caller_org(auth.as_ref(), state.default_org_id)?;
 
     // 404 the upload up front when the container isn't reachable.
     let container = svc
@@ -1306,7 +1314,7 @@ pub async fn api_v1_containers_file_delete(
 ) -> Result<StatusCode, ApiError> {
     let svc = resolve_service(&state)?;
     enforce_authz(authz.as_ref(), auth.as_ref(), "delete").await?;
-    let org_id = require_caller_org(auth.as_ref())?;
+    let org_id = require_caller_org(auth.as_ref(), state.default_org_id)?;
     svc.delete_file(&container_id, &file_id, org_id)
         .await
         .map_err(map_service_err)?;

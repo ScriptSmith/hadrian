@@ -14,6 +14,7 @@ import type { VectorStoreOwnerType } from "@/api/generated/types.gen";
 import { Button } from "@/components/Button/Button";
 import { DataFileUpload } from "@/components/DataFileUpload";
 import { ModelPicker, type ModelInfo } from "@/components/ModelPicker/ModelPicker";
+import { AgentToolSettings } from "@/components/AgentToolSettings/AgentToolSettings";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/Popover/Popover";
 import { getToolIcon } from "@/components/ToolIcons";
 import { TOOL_METADATA, type ToolMetadata } from "@/pages/chat/utils/toolExecutors";
@@ -532,6 +533,11 @@ export function ToolsBar({
             }}
             disabled={disabled}
           />
+        );
+      }
+      if (toolId === "agent") {
+        return (
+          <AgentToolSettings disabled={disabled} onConfigured={() => ensureEnabled("agent")} />
         );
       }
       if (toolId === "mcp") {

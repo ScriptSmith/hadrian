@@ -21,6 +21,8 @@ import {
   useTTSSpeed,
   useWidescreenMode,
   useSubAgentModel,
+  useToolSearchEnabled,
+  useToolSearchRanker,
   useMCPConfigModalOpen,
 } from "@/stores/chatUIStore";
 import {
@@ -121,6 +123,8 @@ export function ChatView({
   const ttsSpeed = useTTSSpeed();
   const widescreenMode = useWidescreenMode();
   const subAgentModel = useSubAgentModel();
+  const toolSearchEnabled = useToolSearchEnabled();
+  const toolSearchRanker = useToolSearchRanker();
   const mcpConfigModalOpen = useMCPConfigModalOpen();
   const [mcpPrefill, setMcpPrefill] = useState<MCPServerPrefill | null>(null);
 
@@ -176,6 +180,8 @@ export function ChatView({
     setTTSSpeed,
     setSubAgentModel,
     setPendingPrompt,
+    setToolSearchEnabled,
+    setToolSearchRanker,
   } = useChatUIStore();
 
   // Stable callback for instance parameter changes
@@ -304,6 +310,10 @@ export function ChatView({
         onClientSideRAGChange={setClientSideRAG}
         maxToolIterations={maxToolIterations}
         onMaxToolIterationsChange={setMaxToolIterations}
+        toolSearchEnabled={toolSearchEnabled}
+        onToolSearchEnabledChange={setToolSearchEnabled}
+        toolSearchRanker={toolSearchRanker}
+        onToolSearchRankerChange={setToolSearchRanker}
         captureRawSSEEvents={captureRawSSEEvents}
         onCaptureRawSSEEventsChange={setCaptureRawSSEEvents}
         ttsVoice={ttsVoice}

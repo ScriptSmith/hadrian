@@ -2,12 +2,10 @@ import type { Meta, StoryObj } from "@storybook/react";
 import { http, HttpResponse } from "msw";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { AgentButton } from "./AgentButton";
+import { AgentToolSettings } from "./AgentToolSettings";
 import { useChatUIStore } from "@/stores/chatUIStore";
 
-const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: false } },
-});
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
 const now = Math.floor(Date.now() / 1000);
 const mockContainers = {
@@ -28,23 +26,20 @@ const mockContainers = {
   has_more: false,
 };
 
-/** Reset agent state between stories so toggles start predictable. */
-function Reset({ enabled }: { enabled: boolean }) {
+function Reset({ mode }: { mode: "auto" | "reference" }) {
   useEffect(() => {
-    useChatUIStore.getState().setAgentEnabled(enabled);
-    useChatUIStore.getState().setAgentContainerMode("auto");
-    useChatUIStore.getState().setToolSearchEnabled(false);
-  }, [enabled]);
+    useChatUIStore.getState().setAgentContainerMode(mode);
+  }, [mode]);
   return null;
 }
 
-const meta: Meta<typeof AgentButton> = {
-  title: "Chat/AgentButton",
-  component: AgentButton,
+const meta: Meta<typeof AgentToolSettings> = {
+  title: "Chat/AgentToolSettings",
+  component: AgentToolSettings,
   decorators: [
     (Story) => (
       <QueryClientProvider client={queryClient}>
-        <div className="p-8">
+        <div className="p-4 max-w-sm">
           <Story />
         </div>
       </QueryClientProvider>
@@ -58,22 +53,22 @@ const meta: Meta<typeof AgentButton> = {
 };
 
 export default meta;
-type Story = StoryObj<typeof AgentButton>;
+type Story = StoryObj<typeof AgentToolSettings>;
 
-export const Disabled: Story = {
+export const NewContainer: Story = {
   render: (args) => (
     <>
-      <Reset enabled={false} />
-      <AgentButton {...args} />
+      <Reset mode="auto" />
+      <AgentToolSettings {...args} />
     </>
   ),
 };
 
-export const Enabled: Story = {
+export const AttachExisting: Story = {
   render: (args) => (
     <>
-      <Reset enabled={true} />
-      <AgentButton {...args} />
+      <Reset mode="reference" />
+      <AgentToolSettings {...args} />
     </>
   ),
 };

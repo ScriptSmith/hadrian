@@ -29,7 +29,6 @@ import {
   useMaxToolIterations,
   useCaptureRawSSEEvents,
   useSubAgentModel,
-  useAgentEnabled,
   useAgentContainerMode,
   useAgentContainerId,
   useAgentMemoryLimit,
@@ -74,7 +73,6 @@ export default function ChatPage() {
   const maxToolIterations = useMaxToolIterations();
   const captureRawSSEEvents = useCaptureRawSSEEvents();
   const subAgentModel = useSubAgentModel();
-  const agentEnabled = useAgentEnabled();
   const agentContainerMode = useAgentContainerMode();
   const agentContainerId = useAgentContainerId();
   const agentMemoryLimit = useAgentMemoryLimit();
@@ -85,7 +83,8 @@ export default function ChatPage() {
 
   const agentConfig = useMemo(
     () => ({
-      enabled: agentEnabled,
+      // The shell tool is enabled via the `agent` entry in the tools bar.
+      enabled: enabledTools.includes("agent"),
       containerMode: agentContainerMode,
       containerId: agentContainerId,
       memoryLimit: agentMemoryLimit,
@@ -95,7 +94,7 @@ export default function ChatPage() {
       toolSearchRanker,
     }),
     [
-      agentEnabled,
+      enabledTools,
       agentContainerMode,
       agentContainerId,
       agentMemoryLimit,
