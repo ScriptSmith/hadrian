@@ -8,7 +8,9 @@ import { Callout } from "fumadocs-ui/components/callout";
 Hadrian's `/v1/responses` accepts OpenAI's [`mcp` tool](https://developers.openai.com/api/docs/guides/tools-connectors-mcp) — `{"type": "mcp", server_url, server_label, authorization, ...}` — so a model can call tools exposed by any remote Model Context Protocol server (Atlassian, Notion, GitHub, HuggingFace, Vercel, …).
 
 <Callout type="info">
-  This page describes the **server-side** `mcp` tool on `/v1/responses`. For the browser-based MCP client in the chat UI, see [MCP Integration](/docs/features/mcp). For coding agents bridged via MCP, see [Agents via MCP](/docs/features/mcp-agents).
+  This page describes the **server-side** `mcp` tool on `/v1/responses`. For the browser-based MCP
+  client in the chat UI, see [MCP Integration](/docs/features/mcp). For coding agents bridged via
+  MCP, see [Agents via MCP](/docs/features/mcp-agents).
 </Callout>
 
 ## Modes
@@ -71,20 +73,20 @@ The caller obtains the bearer token out-of-band (their own OAuth flow against At
 
 ### Field reference
 
-| Field                | Type                          | Required | Notes                                                                                                              |
-| -------------------- | ----------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
-| `type`               | `"mcp"`                       | yes      |                                                                                                                    |
-| `server_label`       | string                        | yes      | Stable identifier surfaced in `mcp_list_tools` / `mcp_call` items.                                                 |
-| `server_url`         | string                        | one of   | URL of the remote MCP server (Streamable HTTP). Mutually exclusive with `connector_id`.                            |
-| `connector_id`       | string                        | one of   | OpenAI first-party connector id (e.g. `connector_googlecalendar`). Requires `allow_connector_ids = true`.          |
-| `server_description` | string                        |          | Human-readable description surfaced to the model.                                                                  |
-| `authorization`      | string                        |          | Bearer or OAuth access token. Caller-supplied, never persisted.                                                    |
-| `headers`            | `Record<string, string>`      |          | Extra HTTP headers sent with every JSON-RPC call (region / workspace selectors).                                   |
-| `require_approval`   | `"always"` \| `"never"` \| object |      | Object form mirrors OpenAI's `MCPToolApprovalFilter`: `{ "always": { "tool_names": ["x"] }, "never": { "tool_names": ["y"] } }` — gate the tools under `always`, exempt those under `never`. |
-| `allowed_tools`      | `string[]` or object          |          | Whitelist of tool names. Object form: `{ tool_names: ["..."] }`.                                                   |
-| `defer_loading`      | boolean                       |          | Discover this server's tools via [tool search](#tool-search-deferred-tools) rather than loading them all into the prompt. Under `hadrian_hosted`, Hadrian runs the search locally (works behind any provider). |
-| `defer_loading_passthrough` | boolean                |          | **Hadrian extension.** With `defer_loading`, forward the flag to the upstream's native tool search instead of running Hadrian-side search. OpenAI/Azure only; rejected (400 `mcp_defer_loading_passthrough_unsupported`) on other providers. |
-| `call_timeout_secs`  | integer                       |          | **Hadrian extension.** Upper bound, in seconds, on a single `tools/call` round-trip under `hadrian_hosted`. Overrides the `[features.mcp].call_timeout_secs` deployment default (300s). On expiry the `mcp_call` terminates with `status="incomplete"` and a timeout `error`. Ignored under `passthrough_openai`. |
+| Field                       | Type                              | Required | Notes                                                                                                                                                                                                                                                                                                             |
+| --------------------------- | --------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`                      | `"mcp"`                           | yes      |                                                                                                                                                                                                                                                                                                                   |
+| `server_label`              | string                            | yes      | Stable identifier surfaced in `mcp_list_tools` / `mcp_call` items.                                                                                                                                                                                                                                                |
+| `server_url`                | string                            | one of   | URL of the remote MCP server (Streamable HTTP). Mutually exclusive with `connector_id`.                                                                                                                                                                                                                           |
+| `connector_id`              | string                            | one of   | OpenAI first-party connector id (e.g. `connector_googlecalendar`). Requires `allow_connector_ids = true`.                                                                                                                                                                                                         |
+| `server_description`        | string                            |          | Human-readable description surfaced to the model.                                                                                                                                                                                                                                                                 |
+| `authorization`             | string                            |          | Bearer or OAuth access token. Caller-supplied, never persisted.                                                                                                                                                                                                                                                   |
+| `headers`                   | `Record<string, string>`          |          | Extra HTTP headers sent with every JSON-RPC call (region / workspace selectors).                                                                                                                                                                                                                                  |
+| `require_approval`          | `"always"` \| `"never"` \| object |          | Object form mirrors OpenAI's `MCPToolApprovalFilter`: `{ "always": { "tool_names": ["x"] }, "never": { "tool_names": ["y"] } }` — gate the tools under `always`, exempt those under `never`.                                                                                                                      |
+| `allowed_tools`             | `string[]` or object              |          | Whitelist of tool names. Object form: `{ tool_names: ["..."] }`.                                                                                                                                                                                                                                                  |
+| `defer_loading`             | boolean                           |          | Discover this server's tools via [tool search](#tool-search-deferred-tools) rather than loading them all into the prompt. Under `hadrian_hosted`, Hadrian runs the search locally (works behind any provider).                                                                                                    |
+| `defer_loading_passthrough` | boolean                           |          | **Hadrian extension.** With `defer_loading`, forward the flag to the upstream's native tool search instead of running Hadrian-side search. OpenAI/Azure only; rejected (400 `mcp_defer_loading_passthrough_unsupported`) on other providers.                                                                      |
+| `call_timeout_secs`         | integer                           |          | **Hadrian extension.** Upper bound, in seconds, on a single `tools/call` round-trip under `hadrian_hosted`. Overrides the `[features.mcp].call_timeout_secs` deployment default (300s). On expiry the `mcp_call` terminates with `status="incomplete"` and a timeout `error`. Ignored under `passthrough_openai`. |
 
 ### Item types
 
@@ -144,11 +146,11 @@ Under `hadrian_hosted`, **Hadrian runs the tool search itself**, so deferral wor
 
 The ranking strategy is set by `[features.mcp.tool_search]` and can be overridden per request via a `tool_search` tool entry's Hadrian-extension `ranker` field (request value wins):
 
-| Strategy   | Behavior                                                                                  |
-| ---------- | ----------------------------------------------------------------------------------------- |
-| `hybrid`   | **Default.** Fuses semantic + lexical relevance (Reciprocal Rank Fusion).                 |
-| `semantic` | Embedding cosine similarity only.                                                         |
-| `lexical`  | Token/substring overlap. No embedding provider required.                                  |
+| Strategy   | Behavior                                                                  |
+| ---------- | ------------------------------------------------------------------------- |
+| `hybrid`   | **Default.** Fuses semantic + lexical relevance (Reciprocal Rank Fusion). |
+| `semantic` | Embedding cosine similarity only.                                         |
+| `lexical`  | Token/substring overlap. No embedding provider required.                  |
 
 ```toml
 [features.mcp.tool_search]
@@ -173,30 +175,30 @@ To opt out of Hadrian-side search and use the upstream's native tool search inst
 
 The gateway validates the `mcp` tool entry before dispatching the request. Failures return HTTP 400 with a stable `error_code`:
 
-| Error code                             | Cause                                                                                                                                                          |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mcp_disabled`                         | A request includes an `mcp` tool but `[features.mcp].enabled = false` (or the section is missing).                                                             |
-| `mcp_invalid_target`                   | Neither `server_url` nor `connector_id` is set, or both are.                                                                                                   |
+| Error code                             | Cause                                                                                                                                                            |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mcp_disabled`                         | A request includes an `mcp` tool but `[features.mcp].enabled = false` (or the section is missing).                                                               |
+| `mcp_invalid_target`                   | Neither `server_url` nor `connector_id` is set, or both are.                                                                                                     |
 | `mcp_connector_id_not_allowed`         | `connector_id` is used but `[features.mcp].allow_connector_ids = false`, or `mode = hadrian_hosted` (which can't reach OpenAI's first-party connector registry). |
-| `mcp_server_url_not_allowed`           | `server_url` is not in `[features.mcp].allowed_server_urls`.                                                                                                   |
-| `mcp_passthrough_unsupported_provider` | `mode = passthrough_openai` but the resolved provider is not OpenAI/Azure (Anthropic, Bedrock, …).                                                             |
-| `mcp_hadrian_hosted_not_implemented`   | `mode = hadrian_hosted` but the gateway was built without the `mcp` cargo feature (e.g. `tiny` / `minimal` profiles).                                          |
+| `mcp_server_url_not_allowed`           | `server_url` is not in `[features.mcp].allowed_server_urls`.                                                                                                     |
+| `mcp_passthrough_unsupported_provider` | `mode = passthrough_openai` but the resolved provider is not OpenAI/Azure (Anthropic, Bedrock, …).                                                               |
+| `mcp_hadrian_hosted_not_implemented`   | `mode = hadrian_hosted` but the gateway was built without the `mcp` cargo feature (e.g. `tiny` / `minimal` profiles).                                            |
 
 And the approval-resume errors (HTTP 400 for caller-shape problems, 502 for upstream failures):
 
-| Error code                          | Status | Cause                                                                                                                       |
-| ----------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `mcp_resume_missing_tool_binding`   | 400    | An `mcp_approval_response` with `approve: true` arrived but the request omits the `mcp` tool entry for the parked server.   |
-| `mcp_resume_call_failed`            | 502    | Resumed call to the upstream MCP server failed (network, 5xx, 401).                                                         |
-| `mcp_resume_repo_error`             | 502    | Approvals-table lookup or delete failed.                                                                                    |
+| Error code                        | Status | Cause                                                                                                                     |
+| --------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `mcp_resume_missing_tool_binding` | 400    | An `mcp_approval_response` with `approve: true` arrived but the request omits the `mcp` tool entry for the parked server. |
+| `mcp_resume_call_failed`          | 502    | Resumed call to the upstream MCP server failed (network, 5xx, 401).                                                       |
+| `mcp_resume_repo_error`           | 502    | Approvals-table lookup or delete failed.                                                                                  |
 
 And HTTP 502 from the upstream MCP dependency during the rewrite:
 
-| Error code                  | Cause                                                                                              |
-| --------------------------- | -------------------------------------------------------------------------------------------------- |
-| `mcp_list_tools_failed`     | `hadrian_hosted` rewrite couldn't reach the remote MCP server's `tools/list` endpoint.             |
-| `mcp_duplicate_server_label` | Two `mcp` tool entries on one request share a `server_label`; exactly one per label is allowed.    |
-| `mcp_missing_server_url`    | `hadrian_hosted` requires `server_url` on every `mcp` tool entry (`connector_id` is rejected).     |
+| Error code                   | Cause                                                                                           |
+| ---------------------------- | ----------------------------------------------------------------------------------------------- |
+| `mcp_list_tools_failed`      | `hadrian_hosted` rewrite couldn't reach the remote MCP server's `tools/list` endpoint.          |
+| `mcp_duplicate_server_label` | Two `mcp` tool entries on one request share a `server_label`; exactly one per label is allowed. |
+| `mcp_missing_server_url`     | `hadrian_hosted` requires `server_url` on every `mcp` tool entry (`connector_id` is rejected).  |
 
 ## OpenAI connectors (`connector_id`)
 
@@ -234,14 +236,15 @@ This mirrors OpenAI's own contract — the `authorization` field is opaque from 
   closed**: if the gateway can't park the call it refuses to run it and returns a failed `mcp_call`
   instead. Parking requires all of:
 
-  - a configured database (`mcp_pending_approvals` lives in Postgres/SQLite — the `tiny` profile has no DB),
-  - `store: true` on the request (a parked call must be persisted so it can be resumed), and
-  - an authenticated request with an organization scope (anonymous requests have nowhere to park).
+- a configured database (`mcp_pending_approvals` lives in Postgres/SQLite — the `tiny` profile has no DB),
+- `store: true` on the request (a parked call must be persisted so it can be resumed), and
+- an authenticated request with an organization scope (anonymous requests have nowhere to park).
 
-  So a "just add an `mcp` tool" request with none of the above will see every call fail with an
-  explanatory error. For unattended / non-sensitive servers, set `require_approval: "never"` (or list
-  the safe tools under the object form's `never`). Only opt into gating when you have a DB, send
-  `store: true`, and have a UI ready to collect the `mcp_approval_response`.
+So a "just add an `mcp` tool" request with none of the above will see every call fail with an
+explanatory error. For unattended / non-sensitive servers, set `require_approval: "never"` (or list
+the safe tools under the object form's `never`). Only opt into gating when you have a DB, send
+`store: true`, and have a UI ready to collect the `mcp_approval_response`.
+
 </Callout>
 
 When `require_approval` matches a call, the upstream emits an `mcp_approval_request` item. The next `/v1/responses` request must carry an `mcp_approval_response` **input** item with the matching `approval_request_id`:
@@ -274,12 +277,14 @@ The resume request **must include the matching `mcp` tool entry** with the `auth
 ```json
 {
   "previous_response_id": "resp_xyz",
-  "tools": [{
-    "type": "mcp",
-    "server_label": "atlassian",
-    "server_url": "https://mcp.atlassian.com/v1/mcp",
-    "authorization": "Bearer ya29..."
-  }],
+  "tools": [
+    {
+      "type": "mcp",
+      "server_label": "atlassian",
+      "server_url": "https://mcp.atlassian.com/v1/mcp",
+      "authorization": "Bearer ya29..."
+    }
+  ],
   "input": [
     { "type": "mcp_approval_response", "approval_request_id": "mcpr_a1b2c3", "approve": true }
   ]

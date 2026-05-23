@@ -6,14 +6,14 @@ description: Where Hadrian stores file bytes — database, local filesystem, or 
 import { Callout } from "fumadocs-ui/components/callout";
 
 The `[storage]` section controls where Hadrian persists the **bytes** of files. File
-*metadata* (ids, names, sizes, ownership) always lives in the database; this section only
+_metadata_ (ids, names, sizes, ownership) always lives in the database; this section only
 governs where the raw content is written.
 
 There are two independent storage targets:
 
-| Section                     | Holds                                                                                          |
-| --------------------------- | ---------------------------------------------------------------------------------------------- |
-| `[storage.files]`           | Files API objects (`/v1/files`) — the same resource that backs Knowledge Bases and Responses-API `input_file` references. |
+| Section                     | Holds                                                                                                                                          |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[storage.files]`           | Files API objects (`/v1/files`) — the same resource that backs Knowledge Bases and Responses-API `input_file` references.                      |
 | `[storage.container_files]` | Container output files — artifacts the agentic shell tool captures under `/mnt/data` and serves from `/v1/containers/{id}/files/{id}/content`. |
 
 Both default to the `database` backend and are configured the same way, so you can keep
@@ -27,17 +27,17 @@ object storage.
   `[storage.files]` and `s3` for `[storage.container_files]`.
 </Callout>
 
-| Backend      | Where bytes live                                  | Best for                                              |
-| ------------ | ------------------------------------------------- | ----------------------------------------------------- |
-| `database`   | A `BYTEA` / `BLOB` column on the metadata row     | Small deployments, quick start. Scales poorly for large or numerous files. |
-| `filesystem` | Local disk under a configured directory           | Single-node deployments with large files.             |
-| `s3`         | An S3-compatible bucket                           | Production, multi-node deployments. Requires the `s3-storage` build feature. |
+| Backend      | Where bytes live                              | Best for                                                                     |
+| ------------ | --------------------------------------------- | ---------------------------------------------------------------------------- |
+| `database`   | A `BYTEA` / `BLOB` column on the metadata row | Small deployments, quick start. Scales poorly for large or numerous files.   |
+| `filesystem` | Local disk under a configured directory       | Single-node deployments with large files.                                    |
+| `s3`         | An S3-compatible bucket                       | Production, multi-node deployments. Requires the `s3-storage` build feature. |
 
 <Callout type="warn">
-  The `database` backend stores file bytes directly in the database. This is simple but
-  inflates database size and backup time, and bottlenecks large reads/writes on the database
-  connection pool. For container artifacts in particular — which can be large and numerous —
-  prefer `filesystem` or `s3` in production.
+  The `database` backend stores file bytes directly in the database. This is simple but inflates
+  database size and backup time, and bottlenecks large reads/writes on the database connection pool.
+  For container artifacts in particular — which can be large and numerous — prefer `filesystem` or
+  `s3` in production.
 </Callout>
 
 ## Database backend (default)
@@ -68,17 +68,17 @@ file_mode = 384     # decimal for 0o600; Unix file permissions for new files
 dir_mode = 448      # decimal for 0o700; Unix directory permissions
 ```
 
-| Setting      | Type   | Default      | Description                                                                  |
-| ------------ | ------ | ------------ | ---------------------------------------------------------------------------- |
-| `path`       | string | _(required)_ | Base directory for stored files.                                             |
-| `create_dir` | bool   | `true`       | Create `path` on startup if it does not exist.                               |
+| Setting      | Type   | Default       | Description                                                                             |
+| ------------ | ------ | ------------- | --------------------------------------------------------------------------------------- |
+| `path`       | string | _(required)_  | Base directory for stored files.                                                        |
+| `create_dir` | bool   | `true`        | Create `path` on startup if it does not exist.                                          |
 | `file_mode`  | int    | `384` (0o600) | Unix permission bits for new files. TOML has no octal literal — give the decimal value. |
-| `dir_mode`   | int    | `448` (0o700) | Unix permission bits for the created directory.                              |
+| `dir_mode`   | int    | `448` (0o700) | Unix permission bits for the created directory.                                         |
 
 <Callout type="info">
-  Reads, deletes, and existence checks are confined to `path`: any stored reference that
-  resolves outside the configured root (via `..`, an absolute path, or a symlink) is rejected.
-  A tampered database row cannot be used to read or delete arbitrary files on the host.
+  Reads, deletes, and existence checks are confined to `path`: any stored reference that resolves
+  outside the configured root (via `..`, an absolute path, or a symlink) is rejected. A tampered
+  database row cannot be used to read or delete arbitrary files on the host.
 </Callout>
 
 ## S3 backend
@@ -103,21 +103,21 @@ key_prefix = "containers/"   # objects stored as containers/<file-id>
 # or the instance IAM role when omitted.
 ```
 
-| Setting                  | Type   | Default        | Description                                                                 |
-| ------------------------ | ------ | -------------- | --------------------------------------------------------------------------- |
-| `bucket`                 | string | _(required)_   | Bucket name.                                                                |
-| `region`                 | string | _(none)_       | AWS region. Required unless `endpoint` is set.                              |
-| `endpoint`               | string | _(none)_       | Custom endpoint URL for non-AWS services.                                   |
-| `access_key_id`          | string | _(env / IAM)_  | Access key. Falls back to environment / IAM role when omitted.              |
-| `secret_access_key`      | string | _(env / IAM)_  | Secret key. Falls back to environment / IAM role when omitted.              |
-| `force_path_style`       | bool   | `false`        | Use path-style URLs. Required for MinIO and many self-hosted services.      |
-| `key_prefix`             | string | _(none)_       | Prefix prepended to every object key. Useful when sharing a bucket.         |
-| `storage_class`          | string | _(none)_       | Object storage class (e.g. `STANDARD_IA`, `GLACIER`).                       |
-| `server_side_encryption` | table  | _(none)_       | Server-side encryption — see below.                                         |
+| Setting                  | Type   | Default       | Description                                                            |
+| ------------------------ | ------ | ------------- | ---------------------------------------------------------------------- |
+| `bucket`                 | string | _(required)_  | Bucket name.                                                           |
+| `region`                 | string | _(none)_      | AWS region. Required unless `endpoint` is set.                         |
+| `endpoint`               | string | _(none)_      | Custom endpoint URL for non-AWS services.                              |
+| `access_key_id`          | string | _(env / IAM)_ | Access key. Falls back to environment / IAM role when omitted.         |
+| `secret_access_key`      | string | _(env / IAM)_ | Secret key. Falls back to environment / IAM role when omitted.         |
+| `force_path_style`       | bool   | `false`       | Use path-style URLs. Required for MinIO and many self-hosted services. |
+| `key_prefix`             | string | _(none)_      | Prefix prepended to every object key. Useful when sharing a bucket.    |
+| `storage_class`          | string | _(none)_      | Object storage class (e.g. `STANDARD_IA`, `GLACIER`).                  |
+| `server_side_encryption` | table  | _(none)_      | Server-side encryption — see below.                                    |
 
 <Callout type="warn">
-  Prefer environment variables or an IAM role over inlining `access_key_id` /
-  `secret_access_key` in the config file. When present, these values are redacted from logs.
+  Prefer environment variables or an IAM role over inlining `access_key_id` / `secret_access_key` in
+  the config file. When present, these values are redacted from logs.
 </Callout>
 
 ### S3-compatible endpoints

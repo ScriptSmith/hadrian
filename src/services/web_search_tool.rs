@@ -324,6 +324,7 @@ fn format_web_search_call_output_event(item_id: &str) -> Option<Bytes> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// `ServerExecutedTool` implementation for `web_search`.
+#[cfg(feature = "server")]
 pub struct WebSearchExecutor {
     context: WebSearchContext,
     /// Hides the rewritten `web_search` function-call plumbing from the
@@ -332,6 +333,7 @@ pub struct WebSearchExecutor {
     suppressor: crate::services::server_tools::FunctionCallSuppressor,
 }
 
+#[cfg(feature = "server")]
 impl WebSearchExecutor {
     pub fn new(context: WebSearchContext) -> Self {
         Self {
@@ -341,6 +343,7 @@ impl WebSearchExecutor {
     }
 }
 
+#[cfg(feature = "server")]
 #[async_trait::async_trait]
 impl crate::services::server_tools::ServerExecutedTool for WebSearchExecutor {
     fn name(&self) -> &'static str {

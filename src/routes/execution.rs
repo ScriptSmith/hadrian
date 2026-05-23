@@ -13,6 +13,14 @@ use crate::providers::azure_openai;
 use crate::providers::bedrock;
 #[cfg(feature = "provider-vertex")]
 use crate::providers::vertex;
+#[cfg(feature = "server")]
+use crate::services::{
+    container_session::MNT_DATA,
+    shell_tool::{
+        ShellExecutionLocation, ShellNetworkSummary, ShellToolHint, preprocess_shell_tools,
+        resolve_shell_environment,
+    },
+};
 use crate::{
     AppState, api_types,
     config::{ProviderConfig, SovereigntyMetadata, SovereigntyRequirements},
@@ -21,14 +29,7 @@ use crate::{
         FallbackDecision, Provider, ProviderError, anthropic, build_fallback_chain,
         classify_provider_error, open_ai, should_fallback_on_response_status, test,
     },
-    services::{
-        container_session::MNT_DATA,
-        preprocess_file_search_tools, preprocess_web_search_tools,
-        shell_tool::{
-            ShellExecutionLocation, ShellNetworkSummary, ShellToolHint, preprocess_shell_tools,
-            resolve_shell_environment,
-        },
-    },
+    services::{preprocess_file_search_tools, preprocess_web_search_tools},
 };
 
 /// Whether OpenAI's native `shell` tool spec should be left intact
@@ -51,6 +52,7 @@ fn keep_openai_native_shell(state: &AppState) -> bool {
 /// dispatch and re-derivation is cheap. Errors fall back to defaults
 /// silently because the request would have been rejected with a 400 at
 /// admission if the env was actually invalid.
+#[cfg(feature = "server")]
 fn build_shell_tool_hint(
     state: &AppState,
     payload: &api_types::CreateResponsesPayload,
@@ -359,6 +361,7 @@ impl ProviderExecutor for ResponsesExecutor {
         let openai_keep_native_shell = keep_openai_native_shell(state);
         // Build the hint once per provider attempt; rewrites are idempotent
         // and the hint depends only on request payload + operator config.
+        #[cfg(feature = "server")]
         let shell_hint = build_shell_tool_hint(state, &payload);
 
         // MCP `hadrian_hosted` rewrite — uniformly across providers. The
@@ -403,6 +406,7 @@ impl ProviderExecutor for ResponsesExecutor {
                 let mut payload = payload;
                 preprocess_file_search_tools(&mut payload);
                 preprocess_web_search_tools(&mut payload);
+                #[cfg(feature = "server")]
                 if !openai_keep_native_shell {
                     preprocess_shell_tools(&mut payload, &shell_hint);
                 }
@@ -418,6 +422,7 @@ impl ProviderExecutor for ResponsesExecutor {
             ProviderConfig::Anthropic(config) => {
                 let mut payload = payload;
                 preprocess_web_search_tools(&mut payload);
+                #[cfg(feature = "server")]
                 preprocess_shell_tools(&mut payload, &shell_hint);
                 anthropic::AnthropicProvider::from_config_with_registry(
                     config,
@@ -432,6 +437,7 @@ impl ProviderExecutor for ResponsesExecutor {
                 let mut payload = payload;
                 preprocess_file_search_tools(&mut payload);
                 preprocess_web_search_tools(&mut payload);
+                #[cfg(feature = "server")]
                 if !openai_keep_native_shell {
                     preprocess_shell_tools(&mut payload, &shell_hint);
                 }
@@ -449,6 +455,7 @@ impl ProviderExecutor for ResponsesExecutor {
                 let mut payload = payload;
                 preprocess_file_search_tools(&mut payload);
                 preprocess_web_search_tools(&mut payload);
+                #[cfg(feature = "server")]
                 preprocess_shell_tools(&mut payload, &shell_hint);
 
                 bedrock::BedrockProvider::from_config_with_registry(
@@ -463,6 +470,7 @@ impl ProviderExecutor for ResponsesExecutor {
             ProviderConfig::Vertex(config) => {
                 let mut payload = payload;
                 preprocess_web_search_tools(&mut payload);
+                #[cfg(feature = "server")]
                 preprocess_shell_tools(&mut payload, &shell_hint);
                 vertex::VertexProvider::from_config_with_registry(
                     config,
@@ -476,6 +484,7 @@ impl ProviderExecutor for ResponsesExecutor {
                 let mut payload = payload;
                 preprocess_file_search_tools(&mut payload);
                 preprocess_web_search_tools(&mut payload);
+                #[cfg(feature = "server")]
                 preprocess_shell_tools(&mut payload, &shell_hint);
 
                 test::TestProvider::from_config(config)

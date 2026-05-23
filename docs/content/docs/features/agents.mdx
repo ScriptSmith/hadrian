@@ -31,12 +31,12 @@ extended to **work behind any provider Hadrian supports** — not just OpenAI.
 
 Configure under `[features.shell]` in `hadrian.toml`:
 
-| Runtime              | Where execution happens                  | When to use                                                            |
-|----------------------|------------------------------------------|------------------------------------------------------------------------|
-| `passthrough_openai` | OpenAI's hosted container                | You're using `gpt-5.2+` and want zero infrastructure.                  |
-| `client_passthrough` | Your application code                    | You want OpenAI's "local shell" UX behind any provider — Hadrian routes the call but doesn't execute it. |
-| `microsandbox`       | Hadrian process, per-request microVM     | You want isolated, hosted sandboxes without an external sandbox service. Behind cargo feature `runtime-microsandbox`. |
-| `opensandbox`        | Remote OpenSandbox Lifecycle API         | You're running a managed sandbox service (e.g. Alibaba OpenSandbox). Behind cargo feature `runtime-opensandbox`. |
+| Runtime              | Where execution happens              | When to use                                                                                                           |
+| -------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `passthrough_openai` | OpenAI's hosted container            | You're using `gpt-5.2+` and want zero infrastructure.                                                                 |
+| `client_passthrough` | Your application code                | You want OpenAI's "local shell" UX behind any provider — Hadrian routes the call but doesn't execute it.              |
+| `microsandbox`       | Hadrian process, per-request microVM | You want isolated, hosted sandboxes without an external sandbox service. Behind cargo feature `runtime-microsandbox`. |
+| `opensandbox`        | Remote OpenSandbox Lifecycle API     | You're running a managed sandbox service (e.g. Alibaba OpenSandbox). Behind cargo feature `runtime-opensandbox`.      |
 
 ```toml
 # Use OpenAI's hosted container
@@ -188,9 +188,9 @@ surfaced two ways:
 2. Downloadable from `GET /v1/containers/{cntr_id}/files/{cfile_id}/content`.
 
 <Callout type="info">
-  Container output files are a **separate** resource from the Files API (`/v1/files`). To
-  feed a container output back into a knowledge base, download it from the container
-  endpoint and re-upload via `/v1/files`.
+  Container output files are a **separate** resource from the Files API (`/v1/files`). To feed a
+  container output back into a knowledge base, download it from the container endpoint and re-upload
+  via `/v1/files`.
 </Callout>
 
 Where the captured bytes physically live is configurable. By default they sit inline in the
@@ -364,14 +364,14 @@ so SDK clients pick up the typed events they expect.
 
 ## How it compares
 
-| Capability                          | Hadrian              | OpenAI Responses     | Anthropic           | Bedrock AgentCore  | Gemini             |
-|-------------------------------------|----------------------|----------------------|---------------------|--------------------|--------------------|
-| Persistent container handle         | ✓                    | ✓                    | ✓ (30-day TTL)      | ✓ (session VM)     | —                  |
-| Reuse across turns                  | ✓ (`previous_response_id`) | ✓              | ✓                   | ✓                  | —                  |
-| Client-executed mode                | ✓ (`client_passthrough`) | ✓                | ✓ (bash tool)       | —                  | —                  |
-| Per-request network allowlist       | ✓                    | ✓                    | — (no network)      | configurable       | —                  |
-| Files via existing Files API        | ✓                    | ✓                    | ✓                   | ✓ (S3 / EFS)       | ✓                  |
-| Background / long-running           | ✓                    | ✓                    | —                   | ✓                  | —                  |
+| Capability                    | Hadrian                    | OpenAI Responses | Anthropic      | Bedrock AgentCore | Gemini |
+| ----------------------------- | -------------------------- | ---------------- | -------------- | ----------------- | ------ |
+| Persistent container handle   | ✓                          | ✓                | ✓ (30-day TTL) | ✓ (session VM)    | —      |
+| Reuse across turns            | ✓ (`previous_response_id`) | ✓                | ✓              | ✓                 | —      |
+| Client-executed mode          | ✓ (`client_passthrough`)   | ✓                | ✓ (bash tool)  | —                 | —      |
+| Per-request network allowlist | ✓                          | ✓                | — (no network) | configurable      | —      |
+| Files via existing Files API  | ✓                          | ✓                | ✓              | ✓ (S3 / EFS)      | ✓      |
+| Background / long-running     | ✓                          | ✓                | —              | ✓                 | —      |
 
 ## See also
 

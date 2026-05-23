@@ -10,6 +10,8 @@ use super::{
     messages_contain_images, reasoning_effort_to_string, response_format_to_string,
     responses_reasoning_effort_to_string, should_bypass_cache,
 };
+#[cfg(feature = "server")]
+use crate::services::response_persister::persist_non_streaming;
 use crate::{
     AppState, api_types,
     auth::AuthenticatedRequest,
@@ -22,7 +24,6 @@ use crate::{
         ProviderExecutor, ResponsesExecutor, execute_with_fallback,
     },
     routing::{resolver, route_model_extended, route_models_extended},
-    services::response_persister::persist_non_streaming,
 };
 
 /// Cache status for tracking cache hits/misses in response headers.
@@ -251,6 +252,7 @@ fn provider_supports_passthrough_shell(provider: &crate::config::ProviderConfig)
 /// doesn't declare a shell tool — staging is only useful when the
 /// model can actually reach the files via shell. Errors from the
 /// resolver map onto 400 / 502-eligible API errors with stable codes.
+#[cfg(feature = "server")]
 async fn stage_input_files_if_shell(
     state: &crate::AppState,
     payload: &crate::api_types::CreateResponsesPayload,
@@ -396,6 +398,7 @@ pub(crate) fn trim_url_to_origin(url: &str) -> String {
 /// not-found / expired / cross-org situation — chain reuse is implicit
 /// from the user's perspective so we silently start fresh rather than
 /// erroring.
+#[cfg(feature = "server")]
 async fn resolve_chained_container_id(
     store: &crate::services::ResponsesStore,
     containers: &crate::services::containers::ContainersService,
@@ -1439,6 +1442,7 @@ pub async fn api_v1_responses(
     // a clean 400 with the variant's stable error code — for background
     // requests this is the only chance to reject; for foreground it
     // spares us the upstream round-trip on doomed calls.
+    #[cfg(feature = "server")]
     {
         let mcp_provider =
             crate::services::mcp_tool::McpProviderKind::from_provider(&provider_config);
@@ -1513,11 +1517,13 @@ pub async fn api_v1_responses(
     // responding. `caller_wants_streaming` preserves the caller's
     // original intent for cache/persist branching below.
     let caller_wants_streaming = payload.stream;
+    #[cfg(feature = "server")]
     let payload_has_web_search = payload
         .tools
         .as_ref()
         .map(|t| t.iter().any(|tt| tt.is_web_search()))
         .unwrap_or(false);
+    #[cfg(feature = "server")]
     let payload_has_file_search = payload
         .tools
         .as_ref()
@@ -1528,18 +1534,21 @@ pub async fn api_v1_responses(
     // gateway — runs the shell. Skip executor registration regardless
     // of the operator-configured runtime so the shell_call / shell_call_output
     // round-trip flows through to the client.
+    #[cfg(feature = "server")]
     let request_env_is_local = payload
         .tools
         .as_ref()
         .and_then(|tools| tools.iter().find_map(|t| t.as_shell()))
         .and_then(|s| s.environment.as_ref())
         .is_some_and(|e| e.is_local());
+    #[cfg(feature = "server")]
     let shell_loops = payload_has_shell
         && !request_env_is_local
         && state
             .shell_runtime
             .as_ref()
             .is_some_and(|r| !r.capabilities().passthrough_only);
+    #[cfg(feature = "server")]
     let web_search_loops = payload_has_web_search
         && state
             .config
@@ -1547,6 +1556,7 @@ pub async fn api_v1_responses(
             .web_search
             .as_ref()
             .is_some_and(|_| true);
+    #[cfg(feature = "server")]
     let file_search_loops = payload_has_file_search
         && state.file_search_service.is_some()
         && state
@@ -1562,16 +1572,21 @@ pub async fn api_v1_responses(
     // unexecuted instead of being run and folded into an `mcp_call`.
     // `passthrough_openai` is excluded: OpenAI/Azure run the loop
     // upstream and return a complete non-streaming response themselves.
-    #[cfg(feature = "mcp")]
+    #[cfg(all(feature = "server", feature = "mcp"))]
     let mcp_loops = request_needs_mcp_loop(
         &payload,
         state.config.features.mcp.as_ref(),
         state.mcp_service.is_some(),
     );
-    #[cfg(not(feature = "mcp"))]
+    #[cfg(all(feature = "server", not(feature = "mcp")))]
     let mcp_loops = false;
+    #[cfg(feature = "server")]
     let needs_non_streaming_bridge = !caller_wants_streaming
         && (shell_loops || web_search_loops || file_search_loops || mcp_loops);
+    // WASM has no server-executed tool loop, so there is never a
+    // forced-streaming bridge — requests forward to the provider as-is.
+    #[cfg(not(feature = "server"))]
+    let needs_non_streaming_bridge = false;
     if needs_non_streaming_bridge {
         payload.stream = true;
     }
@@ -1588,6 +1603,7 @@ pub async fn api_v1_responses(
     // reject; for foreground it spares us the VM-boot cost on doomed
     // calls. Background re-validates at execution time against the
     // current config.
+    #[cfg(feature = "server")]
     let resolved_shell_env = {
         let request_env = payload
             .tools
@@ -1686,6 +1702,7 @@ pub async fn api_v1_responses(
     // log via GET /v1/responses/{id}?stream=true&starting_after=N (the
     // OpenAI Responses-API spec for resuming a stream) or fetch the
     // terminal-state JSON via GET /v1/responses/{id}.
+    #[cfg(feature = "server")]
     if payload.background == Some(true) {
         if let Some(ref store) = state.responses_store {
             let principal_org = auth
@@ -1790,6 +1807,7 @@ pub async fn api_v1_responses(
     // -circuit above and the worker resolves skills when it runs, so
     // the persisted `request_payload` keeps the user's original input
     // (not the rewritten instructions).
+    #[cfg(feature = "server")]
     let principal = crate::services::responses_pipeline::PipelinePrincipal::from_auth(
         &state,
         auth.as_ref().map(|e| &e.0),
@@ -1835,6 +1853,7 @@ pub async fn api_v1_responses(
     // ids into `payload.skills` so `resolve_and_inject_skills` mounts
     // them. Matches OpenAI's spec where skills are bound to the
     // container, not to the response.
+    #[cfg(feature = "server")]
     if let (Some(svc), Some(org_id)) = (state.containers_service.as_ref(), principal.org_id) {
         let candidate_container_id: Option<String> = match (
             resolved_shell_env.referenced_container_id.as_deref(),
@@ -1878,7 +1897,9 @@ pub async fn api_v1_responses(
     // building `request_payload`, so retrieve echoes the user's
     // original input rather than leaking operator-private skill
     // content to anyone with GET access in the same org.
+    #[cfg(feature = "server")]
     let original_instructions = payload.instructions.clone();
+    #[cfg(feature = "server")]
     let mounted_skills = crate::services::responses_pipeline::resolve_and_inject_skills(
         &state,
         &mut payload,
@@ -1912,10 +1933,12 @@ pub async fn api_v1_responses(
     // containers]` is disabled.
     // Scope file_id references to the caller's owner so a request can't
     // stage another tenant's Files-API uploads into its container.
+    #[cfg(feature = "server")]
     let staging_owner = crate::services::responses_pipeline::derive_response_owner(
         &state,
         auth.as_ref().map(|e| &e.0),
     );
+    #[cfg(feature = "server")]
     let staged_input_files = stage_input_files_if_shell(&state, &payload, staging_owner).await?;
 
     // Track cache status for response headers
@@ -2037,6 +2060,7 @@ pub async fn api_v1_responses(
     // injected SKILL.md content but before the provider call. We
     // log + continue on any compactor error: an oversize-but-uncompacted
     // payload still has a fair chance of working at the provider.
+    #[cfg(feature = "server")]
     if let Err(e) = crate::services::compactor::apply_gateway_compaction(
         &state,
         &saved_provider_config,
@@ -2187,6 +2211,7 @@ pub async fn api_v1_responses(
     // Insert the persisted-response row up front (when store=true)
     // so the shared pipeline can attach the persister wrap. Principal
     // was already built up top for skill resolution.
+    #[cfg(feature = "server")]
     let persistence_handle: Option<crate::services::responses_pipeline::PersistenceHandle> = {
         let want_persist = state.responses_store.is_some()
             && payload.store != Some(false)
@@ -2260,12 +2285,18 @@ pub async fn api_v1_responses(
             None
         }
     };
+    #[cfg(feature = "server")]
     let persistence_id_and_org = persistence_handle
         .as_ref()
         .map(|h| (h.response_id.clone(), h.org_id));
+    // WASM never persists responses (no DB-backed store), so there is
+    // no response row to cache-store or persist into below.
+    #[cfg(not(feature = "server"))]
+    let persistence_id_and_org: Option<(String, uuid::Uuid)> = None;
 
     // Apply the shared pipeline: output guardrails + server-executed
     // tool loop + persister.
+    #[cfg(feature = "server")]
     let mut final_response = if is_streaming {
         let req_id_str = request_id.as_ref().map(|r| r.0.0.clone());
         // Derive the response owner for container-persistence wiring
@@ -2359,6 +2390,10 @@ pub async fn api_v1_responses(
     } else {
         final_response
     };
+    // WASM has no server-executed tool loop / persister pipeline; the
+    // upstream response (streaming or not) is returned unchanged.
+    #[cfg(not(feature = "server"))]
+    let mut final_response = final_response;
 
     // Add input guardrails headers
     for (key, value) in guardrails_headers {
@@ -2378,12 +2413,15 @@ pub async fn api_v1_responses(
     // the SSE transcript back into a single JSON response now — before
     // cache/persist, so they see the same shape as a native
     // non-streaming response.
+    #[cfg(feature = "server")]
     let final_response = if needs_non_streaming_bridge {
         crate::services::responses_pipeline::collect_streaming_response_to_json(final_response)
             .await
     } else {
         final_response
     };
+    #[cfg(not(feature = "server"))]
+    let final_response = final_response;
 
     // Cache and/or persist the response (non-streaming only). The two
     // operations share a materialized body: read it once, hand the
@@ -2395,9 +2433,12 @@ pub async fn api_v1_responses(
         && final_response.status().is_success()
         && !caller_wants_streaming
         && state.response_cache.is_some();
+    #[cfg(feature = "server")]
     let needs_persist = !caller_wants_streaming
         && persistence_id_and_org.is_some()
         && state.responses_store.is_some();
+    #[cfg(not(feature = "server"))]
+    let needs_persist = false;
     let final_response = if needs_cache_store || needs_persist {
         // Extract content-type and body once.
         let content_type = final_response
@@ -2439,6 +2480,7 @@ pub async fn api_v1_responses(
                 // is materialized. Streaming responses are persisted by
                 // `wrap_streaming_with_persistence` from inside its
                 // spawned task as the final event arrives.
+                #[cfg(feature = "server")]
                 if let (Some((resp_id, org_id)), Some(store)) = (
                     persistence_id_and_org.as_ref(),
                     state.responses_store.as_ref(),
@@ -2648,6 +2690,7 @@ async fn apply_output_guardrails_responses(
 /// endpoint and streams the compacted window back. Only OpenAI and
 /// Azure OpenAI implement this; routing to any other provider returns
 /// 501 with `error_code = "not_supported"`.
+#[cfg(feature = "server")]
 #[cfg_attr(feature = "utoipa", utoipa::path(
     post,
     path = "/api/v1/responses/compact",

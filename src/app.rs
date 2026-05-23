@@ -33,10 +33,12 @@ use crate::observability;
 #[cfg(feature = "utoipa")]
 use crate::openapi;
 #[cfg(feature = "server")]
+use crate::runtimes;
+#[cfg(feature = "server")]
 use crate::streaming;
 use crate::{
     auth, authz, cache, catalog, config, db, dlq, events, guardrails,
-    init::create_provider_instance, jobs, models, pricing, providers, runtimes, secrets, services,
+    init::create_provider_instance, jobs, models, pricing, providers, secrets, services,
     usage_buffer,
 };
 #[cfg(feature = "server")]
@@ -369,6 +371,7 @@ pub struct AppState {
     /// When the runtime advertises `passthrough_only`, the orchestrator
     /// skips registering a ShellExecutor and the shell tool flows
     /// through to the upstream provider unchanged.
+    #[cfg(feature = "server")]
     pub shell_runtime: Option<Arc<dyn runtimes::ShellRuntime>>,
     /// MCP-tool service. Holds the pooled MCP clients and tools-list
     /// cache used by the `hadrian_hosted` mode. `None` when the `mcp`
@@ -385,19 +388,23 @@ pub struct AppState {
     /// Persisted Responses API store. Always present when a database
     /// is configured; powers `GET/POST cancel/DELETE /v1/responses/{id}`
     /// and the cancellation signal pipeline.
+    #[cfg(feature = "server")]
     pub responses_store: Option<Arc<services::ResponsesStore>>,
     /// Containers service. Present when a database is configured;
     /// drives write-through persistence for the shell-tool
     /// `/mnt/data` artifact pipeline and serves
     /// `GET /v1/containers/*`.
+    #[cfg(feature = "server")]
     pub containers_service: Option<Arc<services::containers::ContainersService>>,
     /// In-memory registry of live container sessions, keyed by the
     /// `cntr_…` id. Always present so cross-response container reuse
     /// works even in DB-less deployments (it just stays empty there).
+    #[cfg(feature = "server")]
     pub container_session_registry: Arc<services::container_session::ContainerSessionRegistry>,
     /// Bounded-channel writer that batches `response_events` rows.
     /// Constructed alongside `responses_store` so persistence and event
     /// log share the same DB lifecycle.
+    #[cfg(feature = "server")]
     pub response_event_buffer: Option<Arc<services::ResponseEventBuffer>>,
     /// Document processor for chunking and embedding files added to vector stores.
     /// Used by the Vector Store Files API to process uploaded files.
@@ -1077,6 +1084,7 @@ impl AppState {
         // Initialize the persisted Responses API store when a database
         // is available. Requests without a DB run stateless — shell
         // tool retrieval/cancel/delete endpoints will 404.
+        #[cfg(feature = "server")]
         let responses_store: Option<Arc<services::ResponsesStore>> = db.as_ref().map(|db| {
             let mut store = services::ResponsesStore::new(
                 db.clone(),
@@ -1096,6 +1104,7 @@ impl AppState {
 
         // Event buffer writes batched response_events. Defaults: 100ms
         // flush interval, batches of 64 events, channel of 1024.
+        #[cfg(feature = "server")]
         let response_event_buffer: Option<Arc<services::ResponseEventBuffer>> =
             db.as_ref().map(|db| {
                 Arc::new(services::ResponseEventBuffer::spawn(
@@ -1111,6 +1120,7 @@ impl AppState {
         // is configured. Without it the live shell tool still works
         // (the in-memory session capture path stays available), but
         // the GET endpoints return 404 because no rows exist.
+        #[cfg(feature = "server")]
         let containers_service: Option<Arc<services::containers::ContainersService>> =
             match db.as_ref() {
                 Some(db) => {
@@ -1140,12 +1150,15 @@ impl AppState {
         // stays empty (sessions never get inserted), but wiring it in
         // unconditionally keeps the rest of the pipeline's plumbing
         // simple.
-        let container_session_registry: Arc<services::container_session::ContainerSessionRegistry> =
-            Arc::new(services::container_session::ContainerSessionRegistry::new());
+        #[cfg(feature = "server")]
+        let container_session_registry: Arc<
+            services::container_session::ContainerSessionRegistry,
+        > = Arc::new(services::container_session::ContainerSessionRegistry::new());
 
         // Initialize the shell tool runtime from [features.shell].
         // Microsandbox / OpenSandbox / E2B adapters land in slice 1B; for
         // now they return None and emit a clear startup error.
+        #[cfg(feature = "server")]
         let shell_runtime: Option<Arc<dyn runtimes::ShellRuntime>> = match &config.features.shell {
             config::ShellRuntimeConfig::None => None,
             config::ShellRuntimeConfig::PassthroughOpenAI => {
@@ -1335,14 +1348,19 @@ impl AppState {
             output_guardrails,
             event_bus,
             file_search_service,
+            #[cfg(feature = "server")]
             shell_runtime,
             #[cfg(feature = "mcp")]
             mcp_service,
             #[cfg(feature = "mcp")]
             tool_search_embeddings,
+            #[cfg(feature = "server")]
             responses_store,
+            #[cfg(feature = "server")]
             containers_service,
+            #[cfg(feature = "server")]
             container_session_registry,
+            #[cfg(feature = "server")]
             response_event_buffer,
             #[cfg(any(
                 feature = "document-extraction-basic",
