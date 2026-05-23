@@ -65,6 +65,7 @@ const featureMatrix: { name: string; profiles: Profile[] }[] = [
   { name: "PostgreSQL", profiles: ["standard", "headless", "full"] },
   { name: "Redis caching", profiles: ["standard", "headless", "full"] },
   { name: "SSO (OIDC / OAuth)", profiles: ["standard", "headless", "full"] },
+  { name: "Server-side MCP", profiles: ["standard", "headless", "full"] },
   { name: "CEL RBAC", profiles: ["standard", "headless", "full"] },
   { name: "S3 storage", profiles: ["standard", "headless", "full"] },
   { name: "Secrets managers", profiles: ["standard", "headless", "full"] },
@@ -79,6 +80,8 @@ const featureMatrix: { name: string; profiles: Profile[] }[] = [
   { name: "SAML SSO", profiles: ["headless", "full"] },
   { name: "Kreuzberg OCR", profiles: ["headless", "full"] },
   { name: "ClamAV scanning", profiles: ["headless", "full"] },
+  { name: "Microsandbox containers", profiles: ["headless", "full"] },
+  { name: "OpenSandbox containers", profiles: ["headless", "full"] },
 ];
 
 function getInstallCommand(method: Method, os: OS, profile: Profile, libc: Libc): string {
