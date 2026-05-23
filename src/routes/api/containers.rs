@@ -1154,7 +1154,7 @@ pub async fn api_v1_containers_file_upload(
     let mut content_type_field: Option<String> = None;
     let mut path_field: Option<String> = None;
 
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
+    while let Some(mut field) = multipart.next_field().await.map_err(|e| {
         ApiError::new(
             StatusCode::BAD_REQUEST,
             "invalid_multipart",
@@ -1165,25 +1165,24 @@ pub async fn api_v1_containers_file_upload(
             "file" => {
                 filename = field.file_name().map(str::to_string);
                 content_type_field = field.content_type().map(str::to_string);
-                let data = field.bytes().await.map_err(|e| {
+                let mut data: Vec<u8> = Vec::new();
+                while let Some(chunk) = field.chunk().await.map_err(|e| {
                     ApiError::new(
                         StatusCode::BAD_REQUEST,
                         "invalid_multipart",
                         format!("failed to read file part: {e}"),
                     )
-                })?;
-                if data.len() > max_bytes {
-                    return Err(ApiError::new(
-                        StatusCode::PAYLOAD_TOO_LARGE,
-                        "file_too_large",
-                        format!(
-                            "file size {} exceeds operator cap of {} bytes",
-                            data.len(),
-                            max_bytes
-                        ),
-                    ));
+                })? {
+                    if data.len() + chunk.len() > max_bytes {
+                        return Err(ApiError::new(
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            "file_too_large",
+                            format!("file size exceeds operator cap of {max_bytes} bytes"),
+                        ));
+                    }
+                    data.extend_from_slice(&chunk);
                 }
-                content_bytes = Some(data.to_vec());
+                content_bytes = Some(data);
             }
             "path" => {
                 path_field = Some(field.text().await.unwrap_or_default());

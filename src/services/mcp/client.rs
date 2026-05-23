@@ -257,11 +257,12 @@ impl Drop for McpClient {
 /// produce `Authorization: Bearer Bearer …` which servers reject.
 fn strip_bearer_prefix(value: &str) -> String {
     let trimmed = value.trim_start();
-    if trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("bearer ") {
-        trimmed[7..].trim_start().to_string()
-    } else {
-        trimmed.to_string()
+    if let Some(prefix) = trimmed.get(..7)
+        && prefix.eq_ignore_ascii_case("bearer ")
+    {
+        return trimmed.get(7..).unwrap_or("").trim_start().to_string();
     }
+    trimmed.to_string()
 }
 
 fn flatten_call_result(result: rmcp::model::CallToolResult) -> McpCallResult {
