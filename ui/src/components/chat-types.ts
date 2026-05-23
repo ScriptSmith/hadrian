@@ -8,6 +8,7 @@ import type {
   ChartArtifactData as ChartArtifactDataImport,
   DisplaySelectionData as DisplaySelectionDataImport,
   AgentArtifactData as AgentArtifactDataImport,
+  ContainerFileArtifactData as ContainerFileArtifactDataImport,
   FileSearchArtifactData as FileSearchArtifactDataImport,
   FileSearchResultItem as FileSearchResultItemImport,
   ToolExecutionStatus as ToolExecutionStatusImport,
@@ -23,6 +24,7 @@ export type TableArtifactData = TableArtifactDataImport;
 export type ChartArtifactData = ChartArtifactDataImport;
 export type DisplaySelectionData = DisplaySelectionDataImport;
 export type AgentArtifactData = AgentArtifactDataImport;
+export type ContainerFileArtifactData = ContainerFileArtifactDataImport;
 export type FileSearchArtifactData = FileSearchArtifactDataImport;
 export type FileSearchResultItem = FileSearchResultItemImport;
 export type ToolExecutionStatus = ToolExecutionStatusImport;

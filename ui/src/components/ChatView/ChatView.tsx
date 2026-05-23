@@ -308,6 +308,7 @@ export function ChatView({
         vectorStoreOwnerId={vectorStoreOwnerId}
         clientSideRAG={clientSideRAG}
         onClientSideRAGChange={setClientSideRAG}
+        enabledTools={enabledTools}
         maxToolIterations={maxToolIterations}
         onMaxToolIterationsChange={setMaxToolIterations}
         toolSearchEnabled={toolSearchEnabled}

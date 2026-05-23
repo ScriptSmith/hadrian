@@ -1,5 +1,15 @@
 import { memo } from "react";
-import { Code, Table, BarChart3, Image, FileCode, Bot, ExternalLink, Search } from "lucide-react";
+import {
+  Code,
+  Table,
+  BarChart3,
+  Image,
+  FileCode,
+  Bot,
+  ExternalLink,
+  Search,
+  FileText,
+} from "lucide-react";
 import type { Artifact, ArtifactType } from "@/components/chat-types";
 
 interface ArtifactThumbnailProps {
@@ -19,6 +29,7 @@ const ARTIFACT_ICONS: Record<ArtifactType, typeof Code> = {
   html: FileCode,
   agent: Bot,
   file_search: Search,
+  container_file: FileText,
   // display_selection is internal and shouldn't be rendered as a thumbnail
   display_selection: Code,
 };
@@ -32,6 +43,7 @@ const ARTIFACT_LABELS: Record<ArtifactType, string> = {
   html: "HTML",
   agent: "Sub-Agent",
   file_search: "Search Results",
+  container_file: "File",
   display_selection: "Selection",
 };
 
@@ -44,6 +56,7 @@ const ARTIFACT_COLORS: Record<ArtifactType, string> = {
   html: "bg-pink-500/10 text-pink-700 dark:text-pink-400",
   agent: "bg-cyan-500/10 text-cyan-800 dark:text-cyan-400",
   file_search: "bg-indigo-500/10 text-indigo-700 dark:text-indigo-400",
+  container_file: "bg-teal-500/10 text-teal-700 dark:text-teal-400",
   display_selection: "bg-zinc-500/10 text-zinc-700 dark:text-zinc-400",
 };
 

@@ -4,6 +4,7 @@ import { Settings2, RotateCcw, Database, Save, Volume2 } from "lucide-react";
 import type { VectorStoreOwnerType, Voice } from "@/api/generated/types.gen";
 import { TTS_VOICES, DEFAULT_TTS_VOICE, DEFAULT_TTS_SPEED } from "@/hooks/useAudioPlayback";
 import { getDefaultSystemPrompt } from "@/utils/defaultSystemPrompt";
+import { getEnabledToolsSystemGuidance } from "@/pages/chat/utils/toolExecutors";
 import { Button } from "@/components/Button/Button";
 import type { ResponseActionConfig } from "@/components/chat-types";
 import { DEFAULT_ACTION_CONFIG } from "@/components/chat-types";
@@ -41,6 +42,8 @@ interface ConversationSettingsModalProps {
   clientSideRAG?: boolean;
   /** Callback when client-side RAG setting changes */
   onClientSideRAGChange?: (enabled: boolean) => void;
+  /** Enabled tool IDs, used to show any per-tool system-prompt guidance. */
+  enabledTools?: string[];
   /** Maximum tool execution iterations */
   maxToolIterations?: number;
   /** Callback when max tool iterations changes */
@@ -86,6 +89,7 @@ export function ConversationSettingsModal({
   vectorStoreOwnerId,
   clientSideRAG,
   onClientSideRAGChange,
+  enabledTools = [],
   maxToolIterations = 25,
   onMaxToolIterationsChange,
   toolSearchEnabled = false,
@@ -103,6 +107,11 @@ export function ConversationSettingsModal({
 
   const displayedPrompt = systemPrompt || getDefaultSystemPrompt();
   const isDefault = !systemPrompt;
+  // Guidance auto-appended to the system prompt at request time for the
+  // enabled tools (e.g. the shell tool's file-output note). Shown read-only so
+  // the user sees the full effective prompt without it polluting their editable
+  // text.
+  const toolGuidance = getEnabledToolsSystemGuidance(enabledTools);
 
   const autoResize = useCallback((el: HTMLTextAreaElement) => {
     el.style.height = "auto";
@@ -204,6 +213,20 @@ export function ConversationSettingsModal({
             aria-label="System prompt"
             className={`w-full min-h-[120px] rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 resize-none ${isDefault ? "text-muted-foreground" : ""}`}
           />
+          {toolGuidance && (
+            <div className="rounded-md border border-dashed bg-muted/30 px-3 py-2">
+              <p className="text-xs font-medium text-muted-foreground mb-1">
+                Auto-added for enabled tools
+              </p>
+              <p className="text-xs text-muted-foreground mb-2">
+                Appended to the system prompt while the relevant tools are on. Not editable here —
+                it updates as you toggle tools.
+              </p>
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
+                {toolGuidance}
+              </pre>
+            </div>
+          )}
         </div>
 
         {/* Knowledge Base Section */}

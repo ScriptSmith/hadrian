@@ -80,7 +80,24 @@ export type ArtifactType =
   | "html"
   | "agent"
   | "file_search"
+  | "container_file"
   | "display_selection";
+
+/**
+ * Container file artifact data — a file written to `/mnt/data` by the shell
+ * tool. The bytes aren't inlined; the renderer lazily fetches them from
+ * `GET /v1/containers/{containerId}/files/{fileId}/content` (authed), showing
+ * images inline and other files as a download chip.
+ */
+export interface ContainerFileArtifactData {
+  containerId: string;
+  fileId: string;
+  filename: string;
+  /** Best-effort MIME type (e.g. "image/png"). */
+  contentType?: string;
+  /** Size in bytes, for the download chip. */
+  bytes?: number;
+}
 
 /**
  * Role of an artifact in the execution timeline
@@ -2703,6 +2720,25 @@ export interface ToolMetadata {
   requiresConfig?: boolean;
   /** Config requirement description */
   configDescription?: string;
+  /**
+   * Extra guidance appended to the system prompt when this tool is enabled.
+   * Use it for UI-specific behavior the tool's own API description can't carry
+   * (e.g. "files you write are shown in this chat"). Optional — most tools
+   * rely solely on their API-level description.
+   */
+  systemGuidance?: string;
+}
+
+/**
+ * Concatenated system-prompt guidance for the enabled tools that define it.
+ * Appended after the base system prompt in `useChat`. Empty when no enabled
+ * tool contributes guidance.
+ */
+export function getEnabledToolsSystemGuidance(enabledToolIds: string[]): string {
+  const enabled = new Set(enabledToolIds);
+  return TOOL_METADATA.filter((t) => enabled.has(t.id) && t.systemGuidance)
+    .map((t) => t.systemGuidance!)
+    .join("\n\n");
 }
 
 /**
@@ -2716,6 +2752,13 @@ export const TOOL_METADATA: ToolMetadata[] = [
       "Run shell commands in a persistent server-side container. Files persist across turns in /mnt/data, and the whole conversation reuses one container until it expires. Configure the container in this tool's settings.",
     icon: "SquareTerminal",
     implemented: true,
+    systemGuidance: `## Shell tool & file output
+
+You have a shell tool that runs commands in a persistent Linux container; \`/mnt/data\` is the working directory and persists for the whole conversation.
+
+Files you save to \`/mnt/data\` are shown to the user directly in this chat — images render inline and other files appear as downloads. So when you produce a visual or downloadable result (a plot, generated image, rendered document, data export, etc.), **save it to \`/mnt/data\`** rather than only printing it or describing it.
+
+The gateway attaches and displays saved files automatically — you do not link to them. Do NOT reference container paths with Markdown image or link syntax: \`![red_square.png](/mnt/data/red_square.png)\` (or a plain link to \`/mnt/data/...\`) will **not** render, because \`/mnt/data\` is a path inside the container, not a URL the chat can load. Likewise, never paste base64-encoded image or file data into your reply. Just write the file and mention its name in prose (e.g. "I saved the chart as \`red_square.png\`"); it will appear on its own.`,
   },
   {
     id: "file_search",

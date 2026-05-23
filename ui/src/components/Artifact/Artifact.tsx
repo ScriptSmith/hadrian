@@ -16,7 +16,17 @@
  */
 
 import { memo } from "react";
-import { Code2, Table2, Image, BarChart3, Globe, Bot, Search, AlertCircle } from "lucide-react";
+import {
+  Code2,
+  Table2,
+  Image,
+  BarChart3,
+  Globe,
+  Bot,
+  Search,
+  FileText,
+  AlertCircle,
+} from "lucide-react";
 
 import type {
   Artifact as ArtifactType,
@@ -31,6 +41,7 @@ import { ChartArtifact } from "./ChartArtifact";
 import { HtmlArtifact } from "./HtmlArtifact";
 import { AgentArtifact } from "./AgentArtifact";
 import { FileSearchArtifact } from "./FileSearchArtifact";
+import { ContainerFileArtifact } from "./ContainerFileArtifact";
 
 export interface ArtifactProps {
   artifact: ArtifactType;
@@ -54,6 +65,8 @@ function ArtifactIcon({ type, className }: { type: ArtifactKind; className?: str
       return <Bot className={className} />;
     case "file_search":
       return <Search className={className} />;
+    case "container_file":
+      return <FileText className={className} />;
     default:
       return <Code2 className={className} />;
   }
@@ -76,6 +89,8 @@ function getArtifactLabel(type: ArtifactKind): string {
       return "Sub-Agent";
     case "file_search":
       return "Knowledge Base Search";
+    case "container_file":
+      return "Container File";
     default:
       return "Output";
   }
@@ -100,6 +115,8 @@ function ArtifactComponent({ artifact, className }: ArtifactProps) {
         return <AgentArtifact artifact={artifact} />;
       case "file_search":
         return <FileSearchArtifact artifact={artifact} />;
+      case "container_file":
+        return <ContainerFileArtifact artifact={artifact} />;
       default:
         return (
           <div className="flex items-center gap-2 text-sm text-muted-foreground p-4">

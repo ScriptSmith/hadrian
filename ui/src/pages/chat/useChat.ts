@@ -44,6 +44,7 @@ import {
   executeToolCalls,
   buildToolResultInputItems,
   createMCPToolName,
+  getEnabledToolsSystemGuidance,
   DISPLAY_PARAMETER_SCHEMA,
   type ToolExecutorContext,
 } from "./utils/toolExecutors";
@@ -269,6 +270,42 @@ interface StreamResponseResult {
   responseOutput?: unknown[];
 }
 
+/** One entry in a `shell_call_output` item's Hadrian `output_files` manifest. */
+interface ShellOutputFile {
+  container_id?: string;
+  file_id?: string;
+  filename?: string;
+  content_type?: string;
+  bytes?: number;
+  source?: string;
+}
+
+/**
+ * Build `container_file` artifacts from a shell `output_files` manifest. These
+ * render as message-level artifacts (images inline, other files as download
+ * chips) by lazily fetching the container content endpoint. Staged inputs
+ * (`source === "user"`) are skipped. Ids are stable (`cfile-<file_id>`) so the
+ * streamed and `response.completed` paths dedupe against each other.
+ */
+function containerFilesToArtifacts(outputFiles: ShellOutputFile[] | undefined): Artifact[] {
+  if (!outputFiles?.length) return [];
+  return outputFiles
+    .filter((f) => f.container_id && f.file_id && f.source !== "user")
+    .map((f) => ({
+      id: `cfile-${f.file_id}`,
+      type: "container_file" as const,
+      role: "output" as const,
+      title: f.filename,
+      data: {
+        containerId: f.container_id!,
+        fileId: f.file_id!,
+        filename: f.filename ?? f.file_id!,
+        contentType: f.content_type,
+        bytes: f.bytes,
+      },
+    }));
+}
+
 /** Extract the metadata fields from a streaming response for committing to the conversation store. */
 function commitFieldsFromStream(stream: StreamingResponse | undefined) {
   return {
@@ -410,10 +447,15 @@ export function useChat({
         // Priority: existing in input > instanceParams > perModelSettings > global modelSettings > default
         const hasSystemMessage = input.some((item) => item.role === "system");
         if (!hasSystemMessage) {
-          const systemPrompt =
+          const basePrompt =
             perModel?.systemPrompt ??
             modelSettings?.systemPrompt ??
             getDefaultSystemPrompt(model, instanceLabel);
+          // Append any per-tool system guidance for the enabled tools (e.g. the
+          // shell tool explaining that files written to /mnt/data are shown in
+          // the chat). Tools opt in via `systemGuidance` on their metadata.
+          const toolGuidance = getEnabledToolsSystemGuidance(enabledTools);
+          const systemPrompt = toolGuidance ? `${basePrompt}\n\n${toolGuidance}` : basePrompt;
           input.unshift({
             role: "system",
             content: systemPrompt,
@@ -1374,6 +1416,16 @@ export function useChat({
                     .filter(Boolean)
                     .join("\n") || "(no output)";
                 const now = Date.now();
+                // Files the command wrote to /mnt/data surface as prominent
+                // message-level artifacts (images inline, others as download
+                // chips). Dedup-by-id means the response.completed sweep below
+                // is harmless if these also arrive only in the final output.
+                const fileArtifacts = containerFilesToArtifacts(
+                  (event.item as { output_files?: ShellOutputFile[] }).output_files
+                );
+                if (fileArtifacts.length > 0) {
+                  streamingStore.addArtifacts(storeKey, fileArtifacts);
+                }
                 recordServerExecution({
                   id: event.item.id ?? `shellout_${now}`,
                   toolName: "shell",
@@ -1506,6 +1558,22 @@ export function useChat({
               const convId = conversationIdRef.current;
               if (event.response.container_id && convId) {
                 activeContainerRef.current.set(convId, event.response.container_id);
+              }
+              // Harvest container files from the final output. Some providers
+              // (e.g. OpenRouter-routed models) deliver shell_call_output items
+              // only in `response.output` rather than as streamed
+              // `output_item.done` events, so the streamed handler above never
+              // sees them. Sweeping here makes generated files show regardless;
+              // addArtifacts dedupes by id against the streamed path.
+              const finalFileArtifacts = (event.response.output ?? [])
+                .filter((item) => item.type === "shell_call_output")
+                .flatMap((item) =>
+                  containerFilesToArtifacts(
+                    (item as { output_files?: ShellOutputFile[] }).output_files
+                  )
+                );
+              if (finalFileArtifacts.length > 0) {
+                streamingStore.addArtifacts(storeKey, finalFileArtifacts);
               }
               // Extract final text from completed response
               // First try output_text, then message content, then reasoning content as fallback
