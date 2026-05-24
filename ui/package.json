@@ -13,7 +13,7 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\"",
     "storybook": "storybook dev -p 6006",
     "storybook:build": "storybook build",
-    "test-storybook": "vitest run --project=storybook --project=storybook-dark",
+    "test-storybook": "pnpm run test-storybook:light && pnpm run test-storybook:dark",
     "test-storybook:light": "vitest run --project=storybook",
     "test-storybook:dark": "vitest run --project=storybook-dark",
     "test": "vitest run --project=unit",
