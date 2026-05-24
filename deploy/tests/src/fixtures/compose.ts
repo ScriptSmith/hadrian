@@ -2,6 +2,7 @@ import {
   DockerComposeEnvironment,
   StartedDockerComposeEnvironment,
   Wait,
+  type WaitStrategy,
 } from "testcontainers";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -9,14 +10,43 @@ import { waitForHealthy } from "./wait-for";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * A wait strategy that resolves immediately without inspecting or exec-ing into
+ * the container. testcontainers applies `Wait.forListeningPorts()` to every
+ * compose service that lacks an explicit strategy, and that check execs into the
+ * container — which fails with a 409 ("container is restarting") for services
+ * that intentionally crash-loop during setup (e.g. the gateway waiting for a
+ * Redis cluster that the test forms after `compose up`). Use this to opt such a
+ * service out of startup waiting; wait for its readiness explicitly in the test.
+ */
+class NoWaitStrategy implements WaitStrategy {
+  private startupTimeout = 60000;
+  async waitUntilReady(): Promise<void> {}
+  withStartupTimeout(startupTimeout: number): WaitStrategy {
+    this.startupTimeout = startupTimeout;
+    return this;
+  }
+  isStartupTimeoutSet(): boolean {
+    return false;
+  }
+  getStartupTimeout(): number {
+    return this.startupTimeout;
+  }
+}
+
 export interface ServiceHealthCheck {
   port: number;
   path?: string;
 }
 
 export interface ServiceWaitStrategy {
-  /** Wait for HTTP endpoint to return 2xx */
-  type: "http" | "healthcheck";
+  /**
+   * - `http` — wait for an HTTP endpoint to return 2xx
+   * - `healthcheck` — wait for the container's Docker healthcheck
+   * - `none` — don't wait at all (opt out of the default port-listening probe,
+   *   e.g. for services that crash-loop until the test finishes provisioning)
+   */
+  type: "http" | "healthcheck" | "none";
   port?: number;
   path?: string;
 }
@@ -79,6 +109,10 @@ export async function startComposeEnvironment(
       } else if (strategy.type === "healthcheck") {
         // Use Docker's built-in health check instead of port waiting
         compose = compose.withWaitStrategy(service, Wait.forHealthCheck());
+      } else if (strategy.type === "none") {
+        // Opt out of testcontainers' default port-listening probe (which execs
+        // into the container) for services that crash-loop during setup.
+        compose = compose.withWaitStrategy(service, new NoWaitStrategy());
       }
     }
   }

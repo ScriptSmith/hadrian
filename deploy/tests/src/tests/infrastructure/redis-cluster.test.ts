@@ -54,8 +54,13 @@ describe("Redis Cluster Deployment (3 Masters + 3 Replicas)", () => {
       composeFile: "docker-compose.redis-cluster.yml",
       // Don't wait for gateway - it will restart until cluster is ready
       waitForServices: {},
-      // Wait for Redis nodes via Docker healthcheck (redis-cli ping)
+      // Wait for Redis nodes via Docker healthcheck (redis-cli ping).
+      // The gateway crash-loops until the cluster is formed (below), so opt it out
+      // of the default port-listening probe — otherwise testcontainers execs into
+      // the restarting container and fails with a 409. We wait for gateway health
+      // explicitly via waitForHealthy() once the cluster is up.
       serviceWaitStrategies: {
+        gateway: { type: "none" },
         "redis-1": { type: "healthcheck" },
         "redis-2": { type: "healthcheck" },
         "redis-3": { type: "healthcheck" },
