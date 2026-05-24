@@ -33,6 +33,8 @@ use crate::observability;
 #[cfg(feature = "utoipa")]
 use crate::openapi;
 #[cfg(feature = "server")]
+use crate::runtimes;
+#[cfg(feature = "server")]
 use crate::streaming;
 use crate::{
     auth, authz, cache, catalog, config, db, dlq, events, guardrails,
@@ -364,6 +366,46 @@ pub struct AppState {
     /// File search service for RAG (Retrieval Augmented Generation).
     /// Used by the file_search tool in the Responses API to search vector stores.
     pub file_search_service: Option<Arc<services::FileSearchService>>,
+    /// Shell tool runtime adapter. Constructed once at startup from
+    /// `[features.shell]` config. `None` when shell tool is disabled.
+    /// When the runtime advertises `passthrough_only`, the orchestrator
+    /// skips registering a ShellExecutor and the shell tool flows
+    /// through to the upstream provider unchanged.
+    #[cfg(feature = "server")]
+    pub shell_runtime: Option<Arc<dyn runtimes::ShellRuntime>>,
+    /// MCP-tool service. Holds the pooled MCP clients and tools-list
+    /// cache used by the `hadrian_hosted` mode. `None` when the `mcp`
+    /// cargo feature is off or `[features.mcp]` is not configured.
+    #[cfg(feature = "mcp")]
+    pub mcp_service: Option<services::mcp::McpService>,
+    /// Embedding service for Hadrian-side MCP tool search (semantic /
+    /// hybrid ranking). Resolved from `[features.mcp.tool_search.embedding]`
+    /// with a fallback to the file_search / semantic-cache embedding
+    /// config. `None` when no embedding provider resolves — tool search
+    /// then falls back to lexical ranking.
+    #[cfg(feature = "mcp")]
+    pub tool_search_embeddings: Option<Arc<cache::EmbeddingService>>,
+    /// Persisted Responses API store. Always present when a database
+    /// is configured; powers `GET/POST cancel/DELETE /v1/responses/{id}`
+    /// and the cancellation signal pipeline.
+    #[cfg(feature = "server")]
+    pub responses_store: Option<Arc<services::ResponsesStore>>,
+    /// Containers service. Present when a database is configured;
+    /// drives write-through persistence for the shell-tool
+    /// `/mnt/data` artifact pipeline and serves
+    /// `GET /v1/containers/*`.
+    #[cfg(feature = "server")]
+    pub containers_service: Option<Arc<services::containers::ContainersService>>,
+    /// In-memory registry of live container sessions, keyed by the
+    /// `cntr_…` id. Always present so cross-response container reuse
+    /// works even in DB-less deployments (it just stays empty there).
+    #[cfg(feature = "server")]
+    pub container_session_registry: Arc<services::container_session::ContainerSessionRegistry>,
+    /// Bounded-channel writer that batches `response_events` rows.
+    /// Constructed alongside `responses_store` so persistence and event
+    /// log share the same DB lifecycle.
+    #[cfg(feature = "server")]
+    pub response_event_buffer: Option<Arc<services::ResponseEventBuffer>>,
     /// Document processor for chunking and embedding files added to vector stores.
     /// Used by the Vector Store Files API to process uploaded files.
     #[cfg(any(
@@ -1039,6 +1081,154 @@ impl AppState {
         )
         .await;
 
+        // Initialize the persisted Responses API store when a database
+        // is available. Requests without a DB run stateless — shell
+        // tool retrieval/cancel/delete endpoints will 404.
+        #[cfg(feature = "server")]
+        let responses_store: Option<Arc<services::ResponsesStore>> = db.as_ref().map(|db| {
+            let mut store = services::ResponsesStore::new(
+                db.clone(),
+                std::time::Duration::from_secs(config.features.responses.retention_secs),
+            );
+            if let Some(ref hook) = config.features.responses.webhook {
+                let dispatcher = services::ResponsesWebhookDispatcher::spawn(
+                    hook.clone(),
+                    http_client.clone(),
+                    dlq.clone(),
+                );
+                store = store.with_webhook(dispatcher);
+                tracing::info!(url = %hook.url, "Responses webhook configured");
+            }
+            Arc::new(store)
+        });
+
+        // Event buffer writes batched response_events. Defaults: 100ms
+        // flush interval, batches of 64 events, channel of 1024.
+        #[cfg(feature = "server")]
+        let response_event_buffer: Option<Arc<services::ResponseEventBuffer>> =
+            db.as_ref().map(|db| {
+                Arc::new(services::ResponseEventBuffer::spawn(
+                    db.response_events(),
+                    64,
+                    std::time::Duration::from_millis(100),
+                    1024,
+                ))
+            });
+
+        // Containers service powers shell-tool `/mnt/data` artifact
+        // persistence and `/v1/containers/*`. Available whenever a DB
+        // is configured. Without it the live shell tool still works
+        // (the in-memory session capture path stays available), but
+        // the GET endpoints return 404 because no rows exist.
+        #[cfg(feature = "server")]
+        let containers_service: Option<Arc<services::containers::ContainersService>> =
+            match db.as_ref() {
+                Some(db) => {
+                    // Container artifacts get their own storage backend
+                    // (`[storage.container_files]`) so operators can offload
+                    // bulky `/mnt/data` outputs to filesystem / S3 while
+                    // keeping the Files API wherever they like.
+                    let container_file_storage =
+                        services::create_file_storage(&config.storage.container_files, db.clone())
+                            .await
+                            .map_err(|e| {
+                                format!("Failed to initialize container file storage: {}", e)
+                            })?;
+                    tracing::info!(
+                        backend = %container_file_storage.backend_name(),
+                        "Container file storage backend initialized"
+                    );
+                    Some(Arc::new(services::containers::ContainersService::new(
+                        db.clone(),
+                        container_file_storage,
+                    )))
+                }
+                None => None,
+            };
+
+        // Always construct a registry. In DB-less deployments it
+        // stays empty (sessions never get inserted), but wiring it in
+        // unconditionally keeps the rest of the pipeline's plumbing
+        // simple.
+        #[cfg(feature = "server")]
+        let container_session_registry: Arc<
+            services::container_session::ContainerSessionRegistry,
+        > = Arc::new(services::container_session::ContainerSessionRegistry::new());
+
+        // Initialize the shell tool runtime from [features.shell].
+        // Microsandbox / OpenSandbox / E2B adapters land in slice 1B; for
+        // now they return None and emit a clear startup error.
+        #[cfg(feature = "server")]
+        let shell_runtime: Option<Arc<dyn runtimes::ShellRuntime>> = match &config.features.shell {
+            config::ShellRuntimeConfig::None => None,
+            config::ShellRuntimeConfig::PassthroughOpenAI => {
+                tracing::info!("Shell tool runtime: passthrough_openai");
+                Some(Arc::new(
+                    runtimes::PassthroughRuntime::for_openai_container(),
+                ))
+            }
+            config::ShellRuntimeConfig::ClientPassthrough => {
+                tracing::info!(
+                    "Shell tool runtime: client_passthrough (API client fulfills shell calls)"
+                );
+                Some(Arc::new(runtimes::PassthroughRuntime::for_api_client()))
+            }
+            #[cfg(feature = "runtime-microsandbox")]
+            config::ShellRuntimeConfig::Microsandbox(cfg) => {
+                tracing::info!(
+                    image = %cfg.image,
+                    cpus = cfg.cpus,
+                    memory_mb = cfg.memory_mb,
+                    "Shell tool runtime: microsandbox"
+                );
+                Some(Arc::new(runtimes::MicrosandboxRuntime::new(cfg.clone())))
+            }
+            #[cfg(feature = "runtime-opensandbox")]
+            config::ShellRuntimeConfig::OpenSandbox(cfg) => {
+                tracing::info!(
+                    endpoint = %cfg.endpoint,
+                    "Shell tool runtime: opensandbox"
+                );
+                Some(Arc::new(runtimes::OpenSandboxRuntime::new(
+                    cfg.clone(),
+                    http_client.clone(),
+                )))
+            }
+        };
+
+        // MCP tool service. Built when `[features.mcp]` is configured;
+        // the executor + preprocess pick it up off AppState. The
+        // `hadrian_hosted` mode is the consumer; under
+        // `passthrough_openai` the service is constructed but unused.
+        #[cfg(feature = "mcp")]
+        let mcp_service: Option<services::mcp::McpService> = match &config.features.mcp {
+            Some(cfg) if cfg.enabled => {
+                tracing::info!(
+                    mode = ?cfg.mode,
+                    "MCP tool: enabled"
+                );
+                let approvals_repo = db.as_ref().map(|db| db.mcp_pending_approvals());
+                let url_validation_opts = crate::validation::UrlValidationOptions {
+                    allow_loopback: config.server.allow_loopback_urls,
+                    allow_private: config.server.allow_private_urls,
+                };
+                Some(services::mcp::McpService::with_approvals_repo(
+                    approvals_repo,
+                    url_validation_opts,
+                ))
+            }
+            _ => None,
+        };
+
+        // Resolve the embedding service for Hadrian-side MCP tool search.
+        #[cfg(feature = "mcp")]
+        let tool_search_embeddings = Self::init_tool_search_embeddings(
+            &config,
+            &circuit_breakers,
+            http_client.clone(),
+            file_search_service.as_ref(),
+        );
+
         // Initialize document processor for RAG file processing
         // This reuses the embedding service and vector store from file_search_service
         #[cfg(any(
@@ -1158,6 +1348,20 @@ impl AppState {
             output_guardrails,
             event_bus,
             file_search_service,
+            #[cfg(feature = "server")]
+            shell_runtime,
+            #[cfg(feature = "mcp")]
+            mcp_service,
+            #[cfg(feature = "mcp")]
+            tool_search_embeddings,
+            #[cfg(feature = "server")]
+            responses_store,
+            #[cfg(feature = "server")]
+            containers_service,
+            #[cfg(feature = "server")]
+            container_session_registry,
+            #[cfg(feature = "server")]
+            response_event_buffer,
             #[cfg(any(
                 feature = "document-extraction-basic",
                 feature = "document-extraction-full"
@@ -1446,6 +1650,88 @@ impl AppState {
     ///
     /// The embedding configuration is taken from the semantic caching config if available,
     /// since file search typically uses the same embedding model.
+    /// Resolve an embedding service for Hadrian-side MCP tool search.
+    ///
+    /// Only relevant under `hadrian_hosted`. Resolves the embedding config
+    /// with priority: `[features.mcp.tool_search.embedding]` →
+    /// `[features.file_search.embedding]` →
+    /// `[features.response_caching.semantic.embedding]`; failing that,
+    /// reuses the file_search embedding service if one was built. Returns
+    /// `None` when nothing resolves (tool search falls back to lexical
+    /// ranking). Logs loudly when the configured ranker is `semantic` but
+    /// no embeddings resolve.
+    #[cfg(feature = "mcp")]
+    fn init_tool_search_embeddings(
+        config: &config::GatewayConfig,
+        circuit_breakers: &providers::CircuitBreakerRegistry,
+        http_client: Client,
+        file_search_service: Option<&Arc<services::FileSearchService>>,
+    ) -> Option<Arc<cache::EmbeddingService>> {
+        let mcp_cfg = match &config.features.mcp {
+            Some(cfg) if cfg.enabled && cfg.is_hadrian_hosted() => cfg,
+            _ => return None,
+        };
+        let ts_cfg = &mcp_cfg.tool_search;
+
+        // Lexical ranking needs no embeddings.
+        if ts_cfg.ranker == crate::api_types::responses::ToolSearchRankerKind::Lexical {
+            return None;
+        }
+
+        let embedding_config = ts_cfg.embedding.as_ref().or_else(|| {
+            config
+                .features
+                .file_search
+                .as_ref()
+                .and_then(|fs| fs.embedding.as_ref())
+                .or_else(|| {
+                    config
+                        .features
+                        .response_caching
+                        .as_ref()
+                        .and_then(|rc| rc.semantic.as_ref())
+                        .map(|sc| &sc.embedding)
+                })
+        });
+
+        let resolved = embedding_config.and_then(|cfg| {
+            let provider_config = config.providers.get(&cfg.provider)?;
+            match cache::EmbeddingService::new(
+                cfg,
+                provider_config,
+                circuit_breakers,
+                http_client.clone(),
+            ) {
+                Ok(service) => Some(Arc::new(service)),
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to build embedding service for MCP tool search");
+                    None
+                }
+            }
+        });
+
+        // Last resort: reuse the file_search embedding service if present.
+        let resolved = resolved.or_else(|| file_search_service.map(|fs| fs.embedding_service()));
+
+        if resolved.is_none() {
+            // `hybrid` degrades to lexical; `semantic` was explicitly asked
+            // for and can't be honored — surface it loudly.
+            if ts_cfg.ranker == crate::api_types::responses::ToolSearchRankerKind::Semantic {
+                tracing::error!(
+                    "MCP tool search ranker is `semantic` but no embedding provider resolved; \
+                     configure [features.mcp.tool_search.embedding] (or file_search / semantic \
+                     cache embeddings). Falling back to lexical ranking."
+                );
+            } else {
+                tracing::info!(
+                    "MCP tool search: no embedding provider resolved; using lexical ranking"
+                );
+            }
+        }
+
+        resolved
+    }
+
     async fn init_file_search_service(
         config: &config::GatewayConfig,
         db: Option<&Arc<db::DbPool>>,

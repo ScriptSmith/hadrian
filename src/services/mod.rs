@@ -1,6 +1,14 @@
 mod access_reviews;
 mod api_keys;
 pub mod audit_logs;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod background_executor;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod compactor;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod container_session;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod containers;
 mod conversations;
 #[cfg(any(
     feature = "document-extraction-basic",
@@ -15,6 +23,12 @@ mod file_storage;
 mod files;
 #[cfg(feature = "forecasting")]
 pub mod forecasting;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod input_file_staging;
+#[cfg(all(feature = "mcp", not(target_arch = "wasm32")))]
+pub mod mcp;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod mcp_tool;
 mod model_pricing;
 pub mod oauth_pkce;
 mod org_rbac_policies;
@@ -29,11 +43,25 @@ pub mod prometheus_parser;
 pub mod provider_metrics;
 mod providers;
 mod reranker;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod response_event_buffer;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod response_persister;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod responses_pipeline;
+#[cfg(not(target_arch = "wasm32"))]
+mod responses_store;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod responses_webhook;
 #[cfg(feature = "sso")]
 mod scim_configs;
 #[cfg(feature = "sso")]
 mod scim_provisioning;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod server_tools;
 mod service_accounts;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod shell_tool;
 mod skills;
 #[cfg(feature = "sso")]
 mod sso_group_mappings;
@@ -67,8 +95,7 @@ pub use file_search::{
     FileSearchServiceConfig,
 };
 pub use file_search_tool::{
-    FileSearchAuthContext, FileSearchContext, FileSearchToolArguments, ProviderCallback,
-    preprocess_file_search_tools, wrap_streaming_with_file_search,
+    FileSearchAuthContext, FileSearchContext, FileSearchToolArguments, preprocess_file_search_tools,
 };
 #[cfg(feature = "server")]
 pub use file_storage::FilesystemFileStorage;
@@ -97,6 +124,14 @@ pub use reranker::{
     LlmReranker, NoOpReranker, RankedResult, RerankError, RerankRequest, RerankResponse,
     RerankUsage, Reranker,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use response_event_buffer::ResponseEventBuffer;
+#[cfg(not(target_arch = "wasm32"))]
+pub use responses_store::{
+    CancelSignal, ResponsesStore, ResponsesStoreError, ResponsesStoreResult,
+};
+#[cfg(not(target_arch = "wasm32"))]
+pub use responses_webhook::{ResponsesWebhookDispatcher, WebhookEvent, WebhookEventData};
 #[cfg(feature = "sso")]
 pub use scim_configs::{OrgScimConfigError, OrgScimConfigService};
 #[cfg(feature = "sso")]
@@ -114,9 +149,7 @@ pub use vector_stores::VectorStoresService;
 pub use virus_scan::{
     ClamAvScanner, NoOpScanner, ScanResult, VirusScanError, VirusScanResult, VirusScanner,
 };
-pub use web_search_tool::{
-    WebSearchContext, preprocess_web_search_tools, wrap_streaming_with_web_search,
-};
+pub use web_search_tool::{WebSearchContext, preprocess_web_search_tools};
 
 use crate::{db::DbPool, events::EventBus};
 

@@ -664,7 +664,13 @@ CREATE TABLE IF NOT EXISTS usage_records (
     tool_query TEXT,
     tool_url TEXT,
     tool_bytes_fetched BIGINT,
-    tool_results_count INTEGER
+    tool_results_count INTEGER,
+    -- Wall-clock runtime in seconds (only populated for shell tool records)
+    tool_runtime_seconds DOUBLE PRECISION,
+    -- Shell process exit code (only populated for shell tool records).
+    -- Kept separate from status_code (HTTP) so a shell that exits non-zero
+    -- inside a 200 response is observable in usage queries.
+    tool_exit_code INTEGER
 );
 
 -- API key indexes (partial: only index rows with api_key_id)
@@ -1291,3 +1297,218 @@ CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_code ON oauth_authorization_cod
 CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_user ON oauth_authorization_codes(user_id);
 -- Used by the periodic cleanup query to find expired/consumed codes
 CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_expires ON oauth_authorization_codes(expires_at);
+
+-- ======================================================================
+-- Responses (Responses API persistence)
+-- ======================================================================
+
+DO $$ BEGIN
+    CREATE TYPE response_owner_type AS ENUM ('organization', 'team', 'project', 'user', 'service_account');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+-- See SQLite migration for documentation. Mirror schema.
+--
+-- `owner_type`/`owner_id` follow the same pattern as `skills` /
+-- `templates` / `conversations`: they record which scope a response
+-- belongs to (so it can be listed/retrieved as an org/team/project/
+-- user/service-account resource). `org_id` is the tenant boundary;
+-- the audit columns (`user_id`, `api_key_id`, `project_id`,
+-- `service_account_id`) record who actually made the call.
+CREATE TABLE IF NOT EXISTS responses (
+    id VARCHAR(64) PRIMARY KEY,
+    org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    owner_type response_owner_type NOT NULL,
+    owner_id UUID NOT NULL,
+    project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    api_key_id UUID REFERENCES api_keys(id) ON DELETE SET NULL,
+    service_account_id UUID REFERENCES service_accounts(id) ON DELETE SET NULL,
+    status VARCHAR(16) NOT NULL,
+    background BOOLEAN NOT NULL DEFAULT FALSE,
+    model VARCHAR(128) NOT NULL,
+    provider VARCHAR(128),
+    created_at TIMESTAMPTZ NOT NULL,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    request_payload JSONB NOT NULL,
+    output JSONB,
+    usage JSONB,
+    error JSONB,
+    retention_expires_at TIMESTAMPTZ NOT NULL,
+    last_sequence_number BIGINT NOT NULL DEFAULT 0,
+    -- Liveness heartbeat for `in_progress` rows. The executing worker
+    -- stamps this periodically; the in-progress reaper compares against
+    -- COALESCE(last_heartbeat_at, started_at) so it only force-fails rows
+    -- whose worker has actually gone away, never a healthy long-running
+    -- response.
+    last_heartbeat_at TIMESTAMPTZ,
+    -- Container the shell-tool session for this response wrote files
+    -- into. Set when a `[features.shell]` runtime captures artifacts
+    -- under `/mnt/data`. Drives `previous_response_id`-based reuse:
+    -- a chained response looks here to find the container it should
+    -- reattach to.
+    container_id VARCHAR(48)
+);
+
+CREATE INDEX IF NOT EXISTS idx_responses_org_status ON responses(org_id, status);
+-- Gateway-wide background-worker queries (claim_queued, reap_stuck_in_progress,
+-- list_cancelled_among) filter on `status` without `org_id`, so the org-leading
+-- index above is unusable for them. This (status, created_at) index serves those
+-- polls without a full table scan + sort.
+CREATE INDEX IF NOT EXISTS idx_responses_status ON responses(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_responses_owner_created ON responses(owner_type, owner_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_responses_retention ON responses(retention_expires_at);
+
+-- Append-only event log; see SQLite migration. The composite PRIMARY
+-- KEY already provides the (response_id, sequence_number) b-tree, so
+-- no extra index is needed.
+CREATE TABLE IF NOT EXISTS response_events (
+    response_id VARCHAR(64) NOT NULL REFERENCES responses(id) ON DELETE CASCADE,
+    sequence_number BIGINT NOT NULL,
+    event_type VARCHAR(64) NOT NULL,
+    payload JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (response_id, sequence_number)
+);
+
+-- ======================================================================
+-- Containers (shell-tool `/mnt/data` artifact persistence)
+-- ======================================================================
+
+-- A "container" is the persistent shell-tool session and the files it
+-- produced under `/mnt/data`. One row per session; today the session
+-- is response-scoped, and `previous_response_id` / `container_reference`
+-- chains can reuse a row across responses.
+--
+-- IDs are stored as TEXT (`cntr_<32hex>`) so the wire format and the
+-- DB key match — clients pass the same string they received in a
+-- `container_file_citation` annotation back as the URL segment.
+CREATE TABLE IF NOT EXISTS containers (
+    id VARCHAR(48) PRIMARY KEY,
+    org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    owner_type response_owner_type NOT NULL,
+    owner_id UUID NOT NULL,
+    -- 'active' | 'expired' | 'deleted'
+    status VARCHAR(16) NOT NULL,
+    -- Runtime that backed the session (`microsandbox`, `opensandbox`,
+    -- `passthrough_openai`). Stored as a label rather than a FK so
+    -- we can drop a runtime backend without rewriting history.
+    runtime_label VARCHAR(64) NOT NULL,
+    -- Response this container was originally provisioned for. Nullable
+    -- because `POST /v1/containers` creates a container unattached to
+    -- any response (it gets used by future responses via
+    -- `container_reference`).
+    source_response_id VARCHAR(64),
+    idle_ttl_secs BIGINT NOT NULL,
+    last_active_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ,
+    -- Optional display name supplied at `POST /v1/containers` time
+    -- (max 255 chars by OpenAI's convention).
+    name VARCHAR(255),
+    -- Memory ceiling stored at creation. Persisted so future reattach
+    -- requests can recompute the resolved env consistently. Nullable
+    -- when not specified (runtime default applies).
+    memory_limit_mb INTEGER,
+    -- JSON-encoded `network_policy` saved at creation time so reuse
+    -- through `container_reference` carries the original egress policy
+    -- (operator caps still apply per request).
+    network_policy_json TEXT,
+    -- JSON array of skill UUIDs bound to this container. Materialised
+    -- on every session boot.
+    skill_ids_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_containers_org_active
+    ON containers(org_id, status, last_active_at);
+-- Gateway-wide reaper queries (mark_expired_idle, hard_delete_expired) filter on
+-- `status` without `org_id` and order by `expires_at`; the org-leading index above
+-- can't serve them. This index avoids a sequential scan + sort on every poll.
+CREATE INDEX IF NOT EXISTS idx_containers_status_expires
+    ON containers(status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_containers_source_response
+    ON containers(source_response_id)
+    WHERE source_response_id IS NOT NULL;
+
+-- One row per file currently tracked under `/mnt/data` for a given
+-- container. Reuses the same `file_storage_backend` enum + storage
+-- columns as the OpenAI Files API table so the same `FileStorage`
+-- trait can read both.
+--
+-- `path` is the absolute path inside the container (always under
+-- `/mnt/data/`). Unique per container so overwrites map to the same
+-- row — re-running a shell command that produces the same artifact
+-- doesn't grow the table unbounded.
+CREATE TABLE IF NOT EXISTS container_files (
+    id VARCHAR(48) PRIMARY KEY,
+    container_id VARCHAR(48) NOT NULL REFERENCES containers(id) ON DELETE CASCADE,
+    org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    filename VARCHAR(255) NOT NULL,
+    size_bytes BIGINT NOT NULL,
+    content_type VARCHAR(128),
+    -- sha256 hex of content. 64 chars exactly.
+    content_hash VARCHAR(64) NOT NULL,
+    -- 'user' (staged from an input_file part) | 'assistant' (written
+    -- by the model during a shell command).
+    source VARCHAR(16) NOT NULL,
+    storage_backend file_storage_backend NOT NULL DEFAULT 'database',
+    file_data BYTEA,
+    storage_path TEXT,
+    -- Provenance: which response / shell call produced this version.
+    source_response_id VARCHAR(64),
+    source_call_id VARCHAR(128),
+    created_at TIMESTAMPTZ NOT NULL,
+    UNIQUE(container_id, path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_container_files_container_created
+    ON container_files(container_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_container_files_org
+    ON container_files(org_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- mcp_pending_approvals
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Parked MCP tool calls waiting on a `mcp_approval_response` from the
+-- caller. Written when the executor's gating check (require_approval
+-- on the corresponding McpTool) blocks a model-initiated call; read
+-- by the preprocess in `routes/execution.rs` when a subsequent
+-- request includes a matching `mcp_approval_response` input item.
+--
+-- Scoped to a `response_id` so two concurrent responses can both park
+-- approvals without colliding; cleanup is best-effort via `expires_at`
+-- and the existing retention worker.
+CREATE TABLE IF NOT EXISTS mcp_pending_approvals (
+    -- `approval_request_id` surfaced on the `mcp_approval_request`
+    -- item the gateway emitted. The caller echoes it back on the
+    -- matching `mcp_approval_response` so the gateway can look up the
+    -- parked call by primary key.
+    id VARCHAR(64) PRIMARY KEY,
+    -- The response (turn) that emitted the approval request. The
+    -- approval response must arrive on a request whose
+    -- `previous_response_id` chains back here.
+    response_id VARCHAR(64) NOT NULL,
+    org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    -- `call_id` from the original `function_call` (rewritten MCP tool)
+    -- so we can synthesize a matching `function_call_output` on resume.
+    call_id VARCHAR(128) NOT NULL,
+    -- MCP server identity captured at park time. Persisted (not
+    -- re-derived from the request) so an in-flight credentials rotation
+    -- between park and resume can't lose the call.
+    server_label VARCHAR(128) NOT NULL,
+    server_url TEXT NOT NULL,
+    tool_name VARCHAR(128) NOT NULL,
+    -- Arguments the model originally proposed, as a JSON string
+    -- (matches the wire shape of `function_call.arguments`).
+    arguments_json TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_pending_approvals_response
+    ON mcp_pending_approvals(response_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_pending_approvals_expires
+    ON mcp_pending_approvals(expires_at);

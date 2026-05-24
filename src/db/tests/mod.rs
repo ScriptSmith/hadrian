@@ -23,6 +23,7 @@
 
 mod api_keys;
 mod audit_logs;
+mod containers;
 mod conversations;
 pub mod harness;
 mod model_pricing;

@@ -31,7 +31,7 @@ jobs:
         run: rustup install nightly && rustup component add rustfmt --toolchain nightly
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libxml2-dev libxslt1-dev libxmlsec1-dev libclang-dev tesseract-ocr tesseract-ocr-eng
+        run: sudo apt-get update && sudo apt-get install -y libxml2-dev libxslt1-dev libxmlsec1-dev libclang-dev libcap-ng-dev tesseract-ocr tesseract-ocr-eng
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -85,7 +85,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libxml2-dev libxslt1-dev libxmlsec1-dev libclang-dev tesseract-ocr tesseract-ocr-eng
+        run: sudo apt-get update && sudo apt-get install -y libxml2-dev libxslt1-dev libxmlsec1-dev libclang-dev libcap-ng-dev tesseract-ocr tesseract-ocr-eng
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -202,7 +202,7 @@ jobs:
 
       - name: Install dependencies (Linux full)
         if: matrix.features == 'full' && runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libxml2-dev libxslt1-dev libxmlsec1-dev libclang-dev
+        run: sudo apt-get update && sudo apt-get install -y libxml2-dev libxslt1-dev libxmlsec1-dev libclang-dev libcap-ng-dev
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -436,7 +436,7 @@ jobs:
       - name: Install build deps for samael
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxml2-dev libxslt1-dev libxmlsec1-dev pkg-config libssl-dev
+          sudo apt-get install -y libxml2-dev libxslt1-dev libxmlsec1-dev libcap-ng-dev pkg-config libssl-dev
 
       - name: Regenerate Hadrian OpenAPI spec
         run: cargo run --release -- openapi --output openapi/hadrian.openapi.json

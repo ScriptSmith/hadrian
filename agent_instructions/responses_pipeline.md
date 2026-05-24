@@ -1,0 +1,142 @@
+# Responses API Streaming Pipeline
+
+`/v1/responses` requests run through `services::responses_pipeline::apply_streaming_pipeline`,
+which wraps the upstream provider's SSE stream with input-file staging, guardrails, server-tool
+execution, and DB persistence. This doc covers the order, the actors, and how
+background requests re-enter the same pipeline.
+
+For the broader Responses API + Containers feature, start with `containers.md`. For adding a
+new tool, mirror `services/web_search_tool.rs` or `services/shell_tool.rs`. For the runtime
+side, see `adding_runtime.md`. Server-side MCP support lives under `src/services/mcp/` and the
+MCP wire shape we expose tracks OpenAI's Responses-API MCP tool (see references below).
+
+Two server-executed tools come from the MCP subsystem, both registered in
+`apply_streaming_pipeline` only under `[features.mcp].mode = "hadrian_hosted"`:
+
+- `McpExecutor` (`src/services/mcp/executor.rs`) — intercepts the rewritten
+  `mcp_<label>__<tool>` function calls and runs `tools/call`.
+- `ToolSearchExecutor` (`src/services/mcp/tool_search/`) — for `mcp` entries with
+  `defer_loading: true`, the rewrite injects a single `tool_search` function tool instead of
+  the per-tool functions; this executor ranks the deferred catalog locally
+  (`tool_search/ranker.rs`: lexical / semantic / hybrid-RRF, reusing `cache::EmbeddingService`),
+  emits `tool_search_call` / `tool_search_output` items, and injects the matched function
+  definitions into the continuation so they become callable. Ranking is configured by
+  `[features.mcp.tool_search]` and overridable per request via the `tool_search` tool's
+  `ranker` extension. See `docs/content/docs/features/mcp-tool.mdx` ("Tool search").
+
+## External references
+
+OpenAI's MCP-tool docs we conform to, plus the cookbook walkthrough:
+
+- https://developers.openai.com/api/docs/mcp.md
+- https://developers.openai.com/api/docs/guides/tools-connectors-mcp.md — guide to using
+  remote MCP servers in the Responses API (listing tools, calling tools, approvals, auth).
+- https://r.jina.ai/openai.com/index/new-tools-and-features-in-the-responses-api/
+- https://raw.githubusercontent.com/openai/openai-cookbook/refs/heads/main/examples/mcp/mcp_tool_guide.ipynb
+- https://developers.openai.com/api/docs/guides/tools-tool-search.md
+- https://developers.openai.com/api/docs/guides/tools.md
+
+## Where it lives
+
+- **Entry point**: `routes/api/responses.rs::handle_create_response` for foreground;
+  `services/background_executor.rs::run_background` for background requests pulled off the
+  queue by the `background_responses` job.
+- **Pipeline body**: `services/responses_pipeline.rs::apply_streaming_pipeline`.
+- **Tool loop**: `services/server_tools/runner.rs::ToolLoopRunner`.
+
+## Order of operations (foreground)
+
+1. **Admission** (`routes/api/responses.rs`): auth, RBAC, budget, sovereignty checks. Resolve
+   the request's shell `environment` against `[features.server_tools].shell_limits` and fail
+   fast on cap overruns (`resolve_shell_environment` in `services/shell_tool.rs`).
+2. **Input-file staging** (`services/input_file_staging.rs`): walk `payload.input` for
+   `input_file` parts and resolve each via Files API lookup / base64 / HTTP fetch. Returns
+   `Vec<StagedFile>` ready to write into `/mnt/data`.
+3. **Provider dispatch**: `ResponsesExecutor::execute` runs `preprocess_file_search_tools`,
+   `preprocess_web_search_tools`, and (per-provider) `preprocess_shell_tools` with a
+   `ShellToolHint` built from the resolved environment, then calls the upstream provider for
+   a streaming response.
+4. **Output guardrails** wrap the stream (block / redact per
+   `[features.guardrails].output`).
+5. **Server tool loop** (`ToolLoopRunner`): for each SSE event, every registered tool runs
+   `detect`. Detected calls run in parallel via `execute()`; their `events` stream interleaves
+   into the client stream; their `ToolCallResult` continuation items go into the next
+   provider request. The loop iterates up to `[features.server_tools].max_iterations` (final
+   iteration strips that tool from `payload.tools` so the model has to produce text).
+6. **Response persister** (`services/response_persister.rs`): when persistence is enabled,
+   buffer the full SSE event stream and upsert into `responses` + `response_events` so
+   `/v1/responses/{id}` can replay.
+7. **Webhook fan-out** (`services/responses_webhook.rs`): terminal events fire optional
+   per-org webhooks.
+
+## Background variant
+
+`POST /v1/responses { "background": true }` skips the provider call inline. Instead:
+
+1. The route persists a `responses` row in `queued` state.
+2. `jobs/background_responses.rs` (leader-locked) pulls queued rows and hands them to
+   `services/background_executor.rs::run_background`.
+3. The executor reconstructs the request (auth context comes from the persisted `owner` and
+   `org_id` — see `db/repos/responses.rs`), then enters the *same* `apply_streaming_pipeline`
+   path. SSE events are captured into the `response_events` table rather than streamed to a
+   live client.
+4. `services/response_event_buffer.rs` lets clients stream the response via
+   `GET /v1/responses/{id}?stream=true`, replaying buffered events and tailing new ones.
+
+The skills used at background-execution time are resolved from the persisted owner, NOT the
+request-time principal — this matters when the principal rotates (e.g. API key revoked
+between queue and dispatch).
+
+## Adding a tool to the pipeline
+
+A `ServerExecutedTool` is the unit of work. To add one:
+
+1. Implement the trait (`services/server_tools/mod.rs`). Be careful in `detect()` — it runs
+   for every SSE event, must be cheap, and must use the **canonical detection event** for
+   that call type (e.g. `response.output_item.done`) to avoid duplicate fires on partial
+   events.
+2. Register it in `apply_streaming_pipeline` under whatever feature gate makes sense.
+3. Hook a `format_*` helper for any new SSE event types you emit; mirror existing
+   `response.<tool>.in_progress` / `.completed` shapes.
+4. Update `[features.server_tools].pricing` if there's a per-call cost dimension.
+
+## Invariants (don't regress these)
+
+- **Terminal-state transitions are DB-guarded.** Writing a terminal status
+  (`completed`/`failed`/`cancelled`/`incomplete`) goes through
+  `ResponsesRepo::complete_within_org`, whose UPDATE carries `WHERE status NOT IN (<terminal
+  set>)`. The webhook-once decision and lost-cancel prevention are driven off the affected-row
+  count — never a read-then-write. Without this a late `completed` from the persister clobbers
+  an earlier `cancelled`, and webhooks double-fire under concurrency. `ResponsesStore::cancel`
+  and `response_persister` both rely on this.
+- **Event-log ordering invariant** (`response_event_buffer.rs`): non-terminal events ride the
+  async drainer (`push`); the terminal event is committed synchronously (`insert_sync`), which
+  ratchets `last_sequence_number`. The persister **must** call `buf.flush().await` before the
+  terminal `insert_sync` so all buffered events land first — otherwise a reconnecting
+  `?stream=true` reader sees the terminal event, emits `[DONE]`, and drops the un-flushed tail.
+  The replay loop (`responses_lookup.rs`) treats the log as the truth source and stops on the
+  first terminal event type.
+- **In-progress heartbeat**: while a response streams, the persister stamps
+  `responses.last_heartbeat_at` (throttled). `reap_stuck_in_progress` compares against
+  `COALESCE(last_heartbeat_at, started_at)` so it force-`failed`s only genuinely dead workers,
+  not healthy long-running responses.
+- **Background-worker lifecycle**: the retention / reaper / background-response / cancel-poller /
+  cleanup workers are spawned on `state.task_tracker` (not raw `tokio::spawn`) and select on the
+  shutdown `CancellationToken` rather than a bare `sleep`. `drain_background_tasks` only awaits
+  the tracker, so an untracked worker is abandoned on SIGTERM and its in-flight `background=true`
+  response gets force-reaped as `worker_lost`. The per-execution task in
+  `background_responses.rs` is also tracked so it drains.
+- **Background retry** (`run_with_retry`): a failed attempt's partial events stay in
+  `response_events`; the next attempt re-loads the row and continues from
+  `last_sequence_number` (and bumps `started_at`/heartbeat so the reaper doesn't kill the retry).
+
+## Common edits
+
+- **Reorder pipeline stages**: only do this with a real reason. Guardrails-before-tools is
+  intentional (the guardrail can short-circuit before any tool spends money). Persister-last
+  is intentional (we persist what the client actually saw).
+- **Add an SSE transformer that changes existing events**: implement `transform_event` on the
+  tool. The runner calls it for every outgoing event. Use interior mutability for stateful
+  transforms (see `ShellExecutor::transform_event` for citation injection).
+- **Skip the pipeline entirely**: `has_enabled_tools()` returns false → the runner falls
+  through with the original stream unchanged. That's the right behavior when nothing applies.

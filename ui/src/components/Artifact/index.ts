@@ -5,3 +5,4 @@ export { TableArtifact, type TableArtifactProps } from "./TableArtifact";
 export { ImageArtifact, type ImageArtifactProps } from "./ImageArtifact";
 export { ChartArtifact, type ChartArtifactProps } from "./ChartArtifact";
 export { HtmlArtifact, type HtmlArtifactProps } from "./HtmlArtifact";
+export { ContainerFileArtifact, type ContainerFileArtifactProps } from "./ContainerFileArtifact";

@@ -28,11 +28,15 @@ use crate::{
 };
 
 mod audio;
-mod chat;
+pub(crate) mod chat;
+#[cfg(feature = "server")]
+pub mod containers;
 mod embeddings;
 mod files;
 mod images;
 mod models;
+#[cfg(feature = "server")]
+pub mod responses_lookup;
 pub(crate) mod tools;
 mod vector_stores;
 
@@ -851,8 +855,42 @@ pub(crate) fn api_v1_routes(limits: ApiBodyLimits) -> Router<AppState> {
         // Tools API (Hadrian extension)
         .route("/v1/tools/web-search", post(web_search))
         .route("/v1/tools/web-fetch", post(web_fetch));
+    // Responses persistence + containers endpoints depend on the DB-backed
+    // ResponsesStore / ContainersService, which are server-only (no WASM).
     #[cfg(feature = "server")]
     let router = router
+        .route("/v1/responses/compact", post(api_v1_responses_compact))
+        .route(
+            "/v1/responses/{response_id}",
+            get(responses_lookup::api_v1_responses_get)
+                .delete(responses_lookup::api_v1_responses_delete),
+        )
+        .route(
+            "/v1/responses/{response_id}/cancel",
+            post(responses_lookup::api_v1_responses_cancel),
+        )
+        .route(
+            "/v1/containers",
+            post(containers::api_v1_containers_create).get(containers::api_v1_containers_list),
+        )
+        .route(
+            "/v1/containers/{container_id}",
+            get(containers::api_v1_containers_get).delete(containers::api_v1_containers_delete),
+        )
+        .route(
+            "/v1/containers/{container_id}/files",
+            get(containers::api_v1_containers_list_files)
+                .post(containers::api_v1_containers_file_upload),
+        )
+        .route(
+            "/v1/containers/{container_id}/files/{file_id}",
+            get(containers::api_v1_containers_file_get)
+                .delete(containers::api_v1_containers_file_delete),
+        )
+        .route(
+            "/v1/containers/{container_id}/files/{file_id}/content",
+            get(containers::api_v1_containers_file_content),
+        )
         .route("/v1/images/edits", post(api_v1_images_edits))
         .route("/v1/images/variations", post(api_v1_images_variations));
     let router = router

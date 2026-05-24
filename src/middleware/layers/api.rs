@@ -977,6 +977,8 @@ pub async fn api_middleware(
                     tool_url: None,
                     tool_bytes_fetched: None,
                     tool_results_count: None,
+                    tool_runtime_seconds: None,
+                    tool_exit_code: None,
                 });
             }
         }
@@ -1138,6 +1140,8 @@ fn track_usage_async(ctx: UsageTrackingContext<'_>) {
         tool_url: None,
         tool_bytes_fetched: None,
         tool_results_count: None,
+        tool_runtime_seconds: None,
+        tool_exit_code: None,
     };
 
     let is_success = response.status().is_success();
@@ -2289,6 +2293,17 @@ mod tests {
             output_guardrails: None,
             event_bus: Arc::new(crate::events::EventBus::new()),
             file_search_service: None,
+            shell_runtime: None,
+            #[cfg(feature = "mcp")]
+            mcp_service: None,
+            #[cfg(feature = "mcp")]
+            tool_search_embeddings: None,
+            responses_store: None,
+            containers_service: None,
+            container_session_registry: std::sync::Arc::new(
+                crate::services::container_session::ContainerSessionRegistry::new(),
+            ),
+            response_event_buffer: None,
             #[cfg(any(
                 feature = "document-extraction-basic",
                 feature = "document-extraction-full"
@@ -2347,6 +2362,17 @@ mod tests {
             output_guardrails: None,
             event_bus: Arc::new(crate::events::EventBus::new()),
             file_search_service: None,
+            shell_runtime: None,
+            #[cfg(feature = "mcp")]
+            mcp_service: None,
+            #[cfg(feature = "mcp")]
+            tool_search_embeddings: None,
+            responses_store: None,
+            containers_service: None,
+            container_session_registry: std::sync::Arc::new(
+                crate::services::container_session::ContainerSessionRegistry::new(),
+            ),
+            response_event_buffer: None,
             #[cfg(any(
                 feature = "document-extraction-basic",
                 feature = "document-extraction-full"

@@ -328,6 +328,22 @@ export interface MCPOAuthConfig {
 /** MCP Server connection status */
 export type MCPConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 
+/**
+ * Where an MCP server's tool calls execute.
+ *
+ * - `browser` (default): the browser connects to the server, discovers tools,
+ *   and executes calls client-side (the existing behavior). Only works inside
+ *   the chat UI.
+ * - `gateway`: Hadrian connects to the server and runs the calls server-side.
+ *   The server config is sent as an `mcp` tool in the `/v1/responses` request,
+ *   so it works for background/agent runs and for API clients — but credentials
+ *   (`headers`/`authorization`) leave the browser with the request.
+ */
+export type MCPRunsOn = "browser" | "gateway";
+
+/** Approval gating for gateway-executed MCP tools. */
+export type MCPRequireApproval = "always" | "never";
+
 /** MCP Server configuration */
 export interface MCPServerConfig {
   /** Unique identifier */
@@ -346,6 +362,18 @@ export interface MCPServerConfig {
   authType?: MCPAuthType;
   /** OAuth configuration (when authType is "oauth") */
   oauth?: MCPOAuthConfig;
+  /** Where tool calls execute (default: "browser"). */
+  runsOn?: MCPRunsOn;
+  /**
+   * Approval gating for gateway-executed tools (default: "never").
+   * Only meaningful when `runsOn === "gateway"`.
+   */
+  requireApproval?: MCPRequireApproval;
+  /**
+   * Restrict the gateway to this subset of tool names (empty/undefined = all).
+   * Only meaningful when `runsOn === "gateway"`.
+   */
+  allowedTools?: string[];
 }
 
 /** MCP Server state (config + runtime state) */

@@ -618,7 +618,13 @@ CREATE TABLE IF NOT EXISTS usage_records (
     tool_query TEXT,
     tool_url TEXT,
     tool_bytes_fetched INTEGER,
-    tool_results_count INTEGER
+    tool_results_count INTEGER,
+    -- Wall-clock runtime in seconds (only populated for shell tool records)
+    tool_runtime_seconds REAL,
+    -- Shell process exit code (only populated for shell tool records).
+    -- Kept separate from status_code (HTTP) so a shell that exits non-zero
+    -- inside a 200 response is observable in usage queries.
+    tool_exit_code INTEGER
 );
 
 -- SQLite doesn't support partial indexes; use regular indexes
@@ -1044,3 +1050,185 @@ CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_code ON oauth_authorization_cod
 CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_user ON oauth_authorization_codes(user_id);
 -- Used by the periodic cleanup query to find expired/consumed codes
 CREATE INDEX IF NOT EXISTS idx_oauth_authz_codes_expires ON oauth_authorization_codes(expires_at);
+
+-- ======================================================================
+-- Responses (Responses API persistence)
+-- ======================================================================
+
+-- A persisted response from the Responses API. Stored when the
+-- client sends `store=true` (default per OpenAI spec). Allows clients
+-- to retrieve responses by ID, list their history, cancel in-progress
+-- background responses, and delete persisted records.
+--
+-- Status lifecycle: queued -> in_progress -> {completed | failed |
+-- cancelled | incomplete}.
+--
+-- `retention_expires_at` drives the cleanup worker that prunes old
+-- records (default 24h after the response reaches a terminal state).
+-- `request_payload`, `output`, `usage`, `error` are stored as JSON
+-- text — the schema is intentionally opaque so the API surface can
+-- evolve without further migrations.
+CREATE TABLE IF NOT EXISTS responses (
+    id TEXT PRIMARY KEY,
+    -- Tenancy. Org is required: anonymous-mode deployments still set a
+    -- synthetic default org via the auth middleware, so a NULL here
+    -- would indicate a bypass we want to reject at insert time.
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    -- Ownership. Matches the `skills` / `templates` / `conversations`
+    -- pattern — records which scope a response belongs to so it can
+    -- be listed/retrieved as an org/team/project/user/service-account
+    -- resource. Reads cascade through the org-scope filter; writes
+    -- and deletes follow the same cascade.
+    owner_type TEXT NOT NULL CHECK (owner_type IN ('organization','team','project','user','service_account')),
+    owner_id TEXT NOT NULL,
+    -- Audit columns. These record who actually made the call; they
+    -- are distinct from the owner above (an API key bound to a
+    -- project can submit a request whose owner is the user, etc.).
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    api_key_id TEXT REFERENCES api_keys(id) ON DELETE SET NULL,
+    service_account_id TEXT REFERENCES service_accounts(id) ON DELETE SET NULL,
+    -- Lifecycle
+    status TEXT NOT NULL,
+    background INTEGER NOT NULL DEFAULT 0,
+    model TEXT NOT NULL,
+    provider TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    -- Payload + result (JSON)
+    request_payload TEXT NOT NULL,
+    output TEXT,
+    usage TEXT,
+    error TEXT,
+    -- Retention
+    retention_expires_at TEXT NOT NULL,
+    -- Highest event sequence_number persisted by the event buffer for
+    -- this response. Used by the replay endpoint to detect "no more
+    -- events coming" without a separate join.
+    last_sequence_number INTEGER NOT NULL DEFAULT 0,
+    -- Liveness heartbeat for `in_progress` rows; the in-progress reaper
+    -- compares against COALESCE(last_heartbeat_at, started_at). See the
+    -- Postgres migration for the rationale.
+    last_heartbeat_at TEXT,
+    -- Container the shell-tool session for this response wrote files
+    -- into. See Postgres migration for the design rationale.
+    container_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_responses_org_status ON responses(org_id, status);
+-- Gateway-wide background-worker queries (claim_queued, reap_stuck_in_progress,
+-- list_cancelled_among) filter on `status` without `org_id`, so the org-leading
+-- index above is unusable for them. This (status, created_at) index serves those
+-- polls without a full table scan + sort.
+CREATE INDEX IF NOT EXISTS idx_responses_status ON responses(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_responses_owner_created ON responses(owner_type, owner_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_responses_retention ON responses(retention_expires_at);
+
+-- Append-only event log for in-flight + completed responses. Powers
+-- `GET /v1/responses/{id}/events?starting_after=N` for clients that
+-- need to resume a dropped stream — they replay missed events from the
+-- log up to whatever sequence number they had when they disconnected,
+-- then continue with live events.
+--
+-- `sequence_number` is monotonic per response and assigned in the
+-- gateway (not derived from the upstream provider) so retries don't
+-- create gaps. ON DELETE CASCADE on `response_id` keeps the log in
+-- sync with `responses` cleanup. The composite PRIMARY KEY already
+-- provides the (response_id, sequence_number) b-tree, so no extra
+-- index is needed.
+CREATE TABLE IF NOT EXISTS response_events (
+    response_id TEXT NOT NULL REFERENCES responses(id) ON DELETE CASCADE,
+    sequence_number INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (response_id, sequence_number)
+);
+
+-- ======================================================================
+-- Containers (shell-tool `/mnt/data` artifact persistence)
+-- ======================================================================
+
+-- Mirror of the Postgres `containers` / `container_files` tables. See
+-- the Postgres migration for the design rationale. SQLite stores
+-- timestamps as TEXT (ISO-8601) — cursor pagination through these
+-- tables relies on millisecond-precision `created_at` values, so all
+-- inserts must use `truncate_to_millis(Utc::now())`.
+CREATE TABLE IF NOT EXISTS containers (
+    id TEXT PRIMARY KEY NOT NULL,
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    owner_type TEXT NOT NULL CHECK (owner_type IN ('organization', 'team', 'project', 'user', 'service_account')),
+    owner_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('active', 'expired', 'deleted')),
+    runtime_label TEXT NOT NULL,
+    source_response_id TEXT,
+    idle_ttl_secs INTEGER NOT NULL,
+    last_active_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT,
+    -- POST /v1/containers fields (see postgres migration for rationale).
+    name TEXT,
+    memory_limit_mb INTEGER,
+    network_policy_json TEXT,
+    skill_ids_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_containers_org_active
+    ON containers(org_id, status, last_active_at);
+-- Gateway-wide reaper queries (mark_expired_idle, hard_delete_expired) filter on
+-- `status` without `org_id` and order by `expires_at`; the org-leading index above
+-- can't serve them. This index avoids a sequential scan + sort on every poll.
+CREATE INDEX IF NOT EXISTS idx_containers_status_expires
+    ON containers(status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_containers_source_response
+    ON containers(source_response_id)
+    WHERE source_response_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS container_files (
+    id TEXT PRIMARY KEY NOT NULL,
+    container_id TEXT NOT NULL REFERENCES containers(id) ON DELETE CASCADE,
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    content_type TEXT,
+    content_hash TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('user', 'assistant')),
+    storage_backend TEXT NOT NULL DEFAULT 'database' CHECK (storage_backend IN ('database', 'filesystem', 's3')),
+    file_data BLOB,
+    storage_path TEXT,
+    source_response_id TEXT,
+    source_call_id TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(container_id, path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_container_files_container_created
+    ON container_files(container_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_container_files_org
+    ON container_files(org_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- mcp_pending_approvals
+-- ─────────────────────────────────────────────────────────────────────────────
+-- See the Postgres mirror for full doc. Timestamps as TEXT (ISO 8601
+-- with millisecond precision — call `truncate_to_millis(Utc::now())`
+-- when writing, per `agent_instructions/database_changes.md`).
+CREATE TABLE IF NOT EXISTS mcp_pending_approvals (
+    id TEXT PRIMARY KEY NOT NULL,
+    response_id TEXT NOT NULL,
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    call_id TEXT NOT NULL,
+    server_label TEXT NOT NULL,
+    server_url TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    arguments_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_pending_approvals_response
+    ON mcp_pending_approvals(response_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_pending_approvals_expires
+    ON mcp_pending_approvals(expires_at);

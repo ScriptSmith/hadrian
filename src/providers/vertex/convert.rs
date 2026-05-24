@@ -681,6 +681,15 @@ pub(super) fn convert_responses_input_to_vertex(
                     }
                     ResponsesInputItem::WebSearchCall(_)
                     | ResponsesInputItem::FileSearchCall(_)
+                    | ResponsesInputItem::ShellCall(_)
+                    | ResponsesInputItem::ShellCallOutput(_)
+                    | ResponsesInputItem::McpListTools(_)
+                    | ResponsesInputItem::McpCall(_)
+                    | ResponsesInputItem::McpApprovalRequest(_)
+                    | ResponsesInputItem::McpApprovalResponse(_)
+                    | ResponsesInputItem::ToolSearchCall(_)
+                    | ResponsesInputItem::ToolSearchOutput(_)
+                    | ResponsesInputItem::Compaction(_)
                     | ResponsesInputItem::ImageGeneration(_) => {
                         // Server-side tool calls not supported by Vertex
                     }
@@ -753,22 +762,12 @@ pub(super) fn convert_responses_tools_to_vertex(
 
     for tool in tools {
         match tool {
-            ResponsesToolDefinition::Function(value) => {
-                // Extract function tool definition from generic JSON
-                // Expected: { "type": "function", "name": "...", "description": "...", "parameters": {...} }
-                if let Some(name) = value.get("name").and_then(|v| v.as_str()) {
-                    let description = value
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    let parameters = value.get("parameters").cloned();
-
-                    function_declarations.push(VertexFunctionDeclaration {
-                        name: name.to_string(),
-                        description,
-                        parameters,
-                    });
-                }
+            ResponsesToolDefinition::Function(func) => {
+                function_declarations.push(VertexFunctionDeclaration {
+                    name: func.name,
+                    description: func.description,
+                    parameters: func.parameters,
+                });
             }
             ResponsesToolDefinition::WebSearchPreview(_)
             | ResponsesToolDefinition::WebSearchPreview20250311(_)
@@ -776,6 +775,24 @@ pub(super) fn convert_responses_tools_to_vertex(
             | ResponsesToolDefinition::WebSearch20250826(_) => {
                 // Dead code: preprocessed to function tools in execution.rs
                 tracing::warn!("Unexpected web_search tool variant reached Vertex conversion");
+            }
+            ResponsesToolDefinition::Shell(_) => {
+                tracing::warn!(
+                    "Shell tool reached Vertex conversion — only OpenAI passthrough is \
+                     supported for shell in the current build; dropping the tool definition"
+                );
+            }
+            ResponsesToolDefinition::Mcp(_) => {
+                tracing::warn!(
+                    "MCP tool reached Vertex conversion — `mcp` requires `mode = \
+                     passthrough_openai` and an OpenAI/Azure upstream; dropping the tool definition"
+                );
+            }
+            ResponsesToolDefinition::ToolSearch(_) => {
+                tracing::warn!(
+                    "tool_search tool reached Vertex conversion — should have been consumed \
+                     by the MCP rewrite under hadrian_hosted; dropping the tool definition"
+                );
             }
             ResponsesToolDefinition::FileSearch(_) => {
                 // File search is handled by the gateway middleware, but the model needs to know
@@ -817,6 +834,16 @@ pub(super) fn convert_responses_tool_choice_to_vertex(
             ResponsesToolChoice::WebSearch(_) => {
                 tracing::warn!("Web search tool choice not supported by Vertex AI");
                 (VertexFunctionCallingMode::Auto, None)
+            }
+            ResponsesToolChoice::Shell(_) => (
+                VertexFunctionCallingMode::Any,
+                Some(vec!["shell".to_string()]),
+            ),
+            ResponsesToolChoice::Mcp(_) => {
+                // Reaches Vertex only when the hadrian_hosted rewrite
+                // was skipped. Fall back to forcing any tool.
+                tracing::warn!("MCP tool choice without a hosted rewrite; falling back to `any`");
+                (VertexFunctionCallingMode::Any, None)
             }
         };
         VertexToolConfig {
@@ -1143,7 +1170,7 @@ mod responses_api_tests {
     };
     use crate::api_types::responses::{
         EasyInputMessage, EasyInputMessageContent, FunctionCallOutput, FunctionCallOutputType,
-        FunctionToolCall, FunctionToolCallType, OutputItemFunctionCallStatus,
+        FunctionTool, FunctionToolCall, FunctionToolCallType, OutputItemFunctionCallStatus,
         OutputItemFunctionCallType, OutputMessage, OutputMessageContentItem, OutputMessageStatus,
         ResponseInputImageDetail, ResponsesNamedToolChoice, ResponsesNamedToolChoiceType,
     };
@@ -1321,18 +1348,21 @@ mod responses_api_tests {
 
     #[test]
     fn test_convert_responses_tools_function() {
-        let tools = Some(vec![ResponsesToolDefinition::Function(serde_json::json!({
-            "type": "function",
-            "name": "get_weather",
-            "description": "Get weather for a location",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {"type": "string"}
-                },
-                "required": ["location"]
-            }
-        }))]);
+        let tools = Some(vec![ResponsesToolDefinition::Function(
+            FunctionTool::from_json(serde_json::json!({
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get weather for a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"}
+                    },
+                    "required": ["location"]
+                }
+            }))
+            .unwrap(),
+        )]);
 
         let vertex_tools = convert_responses_tools_to_vertex(tools).unwrap();
 
@@ -1350,14 +1380,20 @@ mod responses_api_tests {
     #[test]
     fn test_convert_responses_tools_multiple() {
         let tools = Some(vec![
-            ResponsesToolDefinition::Function(serde_json::json!({
-                "name": "tool1",
-                "description": "First tool"
-            })),
-            ResponsesToolDefinition::Function(serde_json::json!({
-                "name": "tool2",
-                "description": "Second tool"
-            })),
+            ResponsesToolDefinition::Function(
+                FunctionTool::from_json(serde_json::json!({
+                    "name": "tool1",
+                    "description": "First tool"
+                }))
+                .unwrap(),
+            ),
+            ResponsesToolDefinition::Function(
+                FunctionTool::from_json(serde_json::json!({
+                    "name": "tool2",
+                    "description": "Second tool"
+                }))
+                .unwrap(),
+            ),
         ]);
 
         let vertex_tools = convert_responses_tools_to_vertex(tools).unwrap();
@@ -1672,11 +1708,14 @@ mod responses_api_tests {
         use crate::api_types::responses::{FileSearchTool, FileSearchToolType};
 
         let tools = Some(vec![
-            ResponsesToolDefinition::Function(serde_json::json!({
-                "name": "get_weather",
-                "description": "Get weather",
-                "parameters": {"type": "object", "properties": {}}
-            })),
+            ResponsesToolDefinition::Function(
+                FunctionTool::from_json(serde_json::json!({
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {"type": "object", "properties": {}}
+                }))
+                .unwrap(),
+            ),
             ResponsesToolDefinition::FileSearch(FileSearchTool {
                 type_: FileSearchToolType::FileSearch,
                 vector_store_ids: vec!["vs_456".to_string()],

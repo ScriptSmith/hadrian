@@ -74,6 +74,16 @@ struct CachedRepos {
     service_accounts: Arc<dyn ServiceAccountRepo>,
     // OAuth PKCE authorization codes
     oauth_authorization_codes: Arc<dyn OAuthAuthorizationCodeRepo>,
+    // Persisted Responses API records
+    responses: Arc<dyn ResponsesRepo>,
+    // Per-response event log
+    response_events: Arc<dyn ResponseEventsRepo>,
+    // Containers + container_files (shell-tool /mnt/data artifacts)
+    containers: Arc<dyn ContainersRepo>,
+    // Parked MCP tool calls waiting on `mcp_approval_response`. Only
+    // present when the `mcp` cargo feature is enabled.
+    #[cfg(feature = "mcp")]
+    mcp_pending_approvals: Arc<dyn McpPendingApprovalsRepo>,
 }
 
 enum PoolStorage {
@@ -153,6 +163,13 @@ impl DbPool {
             oauth_authorization_codes: Arc::new(sqlite::SqliteOAuthAuthorizationCodeRepo::new(
                 pool.clone(),
             )),
+            responses: Arc::new(sqlite::SqliteResponsesRepo::new(pool.clone())),
+            response_events: Arc::new(sqlite::SqliteResponseEventsRepo::new(pool.clone())),
+            containers: Arc::new(sqlite::SqliteContainersRepo::new(pool.clone())),
+            #[cfg(feature = "mcp")]
+            mcp_pending_approvals: Arc::new(sqlite::SqliteMcpPendingApprovalsRepo::new(
+                pool.clone(),
+            )),
         };
         DbPool {
             inner: PoolStorage::Sqlite(pool),
@@ -193,6 +210,13 @@ impl DbPool {
             org_rbac_policies: Arc::new(sqlite::SqliteOrgRbacPolicyRepo::new(pool.clone())),
             service_accounts: Arc::new(sqlite::SqliteServiceAccountRepo::new(pool.clone())),
             oauth_authorization_codes: Arc::new(sqlite::SqliteOAuthAuthorizationCodeRepo::new(
+                pool.clone(),
+            )),
+            responses: Arc::new(sqlite::SqliteResponsesRepo::new(pool.clone())),
+            response_events: Arc::new(sqlite::SqliteResponseEventsRepo::new(pool.clone())),
+            containers: Arc::new(sqlite::SqliteContainersRepo::new(pool.clone())),
+            #[cfg(feature = "mcp")]
+            mcp_pending_approvals: Arc::new(sqlite::SqliteMcpPendingApprovalsRepo::new(
                 pool.clone(),
             )),
         };
@@ -305,6 +329,22 @@ impl DbPool {
                 write_pool.clone(),
                 read_pool.clone(),
             )),
+            responses: Arc::new(postgres::PostgresResponsesRepo::new(
+                write_pool.clone(),
+                read_pool.clone(),
+            )),
+            response_events: Arc::new(postgres::PostgresResponseEventsRepo::new(
+                write_pool.clone(),
+                read_pool.clone(),
+            )),
+            containers: Arc::new(postgres::PostgresContainersRepo::new(
+                write_pool.clone(),
+                read_pool.clone(),
+            )),
+            #[cfg(feature = "mcp")]
+            mcp_pending_approvals: Arc::new(postgres::PostgresMcpPendingApprovalsRepo::new(
+                write_pool.clone(),
+            )),
         };
         DbPool {
             inner: PoolStorage::Postgres(PgPoolPair {
@@ -384,6 +424,13 @@ impl DbPool {
                     oauth_authorization_codes: Arc::new(
                         sqlite::SqliteOAuthAuthorizationCodeRepo::new(pool.clone()),
                     ),
+                    responses: Arc::new(sqlite::SqliteResponsesRepo::new(pool.clone())),
+                    response_events: Arc::new(sqlite::SqliteResponseEventsRepo::new(pool.clone())),
+                    containers: Arc::new(sqlite::SqliteContainersRepo::new(pool.clone())),
+                    #[cfg(feature = "mcp")]
+                    mcp_pending_approvals: Arc::new(sqlite::SqliteMcpPendingApprovalsRepo::new(
+                        pool.clone(),
+                    )),
                 };
 
                 Ok(DbPool {
@@ -525,6 +572,22 @@ impl DbPool {
                             write_pool.clone(),
                             read_pool.clone(),
                         ),
+                    ),
+                    responses: Arc::new(postgres::PostgresResponsesRepo::new(
+                        write_pool.clone(),
+                        read_pool.clone(),
+                    )),
+                    response_events: Arc::new(postgres::PostgresResponseEventsRepo::new(
+                        write_pool.clone(),
+                        read_pool.clone(),
+                    )),
+                    containers: Arc::new(postgres::PostgresContainersRepo::new(
+                        write_pool.clone(),
+                        read_pool.clone(),
+                    )),
+                    #[cfg(feature = "mcp")]
+                    mcp_pending_approvals: Arc::new(
+                        postgres::PostgresMcpPendingApprovalsRepo::new(write_pool.clone()),
                     ),
                 };
 
@@ -694,6 +757,29 @@ impl DbPool {
     /// Get OAuth PKCE authorization code repository
     pub fn oauth_authorization_codes(&self) -> Arc<dyn OAuthAuthorizationCodeRepo> {
         Arc::clone(&self.repos.oauth_authorization_codes)
+    }
+
+    /// Get persisted Responses API record repository.
+    pub fn responses(&self) -> Arc<dyn ResponsesRepo> {
+        Arc::clone(&self.repos.responses)
+    }
+
+    /// Get the response event log repository.
+    pub fn response_events(&self) -> Arc<dyn ResponseEventsRepo> {
+        Arc::clone(&self.repos.response_events)
+    }
+
+    /// Get the containers + container_files repository.
+    pub fn containers(&self) -> Arc<dyn ContainersRepo> {
+        Arc::clone(&self.repos.containers)
+    }
+
+    /// Get the MCP pending-approvals repository. Used by the
+    /// `McpExecutor` to park gated calls and by the routes layer to
+    /// resume them.
+    #[cfg(feature = "mcp")]
+    pub fn mcp_pending_approvals(&self) -> Arc<dyn McpPendingApprovalsRepo> {
+        Arc::clone(&self.repos.mcp_pending_approvals)
     }
 
     /// Get a reference to the underlying database pool.

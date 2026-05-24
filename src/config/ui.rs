@@ -523,6 +523,8 @@ pub struct PagesConfig {
     #[serde(default)]
     pub knowledge_bases: PageConfig,
     #[serde(default)]
+    pub containers: PageConfig,
+    #[serde(default)]
     pub api_keys: PageConfig,
     #[serde(default)]
     pub providers: PageConfig,

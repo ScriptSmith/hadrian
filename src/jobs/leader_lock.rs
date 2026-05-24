@@ -28,6 +28,9 @@ use crate::db::DbPool;
 pub mod keys {
     pub const VECTOR_STORE_CLEANUP: i64 = 0x6861_6472_5f76_7363_u64 as i64;
     pub const OAUTH_CODE_CLEANUP: i64 = 0x6861_6472_5f6f_6163_u64 as i64;
+    pub const RESPONSES_RETENTION: i64 = 0x6861_6472_5f72_6573_u64 as i64;
+    pub const CONTAINERS_REAPER: i64 = 0x6861_6472_5f63_7472_u64 as i64;
+    pub const CONTAINERS_CLEANUP: i64 = 0x6861_6472_5f63_636c_u64 as i64;
 }
 
 /// Outcome of a leader-election attempt.

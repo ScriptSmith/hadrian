@@ -259,6 +259,66 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         });
     }
 
+    // The shutdown token lives for the whole server lifetime and gets
+    // cancelled when the OS sends SIGTERM/SIGINT. Created here so the
+    // responses workers below can subscribe — without this, the
+    // workers loop forever holding an AppState clone, which keeps
+    // mpsc senders (usage_drain etc.) alive and stalls the tracked
+    // drainer shutdown.
+    let shutdown_token = CancellationToken::new();
+
+    // Start the Responses API retention worker. Always runs when a
+    // responses_store is configured; rate is governed by
+    // [features.responses] cleanup_interval_secs. Each pass also
+    // reaps `in_progress` rows older than `max_in_progress_secs`.
+    if let (Some(db), Some(store)) = (state.db.clone(), state.responses_store.clone()) {
+        let interval =
+            std::time::Duration::from_secs(config.features.responses.cleanup_interval_secs);
+        let max_in_progress =
+            std::time::Duration::from_secs(config.features.responses.max_in_progress_secs);
+        let cancel = shutdown_token.clone();
+        state.task_tracker.spawn(async move {
+            jobs::start_responses_retention_worker(store, db, interval, max_in_progress, cancel)
+                .await;
+        });
+    }
+
+    // Start the idle-container reaper. Marks containers whose
+    // `last_active_at + idle_ttl_secs` has elapsed as `expired` and
+    // evicts them from the in-memory registry. Always runs when a
+    // containers_service is configured.
+    if let (Some(db), Some(containers)) = (state.db.clone(), state.containers_service.clone()) {
+        let registry = state.container_session_registry.clone();
+        // Run at 1/4 of the default idle TTL, clamped to [10s, 5min].
+        let raw = config.features.containers.default_idle_ttl_secs / 4;
+        let interval = std::time::Duration::from_secs(raw.clamp(10, 300));
+        let cancel = shutdown_token.clone();
+        state.task_tracker.spawn(async move {
+            jobs::start_containers_reaper_worker(containers, registry, db, interval, cancel).await;
+        });
+    }
+
+    // Start the background response worker — claims rows queued by
+    // `POST /v1/responses` with `background=true` and runs them
+    // through the LLM pipeline.
+    if state.responses_store.is_some() && state.db.is_some() {
+        let worker_state = state.clone();
+        let cancel = shutdown_token.clone();
+        state.task_tracker.spawn(async move {
+            jobs::start_background_response_worker(worker_state, cancel).await;
+        });
+    }
+
+    // Start the cross-replica cancel poller. One task, one DB
+    // round-trip per cycle for the whole replica's in-flight set —
+    // replaces the previous per-execution polling.
+    if let Some(store) = state.responses_store.clone() {
+        let cancel = shutdown_token.clone();
+        state.task_tracker.spawn(async move {
+            jobs::start_responses_cancel_poller(store, cancel).await;
+        });
+    }
+
     // Start vector store cleanup worker if configured and database is available
     if let Some(db) = state.db.clone() {
         let cleanup_config = config.features.vector_store_cleanup.clone();
@@ -271,6 +331,18 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         tokio::spawn(async move {
             jobs::start_vector_store_cleanup_worker(db, vector_store, file_storage, cleanup_config)
                 .await;
+        });
+    }
+
+    // Start the container cleanup worker if configured and a containers
+    // service + database are available. Hard-deletes `expired` / `deleted`
+    // container rows (and their captured files) past the configured delay so
+    // terminal rows don't accumulate forever.
+    if let (Some(db), Some(containers)) = (state.db.clone(), state.containers_service.clone()) {
+        let cleanup_config = config.features.containers_cleanup.clone();
+        let cancel = shutdown_token.clone();
+        state.task_tracker.spawn(async move {
+            jobs::start_containers_cleanup_worker(containers, db, cleanup_config, cancel).await;
         });
     }
 
@@ -379,13 +451,9 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         None
     };
 
-    // CancellationToken for long-running background tasks that hold an
-    // AppState clone. Without this, an infinite-loop tokio::spawn'd task
-    // (like the refresh below) keeps a clone of `usage_drain`'s mpsc::Sender
-    // alive forever, which prevents the tracked drainer worker's
-    // `rx.recv().await` from ever seeing `None`. Tripped when the OS shutdown
-    // signal arrives.
-    let shutdown_token = CancellationToken::new();
+    // (CancellationToken `shutdown_token` was created earlier so the
+    // responses workers could subscribe; reuse it for the cache
+    // refresher below.)
 
     // Refresh the static models cache periodically in the background
     // (initial warming already happened in AppState::new)
@@ -412,6 +480,7 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
     } else {
         None
     };
+    let response_event_buffer = state.response_event_buffer.clone();
     let app = build_app(&config, state);
 
     let bind_addr = format!("{}:{}", config.server.host, config.server.port);
@@ -491,7 +560,13 @@ pub(crate) async fn run_server(explicit_config_path: Option<&str>, no_browser: b
         std::process::exit(1);
     }
 
-    drain_background_tasks(task_tracker, usage_buffer_handle, shutdown_config).await;
+    drain_background_tasks(
+        task_tracker,
+        usage_buffer_handle,
+        response_event_buffer,
+        shutdown_config,
+    )
+    .await;
 }
 
 async fn wait_for_shutdown_signal() {
@@ -531,6 +606,7 @@ async fn drain_background_tasks(
         Arc<usage_buffer::UsageLogBuffer>,
         tokio::task::JoinHandle<()>,
     )>,
+    response_event_buffer: Option<Arc<crate::services::ResponseEventBuffer>>,
     shutdown_config: crate::config::ShutdownConfig,
 ) {
     task_tracker.close();
@@ -546,6 +622,20 @@ async fn drain_background_tasks(
             tracing::warn!(error = %e, "Timeout waiting for usage buffer to flush");
         } else {
             tracing::info!("Usage buffer flushed successfully");
+        }
+    }
+
+    if let Some(buffer) = response_event_buffer {
+        // 5s is generous: the drainer flushes every 100ms by default
+        // and any in-flight events get a final flush. Bound it so a
+        // wedged DB doesn't hold up shutdown indefinitely.
+        if tokio::time::timeout(std::time::Duration::from_secs(5), buffer.shutdown())
+            .await
+            .is_err()
+        {
+            tracing::warn!("Timeout waiting for response event buffer to flush");
+        } else {
+            tracing::info!("Response event buffer flushed successfully");
         }
     }
 

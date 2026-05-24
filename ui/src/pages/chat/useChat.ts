@@ -44,6 +44,7 @@ import {
   executeToolCalls,
   buildToolResultInputItems,
   createMCPToolName,
+  getEnabledToolsSystemGuidance,
   DISPLAY_PARAMETER_SCHEMA,
   type ToolExecutorContext,
 } from "./utils/toolExecutors";
@@ -112,6 +113,23 @@ interface UseChatOptions {
    * Each tool may have additional requirements (e.g., file_search needs vectorStoreIds).
    */
   enabledTools?: string[];
+  /**
+   * Agent mode: attaches the shell tool (+ container) and optional tool
+   * search to the request. Built from `chatUIStore` agent state in ChatPage.
+   */
+  agentConfig?: {
+    enabled: boolean;
+    /** OpenAI memory string (e.g. "512m"); empty = operator default. */
+    memoryLimit: string;
+    /** Idle TTL in minutes; null = operator default. */
+    expiresAfterMinutes: number | null;
+    /** Egress allowlist (comma/newline separated); empty = inherit. */
+    allowedDomains: string;
+    /** Attach a `tool_search` tool + defer-load gateway MCP tools. */
+    toolSearch: boolean;
+    /** Tool-search ranker override; "default" omits it (deployment default). */
+    toolSearchRanker: "default" | "hybrid" | "semantic" | "lexical";
+  };
   /**
    * Skills enabled for this session. Each skill's name + description is
    * listed in the `Skill` tool's description so the model can match user
@@ -219,6 +237,15 @@ interface UseChatReturn {
    * For assistant messages: updates content only (preserves sibling model responses).
    */
   editAndRerun: (messageId: string, newContent: string) => void;
+  /**
+   * Resume a gateway MCP tool call that paused for human approval by echoing
+   * back an `mcp_approval_response`. Single-model turns only.
+   */
+  respondToMcpApproval: (
+    assistantMessageId: string,
+    approvalRequestId: string,
+    approve: boolean
+  ) => void;
 }
 
 /** Default maximum number of tool execution iterations to prevent infinite loops */
@@ -243,6 +270,42 @@ interface StreamResponseResult {
   responseOutput?: unknown[];
 }
 
+/** One entry in a `shell_call_output` item's Hadrian `output_files` manifest. */
+interface ShellOutputFile {
+  container_id?: string;
+  file_id?: string;
+  filename?: string;
+  content_type?: string;
+  bytes?: number;
+  source?: string;
+}
+
+/**
+ * Build `container_file` artifacts from a shell `output_files` manifest. These
+ * render as message-level artifacts (images inline, other files as download
+ * chips) by lazily fetching the container content endpoint. Staged inputs
+ * (`source === "user"`) are skipped. Ids are stable (`cfile-<file_id>`) so the
+ * streamed and `response.completed` paths dedupe against each other.
+ */
+function containerFilesToArtifacts(outputFiles: ShellOutputFile[] | undefined): Artifact[] {
+  if (!outputFiles?.length) return [];
+  return outputFiles
+    .filter((f) => f.container_id && f.file_id && f.source !== "user")
+    .map((f) => ({
+      id: `cfile-${f.file_id}`,
+      type: "container_file" as const,
+      role: "output" as const,
+      title: f.filename,
+      data: {
+        containerId: f.container_id!,
+        fileId: f.file_id!,
+        filename: f.filename ?? f.file_id!,
+        contentType: f.content_type,
+        bytes: f.bytes,
+      },
+    }));
+}
+
 /** Extract the metadata fields from a streaming response for committing to the conversation store. */
 function commitFieldsFromStream(stream: StreamingResponse | undefined) {
   return {
@@ -250,6 +313,7 @@ function commitFieldsFromStream(stream: StreamingResponse | undefined) {
     artifacts: stream?.artifacts,
     toolExecutionRounds: stream?.toolExecutionRounds,
     completedRounds: stream?.completedRounds.length ? stream.completedRounds : undefined,
+    pendingMcpApprovals: stream?.mcpApprovals?.length ? stream.mcpApprovals : undefined,
   };
 }
 
@@ -263,6 +327,7 @@ export function useChat({
   vectorStoreIds,
   clientSideToolExecution = false,
   enabledTools = [],
+  agentConfig,
   enabledSkills = [],
   dataFiles = [],
   maxToolIterations = DEFAULT_maxToolIterations,
@@ -273,6 +338,10 @@ export function useChat({
 }: UseChatOptions): UseChatReturn {
   const { token } = useAuth();
   const abortControllersRef = useRef<AbortController[]>([]);
+  // Active shell container per conversation, so the whole conversation reuses
+  // one container (via `container_reference`) until it expires — then the next
+  // turn provisions a fresh one. Keyed by conversation id.
+  const activeContainerRef = useRef<Map<string, string>>(new Map());
 
   // Use zustand stores instead of local state
   const messages = useMessages();
@@ -378,10 +447,15 @@ export function useChat({
         // Priority: existing in input > instanceParams > perModelSettings > global modelSettings > default
         const hasSystemMessage = input.some((item) => item.role === "system");
         if (!hasSystemMessage) {
-          const systemPrompt =
+          const basePrompt =
             perModel?.systemPrompt ??
             modelSettings?.systemPrompt ??
             getDefaultSystemPrompt(model, instanceLabel);
+          // Append any per-tool system guidance for the enabled tools (e.g. the
+          // shell tool explaining that files written to /mnt/data are shown in
+          // the chat). Tools opt in via `systemGuidance` on their metadata.
+          const toolGuidance = getEnabledToolsSystemGuidance(enabledTools);
+          const systemPrompt = toolGuidance ? `${basePrompt}\n\n${toolGuidance}` : basePrompt;
           input.unshift({
             role: "system",
             content: systemPrompt,
@@ -848,14 +922,48 @@ export function useChat({
           });
         }
 
-        // Add MCP tools from connected servers
+        // Add MCP tools from configured servers.
         if (enabledTools.includes("mcp")) {
-          // Ensure enabled servers are connected before building tools list
-          await useMCPStore.getState().ensureConnected();
+          const allServers = useMCPStore.getState().servers;
+
+          // Gateway servers run server-side: emit a single `mcp` tool object
+          // per server and let Hadrian connect + execute. No browser
+          // connection is required, so these work for background/agent runs.
+          for (const server of allServers) {
+            if (!server.enabled || (server.runsOn ?? "browser") !== "gateway") continue;
+            const mcpTool: { type: string; [key: string]: unknown } = {
+              type: "mcp",
+              server_label: server.name || server.id,
+              server_url: server.url,
+              require_approval: server.requireApproval ?? "never",
+            };
+            if (server.headers && Object.keys(server.headers).length > 0) {
+              mcpTool.headers = server.headers;
+            }
+            if (server.allowedTools && server.allowedTools.length > 0) {
+              mcpTool.allowed_tools = server.allowedTools;
+            }
+            // With tool search on, defer-load this server's catalog so the
+            // model discovers tools lazily instead of loading every definition.
+            if (agentConfig?.toolSearch) {
+              mcpTool.defer_loading = true;
+            }
+            tools.push(mcpTool);
+          }
+
+          // Browser servers execute client-side: connect, discover, and expose
+          // each discovered tool as a `function` tool the client fulfils.
+          const hasBrowserServer = allServers.some(
+            (s) => s.enabled && (s.runsOn ?? "browser") === "browser"
+          );
+          if (hasBrowserServer) {
+            await useMCPStore.getState().ensureConnected();
+          }
           const mcpState = useMCPStore.getState();
           for (const server of mcpState.servers) {
-            // Skip disabled or disconnected servers
-            if (!server.enabled || server.status !== "connected") continue;
+            // Skip disabled, gateway, or disconnected servers
+            if (!server.enabled || (server.runsOn ?? "browser") !== "browser") continue;
+            if (server.status !== "connected") continue;
 
             for (const tool of server.tools) {
               // Check if this specific tool is enabled (default to enabled)
@@ -892,6 +1000,50 @@ export function useChat({
           }
         }
 
+        // Agent mode: attach the shell tool. Reuse the conversation's existing
+        // container if one is live; otherwise provision a fresh one with the
+        // configured limits. The captured id is refreshed from each response's
+        // terminal event (and cleared on error) below.
+        if (agentConfig?.enabled) {
+          const conv = conversationIdRef.current;
+          const reuseId = conv ? activeContainerRef.current.get(conv) : undefined;
+          let environment: Record<string, unknown>;
+          if (reuseId) {
+            environment = { type: "container_reference", container_id: reuseId };
+          } else {
+            environment = { type: "container_auto" };
+            if (agentConfig.memoryLimit.trim()) {
+              environment.memory_limit = agentConfig.memoryLimit.trim();
+            }
+            if (agentConfig.expiresAfterMinutes && agentConfig.expiresAfterMinutes > 0) {
+              environment.expires_after = {
+                anchor: "last_active_at",
+                minutes: agentConfig.expiresAfterMinutes,
+              };
+            }
+            const allowedDomains = agentConfig.allowedDomains
+              .split(/[\n,]/)
+              .map((d) => d.trim())
+              .filter(Boolean);
+            if (allowedDomains.length > 0) {
+              environment.network_policy = {
+                type: "allowlist",
+                allowed_domains: allowedDomains,
+              };
+            }
+          }
+          tools.push({ type: "shell", environment });
+        }
+
+        // Tool search: let the model search for / lazily load tools.
+        if (agentConfig?.toolSearch) {
+          const toolSearchTool: { type: string; [key: string]: unknown } = { type: "tool_search" };
+          if (agentConfig.toolSearchRanker && agentConfig.toolSearchRanker !== "default") {
+            toolSearchTool.ranker = agentConfig.toolSearchRanker;
+          }
+          tools.push(toolSearchTool);
+        }
+
         // Add tools to request if any are configured
         if (tools.length > 0) {
           requestBody.tools = tools;
@@ -919,6 +1071,65 @@ export function useChat({
         const decoder = new TextDecoder();
         let content = "";
         let reasoningContent = "";
+        // Server-side multi-turn tracking. A single `/v1/responses` can carry
+        // several model turns (the gateway runs its own tool loop for shell /
+        // MCP). Each turn is a distinct reasoning item; when a new reasoning
+        // item id appears we flush the prior turn's reasoning+content as a
+        // completed round instead of overwriting it. `null` until the first
+        // reasoning item is seen.
+        let currentReasoningItemId: string | null = null;
+        // Server-side tool executions for the current turn, surfaced in the
+        // "reasoning & tools" disclosure. Built from the spec items the gateway
+        // streams (shell_call/shell_call_output, mcp_call, tool_search) and
+        // attached to each completed round so they persist on the message.
+        let serverRound = 0;
+        let roundExecutions: ToolExecution[] = [];
+        const pendingShell = new Map<string, { command: string; startTime: number }>();
+        let lastToolSearchQuery = "";
+        const codeArtifact = (
+          id: string,
+          role: "input" | "output",
+          language: string,
+          code: string,
+          title?: string
+        ): Artifact => ({ id, type: "code", role, title, data: { language, code } });
+        const recordServerExecution = (exec: ToolExecution) => {
+          roundExecutions.push(exec);
+        };
+        const takeRoundExecution = (): ToolExecutionRound | undefined => {
+          if (roundExecutions.length === 0) return undefined;
+          const round: ToolExecutionRound = {
+            round: serverRound,
+            executions: roundExecutions,
+            hasError: roundExecutions.some((e) => e.status === "error"),
+          };
+          roundExecutions = [];
+          return round;
+        };
+
+        const flushServerTurn = (nextItemId?: string) => {
+          if (!nextItemId) return;
+          if (currentReasoningItemId === null) {
+            currentReasoningItemId = nextItemId;
+            return;
+          }
+          if (nextItemId === currentReasoningItemId) return;
+          // New reasoning item → previous server turn finished. Commit it as a
+          // round so its reasoning isn't overwritten by the next turn.
+          const round: CompletedRound = {};
+          if (reasoningContent.trim()) round.reasoning = reasoningContent;
+          if (content.trim()) round.content = content;
+          const toolExecution = takeRoundExecution();
+          if (toolExecution) round.toolExecution = toolExecution;
+          if (round.reasoning || round.content || round.toolExecution) {
+            streamingStore.pushCompletedRound(storeKey, round);
+            reasoningContent = "";
+            content = "";
+            hasOutputText = false;
+          }
+          serverRound += 1;
+          currentReasoningItemId = nextItemId;
+        };
         // Spec-compliant SSE parser — handles `\r\n`/`\r`/`\n`, multi-line
         // `data:` fields joined with `\n`, and dispatches events on blank
         // lines instead of every `data:` line.
@@ -1003,6 +1214,9 @@ export function useChat({
                 event.type === "response.reasoning_summary_text.delta") &&
               event.delta
             ) {
+              // A new reasoning item id means a new server-side turn — commit
+              // the prior turn before accumulating this one.
+              flushServerTurn(event.item_id);
               // Stream reasoning content (extended thinking)
               reasoningContent += event.delta;
               streamingStore.appendReasoningContent(storeKey, event.delta);
@@ -1011,6 +1225,7 @@ export function useChat({
                 event.type === "response.reasoning_summary_text.done") &&
               event.text
             ) {
+              flushServerTurn(event.item_id);
               // Final reasoning text
               reasoningContent = event.text;
               streamingStore.setReasoningContent(storeKey, reasoningContent);
@@ -1053,6 +1268,232 @@ export function useChat({
                   role: "output",
                 };
                 streamingStore.addArtifacts(storeKey, [artifact]);
+              } else if (event.item.type === "mcp_list_tools") {
+                // Gateway MCP discovered a server's tools.
+                const itemId = event.item.id ?? `mcp_list_${Date.now()}`;
+                const label = event.item.server_label ?? "mcp";
+                const count = event.item.tools?.length ?? 0;
+                const ts = Date.now();
+                streamingStore.addToolCall(storeKey, {
+                  id: itemId,
+                  callId: itemId,
+                  name: `${label}: list tools`,
+                  outputIndex: event.output_index ?? 0,
+                  argumentsBuffer: "",
+                  status: "pending",
+                });
+                streamingStore.completeToolCall(storeKey, itemId, { count });
+                recordServerExecution({
+                  id: itemId,
+                  toolName: `${label}: list tools`,
+                  status: "success",
+                  startTime: ts,
+                  endTime: ts,
+                  input: { server_label: label },
+                  inputArtifacts: [],
+                  outputArtifacts: [
+                    codeArtifact(
+                      `${itemId}-out`,
+                      "output",
+                      "text",
+                      `Loaded ${count} tool${count === 1 ? "" : "s"} from ${label}`
+                    ),
+                  ],
+                  round: serverRound,
+                });
+              } else if (event.item.type === "mcp_call") {
+                // Gateway-executed MCP tool call.
+                const itemId = event.item.id ?? `mcp_call_${Date.now()}`;
+                const label = event.item.server_label ?? "mcp";
+                const name = event.item.name ?? "tool";
+                const ts = Date.now();
+                streamingStore.addToolCall(storeKey, {
+                  id: itemId,
+                  callId: itemId,
+                  name: `${label}.${name}`,
+                  outputIndex: event.output_index ?? 0,
+                  argumentsBuffer: event.item.arguments ?? "",
+                  status: "pending",
+                });
+                let parsedArgs: Record<string, unknown> = {};
+                try {
+                  parsedArgs = event.item.arguments ? JSON.parse(event.item.arguments) : {};
+                } catch {
+                  // Leave args unparsed; the buffer still renders.
+                }
+                const errored = !!event.item.error;
+                if (errored) {
+                  streamingStore.setToolCallError(storeKey, itemId, event.item.error!);
+                } else {
+                  streamingStore.completeToolCall(storeKey, itemId, parsedArgs);
+                }
+                recordServerExecution({
+                  id: itemId,
+                  toolName: `${label}.${name}`,
+                  status: errored ? "error" : "success",
+                  startTime: ts,
+                  endTime: ts,
+                  input: parsedArgs,
+                  error: event.item.error ?? undefined,
+                  inputArtifacts: event.item.arguments?.trim()
+                    ? [
+                        codeArtifact(
+                          `${itemId}-in`,
+                          "input",
+                          "json",
+                          JSON.stringify(parsedArgs, null, 2)
+                        ),
+                      ]
+                    : [],
+                  outputArtifacts: event.item.output
+                    ? [codeArtifact(`${itemId}-out`, "output", "text", event.item.output)]
+                    : [],
+                  round: serverRound,
+                });
+              } else if (
+                event.item.type === "mcp_approval_request" &&
+                event.item.approval_request_id
+              ) {
+                // Gateway MCP paused for human approval. Record it on the
+                // stream so it commits to the message and renders an
+                // approve/deny prompt the user can resume from.
+                let parsedArgs: Record<string, unknown> = {};
+                try {
+                  parsedArgs = event.item.arguments ? JSON.parse(event.item.arguments) : {};
+                } catch {
+                  // Non-JSON args — render the raw string instead.
+                }
+                streamingStore.addMcpApproval(storeKey, {
+                  id: event.item.id ?? event.item.approval_request_id,
+                  approvalRequestId: event.item.approval_request_id,
+                  serverLabel: event.item.server_label ?? "mcp",
+                  toolName: event.item.name ?? "tool",
+                  argumentsJson: event.item.arguments ?? "",
+                  parsedArguments: parsedArgs,
+                });
+              } else if (event.item.type === "shell_call") {
+                // Hadrian-hosted shell tool ran a command. Show the command as a
+                // live indicator; the paired shell_call_output carries the result.
+                const itemId = event.item.id ?? `shell_${Date.now()}`;
+                const commands = event.item.action?.commands ?? [];
+                streamingStore.addToolCall(storeKey, {
+                  id: itemId,
+                  callId: itemId,
+                  name: "shell",
+                  outputIndex: event.output_index ?? 0,
+                  argumentsBuffer: commands.join("\n"),
+                  status: "pending",
+                });
+                streamingStore.completeToolCall(storeKey, itemId, { commands });
+                const callId = event.item.call_id ?? itemId;
+                pendingShell.set(callId, {
+                  command: commands.join("\n"),
+                  startTime: Date.now(),
+                });
+              } else if (event.item.type === "shell_call_output") {
+                // Result of a shell_call. Pair with the command and record a
+                // completed execution carrying the command + stdout/stderr/exit.
+                const callId = event.item.call_id ?? event.item.id ?? `shell_${Date.now()}`;
+                const pending = pendingShell.get(callId);
+                pendingShell.delete(callId);
+                const blocks =
+                  (
+                    event.item as {
+                      output?: Array<{
+                        stdout?: string;
+                        stderr?: string;
+                        outcome?: { type?: string; exit_code?: number };
+                      }>;
+                    }
+                  ).output ?? [];
+                const stdout = blocks.map((b) => b.stdout ?? "").join("");
+                const stderr = blocks.map((b) => b.stderr ?? "").join("");
+                const outcome = blocks[0]?.outcome;
+                const exitCode = outcome?.exit_code ?? 0;
+                const errored = (!!outcome?.type && outcome.type !== "exit") || exitCode !== 0;
+                const outText =
+                  [stdout, stderr.trim() ? `[stderr]\n${stderr}` : "", `[exit ${exitCode}]`]
+                    .filter(Boolean)
+                    .join("\n") || "(no output)";
+                const now = Date.now();
+                // Files the command wrote to /mnt/data surface as prominent
+                // message-level artifacts (images inline, others as download
+                // chips). Dedup-by-id means the response.completed sweep below
+                // is harmless if these also arrive only in the final output.
+                const fileArtifacts = containerFilesToArtifacts(
+                  (event.item as { output_files?: ShellOutputFile[] }).output_files
+                );
+                if (fileArtifacts.length > 0) {
+                  streamingStore.addArtifacts(storeKey, fileArtifacts);
+                }
+                recordServerExecution({
+                  id: event.item.id ?? `shellout_${now}`,
+                  toolName: "shell",
+                  status: errored ? "error" : "success",
+                  startTime: pending?.startTime ?? now,
+                  endTime: now,
+                  input: { command: pending?.command ?? "" },
+                  inputArtifacts: pending?.command
+                    ? [codeArtifact(`${callId}-in`, "input", "bash", pending.command)]
+                    : [],
+                  outputArtifacts: [codeArtifact(`${callId}-out`, "output", "text", outText)],
+                  error: errored ? `exit ${exitCode}` : undefined,
+                  round: serverRound,
+                });
+              } else if (event.item.type === "tool_search_call") {
+                // Model searched the deferred tool catalog. Show the query.
+                const itemId = event.item.id ?? `ts_${Date.now()}`;
+                streamingStore.addToolCall(storeKey, {
+                  id: itemId,
+                  callId: itemId,
+                  name: "tool_search",
+                  outputIndex: event.output_index ?? 0,
+                  argumentsBuffer: event.item.arguments ?? "",
+                  status: "pending",
+                });
+                let parsedArgs: Record<string, unknown> = {};
+                try {
+                  parsedArgs = event.item.arguments ? JSON.parse(event.item.arguments) : {};
+                } catch {
+                  // Leave unparsed; the buffer still renders.
+                }
+                streamingStore.completeToolCall(storeKey, itemId, parsedArgs);
+                lastToolSearchQuery = typeof parsedArgs.query === "string" ? parsedArgs.query : "";
+              } else if (event.item.type === "tool_search_output") {
+                // Tools were loaded from the search — show the query + how many.
+                const itemId = event.item.id ?? `tso_${Date.now()}`;
+                const count = event.item.tools?.length ?? 0;
+                const now = Date.now();
+                streamingStore.addToolCall(storeKey, {
+                  id: itemId,
+                  callId: itemId,
+                  name: "tool_search: loaded tools",
+                  outputIndex: event.output_index ?? 0,
+                  argumentsBuffer: "",
+                  status: "pending",
+                });
+                streamingStore.completeToolCall(storeKey, itemId, { count });
+                recordServerExecution({
+                  id: itemId,
+                  toolName: "tool_search",
+                  status: "success",
+                  startTime: now,
+                  endTime: now,
+                  input: { query: lastToolSearchQuery },
+                  inputArtifacts: lastToolSearchQuery
+                    ? [codeArtifact(`${itemId}-in`, "input", "text", lastToolSearchQuery)]
+                    : [],
+                  outputArtifacts: [
+                    codeArtifact(
+                      `${itemId}-out`,
+                      "output",
+                      "text",
+                      `Loaded ${count} tool${count === 1 ? "" : "s"}`
+                    ),
+                  ],
+                  round: serverRound,
+                });
+                lastToolSearchQuery = "";
               }
             } else if (event.type === "response.file_search_call.in_progress") {
               // Server-side file search starting - add tool call to streaming store
@@ -1111,6 +1552,29 @@ export function useChat({
                 streamingStore.completeToolCall(storeKey, event.item_id, {});
               }
             } else if (event.type === "response.completed" && event.response) {
+              // Remember the container this response used so the rest of the
+              // conversation reuses it (until it expires and a turn fails — see
+              // the catch below, which clears it so the next turn starts fresh).
+              const convId = conversationIdRef.current;
+              if (event.response.container_id && convId) {
+                activeContainerRef.current.set(convId, event.response.container_id);
+              }
+              // Harvest container files from the final output. Some providers
+              // (e.g. OpenRouter-routed models) deliver shell_call_output items
+              // only in `response.output` rather than as streamed
+              // `output_item.done` events, so the streamed handler above never
+              // sees them. Sweeping here makes generated files show regardless;
+              // addArtifacts dedupes by id against the streamed path.
+              const finalFileArtifacts = (event.response.output ?? [])
+                .filter((item) => item.type === "shell_call_output")
+                .flatMap((item) =>
+                  containerFilesToArtifacts(
+                    (item as { output_files?: ShellOutputFile[] }).output_files
+                  )
+                );
+              if (finalFileArtifacts.length > 0) {
+                streamingStore.addArtifacts(storeKey, finalFileArtifacts);
+              }
               // Extract final text from completed response
               // First try output_text, then message content, then reasoning content as fallback
               const outputText =
@@ -1267,12 +1731,17 @@ export function useChat({
         const trackerToolCalls = toolTracker ? toolTracker.getCompletedToolCalls() : [];
         const toolCalls = trackerToolCalls.length > 0 ? trackerToolCalls : completedToolCalls;
 
+        // The final server turn's tool executions never hit a turn boundary,
+        // so hand them to the caller to attach to the last completed round.
+        const finalServerRound = takeRoundExecution();
+
         return {
           content,
           hasOutputText,
           usage,
           reasoningContent: reasoningContent || undefined,
           toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+          toolExecutionRounds: finalServerRound ? [finalServerRound] : undefined,
           requestBody,
           responseOutput,
         };
@@ -1282,6 +1751,11 @@ export function useChat({
         }
 
         const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        // Drop the reused container so the next turn provisions a fresh one —
+        // an expired/deleted container is the most likely cause of a failure
+        // mid-conversation once agent mode is on.
+        const convId = conversationIdRef.current;
+        if (convId) activeContainerRef.current.delete(convId);
         streamingStore.setError(storeKey, errorMessage);
         return null;
       }
@@ -1292,6 +1766,7 @@ export function useChat({
       perModelSettings,
       vectorStoreIds,
       enabledTools,
+      agentConfig,
       enabledSkills,
       dataFiles,
     ]
@@ -1422,6 +1897,12 @@ export function useChat({
           const roundData: CompletedRound = {};
           if (result.reasoningContent) roundData.reasoning = result.reasoningContent;
           if (result.hasOutputText && result.content?.trim()) roundData.content = result.content;
+          // Attach the final server turn's tool executions (shell/MCP/tool_search)
+          // so they render in the "reasoning & tools" disclosure and persist.
+          if (result.toolExecutionRounds?.length) {
+            roundData.toolExecution =
+              result.toolExecutionRounds[result.toolExecutionRounds.length - 1];
+          }
           streamingStore.pushCompletedRound(storeKey, roundData);
           result.completedRounds = [roundData];
         }
@@ -2083,6 +2564,94 @@ export function useChat({
   );
 
   /**
+   * Resume a gateway MCP tool call that paused for human approval.
+   *
+   * Re-streams the assistant turn with an `mcp_approval_response` input item
+   * appended; Hadrian claims the parked approval by `approvalRequestId`,
+   * runs (or refuses) the call, and continues the model loop. The continued
+   * output is appended to the same assistant message. Single-model turns only
+   * — gateway MCP approvals aren't surfaced in multi-model modes.
+   */
+  const respondToMcpApproval = useCallback(
+    async (assistantMessageId: string, approvalRequestId: string, approve: boolean) => {
+      // Don't start an approval-resume turn while another turn is
+      // streaming — it would clobber the active AbortController and race
+      // the in-flight stream. The button is also disabled in this state
+      // (see ChatMessageList), this is the belt-and-suspenders guard.
+      if (useStreamingStore.getState().isStreaming) return;
+      // Read messages live from the store rather than the closed-over
+      // snapshot so the resumed request is built from current state, not
+      // whatever was rendered when the handler was created.
+      const liveMessages = useConversationStore.getState().messages;
+      const idx = liveMessages.findIndex((m) => m.id === assistantMessageId);
+      if (idx === -1) return;
+      const assistantMessage = liveMessages[idx];
+      if (assistantMessage.role !== "assistant") return;
+
+      const model = assistantMessage.model ?? models[0];
+      if (!model) return;
+      const sendEpoch = conversationIdRef.current;
+
+      // Optimistically record the decision so the prompt flips to resolved.
+      const resolvedApprovals = (assistantMessage.pendingMcpApprovals ?? []).map((a) =>
+        a.approvalRequestId === approvalRequestId
+          ? { ...a, resolved: approve ? ("approved" as const) : ("denied" as const) }
+          : a
+      );
+      updateMessage(assistantMessageId, { pendingMcpApprovals: resolvedApprovals });
+
+      // Build history through this assistant turn, then echo the approval back.
+      const messagesThroughAssistant = liveMessages.slice(0, idx + 1);
+      const filtered = filterMessagesForModel(messagesThroughAssistant, model, historyMode);
+      const inputItems = [
+        ...filtered.map(messageToApiInput),
+        {
+          type: "mcp_approval_response",
+          approval_request_id: approvalRequestId,
+          approve,
+        },
+      ];
+
+      streamingStore.initStreaming([model]);
+      const controller = new AbortController();
+      abortControllersRef.current = [controller];
+      const debugMessageId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
+      const result = await streamWithToolExecution(
+        model,
+        inputItems,
+        controller,
+        settings,
+        model,
+        debugMessageId
+      );
+
+      if (result !== null && sendEpoch === conversationIdRef.current) {
+        const stream = useStreamingStore.getState().streams.get(model);
+        const committed = commitFieldsFromStream(stream);
+        const continued = result.content
+          ? `${assistantMessage.content ? `${assistantMessage.content}\n\n` : ""}${result.content}`
+          : assistantMessage.content;
+        updateMessage(assistantMessageId, {
+          content: continued,
+          usage: result.usage ?? assistantMessage.usage,
+          ...committed,
+          // Preserve the resolved decision unless the continuation parked a new one.
+          pendingMcpApprovals: committed.pendingMcpApprovals ?? resolvedApprovals,
+        });
+      }
+
+      streamingStore.clearStreams();
+      abortControllersRef.current = [];
+    },
+    // `messages` is intentionally not a dep: the handler reads live store
+    // state (useConversationStore.getState()) so it can't act on a stale
+    // snapshot, and keeping the callback identity stable lets the
+    // disabled-while-streaming guard in ChatMessageList stay reliable.
+    [models, settings, historyMode, streamWithToolExecution, streamingStore, updateMessage]
+  );
+
+  /**
    * Edit a message and re-run the conversation from that point.
    * For user messages: updates content, deletes all subsequent messages, and streams new responses.
    * For assistant messages: updates content only (preserves sibling model responses).
@@ -2227,5 +2796,6 @@ export function useChat({
     setMessages,
     regenerateResponse,
     editAndRerun,
+    respondToMcpApproval,
   };
 }

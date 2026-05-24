@@ -20,6 +20,8 @@
     "chat-modes",
     "frontend-tools",
     "web-tools",
+    "agents",
+    "mcp-tool",
     "guardrails",
     "mcp",
     "mcp-agents",

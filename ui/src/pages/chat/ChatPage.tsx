@@ -29,6 +29,11 @@ import {
   useMaxToolIterations,
   useCaptureRawSSEEvents,
   useSubAgentModel,
+  useAgentMemoryLimit,
+  useAgentExpiresAfterMinutes,
+  useAgentAllowedDomains,
+  useToolSearchEnabled,
+  useToolSearchRanker,
 } from "@/stores/chatUIStore";
 import { useUserSkills } from "@/hooks/useUserSkills";
 import { setSkillCatalog } from "./utils/skillCache";
@@ -66,6 +71,31 @@ export default function ChatPage() {
   const maxToolIterations = useMaxToolIterations();
   const captureRawSSEEvents = useCaptureRawSSEEvents();
   const subAgentModel = useSubAgentModel();
+  const agentMemoryLimit = useAgentMemoryLimit();
+  const agentExpiresAfterMinutes = useAgentExpiresAfterMinutes();
+  const agentAllowedDomains = useAgentAllowedDomains();
+  const toolSearchEnabled = useToolSearchEnabled();
+  const toolSearchRanker = useToolSearchRanker();
+
+  const agentConfig = useMemo(
+    () => ({
+      // The shell tool is enabled via the `agent` entry in the tools bar.
+      enabled: enabledTools.includes("agent"),
+      memoryLimit: agentMemoryLimit,
+      expiresAfterMinutes: agentExpiresAfterMinutes,
+      allowedDomains: agentAllowedDomains,
+      toolSearch: toolSearchEnabled,
+      toolSearchRanker,
+    }),
+    [
+      enabledTools,
+      agentMemoryLimit,
+      agentExpiresAfterMinutes,
+      agentAllowedDomains,
+      toolSearchEnabled,
+      toolSearchRanker,
+    ]
+  );
 
   const { setSelectedModels } = useConversationStore();
 
@@ -175,6 +205,7 @@ export default function ChatPage() {
     clearMessages,
     regenerateResponse,
     editAndRerun,
+    respondToMcpApproval,
   } = useChat({
     models: activeModels,
     settings: modelSettings,
@@ -185,6 +216,7 @@ export default function ChatPage() {
     vectorStoreIds: vectorStoreIds.length > 0 ? vectorStoreIds : undefined,
     clientSideToolExecution,
     enabledTools,
+    agentConfig,
     enabledSkills,
     dataFiles: registeredDataFiles.length > 0 ? registeredDataFiles : undefined,
     maxToolIterations,
@@ -315,6 +347,7 @@ export default function ChatPage() {
           pendingProjectName={pendingProject.name}
           pendingProjectId={pendingProject.id}
           onEditAndRerun={editAndRerun}
+          onRespondMcpApproval={respondToMcpApproval}
         />
       </ErrorBoundary>
       {currentConversation && (

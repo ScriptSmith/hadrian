@@ -8,4 +8,12 @@ ignore = [
     # rsa 0.9.10 Marvin Attack (timing sidechannel). No fix available. Transitive
     # dependency via sqlx-mysql — Hadrian doesn't use RSA keys for MySQL auth.
     "RUSTSEC-2023-0071",
+    # hickory-proto 0.25.2 NSEC3 unbounded loop and O(n²) name-compression DoS.
+    # Pulled in only by microsandbox-network (the `runtime-microsandbox` feature,
+    # off in every default profile) for in-microVM DNS resolution behind the
+    # sandbox egress allowlist. microsandbox 0.4.5 pins the hickory 0.25.x line
+    # (see the dependency comment in Cargo.toml); a fixed 0.26.x requires a
+    # microsandbox bump. Hadrian's own resolver uses hickory-resolver 0.26.1.
+    "RUSTSEC-2026-0118",
+    "RUSTSEC-2026-0119",
 ]

@@ -1,0 +1,370 @@
+//! Repo for `containers` and `container_files` — the shell-tool
+//! `/mnt/data` artifact store.
+//!
+//! A *container* tracks one persistent shell-tool session. Today the
+//! session is response-scoped; `previous_response_id` chains let the
+//! same container be reused across responses.
+//! A *container_file* tracks one file under `/mnt/data` in that
+//! container, with content stored via the same `FileStorage` backend
+//! abstraction the OpenAI Files API uses.
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use uuid::Uuid;
+
+use crate::{
+    db::{
+        error::DbResult,
+        repos::{ResponseOwner, ResponseOwnerType},
+    },
+    models::StorageBackend,
+};
+
+/// One external storage object whose `container_files` row was removed
+/// by [`ContainersRepo::hard_delete_expired`]. The DB cascade drops the
+/// row but not the backing bytes in filesystem/S3 storage, so the
+/// service deletes these explicitly.
+#[derive(Debug, Clone)]
+pub struct DeletedFileObject {
+    pub file_id: String,
+    pub storage_backend: StorageBackend,
+    pub storage_path: Option<String>,
+}
+
+/// Outcome of one `hard_delete_expired` pass: the container rows that
+/// were removed and the external storage objects their files
+/// referenced.
+#[derive(Debug, Default)]
+pub struct HardDeleteExpiredOutcome {
+    pub container_ids: Vec<String>,
+    pub file_objects: Vec<DeletedFileObject>,
+}
+
+/// Lifecycle states for a container row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerStatus {
+    /// Session is live, can still accept new files / commands.
+    Active,
+    /// Idle TTL elapsed; the VM has been torn down. Existing files
+    /// remain downloadable until the container is hard-deleted.
+    Expired,
+    /// Operator or owner deleted it. Files cascade-delete with the
+    /// row (CASCADE on `container_files.container_id`).
+    Deleted,
+}
+
+impl ContainerStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Expired => "expired",
+            Self::Deleted => "deleted",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "active" => Some(Self::Active),
+            "expired" => Some(Self::Expired),
+            "deleted" => Some(Self::Deleted),
+            _ => None,
+        }
+    }
+}
+
+/// One persisted container row.
+#[derive(Debug, Clone)]
+pub struct ContainerRecord {
+    /// `cntr_<32hex>` — same string the API emits.
+    pub id: String,
+    pub org_id: Uuid,
+    pub owner_type: ResponseOwnerType,
+    pub owner_id: Uuid,
+    pub status: ContainerStatus,
+    /// `microsandbox`, `opensandbox`, etc. Free-form so adding a new
+    /// runtime doesn't require a migration.
+    pub runtime_label: String,
+    /// Response this container was originally provisioned for.
+    /// `None` for containers created via `POST /v1/containers`.
+    pub source_response_id: Option<String>,
+    pub idle_ttl_secs: i64,
+    pub last_active_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    /// Set when status transitions to `Expired` (so we know when the
+    /// VM stopped backing the row).
+    pub expires_at: Option<DateTime<Utc>>,
+    /// Optional display name supplied at creation time.
+    pub name: Option<String>,
+    /// Memory ceiling captured at creation. `None` ⇒ runtime default.
+    pub memory_limit_mb: Option<i64>,
+    /// JSON-encoded network policy applied to this container.
+    pub network_policy_json: Option<String>,
+    /// JSON array of skill UUIDs bound to this container.
+    pub skill_ids_json: Option<String>,
+}
+
+/// Fields needed to create a new container row.
+#[derive(Debug, Clone)]
+pub struct NewContainer {
+    pub id: String,
+    pub org_id: Uuid,
+    pub owner_type: ResponseOwnerType,
+    pub owner_id: Uuid,
+    pub status: ContainerStatus,
+    pub runtime_label: String,
+    pub source_response_id: Option<String>,
+    pub idle_ttl_secs: i64,
+    pub created_at: DateTime<Utc>,
+    pub name: Option<String>,
+    pub memory_limit_mb: Option<i64>,
+    pub network_policy_json: Option<String>,
+    pub skill_ids_json: Option<String>,
+}
+
+impl NewContainer {
+    /// Convenience for the foreground/background pipeline: bundle the
+    /// principal-derived owner together with the rest of the row.
+    pub fn from_owner(
+        id: String,
+        org_id: Uuid,
+        owner: ResponseOwner,
+        runtime_label: impl Into<String>,
+        source_response_id: Option<String>,
+        idle_ttl_secs: i64,
+        created_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            id,
+            org_id,
+            owner_type: owner.owner_type(),
+            owner_id: owner.owner_id(),
+            status: ContainerStatus::Active,
+            runtime_label: runtime_label.into(),
+            source_response_id,
+            idle_ttl_secs,
+            created_at,
+            name: None,
+            memory_limit_mb: None,
+            network_policy_json: None,
+            skill_ids_json: None,
+        }
+    }
+}
+
+/// Origin of a captured container file. Mirrors
+/// [`crate::api_types::responses::ContainerFileSource`] but lives in
+/// the repo layer so persistence code doesn't depend on the API
+/// surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerFileSourceKind {
+    User,
+    Assistant,
+}
+
+impl ContainerFileSourceKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Assistant => "assistant",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "user" => Some(Self::User),
+            "assistant" => Some(Self::Assistant),
+            _ => None,
+        }
+    }
+}
+
+/// One persisted container_file row.
+#[derive(Debug, Clone)]
+pub struct ContainerFileRecord {
+    /// `cfile_<32hex>` — same string the API emits.
+    pub id: String,
+    pub container_id: String,
+    pub org_id: Uuid,
+    /// Absolute path inside the container, always under `/mnt/data/`.
+    pub path: String,
+    pub filename: String,
+    pub size_bytes: i64,
+    pub content_type: Option<String>,
+    pub content_hash: String,
+    pub source: ContainerFileSourceKind,
+    pub storage_backend: crate::models::StorageBackend,
+    /// Path inside the external storage backend, when applicable.
+    pub storage_path: Option<String>,
+    pub source_response_id: Option<String>,
+    pub source_call_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Fields needed to insert or overwrite a container_file row.
+///
+/// Repos resolve same-`(container_id, path)` collisions by replacing
+/// the existing row in place (UPSERT). That keeps a re-run of the
+/// same shell command from creating new rows for an idempotent
+/// artifact — but also means the row's `id` may change between Phase
+/// 1's in-memory view and the persisted one. Callers that emitted a
+/// `cfile_…` id into an annotation should pass that same id here so
+/// downloads stay stable across overwrites.
+#[derive(Debug, Clone)]
+pub struct NewContainerFile {
+    pub id: String,
+    pub container_id: String,
+    pub org_id: Uuid,
+    pub path: String,
+    pub filename: String,
+    pub size_bytes: i64,
+    pub content_type: Option<String>,
+    pub content_hash: String,
+    pub source: ContainerFileSourceKind,
+    pub storage_backend: crate::models::StorageBackend,
+    /// Bytes when `storage_backend == Database`. Repos ignore when the
+    /// backend is filesystem/S3 (those write through a `FileStorage`
+    /// adapter before the row is inserted).
+    pub file_data: Option<Vec<u8>>,
+    pub storage_path: Option<String>,
+    pub source_response_id: Option<String>,
+    pub source_call_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Patch applied to a container row in [`ContainersRepo::update_within_org`].
+/// Only `Some` fields are written. `expires_at` is set when status
+/// transitions to `Expired`; clear it explicitly by passing `Some(None)`
+/// using the `Option<Option<…>>` shape would be redundant since
+/// expiry is monotonic.
+#[derive(Debug, Clone, Default)]
+pub struct ContainerPatch {
+    pub status: Option<ContainerStatus>,
+    pub last_active_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+pub trait ContainersRepo: Send + Sync {
+    /// Insert a new container row. The caller picks the `cntr_…` id
+    /// up front so it can be emitted into SSE/annotations before
+    /// persistence completes.
+    async fn insert(&self, input: NewContainer) -> DbResult<ContainerRecord>;
+
+    /// Org-scoped fetch by ID. Same enumeration-resistance pattern as
+    /// `ResponsesRepo`: returns `None` for missing-or-wrong-org without
+    /// distinguishing the two cases.
+    async fn get_by_id_and_org(&self, id: &str, org_id: Uuid) -> DbResult<Option<ContainerRecord>>;
+
+    /// List containers in an org, newest-first.
+    ///
+    /// `after` is a literal `cntr_…` id (OpenAI's cursor shape). The
+    /// repo resolves it to a `(created_at, id)` keyset and returns the
+    /// next page strictly after that position. Fetches `limit + 1` rows
+    /// so the caller can determine `has_more`.
+    ///
+    /// Returns the rows in `created_at DESC, id DESC` order. Unknown or
+    /// cross-org `after` values resolve to an empty page (no leakage).
+    async fn list_by_org(
+        &self,
+        org_id: Uuid,
+        limit: i64,
+        after: Option<&str>,
+    ) -> DbResult<Vec<ContainerRecord>>;
+
+    /// Upsert a container_file row. If `(container_id, path)` is
+    /// already present, replaces the existing row (path-level
+    /// idempotency for overwrites) while keeping the row's `id`
+    /// stable so any annotation citing the prior version still
+    /// resolves to the latest bytes.
+    async fn upsert_file(&self, input: NewContainerFile) -> DbResult<ContainerFileRecord>;
+
+    /// Org-scoped fetch of one container_file by id. Joins through the
+    /// container to enforce the org boundary in a single query.
+    async fn get_file_by_id_and_org(
+        &self,
+        file_id: &str,
+        org_id: Uuid,
+    ) -> DbResult<Option<ContainerFileRecord>>;
+
+    /// Read the raw bytes for a container_file when its
+    /// `storage_backend == Database`. For external backends the
+    /// caller resolves through the `FileStorage` adapter using
+    /// `record.storage_path`.
+    async fn read_file_data(&self, file_id: &str, org_id: Uuid) -> DbResult<Option<Vec<u8>>>;
+
+    /// List files inside a container, newest first. The container's
+    /// org gate is applied so a cross-tenant `container_id` returns an
+    /// empty list. Returns a simple slice (caller-supplied `limit`,
+    /// default 100); cursor pagination is a future enhancement.
+    async fn list_files_by_container(
+        &self,
+        container_id: &str,
+        org_id: Uuid,
+        limit: i64,
+    ) -> DbResult<Vec<ContainerFileRecord>>;
+
+    /// All files for a container, regardless of `org_id`. Used by the
+    /// reattach path which has already validated org access via the
+    /// `containers` row lookup. Files come back newest-first.
+    async fn list_files_for_replay(&self, container_id: &str)
+    -> DbResult<Vec<ContainerFileRecord>>;
+
+    /// Read raw bytes by `(container_id, file_id)` without an org
+    /// check. Used by reattach to replay files into a fresh VM.
+    async fn read_file_data_for_replay(
+        &self,
+        container_id: &str,
+        file_id: &str,
+    ) -> DbResult<Option<Vec<u8>>>;
+
+    /// Patch lifecycle fields on a container row, org-scoped.
+    /// Returns the updated record, or `None` when nothing matched.
+    async fn update_within_org(
+        &self,
+        id: &str,
+        org_id: Uuid,
+        patch: ContainerPatch,
+    ) -> DbResult<Option<ContainerRecord>>;
+
+    /// Atomically mark all `active` containers whose
+    /// `last_active_at + idle_ttl_secs` is older than `now` as
+    /// `expired`. Returns the list of ids that just transitioned so
+    /// the caller can evict matching entries from the in-memory
+    /// session registry.
+    async fn mark_expired_idle(&self, now: DateTime<Utc>) -> DbResult<Vec<String>>;
+
+    /// Return the subset of `ids` whose row is in a terminal state
+    /// (`expired` / `deleted`). Used by the reaper on *every* replica to
+    /// reconcile its process-local session registry against rows a
+    /// (possibly different) leader replica already flipped to `expired`.
+    async fn expired_among(&self, ids: &[String]) -> DbResult<Vec<String>>;
+
+    /// Hard-`DELETE` terminal (`expired` / `deleted`) container rows whose
+    /// transition timestamp (`expires_at`) is at or before `cutoff`,
+    /// cascading their `container_files` rows. `expires_at` is stamped
+    /// when a row transitions out of `active`, so the caller measures the
+    /// retention delay from when the container became terminal.
+    ///
+    /// At most `limit` rows are removed per call so a backlog can't turn
+    /// into one long-running statement. Returns the deleted container
+    /// ids plus the external storage objects their files referenced, so
+    /// the caller can delete the backing bytes the cascade can't reach.
+    /// Atomic: rows and the returned object list are captured in a
+    /// single transaction.
+    async fn hard_delete_expired(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: i64,
+    ) -> DbResult<HardDeleteExpiredOutcome>;
+
+    /// Org-scoped delete of one `container_files` row. Returns true
+    /// when a row was removed. Bytes inside the row are dropped along
+    /// with the metadata.
+    async fn delete_file_by_id_and_org(
+        &self,
+        file_id: &str,
+        container_id: &str,
+        org_id: Uuid,
+    ) -> DbResult<bool>;
+}

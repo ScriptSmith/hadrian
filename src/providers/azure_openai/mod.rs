@@ -265,6 +265,50 @@ impl Provider for AzureOpenAIProvider {
         skip(self, client, payload),
         fields(
             provider = "azure_openai",
+            operation = "responses_compact",
+            model = %payload.model,
+        )
+    )]
+    async fn create_responses_compact(
+        &self,
+        client: &reqwest::Client,
+        payload: crate::api_types::CompactRequest,
+    ) -> Result<Response, ProviderError> {
+        let (header_name, header_value) = self.get_auth_header().await?;
+        let timeout = self.timeout;
+        let stream = payload.stream;
+        let body = serde_json::to_vec(&payload).unwrap_or_default();
+        let url = format!("{}/v1/responses/compact", self.base_url);
+
+        let response = with_circuit_breaker_and_retry(
+            self.circuit_breaker.as_deref(),
+            &self.circuit_breaker_config,
+            &self.retry,
+            "azure_openai",
+            "responses_compact",
+            || async {
+                client
+                    .post(&url)
+                    .header(header_name, &*header_value)
+                    .header("content-type", "application/json")
+                    .timeout(timeout)
+                    .body(body.clone())
+                    .send()
+                    .await
+            },
+        )
+        .await?;
+
+        if !response.status().is_success() {
+            return error_response::<AzureOpenAiErrorParser>(response).await;
+        }
+        providers::build_response(response, stream).await
+    }
+
+    #[tracing::instrument(
+        skip(self, client, payload),
+        fields(
+            provider = "azure_openai",
             operation = "completion",
             model = %payload.model.as_deref().unwrap_or("gpt-35-turbo-instruct"),
             stream = payload.stream

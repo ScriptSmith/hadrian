@@ -8,6 +8,7 @@ export const defaultPagesConfig: PagesConfig = {
   projects: enabledPage,
   teams: enabledPage,
   knowledge_bases: enabledPage,
+  containers: enabledPage,
   api_keys: enabledPage,
   providers: enabledPage,
   usage: enabledPage,

@@ -106,6 +106,8 @@ fn create_usage_entry(
         tool_url: None,
         tool_bytes_fetched: None,
         tool_results_count: None,
+        tool_runtime_seconds: None,
+        tool_exit_code: None,
     }
 }
 
@@ -148,6 +150,8 @@ fn create_usage_entry_with_referer(
         tool_url: None,
         tool_bytes_fetched: None,
         tool_results_count: None,
+        tool_runtime_seconds: None,
+        tool_exit_code: None,
     }
 }
 
@@ -190,6 +194,8 @@ fn create_usage_entry_at_time(
         tool_url: None,
         tool_bytes_fetched: None,
         tool_results_count: None,
+        tool_runtime_seconds: None,
+        tool_exit_code: None,
     }
 }
 
@@ -242,6 +248,8 @@ fn create_attributed_usage_entry(
         tool_url: None,
         tool_bytes_fetched: None,
         tool_results_count: None,
+        tool_runtime_seconds: None,
+        tool_exit_code: None,
     }
 }
 
@@ -367,6 +375,48 @@ pub async fn test_log_multiple_entries(ctx: &UsageTestContext<'_>) {
 // ============================================================================
 // Log Batch Tests
 // ============================================================================
+
+/// Round-trip the new `tool_runtime_seconds` field through both the
+/// single-insert `log` path and `list_logs`, so a positional bug in
+/// the 35-parameter INSERT (or a missing column in the row reader)
+/// can't silently null the field.
+pub async fn test_log_tool_runtime_seconds_round_trip(ctx: &UsageTestContext<'_>) {
+    use crate::db::repos::UsageLogQuery;
+    let org_id = ctx.create_test_org("test-org-toolrt").await;
+    let api_key_id = ctx.create_test_api_key(org_id, "test-key-toolrt").await;
+
+    let mut entry = create_usage_entry(api_key_id, "gpt-4", "openai", 0, 0, Some(0));
+    entry.record_type = "tool".to_string();
+    entry.tool_name = Some("shell".to_string());
+    entry.tool_runtime_seconds = Some(12.5);
+
+    ctx.usage_repo
+        .log(entry)
+        .await
+        .expect("Failed to log tool usage entry");
+
+    let listed = ctx
+        .usage_repo
+        .list_logs(UsageLogQuery {
+            api_key_id: Some(api_key_id),
+            record_type: Some("tool".to_string()),
+            limit: Some(10),
+            ..Default::default()
+        })
+        .await
+        .expect("Failed to list logs");
+
+    assert_eq!(listed.items.len(), 1, "expected one tool record");
+    let record = &listed.items[0];
+    assert_eq!(record.tool_name.as_deref(), Some("shell"));
+    let runtime = record
+        .tool_runtime_seconds
+        .expect("tool_runtime_seconds should round-trip as Some(_)");
+    assert!(
+        (runtime - 12.5).abs() < 1e-9,
+        "tool_runtime_seconds {runtime} did not match 12.5"
+    );
+}
 
 pub async fn test_log_batch_empty(ctx: &UsageTestContext<'_>) {
     // Empty batch should return 0 without error
@@ -1884,6 +1934,7 @@ mod sqlite_tests {
     sqlite_test!(test_log_with_no_cost);
     sqlite_test!(test_log_with_referer);
     sqlite_test!(test_log_multiple_entries);
+    sqlite_test!(test_log_tool_runtime_seconds_round_trip);
 
     // Log batch tests
     sqlite_test!(test_log_batch_empty);
@@ -1988,6 +2039,7 @@ mod postgres_tests {
     postgres_test!(test_log_with_no_cost);
     postgres_test!(test_log_with_referer);
     postgres_test!(test_log_multiple_entries);
+    postgres_test!(test_log_tool_runtime_seconds_round_trip);
 
     // Log batch tests
     postgres_test!(test_log_batch_empty);

@@ -567,6 +567,17 @@ impl WasmDecode for f64 {
     }
 }
 
+impl WasmDecode for Option<f64> {
+    fn decode(value: &WasmValue, _col: &str) -> Result<Self, WasmDbError> {
+        match value {
+            WasmValue::Real(f) => Ok(Some(*f)),
+            WasmValue::Integer(i) => Ok(Some(*i as f64)),
+            WasmValue::Null => Ok(None),
+            _ => Ok(None),
+        }
+    }
+}
+
 impl WasmDecode for NaiveDate {
     fn decode(value: &WasmValue, col: &str) -> Result<Self, WasmDbError> {
         match value {

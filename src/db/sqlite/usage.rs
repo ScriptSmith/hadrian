@@ -64,9 +64,10 @@ impl UsageRepo for SqliteUsageRepo {
                 latency_ms, cancelled, status_code, pricing_source,
                 image_count, audio_seconds, character_count, provider_source,
                 record_type, tool_name, tool_query, tool_url,
-                tool_bytes_fetched, tool_results_count
+                tool_bytes_fetched, tool_results_count, tool_runtime_seconds,
+                tool_exit_code
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(id.to_string())
@@ -103,6 +104,8 @@ impl UsageRepo for SqliteUsageRepo {
         .bind(&entry.tool_url)
         .bind(entry.tool_bytes_fetched)
         .bind(entry.tool_results_count)
+        .bind(entry.tool_runtime_seconds)
+        .bind(entry.tool_exit_code)
         .execute(&self.pool)
         .await?;
 
@@ -115,8 +118,8 @@ impl UsageRepo for SqliteUsageRepo {
         }
 
         // SQLite has a limit of 999 parameters per query (SQLITE_LIMIT_VARIABLE_NUMBER)
-        // Each entry uses 34 parameters. Use 29 entries (34*29=986) to stay under limit.
-        const MAX_ENTRIES_PER_BATCH: usize = 29;
+        // Each entry uses 36 parameters. Use 27 entries (36*27=972) to stay under limit.
+        const MAX_ENTRIES_PER_BATCH: usize = 27;
 
         let mut total_inserted = 0;
 
@@ -125,7 +128,7 @@ impl UsageRepo for SqliteUsageRepo {
         for chunk in entries.chunks(MAX_ENTRIES_PER_BATCH) {
             let placeholders: Vec<&str> = chunk
                 .iter()
-                .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                 .collect();
 
             let sql = format!(
@@ -138,7 +141,8 @@ impl UsageRepo for SqliteUsageRepo {
                     latency_ms, cancelled, status_code, pricing_source,
                     image_count, audio_seconds, character_count, provider_source,
                     record_type, tool_name, tool_query, tool_url,
-                    tool_bytes_fetched, tool_results_count
+                    tool_bytes_fetched, tool_results_count, tool_runtime_seconds,
+                    tool_exit_code
                 )
                 VALUES {}
                 "#,
@@ -185,7 +189,9 @@ impl UsageRepo for SqliteUsageRepo {
                     .bind(&entry.tool_query)
                     .bind(&entry.tool_url)
                     .bind(entry.tool_bytes_fetched)
-                    .bind(entry.tool_results_count);
+                    .bind(entry.tool_results_count)
+                    .bind(entry.tool_runtime_seconds)
+                    .bind(entry.tool_exit_code);
             }
 
             let result = query_builder.execute(&mut *tx).await?;
@@ -3992,7 +3998,8 @@ impl UsageRepo for SqliteUsageRepo {
                    latency_ms, cancelled, status_code, pricing_source,
                    image_count, audio_seconds, character_count, provider_source,
                    record_type, tool_name, tool_query, tool_url,
-                   tool_bytes_fetched, tool_results_count
+                   tool_bytes_fetched, tool_results_count, tool_runtime_seconds,
+                   tool_exit_code
             FROM usage_records
             {}
             ORDER BY recorded_at {}, id {}
@@ -4061,6 +4068,8 @@ impl UsageRepo for SqliteUsageRepo {
                     tool_url: row.col("tool_url"),
                     tool_bytes_fetched: row.col("tool_bytes_fetched"),
                     tool_results_count: row.col("tool_results_count"),
+                    tool_runtime_seconds: row.col("tool_runtime_seconds"),
+                    tool_exit_code: row.col("tool_exit_code"),
                 })
             })
             .collect::<DbResult<Vec<_>>>()?;

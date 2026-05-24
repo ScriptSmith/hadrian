@@ -24,6 +24,7 @@ mod limits;
 mod observability;
 mod providers;
 mod retention;
+mod runtimes;
 mod secrets;
 mod server;
 pub mod sovereignty;
@@ -42,6 +43,7 @@ pub use limits::*;
 pub use observability::*;
 pub use providers::*;
 pub use retention::*;
+pub use runtimes::*;
 pub use secrets::*;
 use serde::{Deserialize, Serialize};
 pub use server::*;
@@ -190,11 +192,17 @@ impl GatewayConfig {
         self.cache.validate()?;
         self.auth.validate()?;
         self.providers.validate()?;
-        self.storage
-            .files
-            .validate()
-            .map_err(ConfigError::Validation)?;
+        self.storage.validate().map_err(ConfigError::Validation)?;
         self.features.validate().map_err(ConfigError::Validation)?;
+
+        // SSRF-validate the responses webhook URL with the server's
+        // loopback policy. Done here (not in features.validate) so the
+        // webhook config doesn't need to know about server.allow_*.
+        if let Some(ref webhook) = self.features.responses.webhook {
+            webhook
+                .validate(self.server.allow_loopback_urls)
+                .map_err(ConfigError::Validation)?;
+        }
 
         Ok(())
     }
@@ -273,6 +281,16 @@ fn check_disabled_features(raw: &toml::Value) -> Result<(), ConfigError> {
         .and_then(|v| v.as_str())
     {
         check_secrets_feature(type_val, &mut issues);
+    }
+
+    // Check shell runtime type
+    if let Some(type_val) = raw
+        .get("features")
+        .and_then(|v| v.get("shell"))
+        .and_then(|v| v.get("type"))
+        .and_then(|v| v.as_str())
+    {
+        check_shell_runtime_feature(type_val, &mut issues);
     }
 
     // Check cache type
@@ -410,6 +428,24 @@ fn check_secrets_feature(type_val: &str, _issues: &mut Vec<(String, &str)>) {
         "gcp" => _issues.push((
             "secrets type 'gcp' requires the 'secrets-gcp' feature".into(),
             "secrets-gcp",
+        )),
+        _ => {}
+    }
+}
+
+#[cfg(feature = "server")]
+fn check_shell_runtime_feature(type_val: &str, _issues: &mut Vec<(String, &str)>) {
+    match type_val {
+        #[cfg(not(feature = "runtime-microsandbox"))]
+        "microsandbox" => _issues.push((
+            "[features.shell] type 'microsandbox' requires the 'runtime-microsandbox' feature"
+                .into(),
+            "runtime-microsandbox",
+        )),
+        #[cfg(not(feature = "runtime-opensandbox"))]
+        "opensandbox" => _issues.push((
+            "[features.shell] type 'opensandbox' requires the 'runtime-opensandbox' feature".into(),
+            "runtime-opensandbox",
         )),
         _ => {}
     }

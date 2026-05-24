@@ -347,6 +347,8 @@ pub async fn web_search(
             tool_url: None,
             tool_bytes_fetched: None,
             tool_results_count: Some(results_count),
+            tool_runtime_seconds: None,
+            tool_exit_code: None,
         });
     }
 
@@ -638,6 +640,8 @@ pub async fn web_fetch(
             tool_url: Some(payload.url.clone()),
             tool_bytes_fetched: Some(bytes_fetched),
             tool_results_count: None,
+            tool_runtime_seconds: None,
+            tool_exit_code: None,
         });
     }
 

@@ -96,6 +96,7 @@ standard = [
     "embed-docs",
     "forecasting",
     "json-schema",
+    "mcp",
     "otlp",
     "prometheus",
     "redis",
@@ -108,9 +109,16 @@ standard = [
     "utoipa",
     "vault",
 ]
+# `full` pulls in microsandbox (a KVM-based VMM SDK) and opensandbox.
+# Microsandbox is Linux-only, brings ~135 transitive crates (KVM,
+# sea-orm, oci-client, smoltcp, rcgen), and contains substantial
+# unsafe. Keep it out of `standard` so the typical deployment profile
+# stays small and macOS/Windows-portable.
 full = [
     "standard",
     "document-extraction-full",
+    "runtime-microsandbox",
+    "runtime-opensandbox",
     "saml",
     "virus-scan",
 ]
@@ -128,6 +136,7 @@ headless = [
     "document-extraction-full",
     "forecasting",
     "json-schema",
+    "mcp",
     "otlp",
     "prometheus",
     "provider-anthropic",
@@ -138,6 +147,8 @@ headless = [
     "provider-vertex",
     "redis",
     "response-validation",
+    "runtime-microsandbox",
+    "runtime-opensandbox",
     "s3-storage",
     "saml",
     "secrets-aws",
@@ -196,6 +207,20 @@ secrets-aws = ["aws-sdk", "dep:aws-sdk-secretsmanager"]
 secrets-azure = ["azure-sdk", "dep:azure_security_keyvault_secrets"]
 secrets-gcp = ["gcp-sdk", "dep:google-cloud-secretmanager-v1"]
 vault = ["dep:vaultrs"]
+
+# Shell-tool runtimes (server-executed `shell` tool backends)
+# - microsandbox: local microVMs (github.com/superradcompany/microsandbox)
+# - opensandbox: Alibaba's Sandbox Protocol over HTTP
+runtime-microsandbox = ["dep:microsandbox"]
+runtime-opensandbox = []
+
+# MCP (Model Context Protocol) tool support — `{"type": "mcp", ...}`
+# on `/v1/responses`. Pulls in the official `rmcp` crate for the
+# client + Streamable HTTP transport when `hadrian_hosted` mode runs
+# the loop. The `passthrough_openai` mode is pure forwarding and does
+# not need this dep, so the feature gate keeps it out of `tiny` and
+# `minimal` builds.
+mcp = ["dep:rmcp", "dep:reqwest_mcp"]
 
 # Auth
 sso = ["dep:hickory-resolver"]
@@ -348,7 +373,7 @@ flate2 = { version = "1", optional = true }
 google-cloud-auth = { version = "0.17", default-features = false, features = ["rustls-tls"], optional = true }
 google-cloud-secretmanager-v1 = { version = "1.2", optional = true }
 google-cloud-token = { version = "0.1", optional = true }
-hickory-resolver = { version = "0.26", features = ["tokio", "system-config"], optional = true }
+hickory-resolver = { version = "0.26.1", features = ["tokio", "system-config"], optional = true }
 hostname = { version = "0.4.2", optional = true }
 jsonschema = { version = "0.29", optional = true }
 kreuzberg = { version = "~4.7", default-features = false, features = ["tokio-runtime", "bundled-pdfium", "office", "excel", "ocr"], optional = true }
@@ -372,6 +397,44 @@ tracing-opentelemetry = { version = "0.32", optional = true }
 utoipa = { version = "5", features = ["chrono", "uuid", "axum_extras"], optional = true }
 utoipa-scalar = { version = "0.3", features = ["axum"], optional = true }
 vaultrs = { version = "0.7.4", features = ["rustls"], optional = true }
+
+# Shell-tool runtime: local microVM SDK.
+#
+# Pinned to 0.4.5: microsandbox 0.4.6 bumped `microsandbox-network` to
+# `hickory-proto = 0.26.0-alpha.1` with the `tls-ring` feature, which
+# was dropped in the 0.26 stable release — so 0.4.6 + Hadrian's
+# `hickory-resolver = 0.26.1` won't resolve. 0.4.5 still depends on the
+# 0.25.x line which carries `tls-ring`, letting Cargo pull two majors
+# of hickory-proto side by side.
+#
+# We skip `keyring` (it pulls dbus) but keep `net` for container
+# networking.
+microsandbox = { version = "=0.4.5", default-features = false, features = ["net", "prebuilt"], optional = true }
+
+# Official Rust MCP SDK — client + Streamable HTTP transport + OAuth
+# challenge detection. Used only when the `mcp` feature is enabled.
+# Server-side features (transport-streamable-http-server, schemars,
+# macros) are excluded to keep the runtime build lean; tests enable
+# them via dev-dependencies when an in-process MCP server stub is
+# needed.
+rmcp = { version = "1.7", default-features = false, features = [
+    "client",
+    "transport-streamable-http-client",
+    "transport-streamable-http-client-reqwest",
+    "client-side-sse",
+    "auth",
+    "reqwest",
+], optional = true }
+
+# rmcp 1.7's `StreamableHttpClient` is implemented for reqwest 0.13's
+# `Client`, while Hadrian's primary HTTP client is reqwest 0.12. To pin
+# the MCP transport's DNS to validated IPs (SSRF / DNS-rebinding guard)
+# we must hand rmcp a client of *its* reqwest version, so depend on 0.13
+# under an alias. Cargo unifies this with rmcp's transitive 0.13.x, so
+# it's the same crate instance (and inherits rmcp's TLS features) — no
+# duplicate compile. `default-features = false`: we only build a client
+# with custom DNS resolution; TLS comes from rmcp's enabled features.
+reqwest_mcp = { package = "reqwest", version = "0.13", default-features = false, optional = true }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Target-specific: WASM needs JS-backed getrandom for uuid/rand

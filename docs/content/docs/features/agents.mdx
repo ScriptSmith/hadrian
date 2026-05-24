@@ -1,0 +1,383 @@
+---
+title: Agents & Shell Tool
+description: Run shell commands in a persistent container as part of a Responses API call. Works behind any LLM provider, with pluggable execution backends.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Hadrian extends the OpenAI-compatible `/v1/responses` API with an **agentic shell tool**:
+the model can execute shell commands, write and read files in a persistent workspace, and
+chain that work across multiple turns. Inspired by [OpenAI's Responses API computer
+environment](https://openai.com/index/equip-responses-api-computer-environment/) and modeled
+on the [shell tool spec](https://developers.openai.com/api/docs/guides/tools-shell.md),
+extended to **work behind any provider Hadrian supports** — not just OpenAI.
+
+## At a glance
+
+- **Containers** — every shell call runs in a persistent Linux container scoped by a
+  `cntr_<id>`. Reuse across responses via `previous_response_id`; reaped on idle TTL.
+- **Workspace** — `/mnt/data` is the writable workdir. Files you upload via `input_file`
+  parts land here; files the model writes here are captured and downloadable.
+- **Provider agnostic** — the shell tool spec is the same OpenAI-shaped
+  `{"type": "shell"}`. Hadrian rewrites it to a function tool for providers that don't have
+  a native equivalent (Anthropic, Bedrock, Vertex), so any model with tool-use support can
+  drive it.
+- **Pluggable runtimes** — choose how shell calls are executed: OpenAI's hosted container,
+  the API client itself, or a Hadrian-hosted sandbox (`microsandbox`, `opensandbox`).
+- **Background mode** — submit with `{"background": true}` and stream results later via
+  `GET /v1/responses/{id}?stream=true`.
+
+## Runtimes
+
+Configure under `[features.shell]` in `hadrian.toml`:
+
+| Runtime              | Where execution happens              | When to use                                                                                                           |
+| -------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `passthrough_openai` | OpenAI's hosted container            | You're using `gpt-5.2+` and want zero infrastructure.                                                                 |
+| `client_passthrough` | Your application code                | You want OpenAI's "local shell" UX behind any provider — Hadrian routes the call but doesn't execute it.              |
+| `microsandbox`       | Hadrian process, per-request microVM | You want isolated, hosted sandboxes without an external sandbox service. Behind cargo feature `runtime-microsandbox`. |
+| `opensandbox`        | Remote OpenSandbox Lifecycle API     | You're running a managed sandbox service (e.g. Alibaba OpenSandbox). Behind cargo feature `runtime-opensandbox`.      |
+
+```toml
+# Use OpenAI's hosted container
+[features.shell]
+type = "passthrough_openai"
+
+# Or have your client execute calls (works behind any provider)
+[features.shell]
+type = "client_passthrough"
+
+# Or host the sandbox yourself
+[features.shell]
+type = "microsandbox"
+image = "alpine"
+cpus = 1
+memory_mb = 512
+```
+
+`passthrough_openai` requires an OpenAI / Azure OpenAI upstream. Requests routed to any
+other provider (Anthropic, Bedrock, Vertex, etc.) reject with HTTP 400, error code
+`shell_passthrough_unsupported_provider`, and a message naming the provider that's
+unable to run the hosted shell tool. `client_passthrough` works behind **any** supported
+provider; non-OpenAI providers see a `function_call` with `name="shell"` instead of
+OpenAI's native `shell_call`, but the wire-level call data is the same.
+
+### Long-running services
+
+Each `exec()` returns when its own command exits, but the container's VM (or remote
+sandbox) keeps running between calls. A model that detaches a process — `nohup python
+server.py &`, `disown`, `setsid …`, a launched systemd-style supervisor — leaves that
+process alive in the container, observable from subsequent shell calls in the same
+session (i.e. the same `previous_response_id` chain or `container_reference`). The
+container's idle TTL still applies: a session that goes longer than
+`default_idle_ttl_secs` without a shell call is reaped and any detached processes go
+down with it.
+
+## Using the shell tool
+
+The wire format matches OpenAI's. Send a `/v1/responses` request with a `shell` tool
+declared and optional environment overrides:
+
+```json
+{
+  "model": "gpt-5.2",
+  "input": "Plot the residuals in residuals.csv and write the chart to /mnt/data/chart.png.",
+  "tools": [
+    {
+      "type": "shell",
+      "environment": {
+        "type": "container_auto",
+        "memory_limit": "1g",
+        "expires_after": { "anchor": "last_active_at", "minutes": 30 },
+        "network_policy": {
+          "type": "allowlist",
+          "allowed_domains": ["pypi.org", "files.pythonhosted.org"],
+          "domain_secrets": [
+            { "domain": "api.github.com", "name": "GITHUB_TOKEN", "value": "ghp_…" }
+          ]
+        }
+      }
+    }
+  ]
+}
+```
+
+To attach to an existing container (created via `POST /v1/containers` or
+chained from an earlier response), use `container_reference`:
+
+```json
+{
+  "model": "gpt-5.2",
+  "input": "Continue from where we left off.",
+  "tools": [
+    {
+      "type": "shell",
+      "environment": {
+        "type": "container_reference",
+        "container_id": "cntr_abc123…"
+      }
+    }
+  ]
+}
+```
+
+The `domain_secrets` array accepts either OpenAI's inline form
+(`{ domain, name, value }` — the raw secret travels with the request)
+or Hadrian's safer reference form (`{ placeholder, allowed_domains }`,
+matched against `[features.server_tools.shell_limits].allowed_domain_secrets`
+so the value never leaves the gateway).
+
+The model emits shell calls; Hadrian executes them and streams the spec-canonical output
+item lifecycle:
+
+- `response.output_item.added` carrying a `shell_call` item with `status: "in_progress"` —
+  fires before container boot, so SDKs see the item as soon as the request lands.
+- `response.output_item.added` carrying a placeholder `shell_call_output` item with
+  `status: "in_progress"` — paired with the call above.
+- `response.output_item.done` carrying the final `shell_call` item (status `completed` or
+  `incomplete`) with the resolved `environment.container_reference`.
+- `response.output_item.done` carrying the `shell_call_output` item — full stdout / stderr,
+  `outcome` (`{type: "exit", exit_code}` or `{type: "timeout"}`), plus the Hadrian-extension
+  `output_files` array listing every artifact captured under `/mnt/data`.
+
+OpenAI's Responses streaming spec has no per-delta event for the shell tool: stdout and
+stderr surface only on the terminal `output_item.done`, not as incremental chunks. SDKs
+typed against the API stream pick the lifecycle up generically.
+
+Output longer than 8&nbsp;000 characters is head + tail trimmed before being fed back to the
+model, so it should redirect long output to a file under `/mnt/data` and follow up with
+`grep` / `tail`. The function-mode tool description Hadrian sends to non-OpenAI providers
+embeds this guidance explicitly.
+
+## Files
+
+### Inputs
+
+Attach files to a request with `input_file` parts. Three source modes:
+
+```json
+{
+  "input": [
+    {
+      "role": "user",
+      "content": [
+        { "type": "input_text", "text": "Summarize this CSV." },
+        { "type": "input_file", "file_id": "file_abc123" },
+        { "type": "input_file", "file_url": "https://example.com/dataset.csv" },
+        { "type": "input_file", "file_data": "data:text/csv;base64,..." }
+      ]
+    }
+  ]
+}
+```
+
+- `file_id` — looks up a file already uploaded via the standard
+  [Files API](/docs/api). The same `/v1/files` resource that backs Knowledge Bases is
+  reused; you don't need a parallel uploads endpoint just for shell-tool inputs.
+- `file_url` — HTTPS fetch with SSRF protection.
+- `file_data` — inline base64 (data URL).
+
+All resolved files land at `/mnt/data/<filename>` before the first shell command runs.
+
+### Outputs
+
+Anything the model writes under `/mnt/data` is captured into the container's file store and
+surfaced two ways:
+
+1. Inline as `container_file_citation` annotations on the assistant's reply.
+2. Downloadable from `GET /v1/containers/{cntr_id}/files/{cfile_id}/content`.
+
+<Callout type="info">
+  Container output files are a **separate** resource from the Files API (`/v1/files`). To feed a
+  container output back into a knowledge base, download it from the container endpoint and re-upload
+  via `/v1/files`.
+</Callout>
+
+Where the captured bytes physically live is configurable. By default they sit inline in the
+database, which scales poorly for large or numerous artifacts; point
+`[storage.container_files]` at the local filesystem or an S3-compatible bucket to offload
+them. See [Storage configuration](/docs/configuration/storage).
+
+## Containers
+
+Every shell-tool response provisions a container. You can also create one explicitly with
+`POST /v1/containers` and bind future responses to it via
+`environment.type = "container_reference"`:
+
+```
+POST   /v1/containers                                  # Create an empty container
+GET    /v1/containers/{cntr_id}                        # Metadata + TTL
+DELETE /v1/containers/{cntr_id}                        # Tear down + cascade delete files
+POST   /v1/containers/{cntr_id}/files                  # Multipart upload into /mnt/data
+GET    /v1/containers/{cntr_id}/files                  # List files in /mnt/data
+GET    /v1/containers/{cntr_id}/files/{id}             # File metadata
+DELETE /v1/containers/{cntr_id}/files/{id}             # Remove a file
+GET    /v1/containers/{cntr_id}/files/{id}/content     # Raw bytes
+```
+
+`POST /v1/containers` accepts:
+
+```json
+{
+  "name": "my-workspace",
+  "memory_limit": "1g",
+  "expires_after": { "anchor": "last_active_at", "minutes": 60 },
+  "network_policy": {
+    "type": "allowlist",
+    "allowed_domains": ["pypi.org"]
+  },
+  "skills": [
+    { "type": "skill_reference", "skill_id": "<uuid>", "version": "latest" },
+    {
+      "type": "inline",
+      "name": "extract-csv",
+      "description": "Inline ephemeral skill",
+      "source": {
+        "type": "base64",
+        "media_type": "text/markdown",
+        "data": "IyBleHRyYWN0LWNzdgo="
+      }
+    }
+  ]
+}
+```
+
+`skill_reference` resolves to a stored skill by UUID. `inline` carries the bundle on
+the request itself — today only `media_type: "text/markdown"` is supported (decoded as
+the synthetic `SKILL.md`); multi-file (`application/zip`) inline skills reject with
+`unsupported_inline_skill_media_type`. `version` accepts `"latest"` only — passing
+anything else rejects with `unsupported_skill_version` so a future versioned-skills
+release doesn't silently downgrade requests that wanted a pin.
+
+Containers can also be enumerated:
+
+```
+GET /v1/containers?limit=20&after=<cntr_id>
+```
+
+Returns the OpenAI-shaped list envelope `{ "object": "list", "data": [...],
+"first_id": "...", "last_id": "...", "has_more": true }`, newest-first, scoped to the
+caller's org.
+
+The row is created with no live VM; the runtime boots on the first shell call that references
+it. Chain across responses by sending `previous_response_id` for implicit reuse, or
+`environment.type = "container_reference"` for explicit attachment.
+
+### TTL & expiry
+
+`GET /v1/containers/{id}` returns:
+
+- `created_at` — when the container was provisioned.
+- `last_active_at` — moves forward on every shell call.
+- `expires_at` — **Hadrian extension.** For active containers this is a forward-looking
+  estimate (`last_active_at + idle_ttl_secs`); for terminal statuses it's the actual
+  transition time. Lets you plan reuse without polling.
+- `idle_ttl_secs` — **Hadrian extension.** The TTL applied to this row, so you can recompute
+  `expires_at` yourself.
+
+A background reaper marks rows `expired` once `now > last_active_at + idle_ttl_secs`. The
+default TTL is 20 minutes (configurable as `[features.containers].default_idle_ttl_secs`),
+matching OpenAI's hosted-container behavior.
+
+## Sandboxing (Hadrian-hosted runtimes)
+
+For `microsandbox` and `opensandbox`, every request can request a narrower environment
+than the operator's defaults, but the request is bounded by what the operator pins in
+`[features.server_tools.shell_limits]`:
+
+- **Memory** — `default_mem_limit_mb`, `max_mem_limit_mb`. Per-request `memory_limit`
+  must fit inside the cap.
+- **Egress** — `allowed_egress_hosts` is an operator allowlist; per-request
+  `network_policy.allowed_domains` must be a subset. Empty allowlist = inherit the runtime
+  default (microsandbox: full network; opensandbox: deny-all).
+- **Domain secrets** — `allowed_domain_secrets` lets the operator pre-configure
+  placeholder secrets (e.g. `GITHUB_TOKEN`) that the model can refer to by name without
+  ever seeing the value. Per-request `network_policy.domain_secrets[].allowed_domains`
+  must be a subset.
+- **Command timeout** — `command_timeout_secs` caps each individual shell exec.
+
+## Context compaction
+
+OpenAI's Responses API supports a `context_management` directive that triggers server-side
+compaction when the rolling token estimate crosses a threshold. Hadrian forwards the
+directive **verbatim** to providers that support it natively (OpenAI, Azure OpenAI); for
+every other provider (Anthropic, Bedrock, Vertex) it runs a **gateway-side compactor**
+before dispatch.
+
+```json
+"context_management": [
+  {
+    "type": "compaction",
+    "compact_threshold": 8000,
+    "strategy": "llm",
+    "prompt": "Summarize prior turns in <= 200 words; preserve constraints + file paths."
+  }
+]
+```
+
+Two strategies, picked by the request's Hadrian-extension `strategy` field (defaulting to
+`[features.responses.compaction].default_strategy`):
+
+- **`truncate`** — Drop the oldest non-system items until the estimate falls under the
+  threshold, replacing them with a single Hadrian compaction marker message. Free, deterministic.
+- **`llm`** — Summarise the dropped items via a one-shot call to the same provider/model
+  (using the `prompt` field — or `default_prompt` — to drive the summariser), and replace
+  them with a system message carrying the summary.
+
+Operator defaults live under `[features.responses.compaction]`:
+
+```toml
+[features.responses.compaction]
+enabled = true                     # default false — opt in to gateway compaction
+default_strategy = "truncate"      # "llm" | "truncate"
+default_threshold_tokens = 12_000  # falls back to this when the request omits it
+keep_recent_items = 6              # most recent N items are never compacted
+default_prompt = "..."             # summarisation prompt for the llm strategy
+```
+
+## Background mode
+
+Long-running requests run asynchronously:
+
+```json
+{
+  "model": "gpt-5.2",
+  "background": true,
+  "input": "Run the full data pipeline.",
+  "tools": [{ "type": "shell" }]
+}
+```
+
+Returns immediately with a `resp_<id>`. Tail with:
+
+```
+GET /v1/responses/{resp_id}?stream=true
+```
+
+A background worker picks up the queued response, runs it through the same pipeline as
+foreground requests, and persists every SSE event so clients can resume the stream from any
+point — including reconnecting after the server restarts.
+
+Pass `?starting_after=N` alongside `?stream=true` to resume the SSE stream from a specific
+sequence number; events are emitted in OpenAI's named-SSE form (`event: <type>\ndata: <payload>`)
+so SDK clients pick up the typed events they expect.
+
+## How it compares
+
+| Capability                    | Hadrian                    | OpenAI Responses | Anthropic      | Bedrock AgentCore | Gemini |
+| ----------------------------- | -------------------------- | ---------------- | -------------- | ----------------- | ------ |
+| Persistent container handle   | ✓                          | ✓                | ✓ (30-day TTL) | ✓ (session VM)    | —      |
+| Reuse across turns            | ✓ (`previous_response_id`) | ✓                | ✓              | ✓                 | —      |
+| Client-executed mode          | ✓ (`client_passthrough`)   | ✓                | ✓ (bash tool)  | —                 | —      |
+| Per-request network allowlist | ✓                          | ✓                | — (no network) | configurable      | —      |
+| Files via existing Files API  | ✓                          | ✓                | ✓              | ✓ (S3 / EFS)      | ✓      |
+| Background / long-running     | ✓                          | ✓                | —              | ✓                 | —      |
+
+## See also
+
+- [Knowledge Bases](/docs/features/knowledge-bases) — for retrieval, not execution.
+- [Web Tools](/docs/features/web-tools) — server-side web search / URL fetch.
+- [MCP Tool](/docs/features/mcp-tool) — server-side `{"type": "mcp"}` tool on `/v1/responses`,
+  for calling remote Model Context Protocol servers (Atlassian, Notion, GitHub, …).
+- [Skills](/docs/features/skills) — mountable bundles available to the shell tool when
+  supported by the runtime.

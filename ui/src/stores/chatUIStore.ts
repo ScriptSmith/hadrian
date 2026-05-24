@@ -223,6 +223,32 @@ interface ChatUIState {
    * rounds without content to minimal "Thinking" / "Processing" indicators.
    */
   compactMode: boolean;
+
+  // --- Agent mode (shell tool + container) ---
+  // The shell tool is enabled via the `agent` entry in `enabledTools`
+  // (ToolsBar); these fields configure the container a new conversation
+  // provisions. The conversation then reuses that container until it expires
+  // (handled in useChat), so there's no manual container picker.
+  /** Memory ceiling (OpenAI string, e.g. "512m"/"1g"). Empty = operator default. */
+  agentMemoryLimit: string;
+  /** Idle TTL in minutes for a new container. Null = operator default. */
+  agentExpiresAfterMinutes: number | null;
+  /**
+   * Egress allowlist (comma/newline separated). Defaults to `*` (any host,
+   * subject to the operator's `allowed_egress_hosts` ceiling). Empty = deny-all.
+   */
+  agentAllowedDomains: string;
+  /**
+   * Let the model search for tools / defer-load them (`tool_search`).
+   * Keeps context small when many MCP tools are attached.
+   */
+  toolSearchEnabled: boolean;
+  /**
+   * Ranking strategy override for tool search. `"default"` omits the field
+   * (deployment default applies). `"semantic"`/`"hybrid"` need an embedding
+   * provider — the gateway rejects them with 400 otherwise.
+   */
+  toolSearchRanker: "default" | "hybrid" | "semantic" | "lexical";
 }
 
 interface ChatUIActions {
@@ -347,6 +373,13 @@ interface ChatUIActions {
   setCompactMode: (enabled: boolean) => void;
   /** Toggle compact mode */
   toggleCompactMode: () => void;
+
+  // --- Agent mode setters ---
+  setAgentMemoryLimit: (value: string) => void;
+  setAgentExpiresAfterMinutes: (minutes: number | null) => void;
+  setAgentAllowedDomains: (value: string) => void;
+  setToolSearchEnabled: (enabled: boolean) => void;
+  setToolSearchRanker: (ranker: "default" | "hybrid" | "semantic" | "lexical") => void;
 }
 
 export type ChatUIStore = ChatUIState & ChatUIActions;
@@ -410,6 +443,11 @@ const initialState: ChatUIState = {
   pendingPrompt: null,
   subAgentModel: null,
   compactMode: loadCompactMode(),
+  agentMemoryLimit: "",
+  agentExpiresAfterMinutes: null,
+  agentAllowedDomains: "*",
+  toolSearchEnabled: false,
+  toolSearchRanker: "default",
 };
 
 export const useChatUIStore = create<ChatUIStore>((set) => ({
@@ -702,6 +740,12 @@ export const useChatUIStore = create<ChatUIStore>((set) => ({
       }
       return { compactMode: next };
     }),
+
+  setAgentMemoryLimit: (value) => set({ agentMemoryLimit: value }),
+  setAgentExpiresAfterMinutes: (minutes) => set({ agentExpiresAfterMinutes: minutes }),
+  setAgentAllowedDomains: (value) => set({ agentAllowedDomains: value }),
+  setToolSearchEnabled: (enabled) => set({ toolSearchEnabled: enabled }),
+  setToolSearchRanker: (ranker) => set({ toolSearchRanker: ranker }),
 }));
 
 /**
@@ -846,3 +890,15 @@ export const useCompactMode = () => useChatUIStore((state: ChatUIState) => state
 /** Get MCP config modal open state */
 export const useMCPConfigModalOpen = () =>
   useChatUIStore((state: ChatUIState) => state.mcpConfigModalOpen);
+
+// --- Agent mode selectors ---
+export const useAgentMemoryLimit = () =>
+  useChatUIStore((state: ChatUIState) => state.agentMemoryLimit);
+export const useAgentExpiresAfterMinutes = () =>
+  useChatUIStore((state: ChatUIState) => state.agentExpiresAfterMinutes);
+export const useAgentAllowedDomains = () =>
+  useChatUIStore((state: ChatUIState) => state.agentAllowedDomains);
+export const useToolSearchEnabled = () =>
+  useChatUIStore((state: ChatUIState) => state.toolSearchEnabled);
+export const useToolSearchRanker = () =>
+  useChatUIStore((state: ChatUIState) => state.toolSearchRanker);

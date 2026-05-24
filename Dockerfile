@@ -61,6 +61,7 @@ RUN apt-get update && apt-get install -y \
     libxslt1-dev \
     libxmlsec1-dev \
     libclang-dev \
+    libcap-ng-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app directory
@@ -121,6 +122,7 @@ RUN apt-get update && apt-get install -y \
     libxslt1.1 \
     libxmlsec1 \
     libxmlsec1-openssl \
+    libcap-ng0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app user

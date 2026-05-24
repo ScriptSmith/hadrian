@@ -50,6 +50,13 @@ pub struct UsageLogRecord {
     pub tool_bytes_fetched: Option<i64>,
     /// Number of search results returned — only for web_search records
     pub tool_results_count: Option<i32>,
+    /// Wall-clock runtime in seconds — only for shell tool records.
+    pub tool_runtime_seconds: Option<f64>,
+    /// Process exit code — only for shell tool records. Distinct from
+    /// `status_code` (which is the HTTP status of the API request that
+    /// drove the tool); a shell can exit `0` while the wrapping request
+    /// returns 200, or exit `7` while the request still returns 200.
+    pub tool_exit_code: Option<i32>,
 }
 
 /// Usage log entry for a single API request.
@@ -130,6 +137,19 @@ pub struct UsageLogEntry {
     /// Number of search results returned — only for web_search records
     #[serde(default)]
     pub tool_results_count: Option<i32>,
+    /// Wall-clock runtime in seconds — only for shell tool records.
+    /// Multiplied by the rate from `[features.server_tools.pricing]`
+    /// to populate `cost_microcents` for billing.
+    #[serde(default)]
+    pub tool_runtime_seconds: Option<f64>,
+    /// Process exit code for shell tool records. `None` when the
+    /// command never reached an `Exit` event (e.g. client disconnect
+    /// before the runtime signaled completion); clients see this
+    /// surfaced as `status: "incomplete"` with a `timeout` outcome on
+    /// the `shell_call_output` item, but the usage record preserves
+    /// the "never reported" vs "exited 0" distinction.
+    #[serde(default)]
+    pub tool_exit_code: Option<i32>,
 }
 
 fn default_record_type() -> String {

@@ -123,6 +123,25 @@ impl FilesService {
         self.db.files().get_file(id).await
     }
 
+    /// Get a file by ID, scoped to an owner. Returns `None` (the same as
+    /// a missing file — no info leak) when the file exists but belongs to
+    /// a different `(owner_type, owner_id)`. Used by the container
+    /// staging paths so a caller can only reference files in its own
+    /// tenant scope, mirroring how `list_files` is scoped.
+    pub async fn get_for_owner(
+        &self,
+        id: Uuid,
+        owner_type: crate::models::VectorStoreOwnerType,
+        owner_id: Uuid,
+    ) -> DbResult<Option<File>> {
+        Ok(self
+            .db
+            .files()
+            .get_file(id)
+            .await?
+            .filter(|f| f.owner_type == owner_type && f.owner_id == owner_id))
+    }
+
     /// Get the content of a file.
     ///
     /// Retrieves the file content from the appropriate storage backend:

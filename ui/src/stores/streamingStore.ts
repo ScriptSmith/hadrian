@@ -9,6 +9,7 @@ import type {
   CompletedRound,
   ToolExecution,
   ToolExecutionRound,
+  McpApprovalRequest,
 } from "@/components/chat-types";
 import type { ToolCallState } from "@/pages/chat/utils/toolCallParser";
 
@@ -101,6 +102,12 @@ export interface StreamingResponse {
    * These are rich output objects displayed in the UI but not sent to the model.
    */
   artifacts?: Artifact[];
+  /**
+   * Gateway MCP tool calls that paused for human approval during this
+   * response. Rendered as approve/deny prompts; resolved entries stay so the
+   * transcript records the decision.
+   */
+  mcpApprovals?: McpApprovalRequest[];
   /**
    * Tool execution timeline tracking rounds of tool calls.
    * Each round contains one or more tool executions and optional model reasoning.
@@ -767,6 +774,10 @@ interface StreamingActions {
   /** Clear citations for a model */
   clearCitations: (model: string) => void;
 
+  // Gateway MCP approval actions
+  /** Append a pending gateway MCP approval request to a model's stream */
+  addMcpApproval: (model: string, approval: McpApprovalRequest) => void;
+
   // Artifact management actions
   /** Add artifacts to a model's stream (appends to existing) */
   addArtifacts: (model: string, artifacts: Artifact[]) => void;
@@ -1227,6 +1238,23 @@ export const useStreamingStore = create<StreamingStore>((set) => ({
 
       const newStreams = new Map(state.streams);
       newStreams.set(model, { ...existing, citations: undefined });
+      return { streams: newStreams };
+    }),
+
+  // Gateway MCP approval implementations
+  addMcpApproval: (model, approval) =>
+    set((state) => {
+      const existing = state.streams.get(model);
+      if (!existing) return state;
+
+      const current = existing.mcpApprovals ?? [];
+      // Dedupe by approvalRequestId so replays don't double-add.
+      if (current.some((a) => a.approvalRequestId === approval.approvalRequestId)) {
+        return state;
+      }
+
+      const newStreams = new Map(state.streams);
+      newStreams.set(model, { ...existing, mcpApprovals: [...current, approval] });
       return { streams: newStreams };
     }),
 

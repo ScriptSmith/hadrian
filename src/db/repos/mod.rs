@@ -1,10 +1,13 @@
 mod api_keys;
 mod audit_logs;
+mod containers;
 mod conversations;
 pub mod cursor;
 #[cfg(feature = "sso")]
 mod domain_verifications;
 mod files;
+#[cfg(feature = "mcp")]
+mod mcp_pending_approvals;
 mod model_pricing;
 mod oauth_authorization_codes;
 mod org_rbac_policies;
@@ -13,6 +16,8 @@ mod org_sso_configs;
 mod organizations;
 mod projects;
 mod providers;
+mod response_events;
+mod responses;
 #[cfg(feature = "sso")]
 mod scim_configs;
 #[cfg(feature = "sso")]
@@ -32,11 +37,14 @@ mod vector_stores;
 pub use api_keys::*;
 pub use audit_logs::*;
 use chrono::NaiveDate;
+pub use containers::*;
 pub use conversations::*;
 pub use cursor::*;
 #[cfg(feature = "sso")]
 pub use domain_verifications::*;
 pub use files::*;
+#[cfg(feature = "mcp")]
+pub use mcp_pending_approvals::*;
 pub use model_pricing::*;
 pub use oauth_authorization_codes::*;
 pub use org_rbac_policies::*;
@@ -45,6 +53,8 @@ pub use org_sso_configs::*;
 pub use organizations::*;
 pub use projects::*;
 pub use providers::*;
+pub use response_events::*;
+pub use responses::*;
 #[cfg(feature = "sso")]
 pub use scim_configs::*;
 #[cfg(feature = "sso")]

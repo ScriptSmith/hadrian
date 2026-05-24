@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::{CircuitBreakerConfig, RetryConfig};
+use crate::api_types::responses::ToolSearchRankerKind;
 
 /// Feature flags for optional capabilities.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -37,6 +40,12 @@ pub struct FeaturesConfig {
     #[serde(default)]
     pub vector_store_cleanup: VectorStoreCleanupConfig,
 
+    /// Container cleanup job configuration.
+    /// Hard-deletes `expired` / `deleted` containers (and their captured
+    /// files) after a configurable delay so terminal rows don't accumulate.
+    #[serde(default)]
+    pub containers_cleanup: ContainersCleanupConfig,
+
     /// File processing configuration for RAG document ingestion.
     /// Controls how uploaded files are chunked and embedded into vector stores.
     #[serde(default)]
@@ -62,6 +71,562 @@ pub struct FeaturesConfig {
     /// Caches model lists from config-file providers to avoid per-request latency.
     #[serde(default)]
     pub static_models_cache: StaticModelsCacheConfig,
+
+    /// Shared configuration for server-executed tools (file_search, web_search,
+    /// future: shell). Controls the global per-request iteration budget across
+    /// all such tools. Replaces the per-tool `max_iterations` fields on
+    /// `[features.file_search]` and `[features.web_search]`, which are
+    /// deprecated and emit a warning at startup if set to a non-default value.
+    #[serde(default)]
+    pub server_tools: ServerToolsConfig,
+
+    /// Shell tool runtime configuration. Selects which backend executes
+    /// `shell` tool calls (passthrough_openai, microsandbox, etc.).
+    /// Defaults to `None` — shell tool disabled.
+    #[serde(default)]
+    pub shell: super::ShellRuntimeConfig,
+
+    /// Container / `/mnt/data` artifact capture settings. Controls how
+    /// files written by the shell tool are persisted and surfaced back
+    /// to the conversation as `container_file_citation` annotations.
+    #[serde(default)]
+    pub containers: ContainersConfig,
+
+    /// Persistence settings for the Responses API.
+    #[serde(default)]
+    pub responses: ResponsesPersistenceConfig,
+
+    /// MCP (Model Context Protocol) tool configuration. When set,
+    /// `/v1/responses` accepts `{"type": "mcp", ...}` tool entries and
+    /// either forwards them to OpenAI/Azure (`mode = passthrough_openai`)
+    /// or runs the MCP client loop locally (`mode = hadrian_hosted`).
+    /// Defaults to `None` — MCP tool disabled.
+    #[serde(default)]
+    pub mcp: Option<McpConfig>,
+}
+
+/// MCP tool configuration.
+///
+/// Two execution modes:
+///
+/// - `passthrough_openai` — `mcp` tools are forwarded verbatim to
+///   OpenAI / Azure OpenAI, which runs the MCP client loop and emits
+///   the canonical `mcp_*` items. Other providers reject with
+///   `mcp_passthrough_unsupported_provider`.
+/// - `hadrian_hosted` — Hadrian runs the MCP client loop itself
+///   using `rmcp` and rewrites `mcp` into per-tool function tools,
+///   so any provider can drive the loop.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct McpConfig {
+    /// Master enable. `false` makes the gateway behave as if MCP isn't
+    /// configured at all (no preprocess, no executor) even when other
+    /// fields are set.
+    #[serde(default = "default_mcp_enabled")]
+    pub enabled: bool,
+    /// Execution mode.
+    #[serde(default)]
+    pub mode: McpMode,
+    /// Operator allowlist of remote MCP server URLs. `None` = any URL
+    /// the caller supplies is accepted (the caller already controls
+    /// `Authorization`, so this is a defense-in-depth knob, not an
+    /// auth check). When `Some`, the caller's `server_url` must match
+    /// at least one entry exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_server_urls: Option<Vec<String>>,
+    /// When `false` (the default), requests using `connector_id` —
+    /// OpenAI's first-party connector handles — are rejected. Self-
+    /// hosted gateways usually can't reach OpenAI's connector registry,
+    /// so the safe default is "off"; flip to `true` only when the
+    /// upstream is OpenAI/Azure and the connector is known to work.
+    #[serde(default = "default_mcp_allow_connector_ids")]
+    pub allow_connector_ids: bool,
+    /// Hadrian-side tool search for deferred tools (`defer_loading`).
+    /// Only relevant under `hadrian_hosted`.
+    #[serde(default)]
+    pub tool_search: ToolSearchConfig,
+    /// Deployment default upper bound, in seconds, on a single MCP
+    /// `tools/call` round-trip under `hadrian_hosted`. `rmcp` applies no
+    /// request timeout of its own and the underlying reqwest client sets
+    /// none either, so without this a server that accepts the connection
+    /// and then never responds would hang the response indefinitely.
+    /// Overridable per tool via the `mcp` tool's `call_timeout_secs`
+    /// Hadrian extension. Default 300s (5 min).
+    #[serde(default = "default_mcp_call_timeout_secs")]
+    pub call_timeout_secs: u64,
+}
+
+/// Settings for Hadrian-side tool search over a deferred MCP catalog.
+///
+/// Engages under `hadrian_hosted` when a request marks an `mcp` tool
+/// entry with `defer_loading: true` (and does not opt into native
+/// passthrough). Hadrian exposes a single `tool_search` function tool,
+/// keeps the catalog server-side, and injects matched per-tool function
+/// definitions as the model discovers them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ToolSearchConfig {
+    /// Deployment default ranking strategy. Overridable per-request via
+    /// the `tool_search` tool's `ranker` extension field. `hybrid` (the
+    /// default) fuses semantic + lexical relevance; `semantic` requires a
+    /// resolvable embedding provider (validated at startup); `lexical`
+    /// needs no embeddings.
+    #[serde(default = "default_tool_search_ranker")]
+    pub ranker: ToolSearchRankerKind,
+    /// Maximum number of tools a single search returns.
+    #[serde(default = "default_tool_search_max_results")]
+    pub max_results: usize,
+    /// Minimum relevance score (0.0–1.0) a tool must reach to be
+    /// returned. Applies only to the `lexical` and `semantic` rankers,
+    /// whose scores are normalized to this range. The default `hybrid`
+    /// ranker fuses ranks via RRF and produces a small ranking-only score
+    /// (not a 0–1 relevance), so the threshold is *ignored* for it —
+    /// otherwise any non-zero value would drop every result. Use
+    /// `max_results` to bound hybrid output.
+    #[serde(default = "default_tool_search_score_threshold")]
+    pub score_threshold: f64,
+    /// Embedding configuration for semantic/hybrid ranking. When omitted,
+    /// resolution falls back to the `file_search` then semantic-cache
+    /// embedding config; if none resolve, `hybrid` degrades to `lexical`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<EmbeddingConfig>,
+    /// RRF smoothing constant `k` for `hybrid` fusion (default 60, per the
+    /// original RRF paper).
+    #[serde(default = "default_tool_search_rrf_k")]
+    pub rrf_k: u32,
+}
+
+impl Default for ToolSearchConfig {
+    fn default() -> Self {
+        Self {
+            ranker: default_tool_search_ranker(),
+            max_results: default_tool_search_max_results(),
+            score_threshold: default_tool_search_score_threshold(),
+            embedding: None,
+            rrf_k: default_tool_search_rrf_k(),
+        }
+    }
+}
+
+fn default_tool_search_ranker() -> ToolSearchRankerKind {
+    ToolSearchRankerKind::Hybrid
+}
+
+fn default_tool_search_max_results() -> usize {
+    20
+}
+
+fn default_tool_search_score_threshold() -> f64 {
+    0.0
+}
+
+fn default_tool_search_rrf_k() -> u32 {
+    60
+}
+
+impl McpConfig {
+    /// True when MCP is enabled *and* the gateway runs the client loop
+    /// itself (`hadrian_hosted`). This is the single predicate the
+    /// route handler (non-streaming bridge), the approval-resume gate,
+    /// and the pipeline executor registration all key off — keep it in
+    /// one place so the three sites can't drift apart.
+    pub fn is_hadrian_hosted(&self) -> bool {
+        self.enabled && matches!(self.mode, McpMode::HadrianHosted)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        // A zero call timeout would expire every `tools/call` immediately;
+        // a zero tool-search cap would return nothing from `tool_search`.
+        if self.call_timeout_secs == 0 {
+            return Err("[features.mcp] call_timeout_secs must be > 0".into());
+        }
+        if self.tool_search.max_results == 0 {
+            return Err("[features.mcp.tool_search] max_results must be > 0".into());
+        }
+        Ok(())
+    }
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_mcp_enabled(),
+            mode: McpMode::default(),
+            allowed_server_urls: None,
+            allow_connector_ids: default_mcp_allow_connector_ids(),
+            tool_search: ToolSearchConfig::default(),
+            call_timeout_secs: default_mcp_call_timeout_secs(),
+        }
+    }
+}
+
+fn default_mcp_enabled() -> bool {
+    true
+}
+
+fn default_mcp_call_timeout_secs() -> u64 {
+    300
+}
+
+fn default_mcp_allow_connector_ids() -> bool {
+    false
+}
+
+/// Where the MCP client loop runs.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum McpMode {
+    /// Forward `mcp` tool entries to OpenAI / Azure OpenAI. Other
+    /// providers reject. The default — zero gateway overhead.
+    #[default]
+    PassthroughOpenai,
+    /// Hadrian runs the MCP client loop itself via `rmcp` and rewrites
+    /// `mcp` tools into per-tool function tools. Requires the `mcp`
+    /// cargo feature.
+    HadrianHosted,
+}
+
+/// Persistence and retention settings for the Responses API.
+///
+/// When `store=true` (the OpenAI default) is set on a request, Hadrian
+/// writes a row to the `responses` table that can later be retrieved
+/// via `GET /v1/responses/{id}` or cancelled via
+/// `POST /v1/responses/{id}/cancel`. Records past
+/// `retention_secs` are removed by the cleanup worker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ResponsesPersistenceConfig {
+    /// How long a terminal response is kept before pruning.
+    /// Default 86400 (24h). Must be > 0.
+    #[serde(default = "default_responses_retention_secs")]
+    pub retention_secs: u64,
+    /// Interval at which the retention worker scans for expired
+    /// records. Default 3600 (1h). Must be > 0.
+    #[serde(default = "default_responses_cleanup_interval_secs")]
+    pub cleanup_interval_secs: u64,
+    /// Max concurrent in-flight background-mode responses **per
+    /// replica**. Each `background=true` request claims a row and runs
+    /// the LLM stream in its own task; without a cap a burst can pin
+    /// the whole replica. Default 8.
+    #[serde(default = "default_responses_worker_concurrency")]
+    pub worker_concurrency: usize,
+    /// Maximum wall-clock time a response is allowed to remain in
+    /// `status='in_progress'`. The retention worker reaps rows that
+    /// exceed this (mark Failed with `code="worker_lost"`), covering
+    /// the case where a worker crashed mid-execution. Should be
+    /// generously larger than the longest expected execution — a
+    /// real workload should finish well within this. Default 3600
+    /// (1h). Must be > 0.
+    #[serde(default = "default_responses_max_in_progress_secs")]
+    pub max_in_progress_secs: u64,
+    /// Retry policy for background-mode responses. Foreground
+    /// streaming requests don't use this — the client owns the retry.
+    #[serde(default)]
+    pub retry: ResponsesRetryConfig,
+    /// Optional webhook fired on terminal-state transitions
+    /// (`completed`, `failed`, `cancelled`, `incomplete`). Disabled
+    /// when unset.
+    #[serde(default)]
+    pub webhook: Option<ResponsesWebhookConfig>,
+
+    /// Gateway-side context compaction for non-OpenAI providers (the
+    /// canonical OpenAI compaction directive is otherwise forwarded
+    /// verbatim). Disabled by default.
+    #[serde(default)]
+    pub compaction: ResponsesCompactionConfig,
+}
+
+/// Operator-side defaults for the gateway compactor. When a request
+/// includes `context_management = [{type: "compaction", ...}]` and the
+/// upstream provider does not natively support server-side compaction
+/// (i.e. anything other than OpenAI / Azure OpenAI), Hadrian runs the
+/// compactor before dispatch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ResponsesCompactionConfig {
+    /// Master switch. When false, gateway-side compaction never runs
+    /// regardless of request directives; non-OpenAI providers still
+    /// see the unedited payload (matching pre-compactor behaviour).
+    #[serde(default = "default_compaction_enabled")]
+    pub enabled: bool,
+    /// Strategy used when the request didn't specify one. Picks
+    /// `truncate` so the default behaviour is deterministic + free.
+    #[serde(default = "default_compaction_default_strategy")]
+    pub default_strategy: ResponsesCompactionStrategy,
+    /// Fallback `compact_threshold` (in tokens) when the request
+    /// didn't specify one. The default 12_000 leaves headroom under
+    /// the smaller non-OpenAI context windows (Bedrock claude-haiku
+    /// ~200k, but typical app prompts stay well below the limit).
+    #[serde(default = "default_compaction_threshold")]
+    pub default_threshold_tokens: u32,
+    /// Number of most-recent items the compactor must keep intact.
+    /// Older items are dropped (truncate) or replaced by a summary
+    /// (llm). Default 6.
+    #[serde(default = "default_compaction_keep_recent")]
+    pub keep_recent_items: usize,
+    /// Default prompt the `llm` strategy uses to summarise dropped
+    /// items. Overridden per-request via
+    /// `context_management.compaction.prompt`. Includes a placeholder
+    /// describing what the summary will be inserted as.
+    #[serde(default = "default_compaction_prompt")]
+    pub default_prompt: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ResponsesCompactionStrategy {
+    /// Summarise dropped items via the active provider.
+    Llm,
+    /// Drop oldest non-system items until the rolling token estimate
+    /// falls under the threshold.
+    #[default]
+    Truncate,
+}
+
+impl Default for ResponsesCompactionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_compaction_enabled(),
+            default_strategy: default_compaction_default_strategy(),
+            default_threshold_tokens: default_compaction_threshold(),
+            keep_recent_items: default_compaction_keep_recent(),
+            default_prompt: default_compaction_prompt(),
+        }
+    }
+}
+
+fn default_compaction_enabled() -> bool {
+    false
+}
+
+fn default_compaction_default_strategy() -> ResponsesCompactionStrategy {
+    ResponsesCompactionStrategy::Truncate
+}
+
+fn default_compaction_threshold() -> u32 {
+    12_000
+}
+
+fn default_compaction_keep_recent() -> usize {
+    6
+}
+
+fn default_compaction_prompt() -> String {
+    "Summarize the prior conversation in <= 250 words. Preserve concrete decisions, \
+     user-stated constraints, file paths and IDs, and unresolved questions. Drop \
+     redundant pleasantries. Output a single paragraph; the result will be inserted \
+     as system context for the model to consult in the remaining turns."
+        .to_string()
+}
+
+impl Default for ResponsesPersistenceConfig {
+    fn default() -> Self {
+        Self {
+            retention_secs: default_responses_retention_secs(),
+            cleanup_interval_secs: default_responses_cleanup_interval_secs(),
+            worker_concurrency: default_responses_worker_concurrency(),
+            max_in_progress_secs: default_responses_max_in_progress_secs(),
+            retry: ResponsesRetryConfig::default(),
+            webhook: None,
+            compaction: ResponsesCompactionConfig::default(),
+        }
+    }
+}
+
+impl ResponsesPersistenceConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.retention_secs == 0 {
+            return Err("[features.responses] retention_secs must be > 0".into());
+        }
+        if self.cleanup_interval_secs == 0 {
+            return Err("[features.responses] cleanup_interval_secs must be > 0".into());
+        }
+        if self.max_in_progress_secs == 0 {
+            return Err("[features.responses] max_in_progress_secs must be > 0".into());
+        }
+        self.retry.validate()?;
+        Ok(())
+    }
+}
+
+fn default_responses_worker_concurrency() -> usize {
+    8
+}
+
+fn default_responses_max_in_progress_secs() -> u64 {
+    3_600
+}
+
+/// Retry policy for background-mode responses.
+///
+/// Foreground `/v1/responses` requests are streamed back to the
+/// client — retries are the client's responsibility. Background
+/// requests have no client connected during execution, so the
+/// worker handles transient failures (provider 5xx, network blips,
+/// transient DB errors) by re-running the row with exponential
+/// backoff until either the call succeeds or `max_attempts` is hit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ResponsesRetryConfig {
+    /// Master switch. Default `true`.
+    #[serde(default = "default_responses_retry_enabled")]
+    pub enabled: bool,
+    /// Maximum number of execution attempts, including the first.
+    /// `1` means no retry. Default 3.
+    #[serde(default = "default_responses_retry_max_attempts")]
+    pub max_attempts: u32,
+    /// Initial backoff before the second attempt, in milliseconds.
+    /// Default 500ms.
+    #[serde(default = "default_responses_retry_initial_backoff_ms")]
+    pub initial_backoff_ms: u64,
+    /// Backoff multiplier between attempts. Default 2.0.
+    #[serde(default = "default_responses_retry_multiplier")]
+    pub multiplier: f64,
+    /// Cap on a single backoff interval, in milliseconds. Default
+    /// 30000 (30s).
+    #[serde(default = "default_responses_retry_max_backoff_ms")]
+    pub max_backoff_ms: u64,
+}
+
+impl Default for ResponsesRetryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_responses_retry_enabled(),
+            max_attempts: default_responses_retry_max_attempts(),
+            initial_backoff_ms: default_responses_retry_initial_backoff_ms(),
+            multiplier: default_responses_retry_multiplier(),
+            max_backoff_ms: default_responses_retry_max_backoff_ms(),
+        }
+    }
+}
+
+impl ResponsesRetryConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.max_attempts == 0 {
+            return Err("[features.responses.retry] max_attempts must be >= 1".into());
+        }
+        if self.multiplier < 1.0 {
+            return Err("[features.responses.retry] multiplier must be >= 1.0".into());
+        }
+        if self.initial_backoff_ms == 0 {
+            return Err("[features.responses.retry] initial_backoff_ms must be > 0".into());
+        }
+        if self.max_backoff_ms < self.initial_backoff_ms {
+            return Err(
+                "[features.responses.retry] max_backoff_ms must be >= initial_backoff_ms".into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Compute the next backoff interval for `attempt` (1-indexed
+    /// after the first try). Caps at `max_backoff_ms`.
+    pub fn backoff_for_attempt(&self, attempt: u32) -> std::time::Duration {
+        let exp = attempt.saturating_sub(1).min(31) as i32;
+        let ms = (self.initial_backoff_ms as f64) * self.multiplier.powi(exp);
+        let clamped = ms.min(self.max_backoff_ms as f64).max(0.0) as u64;
+        std::time::Duration::from_millis(clamped)
+    }
+}
+
+fn default_responses_retry_enabled() -> bool {
+    true
+}
+
+fn default_responses_retry_max_attempts() -> u32 {
+    3
+}
+
+fn default_responses_retry_initial_backoff_ms() -> u64 {
+    500
+}
+
+fn default_responses_retry_multiplier() -> f64 {
+    2.0
+}
+
+fn default_responses_retry_max_backoff_ms() -> u64 {
+    30_000
+}
+
+/// Webhook delivery settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ResponsesWebhookConfig {
+    /// Target URL. Validated for SSRF at config-load time via
+    /// `validate_base_url` (no private/loopback/metadata addresses by
+    /// default).
+    pub url: String,
+    /// Optional bearer token sent in the `Authorization` header. As
+    /// with other secret-bearing config fields, treat this value as
+    /// sensitive: don't log it and prefer routing through the secrets
+    /// manager URI scheme rather than embedding the literal token.
+    #[serde(default)]
+    pub bearer_token: Option<String>,
+    /// Optional HMAC signing secret. When set, every delivery carries
+    /// an `X-Hadrian-Signature: t=<unix>,v1=<hex>` header where the
+    /// hex digest is `HMAC-SHA256(secret, "<unix>.<body>")`. Receivers
+    /// reject requests whose timestamp is too old (defends against
+    /// replay) and recompute the digest to verify the body.
+    #[serde(default)]
+    pub signing_secret: Option<String>,
+    /// Per-request timeout in seconds. Default 10s.
+    #[serde(default = "default_webhook_timeout_secs")]
+    pub timeout_secs: u64,
+    /// Maximum concurrent in-flight deliveries. A slow target won't
+    /// hold up new deliveries beyond this cap; additional events
+    /// queue in the bounded retry channel. Default 32.
+    #[serde(default = "default_webhook_max_concurrent")]
+    pub max_concurrent_deliveries: usize,
+    /// Bounded retry queue capacity. When full, new events are
+    /// dropped (with a `webhook_dropped_total` counter increment) so
+    /// the gateway doesn't grow memory unboundedly when the target
+    /// is wedged. Default 1000.
+    #[serde(default = "default_webhook_retry_capacity")]
+    pub retry_queue_capacity: usize,
+}
+
+impl ResponsesWebhookConfig {
+    /// Validate the webhook URL against Hadrian's SSRF rules. Called
+    /// from `FeaturesConfig::validate()` at startup so misconfigured
+    /// hooks fail loudly instead of silently sending traffic to
+    /// internal endpoints.
+    pub fn validate(&self, allow_loopback: bool) -> Result<(), String> {
+        crate::validation::validate_base_url(&self.url, allow_loopback).map_err(|e| {
+            format!(
+                "[features.responses.webhook] url failed SSRF validation: {}",
+                e
+            )
+        })
+    }
+}
+
+fn default_webhook_timeout_secs() -> u64 {
+    10
+}
+
+fn default_webhook_max_concurrent() -> usize {
+    32
+}
+
+fn default_webhook_retry_capacity() -> usize {
+    1000
+}
+
+fn default_responses_retention_secs() -> u64 {
+    86_400
+}
+
+fn default_responses_cleanup_interval_secs() -> u64 {
+    3_600
 }
 
 impl FeaturesConfig {
@@ -70,8 +635,346 @@ impl FeaturesConfig {
         if let Some(ref file_search) = self.file_search {
             file_search.validate()?;
         }
+        // Surface deprecation warnings for per-tool iteration limits.
+        if let Some(ref file_search) = self.file_search
+            && file_search.max_iterations != default_file_search_max_iterations()
+        {
+            tracing::warn!(
+                "[features.file_search] max_iterations is deprecated; \
+                 use [features.server_tools] max_iterations instead. \
+                 The global value ({}) will be used.",
+                self.server_tools.max_iterations
+            );
+        }
+        if let Some(ref web_search) = self.web_search
+            && web_search.max_iterations != default_web_search_max_iterations()
+        {
+            tracing::warn!(
+                "[features.web_search] max_iterations is deprecated; \
+                 use [features.server_tools] max_iterations instead. \
+                 The global value ({}) will be used.",
+                self.server_tools.max_iterations
+            );
+        }
+        self.responses.validate()?;
+        self.containers.validate()?;
+        self.containers_cleanup.validate()?;
+        if let Some(ref mcp) = self.mcp {
+            mcp.validate()?;
+        }
         Ok(())
     }
+}
+
+/// Configuration shared by all server-executed tools.
+///
+/// Server-executed tools (`file_search`, `web_search`, etc.) run inside the
+/// gateway in a multi-turn loop. This config gates the total number of
+/// iterations a single request can drive, across **all** tools — preventing
+/// runaway sessions where the model keeps requesting new tool calls.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ServerToolsConfig {
+    /// Maximum number of provider continuation requests in one response.
+    ///
+    /// Counts all server-executed tool iterations together (file_search +
+    /// web_search + shell + …). On the final iteration the tools strip
+    /// their own definitions from the continuation payload so the model
+    /// is forced to produce a text response.
+    ///
+    /// Default: 10.
+    #[serde(default = "default_server_tools_max_iterations")]
+    pub max_iterations: usize,
+
+    /// Pricing for runtime time consumed by the shell tool.
+    ///
+    /// Local runtimes (microsandbox) are billed by wall-clock seconds.
+    /// Passthrough mode (where the upstream provider runs the container)
+    /// is billed by that provider and remains 0 here.
+    #[serde(default)]
+    pub pricing: ServerToolsPricingConfig,
+
+    /// Shell-tool execution limits.
+    #[serde(default)]
+    pub shell_limits: ShellLimitsConfig,
+}
+
+impl Default for ServerToolsConfig {
+    fn default() -> Self {
+        Self {
+            max_iterations: default_server_tools_max_iterations(),
+            pricing: ServerToolsPricingConfig::default(),
+            shell_limits: ShellLimitsConfig::default(),
+        }
+    }
+}
+
+fn default_server_tools_max_iterations() -> usize {
+    10
+}
+
+/// Limits enforced on every shell-tool invocation. Sets soft ceilings
+/// on wall-clock time and resource use so a runaway model can't pin
+/// VM resources indefinitely, and the upper bound for what a
+/// per-request `environment` block may ask for.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ShellLimitsConfig {
+    /// Per-command timeout in seconds. The runtime aborts the exec
+    /// once this elapses; the persister records the partial output.
+    /// Default 300 (5 min).
+    #[serde(default = "default_shell_command_timeout_secs")]
+    pub command_timeout_secs: u64,
+    /// Default vCPU limit applied when the SessionSpec doesn't
+    /// specify one. The runtime backend's own default applies when
+    /// this is `None`.
+    #[serde(default)]
+    pub default_cpu_limit: Option<f64>,
+    /// Default memory limit (MB) applied when the request didn't
+    /// supply a `container_auto.memory_limit`. The runtime backend's
+    /// own default applies when this is `None`.
+    #[serde(default)]
+    pub default_mem_limit_mb: Option<u32>,
+    /// Hard ceiling for the per-request `container_auto.memory_limit`
+    /// override. Requests asking for more than this are rejected with
+    /// `400`. `None` (the default) means requests can ask for any
+    /// value the backend supports.
+    #[serde(default)]
+    pub max_mem_limit_mb: Option<u32>,
+    /// Hostnames (or `*.suffix` patterns) requests may put in
+    /// `network_policy.domains`. Empty (the default) means requests
+    /// cannot widen egress beyond whatever the runtime allows by
+    /// default; use `["*"]` to permit any host.
+    #[serde(default)]
+    pub allowed_egress_hosts: Vec<String>,
+    /// Operator-pre-configured secrets the request may reference by
+    /// `placeholder` in `domain_secrets`. The raw value never leaves
+    /// the gateway — the model sees only the placeholder, and the
+    /// runtime substitutes the value at egress to the permitted hosts.
+    #[serde(default)]
+    pub allowed_domain_secrets: HashMap<String, AllowedDomainSecret>,
+    /// Maximum number of characters of stdout/stderr fed back to the
+    /// model per shell call. Output longer than this is head + tail
+    /// trimmed with a `... N chars truncated ...` marker so the model
+    /// still sees both ends. The full stream remains in the response
+    /// event log; operators can raise this for token-rich models or
+    /// lower it to bound context spend. Default 8000.
+    #[serde(default = "default_shell_max_output_chars")]
+    pub max_output_chars: usize,
+    /// Free-text description of the container environment, appended to the
+    /// shell tool's description the model sees. Use it to explain which
+    /// toolchains are available and how to install packages, so the model
+    /// doesn't waste turns probing. Defaults to instructions for the default
+    /// `alpine` image (how to `apk add` curl, uv, pnpm, etc.); set to `""` to
+    /// append nothing, or override it to match a different image.
+    #[serde(default = "default_environment_description")]
+    pub environment_description: Option<String>,
+}
+
+/// Default shell-tool environment notes, written for the default `alpine`
+/// microsandbox image. Override when using a different base image.
+pub fn default_environment_description() -> Option<String> {
+    Some(
+        "Alpine Linux (musl libc), minimal base image. Install what you need at the start of a \
+         session; nothing beyond busybox + a shell is guaranteed. **Always try `apk` first** — \
+         most tools are packaged and it's the fastest, most reliable option: `apk add --no-cache \
+         <pkg>`, e.g. `apk add --no-cache curl git python3 py3-pip nodejs npm build-base uv pnpm` \
+         (uv and pnpm are in the Alpine community repo on recent releases). Only if a package \
+         isn't available via apk, fall back to a language-specific installer: uv via `curl -LsSf \
+         https://astral.sh/uv/install.sh | sh`, pnpm via `npm install -g pnpm`, Python libs via \
+         `uv pip`/`pip`, Node libs via `pnpm`/`npm`, Rust crates via `cargo`. Installs need \
+         network egress to be allowed."
+            .to_string(),
+    )
+}
+
+impl Default for ShellLimitsConfig {
+    fn default() -> Self {
+        Self {
+            command_timeout_secs: default_shell_command_timeout_secs(),
+            default_cpu_limit: None,
+            default_mem_limit_mb: None,
+            max_mem_limit_mb: None,
+            allowed_egress_hosts: Vec::new(),
+            allowed_domain_secrets: HashMap::new(),
+            max_output_chars: default_shell_max_output_chars(),
+            environment_description: default_environment_description(),
+        }
+    }
+}
+
+fn default_shell_max_output_chars() -> usize {
+    8_000
+}
+
+/// One operator-pinned secret the request may reference via
+/// `ShellDomainSecretRef`. The literal value can be a plaintext token
+/// or a secrets-manager URI; resolution is the runtime's
+/// responsibility.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AllowedDomainSecret {
+    /// Literal value or `secret://…` reference. Never logged. Never
+    /// returned in API responses.
+    pub value: String,
+    /// Hostnames the runtime is permitted to send this secret to. A
+    /// request's `allowed_domains` must be a subset; empty in the
+    /// request inherits this full list.
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
+}
+
+fn default_shell_command_timeout_secs() -> u64 {
+    300
+}
+
+/// Settings for `/mnt/data` artifact capture from the shell tool.
+///
+/// When the configured shell runtime supports `file_io`, Hadrian
+/// snapshots the container's `/mnt/data` directory before and after
+/// every shell command. New or changed files are surfaced as
+/// `container_file_citation` annotations on the assistant's reply, with
+/// a stable `cfile_<uuid>` identifier that the container files API
+/// resolves to downloadable bytes.
+///
+/// Setting `enabled = false` reverts to the legacy "tear down VM after
+/// every command" behaviour with no artifact capture.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ContainersConfig {
+    /// Master switch. When false, the shell tool boots and tears down a
+    /// fresh microVM for every command and never captures artifacts.
+    #[serde(default = "default_containers_enabled")]
+    pub enabled: bool,
+
+    /// Idle time after which an in-memory container session is torn
+    /// down. Sessions are response-scoped, so this only kicks in if a
+    /// response stalls without terminating. Default 1200 (20m,
+    /// matching OpenAI's hosted-container idle TTL).
+    #[serde(default = "default_containers_idle_ttl_secs")]
+    pub default_idle_ttl_secs: u64,
+
+    /// Hard cap on `expires_after.minutes` per request and on
+    /// `POST /v1/containers` creation. Requests above this cap reject
+    /// with 400. Default 86_400 (60 days), matching OpenAI's
+    /// hosted-container maximum.
+    #[serde(default = "default_containers_max_idle_ttl_secs")]
+    pub max_idle_ttl_secs: u64,
+
+    /// Hard cap on the number of new/changed files captured per shell
+    /// exec. Excess files are dropped with a warning. Default 64.
+    #[serde(default = "default_containers_max_files_per_exec")]
+    pub max_files_per_exec: usize,
+
+    /// Hard cap on the size of any single captured file. Files larger
+    /// than this are recorded as metadata only (bytes + filename) with
+    /// no content stored. Default 25 MiB.
+    #[serde(default = "default_containers_max_bytes_per_file")]
+    pub max_bytes_per_file: u64,
+
+    /// Hard cap on the total bytes captured across all files in one
+    /// container session. Default 250 MiB.
+    #[serde(default = "default_containers_max_bytes_per_session")]
+    pub max_bytes_per_session: u64,
+
+    /// Hard cap on the number of `input_file` parts Hadrian will
+    /// materialize into `/mnt/data` for one request. Excess parts
+    /// cause the request to fail with a 400. Default 32.
+    #[serde(default = "default_containers_max_input_files_per_request")]
+    pub max_input_files_per_request: usize,
+
+    /// Hard cap on the total bytes across all staged input files in
+    /// one request. Default 100 MiB.
+    #[serde(default = "default_containers_max_input_bytes_per_request")]
+    pub max_input_bytes_per_request: u64,
+}
+
+impl Default for ContainersConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_containers_enabled(),
+            default_idle_ttl_secs: default_containers_idle_ttl_secs(),
+            max_idle_ttl_secs: default_containers_max_idle_ttl_secs(),
+            max_files_per_exec: default_containers_max_files_per_exec(),
+            max_bytes_per_file: default_containers_max_bytes_per_file(),
+            max_bytes_per_session: default_containers_max_bytes_per_session(),
+            max_input_files_per_request: default_containers_max_input_files_per_request(),
+            max_input_bytes_per_request: default_containers_max_input_bytes_per_request(),
+        }
+    }
+}
+
+impl ContainersConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        // The reaper derives its poll interval from `default_idle_ttl_secs`,
+        // and both TTLs gate session/expiry math — a zero would expire
+        // sessions instantly and make the caps meaningless.
+        if self.default_idle_ttl_secs == 0 {
+            return Err("[features.containers] default_idle_ttl_secs must be > 0".into());
+        }
+        if self.max_idle_ttl_secs == 0 {
+            return Err("[features.containers] max_idle_ttl_secs must be > 0".into());
+        }
+        if self.default_idle_ttl_secs > self.max_idle_ttl_secs {
+            return Err(
+                "[features.containers] default_idle_ttl_secs must not exceed max_idle_ttl_secs"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+fn default_containers_enabled() -> bool {
+    true
+}
+
+fn default_containers_idle_ttl_secs() -> u64 {
+    1200
+}
+
+fn default_containers_max_idle_ttl_secs() -> u64 {
+    // 60 days, matching OpenAI's published hosted-container cap.
+    60 * 24 * 60 * 60
+}
+
+fn default_containers_max_files_per_exec() -> usize {
+    64
+}
+
+fn default_containers_max_bytes_per_file() -> u64 {
+    25 * 1024 * 1024
+}
+
+fn default_containers_max_bytes_per_session() -> u64 {
+    250 * 1024 * 1024
+}
+
+fn default_containers_max_input_files_per_request() -> usize {
+    32
+}
+
+fn default_containers_max_input_bytes_per_request() -> u64 {
+    100 * 1024 * 1024
+}
+
+/// Cost rates for billable server-tool runtimes.
+///
+/// Rates are in **microcents per second** (1/1,000,000 of a dollar per
+/// second, matching the precision used elsewhere in `pricing::PricingConfig`).
+/// Total cost per shell call is `runtime_seconds * rate`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ServerToolsPricingConfig {
+    /// Microcents per second of microsandbox VM wall-clock time.
+    /// Default 0 (no charge until operator sets a rate).
+    #[serde(default)]
+    pub microsandbox_microcents_per_second: u64,
 }
 
 /// Embedding configuration.
@@ -2541,6 +3444,114 @@ fn default_cleanup_max_duration_secs() -> u64 {
     60
 }
 
+/// Configuration for the container cleanup job.
+///
+/// Containers move `active` → `expired` (idle reaper) → `deleted` (explicit
+/// `DELETE /v1/containers/{id}`). Both terminal states stamp `expires_at` with
+/// the transition time but never remove the row, so without this job `expired`
+/// / `deleted` rows (and their `container_files`) accumulate forever. This
+/// worker hard-deletes terminal rows whose `expires_at` is older than
+/// `cleanup_delay_secs`, cascading their files.
+///
+/// # Example Configuration
+///
+/// ```toml
+/// [features.containers_cleanup]
+/// enabled = true
+/// interval_secs = 300
+/// cleanup_delay_secs = 3600
+/// batch_size = 100
+/// max_duration_secs = 60
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ContainersCleanupConfig {
+    /// Enable the cleanup job.
+    /// When disabled, terminal containers remain in the database indefinitely.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// How often to run the cleanup job (in seconds).
+    /// Default: 300 (5 minutes)
+    #[serde(default = "default_cleanup_interval_secs")]
+    pub interval_secs: u64,
+
+    /// Time to wait after a container becomes terminal (`expired` /
+    /// `deleted`) before hard deleting it (in seconds). Measured from
+    /// `expires_at`. Gives clients time to download captured files.
+    /// Default: 3600 (1 hour)
+    #[serde(default = "default_cleanup_delay_secs")]
+    pub cleanup_delay_secs: u64,
+
+    /// Maximum number of containers to hard-delete per run.
+    /// Prevents long-running cleanup operations.
+    /// Default: 100
+    #[serde(default = "default_cleanup_batch_size")]
+    pub batch_size: u32,
+
+    /// Maximum duration for a single cleanup run (in seconds).
+    /// If exceeded, cleanup stops gracefully and continues next run.
+    /// Set to 0 for unlimited.
+    /// Default: 60
+    #[serde(default = "default_cleanup_max_duration_secs")]
+    pub max_duration_secs: u64,
+
+    /// Dry run mode - log what would be deleted without actually deleting.
+    /// Useful for testing cleanup configuration.
+    /// Default: false
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+impl Default for ContainersCleanupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_secs: default_cleanup_interval_secs(),
+            cleanup_delay_secs: default_cleanup_delay_secs(),
+            batch_size: default_cleanup_batch_size(),
+            max_duration_secs: default_cleanup_max_duration_secs(),
+            dry_run: false,
+        }
+    }
+}
+
+impl ContainersCleanupConfig {
+    /// Get the interval as a Duration.
+    pub fn interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.interval_secs)
+    }
+
+    /// Get the cleanup delay as a Duration.
+    pub fn cleanup_delay(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.cleanup_delay_secs)
+    }
+
+    /// Get the max duration as a Duration, or None if unlimited.
+    pub fn max_duration(&self) -> Option<std::time::Duration> {
+        if self.max_duration_secs == 0 {
+            None
+        } else {
+            Some(std::time::Duration::from_secs(self.max_duration_secs))
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        // Only meaningful when enabled, but validate unconditionally so a
+        // misconfigured-but-disabled job surfaces the error if it's later
+        // turned on. A zero interval is a tight DB-hammering loop; a zero
+        // batch makes no progress.
+        if self.interval_secs == 0 {
+            return Err("[features.containers_cleanup] interval_secs must be > 0".into());
+        }
+        if self.batch_size == 0 {
+            return Err("[features.containers_cleanup] batch_size must be > 0".into());
+        }
+        Ok(())
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Model Catalog
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2653,6 +3664,35 @@ mod tests {
     fn test_distance_metric_default() {
         let metric: DistanceMetric = Default::default();
         assert_eq!(metric, DistanceMetric::Cosine);
+    }
+
+    #[test]
+    fn mcp_config_default_includes_hybrid_tool_search() {
+        let cfg = McpConfig::default();
+        assert_eq!(cfg.tool_search.ranker, ToolSearchRankerKind::Hybrid);
+        assert_eq!(cfg.tool_search.max_results, 20);
+        assert_eq!(cfg.tool_search.rrf_k, 60);
+        assert!(cfg.tool_search.embedding.is_none());
+    }
+
+    #[test]
+    fn tool_search_config_parses_overrides() {
+        let cfg: McpConfig = toml::from_str(
+            r#"
+            enabled = true
+            mode = "hadrian_hosted"
+            [tool_search]
+            ranker = "lexical"
+            max_results = 5
+            score_threshold = 0.4
+            rrf_k = 30
+            "#,
+        )
+        .expect("parses");
+        assert_eq!(cfg.tool_search.ranker, ToolSearchRankerKind::Lexical);
+        assert_eq!(cfg.tool_search.max_results, 5);
+        assert_eq!(cfg.tool_search.score_threshold, 0.4);
+        assert_eq!(cfg.tool_search.rrf_k, 30);
     }
 
     #[test]
@@ -3849,6 +4889,139 @@ mod tests {
         // Defaults for unset values
         assert_eq!(config.vector_store_cleanup.batch_size, 100);
         assert_eq!(config.vector_store_cleanup.max_duration_secs, 60);
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // Containers Cleanup Config Tests
+    // ───────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_containers_cleanup_config_defaults() {
+        let config: ContainersCleanupConfig = toml::from_str("").unwrap();
+
+        assert!(!config.enabled);
+        assert_eq!(config.interval_secs, 300);
+        assert_eq!(config.cleanup_delay_secs, 3600);
+        assert_eq!(config.batch_size, 100);
+        assert_eq!(config.max_duration_secs, 60);
+        assert!(!config.dry_run);
+    }
+
+    #[test]
+    fn test_zero_interval_configs_rejected() {
+        // Defaults validate.
+        assert!(ContainersCleanupConfig::default().validate().is_ok());
+        assert!(ContainersConfig::default().validate().is_ok());
+        assert!(McpConfig::default().validate().is_ok());
+
+        // A zero cleanup interval (tight DB-hammering loop) is rejected.
+        assert!(
+            ContainersCleanupConfig {
+                interval_secs: 0,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        // Zero container TTLs are rejected.
+        assert!(
+            ContainersConfig {
+                default_idle_ttl_secs: 0,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        // Zero MCP call timeout / tool-search cap are rejected.
+        assert!(
+            McpConfig {
+                call_timeout_secs: 0,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            McpConfig {
+                tool_search: ToolSearchConfig {
+                    max_results: 0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_containers_cleanup_config_custom_values() {
+        let config: ContainersCleanupConfig = toml::from_str(
+            r#"
+            enabled = true
+            interval_secs = 600
+            cleanup_delay_secs = 7200
+            batch_size = 50
+            max_duration_secs = 120
+            dry_run = true
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.enabled);
+        assert_eq!(config.interval_secs, 600);
+        assert_eq!(config.cleanup_delay_secs, 7200);
+        assert_eq!(config.batch_size, 50);
+        assert_eq!(config.max_duration_secs, 120);
+        assert!(config.dry_run);
+    }
+
+    #[test]
+    fn test_containers_cleanup_config_durations() {
+        let config = ContainersCleanupConfig {
+            enabled: true,
+            interval_secs: 300,
+            cleanup_delay_secs: 3600,
+            batch_size: 100,
+            max_duration_secs: 60,
+            dry_run: false,
+        };
+
+        assert_eq!(config.interval(), std::time::Duration::from_secs(300));
+        assert_eq!(config.cleanup_delay(), std::time::Duration::from_secs(3600));
+        assert_eq!(
+            config.max_duration(),
+            Some(std::time::Duration::from_secs(60))
+        );
+    }
+
+    #[test]
+    fn test_containers_cleanup_config_unlimited_duration() {
+        let config = ContainersCleanupConfig {
+            max_duration_secs: 0,
+            ..Default::default()
+        };
+
+        assert!(config.max_duration().is_none());
+    }
+
+    #[test]
+    fn test_features_config_with_containers_cleanup() {
+        let config: FeaturesConfig = toml::from_str(
+            r#"
+            [containers_cleanup]
+            enabled = true
+            interval_secs = 180
+            cleanup_delay_secs = 1800
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.containers_cleanup.enabled);
+        assert_eq!(config.containers_cleanup.interval_secs, 180);
+        assert_eq!(config.containers_cleanup.cleanup_delay_secs, 1800);
+        assert_eq!(config.containers_cleanup.batch_size, 100);
+        assert_eq!(config.containers_cleanup.max_duration_secs, 60);
     }
 
     // ───────────────────────────────────────────────────────────────────────────

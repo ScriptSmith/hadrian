@@ -647,40 +647,6 @@ pub fn record_file_search(
     }
 }
 
-/// Record file search tool iteration in the middleware loop.
-///
-/// Tracks iteration behavior for the file_search middleware, enabling:
-/// - Iteration count distribution analysis
-/// - Detection of potential infinite loops
-/// - Optimization of max_iterations setting
-/// - Understanding of multi-turn search patterns
-///
-/// # Arguments
-/// * `iteration` - Current iteration number (1-indexed)
-/// * `is_final` - Whether this is the final iteration (hit limit or completed)
-/// * `reason` - Why the iteration ended ("completed", "limit_reached", "no_tool_call", "error")
-pub fn record_file_search_iteration(iteration: u32, is_final: bool, reason: &str) {
-    #[cfg(feature = "prometheus")]
-    {
-        counter!("rag_file_search_iterations_total").increment(1);
-
-        if is_final {
-            histogram!("rag_file_search_iteration_count", "reason" => reason.to_string())
-                .record(iteration as f64);
-
-            counter!(
-                "rag_file_search_completions_total",
-                "reason" => reason.to_string()
-            )
-            .increment(1);
-        }
-    }
-    #[cfg(not(feature = "prometheus"))]
-    {
-        let _ = (iteration, is_final, reason);
-    }
-}
-
 /// Record a web search tool execution.
 pub fn record_web_search(status: &str, duration_secs: f64, results_count: u32) {
     #[cfg(feature = "prometheus")]
@@ -705,26 +671,91 @@ pub fn record_web_search(status: &str, duration_secs: f64, results_count: u32) {
     }
 }
 
-/// Record web search tool iteration in the middleware loop.
-pub fn record_web_search_iteration(iteration: u32, is_final: bool, reason: &str) {
+/// Record a shell tool execution.
+///
+/// Emitted once per shell call at the end of the spawned task. The
+/// `shell_tool_runtime_seconds` histogram is the primary signal for
+/// cost attribution; `shell_tool_cost_microcents` is the precomputed
+/// (`runtime_seconds * rate`) value for ops teams that aggregate
+/// directly off the gateway metrics. The `status` label distinguishes
+/// natural completion from client-disconnect aborts. The `runtime`
+/// label names which runtime executed (e.g. `microsandbox`).
+pub fn record_shell_execution(
+    duration_secs: f64,
+    exit_code: i32,
+    status: &str,
+    runtime: &str,
+    cost_microcents: i64,
+) {
     #[cfg(feature = "prometheus")]
     {
-        counter!("web_search_iterations_total").increment(1);
+        counter!(
+            "shell_tool_executions_total",
+            "status" => status.to_string(),
+            "runtime" => runtime.to_string(),
+        )
+        .increment(1);
+        histogram!(
+            "shell_tool_runtime_seconds",
+            "status" => status.to_string(),
+            "runtime" => runtime.to_string(),
+        )
+        .record(duration_secs);
+        histogram!(
+            "shell_tool_exit_code",
+            "status" => status.to_string(),
+            "runtime" => runtime.to_string(),
+        )
+        .record(exit_code as f64);
+        counter!(
+            "shell_tool_cost_microcents_total",
+            "status" => status.to_string(),
+            "runtime" => runtime.to_string(),
+        )
+        .increment(cost_microcents.max(0) as u64);
+    }
+    #[cfg(not(feature = "prometheus"))]
+    {
+        let _ = (duration_secs, exit_code, status, runtime, cost_microcents);
+    }
+}
+
+/// Record one iteration of the server-tool orchestrator loop.
+///
+/// Emitted by `ToolLoopRunner` once per iteration regardless of which
+/// tool fired. `tools` lists the names of all enabled server tools for
+/// the request (e.g. `"file_search"`, `"web_search"`). On the final
+/// iteration, `reason` describes why the loop exited
+/// (`"completed"`, `"limit_reached"`, `"error"`, `"no_callback"`).
+pub fn record_server_tool_iteration(iteration: u32, is_final: bool, reason: &str, tools: &[&str]) {
+    #[cfg(feature = "prometheus")]
+    {
+        let tools_label = tools.join(",");
+        counter!(
+            "server_tool_iterations_total",
+            "tools" => tools_label.clone(),
+        )
+        .increment(1);
 
         if is_final {
-            histogram!("web_search_iteration_count", "reason" => reason.to_string())
-                .record(iteration as f64);
+            histogram!(
+                "server_tool_iteration_count",
+                "reason" => reason.to_string(),
+                "tools" => tools_label.clone(),
+            )
+            .record(iteration as f64);
 
             counter!(
-                "web_search_completions_total",
-                "reason" => reason.to_string()
+                "server_tool_completions_total",
+                "reason" => reason.to_string(),
+                "tools" => tools_label,
             )
             .increment(1);
         }
     }
     #[cfg(not(feature = "prometheus"))]
     {
-        let _ = (iteration, is_final, reason);
+        let _ = (iteration, is_final, reason, tools);
     }
 }
 

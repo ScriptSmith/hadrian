@@ -6,11 +6,25 @@ Unit tests go in the same file as the code (`#[cfg(test)]`). Test both SQLite an
 
 ## E2E Tests
 
+Build the gateway image first, then run the suite:
+
 ```bash
-cd deploy/tests && pnpm test    # Run all E2E tests
+docker build -t hadrian:local .   # From repo root — builds the image the compose files reference
+cd deploy/tests && pnpm test      # Run all E2E tests
 ```
 
-Uses TypeScript test suite with testcontainers.
+Uses TypeScript test suite with testcontainers. The docker-compose files
+(`deploy/docker-compose.*.yml`) reference `image: hadrian:local`, and the test
+harness rebuilds it on every `compose.up()` by default — which is slow. Pre-build
+it once with the command above and set `SKIP_BUILD=1` to reuse it:
+
+```bash
+docker build -t hadrian:local .
+cd deploy/tests && SKIP_BUILD=1 pnpm test
+```
+
+Rebuild the image when you want to test your latest changes; `SKIP_BUILD=1` runs
+against whatever `hadrian:local` currently points at.
 
 ## Provider Testing (Wiremock)
 
