@@ -169,8 +169,10 @@ pub struct McpExecutor {
     suppress_list_tools: std::collections::HashSet<String>,
     /// Identifier of the response this executor is serving. Used to
     /// scope `mcp_pending_approvals` rows. `None` when the request
-    /// isn't persisted (e.g. `store=false` with no DB), in which case
-    /// approval gating degrades to a warn-and-run.
+    /// isn't persisted (e.g. `store=false` with no DB), in which case a
+    /// gated call fails closed — it cannot be parked for resume, so
+    /// [`Self::park_for_approval`] synthesizes a failed `mcp_call`
+    /// rather than executing the tool.
     response_id: Option<String>,
     /// Org scope for parked approvals.
     org_id: Option<uuid::Uuid>,
@@ -212,10 +214,11 @@ impl McpExecutor {
 
     /// Construct an executor that can persist parked approvals. Pass
     /// `response_id` / `org_id` when both are known (DB-backed
-    /// responses); otherwise use [`McpExecutor::new`] and approval
-    /// gating will warn-and-run. `default_call_timeout_secs` is the
-    /// deployment default applied to any `mcp` tool that doesn't set its
-    /// own `call_timeout_secs`.
+    /// responses); otherwise use [`McpExecutor::new`] and a gated call
+    /// fails closed (a parked-for-approval tool cannot be resumed
+    /// without persistence, so it synthesizes a failed `mcp_call`).
+    /// `default_call_timeout_secs` is the deployment default applied to
+    /// any `mcp` tool that doesn't set its own `call_timeout_secs`.
     pub fn with_persistence(
         service: McpService,
         original_payload: &CreateResponsesPayload,

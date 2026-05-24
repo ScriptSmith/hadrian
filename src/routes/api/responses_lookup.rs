@@ -77,9 +77,10 @@ pub struct WireOwner {
 
 fn record_to_wire(record: &ResponseRecord) -> WireResponse {
     // Pull selected request fields back into the top-level shape so
-    // clients can introspect what they sent. Anything sensitive
-    // (e.g. raw secret values) is omitted because callers only ever
-    // stored placeholders.
+    // clients can introspect what they sent. Sensitive values are kept
+    // out of the echo: MCP credentials are scrubbed before storage, and
+    // inline shell `domain_secrets[].value` (which background rows must
+    // retain to execute) is redacted here on the way out.
     const ECHO_FIELDS: &[&str] = &[
         "input",
         "instructions",
@@ -100,7 +101,16 @@ fn record_to_wire(record: &ResponseRecord) -> WireResponse {
     if let Value::Object(obj) = &record.request_payload {
         for k in ECHO_FIELDS {
             if let Some(v) = obj.get(*k) {
-                echoed.insert((*k).to_string(), v.clone());
+                let mut cloned = v.clone();
+                // Background rows keep the raw inline domain-secret value
+                // in `request_payload` so the worker can execute the
+                // shell tool, but the value must never be echoed back to
+                // a client — mirroring how MCP `authorization` is
+                // scrubbed before storage.
+                if *k == "tools" {
+                    redact_inline_domain_secrets(&mut cloned);
+                }
+                echoed.insert((*k).to_string(), cloned);
             }
         }
     }
@@ -122,6 +132,36 @@ fn record_to_wire(record: &ResponseRecord) -> WireResponse {
         error: record.error.clone().unwrap_or(Value::Null),
         container_id: record.container_id.clone(),
         echoed,
+    }
+}
+
+/// Walk a serialized `tools` array, redacting every inline
+/// `domain_secrets[].value` (the OpenAI `{domain, name, value}` form
+/// that carries a raw secret on the wire). The reference form
+/// (`{placeholder, allowed_domains}`) holds no secret and is left
+/// intact.
+fn redact_inline_domain_secrets(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::Array(secrets)) = map.get_mut("domain_secrets") {
+                for secret in secrets.iter_mut() {
+                    if let Value::Object(entry) = secret
+                        && let Some(Value::String(s)) = entry.get_mut("value")
+                    {
+                        *s = format!("_omitted_{}_bytes", s.len());
+                    }
+                }
+            }
+            for (_, v) in map.iter_mut() {
+                redact_inline_domain_secrets(v);
+            }
+        }
+        Value::Array(items) => {
+            for v in items.iter_mut() {
+                redact_inline_domain_secrets(v);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -533,4 +573,37 @@ pub async fn api_v1_responses_delete(
         object: "response.deleted",
         deleted,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn redacts_inline_domain_secret_values_but_keeps_references() {
+        let mut tools = json!([
+            {
+                "type": "shell",
+                "network_policy": {
+                    "type": "allowlist",
+                    "allowed_domains": ["api.example.com"],
+                    "domain_secrets": [
+                        {"domain": "api.example.com", "name": "API_KEY", "value": "sk-supersecret"},
+                        {"placeholder": "shared_token", "allowed_domains": ["api.example.com"]}
+                    ]
+                }
+            }
+        ]);
+        redact_inline_domain_secrets(&mut tools);
+
+        let secrets = &tools[0]["network_policy"]["domain_secrets"];
+        // Inline value is redacted to a length marker, never the raw value.
+        assert_eq!(secrets[0]["value"], json!("_omitted_14_bytes"));
+        // Non-secret fields and the reference form are untouched.
+        assert_eq!(secrets[0]["name"], json!("API_KEY"));
+        assert_eq!(secrets[1]["placeholder"], json!("shared_token"));
+        assert!(secrets[1].get("value").is_none());
+    }
 }
