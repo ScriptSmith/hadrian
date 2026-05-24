@@ -34,12 +34,17 @@ services:
       # - REDIS_SENTINEL_MASTER=mymaster
       # - REDIS_SENTINEL_NODES=sentinel-1:26379,sentinel-2:26379,sentinel-3:26379
     depends_on:
+      # service_started, not service_healthy: the gateway can't reach a working
+      # cluster until it's formed by `redis-cli --cluster create`, which runs after
+      # `compose up` returns. Gating on redis health here adds no value (the gateway
+      # restart-loops until the cluster exists either way) and makes `compose up`
+      # abort whenever a redis healthcheck flaps under CI load.
       redis-1:
-        condition: service_healthy
+        condition: service_started
       redis-2:
-        condition: service_healthy
+        condition: service_started
       redis-3:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -68,12 +73,14 @@ services:
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 3s
-      retries: 5
-      # Grace period before failures count: under CI load several Redis nodes and
-      # the gateway build start at once, and the first health probes can race the
-      # server becoming ready, marking the container unhealthy non-deterministically.
-      start_period: 15s
+      # Generous timeout/retries/start_period so the check never flaps to "unhealthy"
+      # under CI load: 6 redis nodes, a gateway image build, and ~10 other compose
+      # stacks can run at once, so spawning redis-cli and the server's first probes
+      # race CPU starvation. The testcontainers wait strategy aborts on a single
+      # "unhealthy" status, so tolerance here is what keeps startup deterministic.
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   redis-2:
     image: redis:7-alpine
@@ -90,12 +97,14 @@ services:
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 3s
-      retries: 5
-      # Grace period before failures count: under CI load several Redis nodes and
-      # the gateway build start at once, and the first health probes can race the
-      # server becoming ready, marking the container unhealthy non-deterministically.
-      start_period: 15s
+      # Generous timeout/retries/start_period so the check never flaps to "unhealthy"
+      # under CI load: 6 redis nodes, a gateway image build, and ~10 other compose
+      # stacks can run at once, so spawning redis-cli and the server's first probes
+      # race CPU starvation. The testcontainers wait strategy aborts on a single
+      # "unhealthy" status, so tolerance here is what keeps startup deterministic.
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   redis-3:
     image: redis:7-alpine
@@ -112,12 +121,14 @@ services:
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 3s
-      retries: 5
-      # Grace period before failures count: under CI load several Redis nodes and
-      # the gateway build start at once, and the first health probes can race the
-      # server becoming ready, marking the container unhealthy non-deterministically.
-      start_period: 15s
+      # Generous timeout/retries/start_period so the check never flaps to "unhealthy"
+      # under CI load: 6 redis nodes, a gateway image build, and ~10 other compose
+      # stacks can run at once, so spawning redis-cli and the server's first probes
+      # race CPU starvation. The testcontainers wait strategy aborts on a single
+      # "unhealthy" status, so tolerance here is what keeps startup deterministic.
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   # Redis Cluster Nodes (Replicas)
   redis-4:
@@ -135,12 +146,14 @@ services:
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 3s
-      retries: 5
-      # Grace period before failures count: under CI load several Redis nodes and
-      # the gateway build start at once, and the first health probes can race the
-      # server becoming ready, marking the container unhealthy non-deterministically.
-      start_period: 15s
+      # Generous timeout/retries/start_period so the check never flaps to "unhealthy"
+      # under CI load: 6 redis nodes, a gateway image build, and ~10 other compose
+      # stacks can run at once, so spawning redis-cli and the server's first probes
+      # race CPU starvation. The testcontainers wait strategy aborts on a single
+      # "unhealthy" status, so tolerance here is what keeps startup deterministic.
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   redis-5:
     image: redis:7-alpine
@@ -157,12 +170,14 @@ services:
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 3s
-      retries: 5
-      # Grace period before failures count: under CI load several Redis nodes and
-      # the gateway build start at once, and the first health probes can race the
-      # server becoming ready, marking the container unhealthy non-deterministically.
-      start_period: 15s
+      # Generous timeout/retries/start_period so the check never flaps to "unhealthy"
+      # under CI load: 6 redis nodes, a gateway image build, and ~10 other compose
+      # stacks can run at once, so spawning redis-cli and the server's first probes
+      # race CPU starvation. The testcontainers wait strategy aborts on a single
+      # "unhealthy" status, so tolerance here is what keeps startup deterministic.
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   redis-6:
     image: redis:7-alpine
@@ -179,12 +194,14 @@ services:
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 3s
-      retries: 5
-      # Grace period before failures count: under CI load several Redis nodes and
-      # the gateway build start at once, and the first health probes can race the
-      # server becoming ready, marking the container unhealthy non-deterministically.
-      start_period: 15s
+      # Generous timeout/retries/start_period so the check never flaps to "unhealthy"
+      # under CI load: 6 redis nodes, a gateway image build, and ~10 other compose
+      # stacks can run at once, so spawning redis-cli and the server's first probes
+      # race CPU starvation. The testcontainers wait strategy aborts on a single
+      # "unhealthy" status, so tolerance here is what keeps startup deterministic.
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   # Redis Cluster initialization helper
   redis-cluster-init:
