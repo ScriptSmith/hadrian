@@ -36,6 +36,7 @@ import {
   useToolSearchRanker,
 } from "@/stores/chatUIStore";
 import { useUserSkills } from "@/hooks/useUserSkills";
+import { useWasmSetup } from "@/components/WasmSetup/WasmSetupGuard";
 import { setSkillCatalog } from "./utils/skillCache";
 
 import type { ModelSettings } from "./types";
@@ -76,11 +77,14 @@ export default function ChatPage() {
   const agentAllowedDomains = useAgentAllowedDomains();
   const toolSearchEnabled = useToolSearchEnabled();
   const toolSearchRanker = useToolSearchRanker();
+  // The shell tool runs in a server-side container, which the zero-backend WASM
+  // build cannot provide — never attach it there.
+  const { isWasm } = useWasmSetup();
 
   const agentConfig = useMemo(
     () => ({
       // The shell tool is enabled via the `agent` entry in the tools bar.
-      enabled: enabledTools.includes("agent"),
+      enabled: !isWasm && enabledTools.includes("agent"),
       memoryLimit: agentMemoryLimit,
       expiresAfterMinutes: agentExpiresAfterMinutes,
       allowedDomains: agentAllowedDomains,
@@ -88,6 +92,7 @@ export default function ChatPage() {
       toolSearchRanker,
     }),
     [
+      isWasm,
       enabledTools,
       agentMemoryLimit,
       agentExpiresAfterMinutes,

@@ -18,6 +18,7 @@ import { AgentToolSettings } from "@/components/AgentToolSettings/AgentToolSetti
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/Popover/Popover";
 import { getToolIcon } from "@/components/ToolIcons";
 import { TOOL_METADATA, type ToolMetadata } from "@/pages/chat/utils/toolExecutors";
+import { useWasmSetup } from "@/components/WasmSetup/WasmSetupGuard";
 import { cn } from "@/utils/cn";
 import { pyodideService, type PyodideStatus } from "@/services/pyodide";
 import { quickjsService, type QuickJSStatus } from "@/services/quickjs";
@@ -217,6 +218,13 @@ function ToolButton({
 /** Tools to display (excluding internal tools like display_artifacts) */
 const VISIBLE_TOOLS = TOOL_METADATA.filter((tool) => tool.id !== "display_artifacts");
 
+/**
+ * Tools that require Hadrian Server and are unavailable in browser (WASM) mode.
+ * The `agent` (shell) tool runs commands in a server-side container, which the
+ * zero-backend WASM build cannot provide.
+ */
+const WASM_UNAVAILABLE_TOOLS = new Set(["agent"]);
+
 /** Sub-agent model selector component with ModelPicker integration */
 interface SubAgentModelSelectorProps {
   availableModels: ModelInfo[];
@@ -371,6 +379,7 @@ export function ToolsBar({
   onSubAgentModelChange,
   onOpenMCPConfig,
 }: ToolsBarProps) {
+  const { isWasm } = useWasmSetup();
   const [isHovering, setIsHovering] = useState(false);
   // Track whether we're in "stable mode" - delays layout changes to prevent jumping
   const [isStableMode, setIsStableMode] = useState(false);
@@ -448,28 +457,35 @@ export function ToolsBar({
   const isMobile = useIsMobile();
   const hasEnabledTools = enabledTools.length > 0;
 
+  // Tools available in the current deployment. In browser (WASM) mode, drop
+  // tools that require Hadrian Server (e.g. the server-side shell container).
+  const availableTools = useMemo(
+    () => (isWasm ? VISIBLE_TOOLS.filter((t) => !WASM_UNAVAILABLE_TOOLS.has(t.id)) : VISIBLE_TOOLS),
+    [isWasm]
+  );
+
   /** Toggle all implemented tools on/off (desktop only) */
   const toggleAllTools = useCallback(() => {
     if (isMobile) return;
     if (hasEnabledTools) {
       onEnabledToolsChange([]);
     } else {
-      const allImplemented = VISIBLE_TOOLS.filter((t) => t.implemented && canEnableTool(t.id)).map(
-        (t) => t.id
-      );
+      const allImplemented = availableTools
+        .filter((t) => t.implemented && canEnableTool(t.id))
+        .map((t) => t.id);
       onEnabledToolsChange(allImplemented);
     }
-  }, [isMobile, hasEnabledTools, onEnabledToolsChange, canEnableTool]);
+  }, [isMobile, hasEnabledTools, onEnabledToolsChange, canEnableTool, availableTools]);
 
   // All tools with metadata and icons
   const allToolsData = useMemo(
     (): ToolWithIcon[] =>
-      VISIBLE_TOOLS.map((tool) => ({
+      availableTools.map((tool) => ({
         ...tool,
         loading: isToolLoading(tool.id),
         IconComponent: getToolIcon(tool.id),
       })),
-    [isToolLoading]
+    [isToolLoading, availableTools]
   );
 
   // Enabled tools only (for collapsed view) - maintains VISIBLE_TOOLS order

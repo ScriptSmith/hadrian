@@ -510,6 +510,7 @@ fn wasm_default_config() -> config::GatewayConfig {
         ui: config::UiConfig {
             pages: config::PagesConfig {
                 teams: notice("Team management needs multi-user authentication."),
+                containers: notice("Containers are not available in browser mode."),
                 api_keys: notice("API key management is not available in browser mode."),
                 usage: notice("Usage tracking is not available in browser mode."),
                 admin: config::AdminPagesConfig {
