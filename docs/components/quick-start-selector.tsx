@@ -52,36 +52,116 @@ const profileSummaries: Record<Profile, string> = {
 const allProfiles: Profile[] = ["full", "headless", "standard", "minimal", "tiny"];
 const embeddedAssetProfiles: Profile[] = ["minimal", "standard", "full"];
 
-const featureMatrix: { name: string; profiles: Profile[] }[] = [
-  { name: "OpenAI", profiles: allProfiles },
-  { name: "Anthropic", profiles: ["minimal", "standard", "headless", "full"] },
-  { name: "AWS Bedrock", profiles: ["minimal", "standard", "headless", "full"] },
-  { name: "Google Vertex AI", profiles: ["minimal", "standard", "headless", "full"] },
-  { name: "Azure OpenAI", profiles: ["minimal", "standard", "headless", "full"] },
-  { name: "SQLite", profiles: ["minimal", "standard", "headless", "full"] },
-  { name: "Embedded UI", profiles: embeddedAssetProfiles },
+const featureMatrix: { name: string; profiles: Profile[]; href?: string }[] = [
+  { name: "OpenAI", profiles: allProfiles, href: "/docs/configuration/providers" },
+  {
+    name: "Anthropic",
+    profiles: ["minimal", "standard", "headless", "full"],
+    href: "/docs/configuration/providers",
+  },
+  {
+    name: "AWS Bedrock",
+    profiles: ["minimal", "standard", "headless", "full"],
+    href: "/docs/configuration/providers",
+  },
+  {
+    name: "Google Vertex AI",
+    profiles: ["minimal", "standard", "headless", "full"],
+    href: "/docs/configuration/providers",
+  },
+  {
+    name: "Azure OpenAI",
+    profiles: ["minimal", "standard", "headless", "full"],
+    href: "/docs/configuration/providers",
+  },
+  {
+    name: "SQLite",
+    profiles: ["minimal", "standard", "headless", "full"],
+    href: "/docs/configuration/database",
+  },
+  { name: "Embedded UI", profiles: embeddedAssetProfiles, href: "/docs/features/chat-ui" },
   { name: "Model catalog", profiles: embeddedAssetProfiles },
-  { name: "Setup wizard", profiles: embeddedAssetProfiles },
-  { name: "PostgreSQL", profiles: ["standard", "headless", "full"] },
-  { name: "Redis caching", profiles: ["standard", "headless", "full"] },
-  { name: "SSO (OIDC / OAuth)", profiles: ["standard", "headless", "full"] },
-  { name: "Server-side MCP", profiles: ["standard", "headless", "full"] },
-  { name: "CEL RBAC", profiles: ["standard", "headless", "full"] },
-  { name: "S3 storage", profiles: ["standard", "headless", "full"] },
-  { name: "Secrets managers", profiles: ["standard", "headless", "full"] },
-  { name: "OTLP & Prometheus", profiles: ["standard", "headless", "full"] },
-  { name: "OpenAPI docs", profiles: ["standard", "headless", "full"] },
+  { name: "Setup wizard", profiles: embeddedAssetProfiles, href: "/docs/configuration/builder" },
+  {
+    name: "PostgreSQL",
+    profiles: ["standard", "headless", "full"],
+    href: "/docs/configuration/database",
+  },
+  {
+    name: "Redis caching",
+    profiles: ["standard", "headless", "full"],
+    href: "/docs/features/caching",
+  },
+  {
+    name: "SSO (OIDC / OAuth)",
+    profiles: ["standard", "headless", "full"],
+    href: "/docs/features/sso-admin-guide",
+  },
+  {
+    name: "Server-side MCP",
+    profiles: ["standard", "headless", "full"],
+    href: "/docs/features/mcp",
+  },
+  {
+    name: "CEL RBAC",
+    profiles: ["standard", "headless", "full"],
+    href: "/docs/features/authorization",
+  },
+  {
+    name: "S3 storage",
+    profiles: ["standard", "headless", "full"],
+    href: "/docs/configuration/storage",
+  },
+  {
+    name: "Secrets managers",
+    profiles: ["standard", "headless", "full"],
+    href: "/docs/deployment/advanced#secret-management-with-vault",
+  },
+  {
+    name: "OTLP & Prometheus",
+    profiles: ["standard", "headless", "full"],
+    href: "/docs/configuration/observability",
+  },
+  { name: "OpenAPI docs", profiles: ["standard", "headless", "full"], href: "/docs/api" },
   { name: "Embedded docs", profiles: embeddedAssetProfiles },
-  { name: "Doc extraction", profiles: ["standard", "headless", "full"] },
-  { name: "Cost forecasting", profiles: ["standard", "headless", "full"] },
+  {
+    name: "Doc extraction",
+    profiles: ["standard", "headless", "full"],
+    href: "/docs/configuration/features/file-processing#document-extraction",
+  },
+  {
+    name: "Cost forecasting",
+    profiles: ["standard", "headless", "full"],
+    href: "/docs/features/budgets#time-series-forecasting",
+  },
   { name: "CSV export", profiles: ["standard", "headless", "full"] },
-  { name: "Response validation", profiles: ["standard", "headless", "full"] },
+  {
+    name: "Response validation",
+    profiles: ["standard", "headless", "full"],
+    href: "/docs/features/guardrails",
+  },
   { name: "JSON schema", profiles: ["standard", "headless", "full"] },
-  { name: "SAML SSO", profiles: ["headless", "full"] },
-  { name: "Kreuzberg OCR", profiles: ["headless", "full"] },
-  { name: "ClamAV scanning", profiles: ["headless", "full"] },
-  { name: "Microsandbox containers", profiles: ["headless", "full"] },
-  { name: "OpenSandbox containers", profiles: ["headless", "full"] },
+  { name: "SAML SSO", profiles: ["headless", "full"], href: "/docs/features/saml" },
+  {
+    name: "Kreuzberg OCR",
+    profiles: ["headless", "full"],
+    href: "/docs/configuration/features/file-processing#document-extraction",
+  },
+  {
+    name: "ClamAV scanning",
+    profiles: ["headless", "full"],
+    href: "/docs/configuration/features/file-processing#virus-scanning",
+  },
+  {
+    name: "Microsandbox containers",
+    profiles: ["headless", "full"],
+    href: "/docs/features/agents#runtimes",
+  },
+  {
+    name: "OpenSandbox containers",
+    profiles: ["headless", "full"],
+    href: "/docs/features/agents#runtimes",
+  },
 ];
 
 function getInstallCommand(method: Method, os: OS, profile: Profile, libc: Libc): string {
@@ -350,13 +430,22 @@ export function QuickStartSelector() {
                   ) : (
                     <X className="h-3.5 w-3.5 shrink-0 text-fd-muted-foreground/40" />
                   )}
-                  <span
-                    className={
-                      included ? "text-fd-foreground" : "text-fd-muted-foreground/50 line-through"
-                    }
-                  >
-                    {f.name}
-                  </span>
+                  {included && f.href ? (
+                    <a
+                      href={f.href}
+                      className="text-fd-foreground underline decoration-fd-muted-foreground/40 underline-offset-2 transition-colors hover:decoration-fd-foreground"
+                    >
+                      {f.name}
+                    </a>
+                  ) : (
+                    <span
+                      className={
+                        included ? "text-fd-foreground" : "text-fd-muted-foreground/50 line-through"
+                      }
+                    >
+                      {f.name}
+                    </span>
+                  )}
                 </div>
               );
             })}
