@@ -40,7 +40,7 @@ impl WebSearchToolArguments {
     }
 
     pub fn function_description() -> &'static str {
-        "Search the web for current information. Use this when you need up-to-date facts, recent events, or information that may not be in your training data."
+        "Search the web for current or fast-changing information that may not be in your training data, such as recent events, news, prices, or release dates. Returns a ranked list of results with titles, URLs, and short content snippets rather than full page contents. Prefer this over answering from memory whenever the freshness of a fact matters or you're unsure it's up to date."
     }
 
     pub fn function_parameters_schema() -> Value {

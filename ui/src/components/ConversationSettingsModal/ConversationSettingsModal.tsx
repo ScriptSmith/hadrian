@@ -4,7 +4,7 @@ import { Settings2, RotateCcw, Database, Save, Volume2 } from "lucide-react";
 import type { VectorStoreOwnerType, Voice } from "@/api/generated/types.gen";
 import { TTS_VOICES, DEFAULT_TTS_VOICE, DEFAULT_TTS_SPEED } from "@/hooks/useAudioPlayback";
 import { getDefaultSystemPrompt } from "@/utils/defaultSystemPrompt";
-import { getEnabledToolsSystemGuidance } from "@/pages/chat/utils/toolExecutors";
+import { getAppendedSystemGuidance } from "@/pages/chat/utils/toolExecutors";
 import { Button } from "@/components/Button/Button";
 import type { ResponseActionConfig } from "@/components/chat-types";
 import { DEFAULT_ACTION_CONFIG } from "@/components/chat-types";
@@ -107,11 +107,11 @@ export function ConversationSettingsModal({
 
   const displayedPrompt = systemPrompt || getDefaultSystemPrompt();
   const isDefault = !systemPrompt;
-  // Guidance auto-appended to the system prompt at request time for the
-  // enabled tools (e.g. the shell tool's file-output note). Shown read-only so
-  // the user sees the full effective prompt without it polluting their editable
-  // text.
-  const toolGuidance = getEnabledToolsSystemGuidance(enabledTools);
+  // Guidance auto-appended to the system prompt at request time when tools are
+  // enabled (the agentic block plus per-tool notes like the shell file-output
+  // note). Shown read-only so the user sees the full effective prompt without
+  // it polluting their editable text.
+  const toolGuidance = getAppendedSystemGuidance(enabledTools);
 
   const autoResize = useCallback((el: HTMLTextAreaElement) => {
     el.style.height = "auto";

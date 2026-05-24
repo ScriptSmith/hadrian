@@ -167,6 +167,16 @@ if (enabledTools.includes("my_tool")) {
 }
 ```
 
+> **Two descriptions, kept in sync.** A tool carries *two* separate description strings: the
+> UI one in `TOOL_METADATA` (Step 4, shown in settings) and the LLM-facing one here (sent to the
+> model in the `tools` array). They are independent string literals keyed only by the tool id, so
+> they drift easily — update both when the tool's behavior changes. The LLM-facing one is what
+> drives tool selection: follow the "what it does / when to use / when *not* to use / caveats"
+> shape and aim for 3-4 sentences for any non-trivial tool (per Anthropic's tool-use guidance).
+> State constraints positively with their reason rather than as all-caps prohibitions, and don't
+> use em-dashes. Behavior that the API description can't carry (e.g. "files you save are shown in
+> the chat") goes in the optional `systemGuidance` field on `TOOL_METADATA` instead.
+
 ## Step 6: Enable Client-Side Execution
 
 **IMPORTANT**: This step is often forgotten and causes tools to not execute!

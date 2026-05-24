@@ -8,8 +8,6 @@
  * its own description via the API's tools array.
  */
 
-import { getShortModelName } from "./modelName";
-
 /**
  * Get today's date formatted for the system prompt
  */
@@ -25,16 +23,15 @@ function getFormattedDate(): string {
 }
 
 /**
- * Generate the default system prompt with current date and model identity
- * @param modelId - The model ID (e.g., "openai/gpt-4o")
- * @param instanceLabel - Optional custom instance label (e.g., "Creative Writer")
+ * Generate the default system prompt with the current date.
+ * @param instanceLabel - Optional persona/instance label (e.g., "Creative Writer").
+ *   When set it becomes the assistant's role; otherwise a generic role is used.
+ *   The bare model name is deliberately not used as the identity: it provides no
+ *   behavioral steering and can mislead a model about itself when routed across providers.
  */
-export function getDefaultSystemPrompt(modelId?: string, instanceLabel?: string): string {
+export function getDefaultSystemPrompt(instanceLabel?: string): string {
   const today = getFormattedDate();
-  const modelName = modelId ? getShortModelName(modelId) : "a helpful AI assistant";
-
-  // Use instance label if provided, otherwise fall back to model name
-  const identity = instanceLabel ? `${instanceLabel} (${modelName})` : modelName;
+  const identity = instanceLabel ?? "a helpful AI assistant";
 
   return `You are ${identity}.
 
@@ -47,8 +44,21 @@ Format your responses using Markdown:
 - **Text**: Headings, lists, bold, italic, links, blockquotes, tables
 - **Code blocks**: Use fenced code blocks with language identifiers for syntax highlighting
 - **Inline code**: Use \`backticks\` for file names, paths, function names, and short code snippets
-- **Math**: ONLY use $$...$$ for equations. Do NOT ever use \\(...\\), \\[...\\], $...$ delimiters.
+- **Math**: Use \`$$...$$\` delimiters for all math, including inline expressions; the chat renderer only supports this form.
 - **Diagrams**: Use Mermaid code blocks for flowcharts, sequence diagrams, etc.
 
 Keep responses concise and focused. Prefer clarity over verbosity.`;
+}
+
+/**
+ * Agentic guidance appended to the system prompt when at least one tool is
+ * enabled. Mirrors the persistence / use-tools / plan trio that measurably
+ * improves agentic task completion. Empty when no tools are enabled, so plain
+ * chats stay lightweight.
+ */
+export function getAgenticGuidance(enabledToolIds: string[]): string {
+  if (enabledToolIds.length === 0) return "";
+  return `## Working with tools
+
+You have tools available. Keep working until the user's request is fully resolved before ending your turn. When something could be checked with a tool, use the tool to gather the facts rather than guessing. For multi-step work, briefly outline your plan before you start and adjust as results come in.`;
 }

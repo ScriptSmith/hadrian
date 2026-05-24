@@ -44,7 +44,7 @@ import {
   executeToolCalls,
   buildToolResultInputItems,
   createMCPToolName,
-  getEnabledToolsSystemGuidance,
+  getAppendedSystemGuidance,
   DISPLAY_PARAMETER_SCHEMA,
   type ToolExecutorContext,
 } from "./utils/toolExecutors";
@@ -450,11 +450,11 @@ export function useChat({
           const basePrompt =
             perModel?.systemPrompt ??
             modelSettings?.systemPrompt ??
-            getDefaultSystemPrompt(model, instanceLabel);
-          // Append any per-tool system guidance for the enabled tools (e.g. the
-          // shell tool explaining that files written to /mnt/data are shown in
-          // the chat). Tools opt in via `systemGuidance` on their metadata.
-          const toolGuidance = getEnabledToolsSystemGuidance(enabledTools);
+            getDefaultSystemPrompt(instanceLabel);
+          // Append agentic guidance plus any per-tool system guidance for the
+          // enabled tools (e.g. the shell tool explaining that files written to
+          // /mnt/data are shown in the chat). Empty when no tools are enabled.
+          const toolGuidance = getAppendedSystemGuidance(enabledTools);
           const systemPrompt = toolGuidance ? `${basePrompt}\n\n${toolGuidance}` : basePrompt;
           input.unshift({
             role: "system",
@@ -623,7 +623,7 @@ export function useChat({
               "Create data visualizations using Vega-Lite. " +
               "Renders charts in the browser including bar charts, line charts, scatter plots, " +
               "pie/donut charts, area charts, heatmaps, and more. " +
-              "IMPORTANT: Data must be embedded inline in the spec - external URLs or file references will NOT work. " +
+              "Data must be embedded inline in the spec, because the chart renders in the browser with no network access, so external URLs or file references won't load. " +
               'Use the format: {"data": {"values": [{"x": 1, "y": 2}, ...]}, "mark": "...", "encoding": {...}}. ' +
               "If you have data from sql_query or code_interpreter, extract the values and embed them directly. " +
               "Use this when the user asks for charts, graphs, or data visualizations.",
@@ -848,7 +848,7 @@ export function useChat({
             type: "function",
             name: "web_search",
             description:
-              "Search the web for current information. Returns a list of relevant results with titles, URLs, and content snippets.",
+              "Search the web for current or fast-changing information such as recent events, news, prices, release dates, or anything that may have changed since your training data. Returns a ranked list of results with titles, URLs, and short content snippets, not full pages; to read a result in depth, follow up with web_fetch on its URL. Prefer this over answering from memory when freshness matters or you're unsure a fact is current. For information in the user's own documents, use file_search instead.",
             parameters: {
               type: "object",
               properties: {
@@ -868,7 +868,7 @@ export function useChat({
             type: "function",
             name: "web_fetch",
             description:
-              "Fetch the content of a web page or API endpoint. Returns the text content of the URL. HTML pages are automatically converted to plain text.",
+              "Fetch the contents of a single web page or API endpoint by URL and return its text. HTML is converted to plain text, so layout, images, and scripts are lost; expect prose, not markup. Use this to read a specific page in depth (often a URL returned by web_search); it cannot reach pages that require login. To discover relevant URLs in the first place, use web_search.",
             parameters: {
               type: "object",
               properties: {
