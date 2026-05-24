@@ -251,7 +251,11 @@ impl TeamRepo for PostgresTeamRepo {
         )
         .bind(org_id)
         .bind(slug)
-        .fetch_optional(&self.read_pool)
+        // Slug resolution is the entry point for control-plane operations: admin
+        // handlers resolve a team by slug before reading or mutating it. Reading from
+        // a replica makes every "create then immediately manage" flow race against
+        // streaming replication lag (spurious 404s). Use the primary for read-your-writes.
+        .fetch_optional(&self.write_pool)
         .await?;
 
         Ok(result.map(|row| Team {

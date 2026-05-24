@@ -1,20 +1,32 @@
 import type { Preview } from "@storybook/react";
 import React from "react";
 import { initialize, mswLoader } from "msw-storybook-addon";
+import { http, HttpResponse } from "msw";
 import "../src/index.css";
 import { PreferencesProvider } from "../src/preferences/PreferencesProvider";
 import { ConfigProvider } from "../src/config/ConfigProvider";
+import { defaultConfig } from "../src/config/defaults";
 import { defaultPreferences } from "../src/preferences/types";
 
 // Initialize MSW
 // Use relative URL so it works both standalone and when embedded in docs
-initialize({
-  quiet: true, // Suppress MSW startup and request/response logging in tests
-  onUnhandledRequest: "bypass", // Don't warn about unhandled requests
-  serviceWorker: {
-    url: "./mockServiceWorker.js",
+//
+// The second argument registers *initial* handlers that survive each story's
+// `resetHandlers()` (story-level `parameters.msw.handlers` are runtime handlers and
+// still take precedence). Every story is wrapped in `ConfigProvider`, which fetches
+// `/admin/v1/ui/config` on mount. Without a default handler those requests fall
+// through to the Vite dev-server proxy → localhost:8080 (no backend in tests),
+// spamming the output with "http proxy error" AggregateErrors. Serve defaults here.
+initialize(
+  {
+    quiet: true, // Suppress MSW startup and request/response logging in tests
+    onUnhandledRequest: "bypass", // Don't warn about unhandled requests
+    serviceWorker: {
+      url: "./mockServiceWorker.js",
+    },
   },
-});
+  [http.get("*/admin/v1/ui/config", () => HttpResponse.json(defaultConfig))]
+);
 
 const preview: Preview = {
   parameters: {

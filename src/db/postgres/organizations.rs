@@ -155,7 +155,11 @@ impl OrganizationRepo for PostgresOrganizationRepo {
             "#,
         )
         .bind(slug)
-        .fetch_optional(&self.read_pool)
+        // Slug resolution is the entry point for control-plane operations: admin
+        // handlers resolve an org by slug before reading or mutating nested resources.
+        // Reading from a replica makes "create then immediately manage" flows race
+        // against replication lag (spurious 404s). Use the primary for read-your-writes.
+        .fetch_optional(&self.write_pool)
         .await?;
 
         Ok(result.map(|row| Organization {

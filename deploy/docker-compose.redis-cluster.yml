@@ -69,7 +69,11 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 3
+      retries: 5
+      # Grace period before failures count: under CI load several Redis nodes and
+      # the gateway build start at once, and the first health probes can race the
+      # server becoming ready, marking the container unhealthy non-deterministically.
+      start_period: 15s
 
   redis-2:
     image: redis:7-alpine
@@ -87,7 +91,11 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 3
+      retries: 5
+      # Grace period before failures count: under CI load several Redis nodes and
+      # the gateway build start at once, and the first health probes can race the
+      # server becoming ready, marking the container unhealthy non-deterministically.
+      start_period: 15s
 
   redis-3:
     image: redis:7-alpine
@@ -105,7 +113,11 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 3
+      retries: 5
+      # Grace period before failures count: under CI load several Redis nodes and
+      # the gateway build start at once, and the first health probes can race the
+      # server becoming ready, marking the container unhealthy non-deterministically.
+      start_period: 15s
 
   # Redis Cluster Nodes (Replicas)
   redis-4:
@@ -124,7 +136,11 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 3
+      retries: 5
+      # Grace period before failures count: under CI load several Redis nodes and
+      # the gateway build start at once, and the first health probes can race the
+      # server becoming ready, marking the container unhealthy non-deterministically.
+      start_period: 15s
 
   redis-5:
     image: redis:7-alpine
@@ -142,7 +158,11 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 3
+      retries: 5
+      # Grace period before failures count: under CI load several Redis nodes and
+      # the gateway build start at once, and the first health probes can race the
+      # server becoming ready, marking the container unhealthy non-deterministically.
+      start_period: 15s
 
   redis-6:
     image: redis:7-alpine
@@ -160,7 +180,11 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 3
+      retries: 5
+      # Grace period before failures count: under CI load several Redis nodes and
+      # the gateway build start at once, and the first health probes can race the
+      # server becoming ready, marking the container unhealthy non-deterministically.
+      start_period: 15s
 
   # Redis Cluster initialization helper
   redis-cluster-init:

@@ -33,16 +33,32 @@ pub async fn run_sqlite_migrations(pool: &SqlitePool) {
 pub mod redis {
     use testcontainers_modules::{
         redis::Redis,
-        testcontainers::{ContainerAsync, runners::AsyncRunner},
+        testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner},
     };
 
     /// Start a Redis container and return the connection URL and container handle
     /// The container is kept alive as long as the returned handle is held
     pub async fn create_redis_container() -> (String, ContainerAsync<Redis>) {
-        let container = Redis::default()
-            .start()
-            .await
-            .expect("Failed to start Redis container");
+        // Pin to redis:7-alpine (matches the rest of the stack, so CI reuses an
+        // already-cached image) and retry: image pulls intermittently fail in CI
+        // with transient errors like "bytes remaining on stream".
+        const MAX_ATTEMPTS: u32 = 3;
+        let mut attempt = 0;
+        let container = loop {
+            attempt += 1;
+            match Redis::default().with_tag("7-alpine").start().await {
+                Ok(container) => break container,
+                Err(err) if attempt < MAX_ATTEMPTS => {
+                    eprintln!(
+                        "Failed to start Redis container (attempt {attempt}/{MAX_ATTEMPTS}): {err}; retrying"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+                Err(err) => {
+                    panic!("Failed to start Redis container after {attempt} attempts: {err}")
+                }
+            }
+        };
 
         let host = container.get_host().await.expect("Failed to get host");
         let port = container
