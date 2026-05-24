@@ -200,7 +200,7 @@ impl FileSearchToolArguments {
         serde_json::json!({
             "type": "function",
             "name": "file_search",
-            "description": "Search for relevant information in the configured knowledge base. Use this tool when you need to find specific information, answer questions about documents, or look up facts from the available files.",
+            "description": "Search the knowledge base attached to this conversation (the user's uploaded files and configured vector stores) using semantic search. Returns the most relevant passages with relevance scores, not whole documents, so synthesize your answer from these snippets. Use this for questions about the user's own documents or domain data. Don't use it for general knowledge you already have; for current web information, use a web search tool if one is available.",
             "parameters": Self::function_parameters_schema()
         })
     }
@@ -210,7 +210,7 @@ impl FileSearchToolArguments {
 
     /// Get the function description for file_search.
     pub fn function_description() -> &'static str {
-        "Search for relevant information in the configured knowledge base. Use this tool when you need to find specific information, answer questions about documents, or look up facts from the available files."
+        "Search the knowledge base attached to this conversation (the user's uploaded files and configured vector stores) using semantic search. Returns the most relevant passages with relevance scores, not whole documents, so synthesize your answer from these snippets. Use this for questions about the user's own documents or domain data. Don't use it for general knowledge you already have; for current web information, use a web search tool if one is available."
     }
 }
 

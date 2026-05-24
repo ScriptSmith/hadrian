@@ -415,17 +415,9 @@ impl LlmReranker {
 
     /// Build the system prompt for the reranking task.
     fn build_system_prompt() -> String {
-        r#"You are a relevance scoring assistant. Your task is to evaluate how relevant each document passage is to the user's search query.
+        r#"You are a relevance scoring assistant. Score how relevant each passage is to the user's search query, from 0.0 (not relevant) to 1.0 (directly answers the query). Use the full range: ~0.7+ when the passage contains the answer, ~0.4 to 0.6 for related context, below ~0.3 for loosely connected or off-topic passages.
 
-For each passage, assign a relevance score from 0.0 to 1.0:
-- 1.0: Directly answers the query or contains exactly what was asked for
-- 0.8-0.9: Highly relevant, contains most of the needed information
-- 0.6-0.7: Moderately relevant, contains related information
-- 0.4-0.5: Somewhat relevant, tangentially related
-- 0.2-0.3: Minimally relevant, only loosely connected
-- 0.0-0.1: Not relevant to the query
-
-Respond with a JSON object containing a "scores" array with objects having "index" (0-based) and "score" (0.0-1.0) for each passage."#
+Respond with a JSON object containing a "scores" array of objects with "index" (0-based) and "score" (0.0 to 1.0) for each passage."#
             .to_string()
     }
 

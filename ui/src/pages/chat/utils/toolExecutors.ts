@@ -45,6 +45,7 @@ import type { ToolContent } from "@/services/mcp";
 import safeRegex from "safe-regex";
 
 import { formatApiError } from "@/utils/formatApiError";
+import { getAgenticGuidance } from "@/utils/defaultSystemPrompt";
 /**
  * Context provided to tool executors
  */
@@ -2742,6 +2743,18 @@ export function getEnabledToolsSystemGuidance(enabledToolIds: string[]): string 
 }
 
 /**
+ * Full guidance appended after the base system prompt when tools are enabled:
+ * the generic agentic block followed by any per-tool `systemGuidance`. Used by
+ * both `useChat` (request building) and the settings modal (read-only preview)
+ * so the displayed effective prompt matches what is actually sent.
+ */
+export function getAppendedSystemGuidance(enabledToolIds: string[]): string {
+  return [getAgenticGuidance(enabledToolIds), getEnabledToolsSystemGuidance(enabledToolIds)]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
  * Available tools with metadata for UI display
  */
 export const TOOL_METADATA: ToolMetadata[] = [
@@ -2756,9 +2769,9 @@ export const TOOL_METADATA: ToolMetadata[] = [
 
 You have a shell tool that runs commands in a persistent Linux container; \`/mnt/data\` is the working directory and persists for the whole conversation.
 
-Files you save to \`/mnt/data\` are shown to the user directly in this chat — images render inline and other files appear as downloads. So when you produce a visual or downloadable result (a plot, generated image, rendered document, data export, etc.), **save it to \`/mnt/data\`** rather than only printing it or describing it.
+Files you save to \`/mnt/data\` are shown to the user directly in this chat: images render inline and other files appear as downloads. So when you produce a visual or downloadable result (a plot, generated image, rendered document, data export, etc.), **save it to \`/mnt/data\`** rather than only printing it or describing it.
 
-The gateway attaches and displays saved files automatically — you do not link to them. Do NOT reference container paths with Markdown image or link syntax: \`![red_square.png](/mnt/data/red_square.png)\` (or a plain link to \`/mnt/data/...\`) will **not** render, because \`/mnt/data\` is a path inside the container, not a URL the chat can load. Likewise, never paste base64-encoded image or file data into your reply. Just write the file and mention its name in prose (e.g. "I saved the chart as \`red_square.png\`"); it will appear on its own.`,
+The gateway attaches and displays saved files automatically. Refer to a file by name in prose (e.g. "I saved the chart as \`red_square.png\`") and it appears on its own. Markdown image or link syntax pointing at \`/mnt/data/...\` (such as \`![red_square.png](/mnt/data/red_square.png)\`) won't render, because that's a path inside the container rather than a URL the chat can load. Pasting base64-encoded file data won't display either, so just write the file.`,
   },
   {
     id: "file_search",
