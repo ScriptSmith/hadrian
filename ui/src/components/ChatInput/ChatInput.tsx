@@ -1,6 +1,7 @@
 import {
   AlertCircle,
   ArrowsUpFromLine,
+  Clock,
   MousePointerClick,
   Paperclip,
   Send,
@@ -47,7 +48,7 @@ import { cn } from "@/utils/cn";
 import { isFileTypeAllowed, buildAcceptAttribute } from "@/utils/fileTypes";
 import { useQuotedText, usePendingPrompt, useChatUIStore } from "@/stores/chatUIStore";
 
-import type { ChatFile, HistoryMode } from "@/components/chat-types";
+import type { ChatFile, HistoryMode, QueuedMessage } from "@/components/chat-types";
 import {
   File,
   FileText,
@@ -155,6 +156,10 @@ interface ChatInputProps {
   onOpenMCPConfig?: () => void;
   /** Callback when a prompt template is applied */
   onApplyPrompt?: (content: string) => void;
+  /** Messages queued while a response is streaming (sent as each turn completes) */
+  queuedMessages?: QueuedMessage[];
+  /** Remove a queued message before it is sent */
+  onRemoveQueuedMessage?: (id: string) => void;
 }
 
 export function ChatInput({
@@ -181,6 +186,8 @@ export function ChatInput({
   onSubAgentModelChange,
   onOpenMCPConfig,
   onApplyPrompt,
+  queuedMessages = [],
+  onRemoveQueuedMessage,
 }: ChatInputProps) {
   const [content, setContent] = useState("");
   const [files, setFiles] = useState<ChatFile[]>([]);
@@ -258,12 +265,9 @@ export function ChatInput({
 
   const acceptAttribute = useMemo(() => buildAcceptAttribute(allowedTypes), [allowedTypes]);
 
+  // Send always submits (queuing the message if a response is still streaming).
+  // Stopping the current response is a separate button, shown while streaming.
   const handleSubmit = useCallback(() => {
-    if (isStreaming) {
-      onStop?.();
-      return;
-    }
-
     const trimmedContent = content.trim();
     if (!trimmedContent && files.length === 0) return;
 
@@ -277,7 +281,7 @@ export function ChatInput({
     setContent("");
     setFiles([]);
     setPendingSkill(null);
-  }, [content, files, isStreaming, onSend, onStop, pendingSkill]);
+  }, [content, files, onSend, pendingSkill]);
 
   const enableSkill = useChatUIStore((s) => s.enableSkill);
 
@@ -463,6 +467,39 @@ export function ChatInput({
 
   return (
     <div className="space-y-2">
+      {/* Queued messages: composed while a response was still streaming. They
+          send one at a time as each in-flight turn completes. */}
+      {queuedMessages.length > 0 && (
+        <ul className="flex flex-col gap-1.5 px-1" aria-label="Queued messages">
+          {queuedMessages.map((msg) => (
+            <li
+              key={msg.id}
+              className="flex items-center gap-2 rounded-lg border border-dashed bg-muted/40 px-2.5 py-1.5 text-sm"
+            >
+              <Clock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                {msg.content || (msg.files.length > 0 ? "(attachment only)" : "")}
+              </span>
+              {msg.files.length > 0 && (
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {msg.files.length} file{msg.files.length > 1 ? "s" : ""}
+                </span>
+              )}
+              {onRemoveQueuedMessage && (
+                <button
+                  type="button"
+                  onClick={() => onRemoveQueuedMessage(msg.id)}
+                  className="shrink-0 rounded-full p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  aria-label="Remove queued message"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
       {/* File previews */}
       {files.length > 0 && (
         <div className="flex flex-wrap gap-2 px-1">
@@ -566,7 +603,7 @@ export function ChatInput({
             className="min-h-[56px] w-full resize-none border-0 bg-transparent px-4 pt-3 pb-1 text-base focus-visible:ring-0 focus-visible:ring-offset-0"
             autoResize
             maxHeight={200}
-            disabled={disabled || isStreaming}
+            disabled={disabled}
           />
           {slashQuery && (
             <SlashCommandPopover
@@ -597,7 +634,7 @@ export function ChatInput({
                         : "text-muted-foreground hover:text-foreground"
                     )}
                     onClick={onSettingsClick}
-                    disabled={disabled || isStreaming}
+                    disabled={disabled}
                     aria-label="Conversation settings"
                   >
                     <Settings2 className="h-4 w-4" />
@@ -611,11 +648,11 @@ export function ChatInput({
 
             {/* Templates */}
             {onApplyPrompt && (
-              <TemplatesButton onApplyTemplate={onApplyPrompt} disabled={disabled || isStreaming} />
+              <TemplatesButton onApplyTemplate={onApplyPrompt} disabled={disabled} />
             )}
 
             {/* Skills */}
-            <SkillsButton disabled={disabled || isStreaming} />
+            <SkillsButton disabled={disabled} />
 
             {/* History mode toggle - only show when multiple models */}
             {hasMultipleModels && onHistoryModeChange && (
@@ -634,7 +671,7 @@ export function ChatInput({
                     onClick={() =>
                       onHistoryModeChange(historyMode === "all" ? "same-model" : "all")
                     }
-                    disabled={disabled || isStreaming}
+                    disabled={disabled}
                     aria-label={
                       historyMode === "all"
                         ? "Switch to isolated history"
@@ -686,7 +723,7 @@ export function ChatInput({
                       variant="ghost"
                       className="h-8 w-8 shrink-0 rounded-lg text-muted-foreground hover:text-foreground"
                       onClick={() => fileInputRef.current?.click()}
-                      disabled={disabled || isStreaming}
+                      disabled={disabled}
                       aria-label="Attach files"
                     >
                       <Paperclip className="h-4 w-4" />
@@ -708,7 +745,7 @@ export function ChatInput({
                 onVectorStoreIdsChange={onVectorStoreIdsChange}
                 vectorStoreOwnerType={vectorStoreOwnerType}
                 vectorStoreOwnerId={vectorStoreOwnerId}
-                disabled={disabled || isStreaming}
+                disabled={disabled}
                 availableModels={availableModels}
                 subAgentModel={subAgentModel}
                 onSubAgentModelChange={onSubAgentModelChange}
@@ -717,29 +754,33 @@ export function ChatInput({
             )}
           </div>
 
-          {/* Send button */}
-          <Button
-            size="sm"
-            className={cn(
-              "h-8 shrink-0 gap-1.5 rounded-xl px-3 transition-all",
-              isStreaming && "bg-destructive hover:bg-destructive/90"
-            )}
-            onClick={handleSubmit}
-            disabled={disabled || (!canSend && !isStreaming)}
-            variant={isStreaming ? "danger" : "primary"}
-          >
-            {isStreaming ? (
-              <>
+          {/* Send / Stop buttons. While streaming, Send queues the message and
+              a separate Stop button aborts the in-flight response. */}
+          <div className="flex shrink-0 items-center gap-1.5">
+            {isStreaming && onStop && (
+              <Button
+                size="sm"
+                variant="danger"
+                className="h-8 gap-1.5 rounded-xl px-3 transition-all"
+                onClick={onStop}
+                aria-label="Stop response"
+              >
                 <StopCircle className="h-4 w-4" />
                 Stop
-              </>
-            ) : (
-              <>
-                Send
-                <Send className="h-3.5 w-3.5" />
-              </>
+              </Button>
             )}
-          </Button>
+            <Button
+              size="sm"
+              className="h-8 gap-1.5 rounded-xl px-3 transition-all"
+              onClick={handleSubmit}
+              disabled={disabled || !canSend}
+              variant="primary"
+              aria-label={isStreaming ? "Queue message" : "Send message"}
+            >
+              {isStreaming ? "Queue" : "Send"}
+              <Send className="h-3.5 w-3.5" />
+            </Button>
+          </div>
         </div>
       </div>
     </div>

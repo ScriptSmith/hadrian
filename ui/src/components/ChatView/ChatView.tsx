@@ -1,5 +1,5 @@
 import type { VectorStoreOwnerType } from "@/api/generated/types.gen";
-import type { Conversation, ModelParameters } from "@/components/chat-types";
+import type { Conversation, ModelParameters, QueuedMessage } from "@/components/chat-types";
 import { ChatHeader } from "@/components/ChatHeader/ChatHeader";
 import { ChatInput } from "@/components/ChatInput/ChatInput";
 import { ChatMessageList } from "@/components/ChatMessageList/ChatMessageList";
@@ -83,6 +83,10 @@ export interface ChatViewProps {
   vectorStoreOwnerType?: VectorStoreOwnerType;
   /** Owner ID for vector store filtering (e.g., user id, org id) */
   vectorStoreOwnerId?: string;
+  /** Messages queued while a response is streaming (sent as each turn completes) */
+  queuedMessages?: QueuedMessage[];
+  /** Remove a queued message before it is sent */
+  onRemoveQueuedMessage?: (id: string) => void;
 }
 
 export function ChatView({
@@ -105,6 +109,8 @@ export function ChatView({
   onRespondMcpApproval,
   vectorStoreOwnerType,
   vectorStoreOwnerId,
+  queuedMessages,
+  onRemoveQueuedMessage,
 }: ChatViewProps) {
   // Subscribe to stores
   const selectedInstances = useSelectedInstances();
@@ -290,6 +296,8 @@ export function ChatView({
             onSubAgentModelChange={setSubAgentModel}
             onOpenMCPConfig={() => setMCPConfigModalOpen(true)}
             onApplyPrompt={setPendingPrompt}
+            queuedMessages={queuedMessages}
+            onRemoveQueuedMessage={onRemoveQueuedMessage}
           />
         </div>
       </footer>

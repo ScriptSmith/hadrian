@@ -235,6 +235,67 @@ export const Streaming: Story = {
 };
 
 /**
+ * Test: While streaming, the textarea stays enabled and "Send" becomes "Queue"
+ * (queuing the message) while a separate Stop button aborts the response.
+ */
+export const StreamingAllowsQueueing: Story = {
+  args: {
+    isStreaming: true,
+    placeholder: "Type a message...",
+    onSend: fn(),
+    onStop: fn(),
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    // Textarea remains usable while streaming
+    const textarea = canvas.getByPlaceholderText("Type a message...");
+    await expect(textarea).toBeEnabled();
+    await userEvent.type(textarea, "Next question");
+
+    // Primary button now queues rather than stops
+    const queueButton = canvas.getByRole("button", { name: /queue message/i });
+    await expect(queueButton).toBeEnabled();
+    await userEvent.click(queueButton);
+    await expect(args.onSend).toHaveBeenCalledWith("Next question", []);
+    await expect(args.onStop).not.toHaveBeenCalled();
+
+    // A distinct Stop button is still available to abort the in-flight response
+    const stopButton = canvas.getByRole("button", { name: /stop response/i });
+    await userEvent.click(stopButton);
+    await expect(args.onStop).toHaveBeenCalled();
+  },
+};
+
+/**
+ * Test: Queued messages render as removable chips above the input
+ */
+export const WithQueuedMessages: Story = {
+  args: {
+    isStreaming: true,
+    placeholder: "Type a message...",
+    onRemoveQueuedMessage: fn(),
+    queuedMessages: [
+      { id: "q1", content: "First queued message", files: [] },
+      { id: "q2", content: "Second queued message", files: [] },
+    ],
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    // Both queued messages are listed
+    await expect(canvas.getByText("First queued message")).toBeInTheDocument();
+    await expect(canvas.getByText("Second queued message")).toBeInTheDocument();
+
+    // Removing the first chip calls back with its id
+    const removeButtons = canvas.getAllByRole("button", { name: /remove queued message/i });
+    await expect(removeButtons).toHaveLength(2);
+    await userEvent.click(removeButtons[0]);
+    await expect(args.onRemoveQueuedMessage).toHaveBeenCalledWith("q1");
+  },
+};
+
+/**
  * Test: Typing enables the send button
  */
 export const TypingEnablesSend: Story = {
