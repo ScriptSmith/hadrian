@@ -385,10 +385,10 @@ export default function HomePage() {
             />
             <h1 className="mb-6 text-4xl font-bold tracking-tight md:text-6xl">Hadrian Gateway</h1>
             <p className="mx-auto mb-0 max-w-2xl text-lg text-fd-muted-foreground md:text-xl">
-              A unified AI gateway with every enterprise feature included.
+              Unified AI gateway with every enterprise feature included.
             </p>
             <p className="mx-auto mb-8 max-w-2xl text-lg text-fd-muted-foreground md:text-xl">
-              Completely Open source and free.
+              Completely Open Source and Free.
             </p>
             <p className="mb-8 text-sm text-fd-muted-foreground">
               MIT and Apache-2.0 licensed. No proprietary code, no upgrade tiers, no restrictions.
