@@ -96,7 +96,7 @@ The gateway starts at `http://localhost:8080` with the chat UI. No database requ
 ## Configuration
 
 ```toml
-# Minimal -- just add a provider
+# Minimal: just add a provider
 [providers.openai]
 type = "open_ai"
 api_key = "${OPENAI_API_KEY}"
@@ -118,18 +118,18 @@ Supports OpenAI, Anthropic, AWS Bedrock, Google Vertex AI, Azure OpenAI, and any
 
 ## Features
 
-- **Providers** -- OpenAI, Anthropic, Bedrock, Vertex, Azure, plus any OpenAI-compatible API. Fallback chains, circuit breakers, health checks.
-- **Multi-tenancy** -- Organizations, teams, projects, users. Scoped providers, budgets, and rate limits at every level.
-- **Auth** -- API keys, OIDC/OAuth, per-org SSO, SAML, SCIM, reverse proxy auth, CEL-based RBAC, Sovereignty enforcement for data residency.
-- **Guardrails** -- Blocklist, PII detection, content moderation (OpenAI, Bedrock, Azure). Blocking, concurrent, and post-response modes.
-- **Caching** -- Exact match and semantic similarity caching with pgvector or Qdrant.
-- **Knowledge Bases** -- File upload, text extraction, OCR, chunking, vector search, re-ranking. OpenAI-compatible Vector Stores API.
-- **Cost tracking** -- Microcent precision, time-series forecasting, budget enforcement with atomic reservation.
-- **Observability** -- Prometheus metrics, OTLP tracing, structured logging, usage export.
-- **Web UI** -- Multi-model chat with 14 modes, web search, frontend tools (Python, JS, SQL, charts), MCP support, admin panel.
-- **Agents** -- Server-side shell tool in persistent containers and server-side MCP, via the Responses API.
-- **Studio** -- Image generation, text-to-speech, transcription, and translation across providers.
-- **Secrets** -- External secrets managers (AWS Secrets Manager, GCP Secret Manager, Azure Key Vault, HashiCorp Vault) for credential storage.
+- **Providers:** OpenAI, Anthropic, Bedrock, Vertex, Azure, plus any OpenAI-compatible API. Fallback chains, circuit breakers, health checks.
+- **Multi-tenancy:** Organizations, teams, projects, users. Scoped providers, budgets, and rate limits at every level.
+- **Auth:** API keys, OIDC/OAuth, per-org SSO, SAML, SCIM, reverse proxy auth, CEL-based RBAC, Sovereignty enforcement for data residency.
+- **Guardrails:** Blocklist, PII detection, content moderation (OpenAI, Bedrock, Azure). Blocking, concurrent, and post-response modes.
+- **Caching:** Exact match and semantic similarity caching with pgvector or Qdrant.
+- **Knowledge Bases:** File upload, text extraction, OCR, chunking, vector search, re-ranking. OpenAI-compatible Vector Stores API.
+- **Cost tracking:** Microcent precision, time-series forecasting, budget enforcement with atomic reservation.
+- **Observability:** Prometheus metrics, OTLP tracing, structured logging, usage export.
+- **Web UI:** Multi-model chat with 14 modes, web search, frontend tools (Python, JS, SQL, charts), MCP support, admin panel.
+- **Agents:** Server-side shell tool in persistent containers and server-side MCP, via the Responses API.
+- **Studio:** Image generation, text-to-speech, transcription, and translation across providers.
+- **Secrets:** External secrets managers (AWS Secrets Manager, GCP Secret Manager, Azure Key Vault, HashiCorp Vault) for credential storage.
 
 ## API
 
