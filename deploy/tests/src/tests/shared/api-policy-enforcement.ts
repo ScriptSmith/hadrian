@@ -420,7 +420,7 @@ export function runApiPolicyEnforcementTests(
           body: JSON.stringify({
             model: "test/test-model",
             input: "Search the files for information about testing.",
-            tools: [{ type: "file_search" }],
+            tools: [{ type: "file_search", vector_store_ids: ["vs_test"] }],
           }),
         });
 
@@ -440,7 +440,7 @@ export function runApiPolicyEnforcementTests(
           body: JSON.stringify({
             model: "test/test-model",
             input: "Search the files for information about testing.",
-            tools: [{ type: "file_search" }],
+            tools: [{ type: "file_search", vector_store_ids: ["vs_test"] }],
           }),
         });
 
