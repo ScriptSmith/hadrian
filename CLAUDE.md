@@ -50,6 +50,7 @@ cargo clippy                    # Lint
 cargo +nightly fmt              # Format (requires nightly)
 cargo run                       # Run with default config (hadrian.toml)
 cargo run -- --config path.toml # Run with custom config
+docker build -t hadrian:local . # Build gateway image first (compose files use hadrian:local)
 cd deploy/tests && pnpm test    # E2E tests with testcontainers
 ```
 
@@ -142,7 +143,7 @@ See `agent_instructions/architecture.md` for details on RBAC, SSO, RAG, chat mod
 ## Testing
 
 - Unit tests: same file as code (`#[cfg(test)]`)
-- E2E tests: `cd deploy/tests && pnpm test`
+- E2E tests: `docker build -t hadrian:local .` (first), then `cd deploy/tests && pnpm test`
 - Test both SQLite and PostgreSQL paths
 - See `agent_instructions/testing.md` for provider and university E2E tests
 
