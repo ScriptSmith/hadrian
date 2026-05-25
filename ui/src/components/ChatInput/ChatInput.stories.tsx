@@ -240,7 +240,10 @@ export const Streaming: Story = {
  */
 export const StreamingAllowsQueueing: Story = {
   args: {
+    // A queue-backed turn is in flight: both flags are set, so the primary
+    // button queues the next message rather than starting a concurrent turn.
     isStreaming: true,
+    isQueuing: true,
     placeholder: "Type a message...",
     onSend: fn(),
     onStop: fn(),
@@ -268,11 +271,47 @@ export const StreamingAllowsQueueing: Story = {
 };
 
 /**
+ * Test: A stream started outside the queue (editAndRerun/regenerateResponse sets
+ * `isStreaming` but not `isQueuing`) disables the primary button, so a click or
+ * Enter can't start a second concurrent turn that would clobber the active one.
+ */
+export const NonQueueStreamBlocksSend: Story = {
+  args: {
+    isStreaming: true,
+    isQueuing: false,
+    placeholder: "Type a message...",
+    onSend: fn(),
+    onStop: fn(),
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    const textarea = canvas.getByPlaceholderText("Type a message...");
+    await userEvent.type(textarea, "Next question");
+
+    // The primary button is present but disabled in this state.
+    const queueButton = canvas.getByRole("button", { name: /queue message/i });
+    await expect(queueButton).toBeDisabled();
+
+    // Enter must not slip past the disabled button and dispatch a send.
+    await userEvent.type(textarea, "{Enter}");
+    await expect(args.onSend).not.toHaveBeenCalled();
+
+    // Stop remains available to abort the externally-started stream.
+    const stopButton = canvas.getByRole("button", { name: /stop response/i });
+    await userEvent.click(stopButton);
+    await expect(args.onStop).toHaveBeenCalled();
+  },
+};
+
+/**
  * Test: Queued messages render as removable chips above the input
  */
 export const WithQueuedMessages: Story = {
   args: {
+    // Messages are queued, so the queue is busy and queueing stays enabled.
     isStreaming: true,
+    isQueuing: true,
     placeholder: "Type a message...",
     onRemoveQueuedMessage: fn(),
     queuedMessages: [

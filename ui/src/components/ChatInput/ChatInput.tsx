@@ -273,6 +273,11 @@ export function ChatInput({
   // Send always submits (queuing the message if a response is still streaming).
   // Stopping the current response is a separate button, shown while streaming.
   const handleSubmit = useCallback(() => {
+    // Mirror the Send button's `disabled` guard for the Enter-key path: block
+    // sending while a non-queue stream (editAndRerun/regenerateResponse) is in
+    // flight, since that would start a second concurrent turn and clobber it.
+    if (isStreaming && !isQueuing) return;
+
     const trimmedContent = content.trim();
     if (!trimmedContent && files.length === 0) return;
 
@@ -286,7 +291,7 @@ export function ChatInput({
     setContent("");
     setFiles([]);
     setPendingSkill(null);
-  }, [content, files, onSend, pendingSkill]);
+  }, [content, files, onSend, pendingSkill, isStreaming, isQueuing]);
 
   const enableSkill = useChatUIStore((s) => s.enableSkill);
 
@@ -778,7 +783,14 @@ export function ChatInput({
               size="sm"
               className="h-8 gap-1.5 rounded-xl px-3 transition-all"
               onClick={handleSubmit}
-              disabled={disabled || !canSend}
+              // Queueing is only safe when the in-flight turn is the queue's own
+              // (`isQueuing`): the queue serializes those off `sendMessage`'s
+              // promise. A stream started outside the queue — `editAndRerun` /
+              // `regenerateResponse` call `initStreaming` directly and never set
+              // `busy` — would otherwise let a click start a second concurrent
+              // turn that clobbers the active stream. Disable in that case; the
+              // separate Stop button still handles aborting it.
+              disabled={disabled || !canSend || (isStreaming && !isQueuing)}
               variant="primary"
               aria-label={isStreaming || isQueuing ? "Queue message" : "Send message"}
             >
