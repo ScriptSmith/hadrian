@@ -241,6 +241,38 @@ describe("MessageQueue", () => {
     expect(transcript).toEqual(["user:q1", "assistant:q1", "user:q2", "assistant:q2"]);
   });
 
+  it("notifies busy subscribers across the whole drain, not per message", async () => {
+    const busyEvents: boolean[] = [];
+    const gates = [deferred(), deferred()];
+    let i = 0;
+    const send = vi.fn().mockImplementation(async () => {
+      await gates[i++].promise;
+    });
+
+    const q = makeQueue(send);
+    q.subscribeBusy((busy) => busyEvents.push(busy));
+
+    // subscribeBusy fires immediately with the current (idle) value.
+    expect(busyEvents).toEqual([false]);
+
+    q.sendOrQueue("one", []); // idle -> busy flips true
+    q.sendOrQueue("two", []); // queued while busy -> no extra busy event
+    expect(busyEvents).toEqual([false, true]);
+    expect(q.isBusy).toBe(true);
+
+    gates[0].resolve();
+    await flush();
+    // Still draining "two": busy must stay true between turns.
+    expect(q.isBusy).toBe(true);
+    expect(busyEvents).toEqual([false, true]);
+
+    gates[1].resolve();
+    await flush();
+    // Drain complete -> busy flips back to false exactly once.
+    expect(busyEvents).toEqual([false, true, false]);
+    expect(q.isBusy).toBe(false);
+  });
+
   it("uses the latest send function for each dispatch", async () => {
     const first = deferred();
     const sendA = vi.fn().mockImplementation(async () => {

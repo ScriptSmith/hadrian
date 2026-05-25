@@ -23,15 +23,17 @@ export type SendFn = (content: string, files: ChatFile[]) => Promise<void>;
  * with the one still streaming (two side-by-side responses for one model). A
  * singleton keeps the lock alive across that remount.
  *
- * `send` is set via {@link setSend} on every render so each dispatch uses the
- * latest `sendMessage` closure (picking up model/tool/config changes the user
- * made while the queue was draining).
+ * `send` is kept current via {@link setSend} (called from an effect in
+ * `useMessageQueue`) so each dispatch uses the latest `sendMessage` closure,
+ * picking up model/tool/config changes the user made while the queue was
+ * draining.
  */
 export class MessageQueue {
   private queue: QueuedMessage[] = [];
   private busy = false;
   private send: SendFn | null = null;
   private readonly listeners = new Set<(queue: QueuedMessage[]) => void>();
+  private readonly busyListeners = new Set<(busy: boolean) => void>();
 
   /** Current number of queued (not-yet-dispatched) messages. */
   get size(): number {
@@ -41,6 +43,16 @@ export class MessageQueue {
   /** True while a turn is being sent (and therefore further sends will queue). */
   get isBusy(): boolean {
     return this.busy;
+  }
+
+  // Flip the busy flag and notify subscribers. The UI uses this to keep the
+  // Send/Queue label in step with the actual dispatch decision: `busy` stays
+  // true across a whole turn (including between tool rounds, where `isStreaming`
+  // briefly flips false), so a click always matches the rendered label.
+  private setBusy(value: boolean) {
+    if (this.busy === value) return;
+    this.busy = value;
+    for (const listener of this.busyListeners) listener(value);
   }
 
   /** Point the queue at the current send function. Call on every render. */
@@ -55,6 +67,16 @@ export class MessageQueue {
     listener([...this.queue]);
     return () => {
       this.listeners.delete(listener);
+    };
+  }
+
+  /** Subscribe to busy-state changes. The listener is invoked immediately with
+   *  the current value, and on every subsequent change. Returns an unsubscribe. */
+  subscribeBusy(listener: (busy: boolean) => void): () => void {
+    this.busyListeners.add(listener);
+    listener(this.busy);
+    return () => {
+      this.busyListeners.delete(listener);
     };
   }
 
@@ -93,7 +115,7 @@ export class MessageQueue {
   // stays true across the whole drain so no other send can start concurrently
   // (which would clobber the in-flight stream).
   private async pump(first: string, firstFiles: ChatFile[]) {
-    this.busy = true;
+    this.setBusy(true);
     try {
       await this.runSafe(first, firstFiles);
       while (this.queue.length > 0) {
@@ -103,7 +125,7 @@ export class MessageQueue {
         await this.runSafe(next.content, next.files);
       }
     } finally {
-      this.busy = false;
+      this.setBusy(false);
     }
   }
 

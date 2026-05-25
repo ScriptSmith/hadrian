@@ -262,7 +262,7 @@ export default function ChatPage() {
   // issued mid-turn is queued and dispatched when the turn completes. See
   // `MessageQueue` for why serialization keys off the `sendMessage` promise
   // rather than `isStreaming` (which flickers between tool rounds).
-  const { queuedMessages, sendOrQueue, removeQueuedMessage, clearQueue } =
+  const { queuedMessages, isBusy, sendOrQueue, removeQueuedMessage, clearQueue } =
     useMessageQueue(sendMessage);
 
   // Drop pending queued messages when leaving the conversation they were queued
@@ -380,6 +380,7 @@ export default function ChatPage() {
           onRespondMcpApproval={respondToMcpApproval}
           queuedMessages={queuedMessages}
           onRemoveQueuedMessage={removeQueuedMessage}
+          isQueuing={isBusy}
         />
       </ErrorBoundary>
       {currentConversation && (

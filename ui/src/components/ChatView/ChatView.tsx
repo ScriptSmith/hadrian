@@ -87,6 +87,9 @@ export interface ChatViewProps {
   queuedMessages?: QueuedMessage[];
   /** Remove a queued message before it is sent */
   onRemoveQueuedMessage?: (id: string) => void;
+  /** True while a turn is in flight, so further sends queue. Stays true across
+   *  tool rounds (unlike `isStreaming`); drives the Send/Queue button label. */
+  isQueuing?: boolean;
 }
 
 export function ChatView({
@@ -111,6 +114,7 @@ export function ChatView({
   vectorStoreOwnerId,
   queuedMessages,
   onRemoveQueuedMessage,
+  isQueuing = false,
 }: ChatViewProps) {
   // Subscribe to stores
   const selectedInstances = useSelectedInstances();
@@ -276,6 +280,7 @@ export function ChatView({
             onSend={onSendMessage}
             onStop={onStopStreaming}
             isStreaming={isStreaming}
+            isQueuing={isQueuing}
             disabled={inputDisabled}
             noModelsSelected={selectedInstances.length === 0}
             noModelsAvailable={!isLoadingModels && availableModels.length === 0}

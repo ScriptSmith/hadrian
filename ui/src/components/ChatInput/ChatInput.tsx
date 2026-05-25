@@ -121,6 +121,10 @@ interface ChatInputProps {
   onStop?: () => void;
   onSettingsClick?: () => void;
   isStreaming?: boolean;
+  /** True while a turn is in flight (so a send queues instead of dispatching).
+   *  Stays true across tool rounds, unlike `isStreaming`, which flickers false
+   *  between them — used so the action button reliably reads "Queue". */
+  isQueuing?: boolean;
   disabled?: boolean;
   /** Whether no models are selected (shows a prominent hint overlay) */
   noModelsSelected?: boolean;
@@ -167,6 +171,7 @@ export function ChatInput({
   onStop,
   onSettingsClick,
   isStreaming = false,
+  isQueuing = false,
   disabled = false,
   noModelsSelected = false,
   noModelsAvailable = false,
@@ -775,9 +780,9 @@ export function ChatInput({
               onClick={handleSubmit}
               disabled={disabled || !canSend}
               variant="primary"
-              aria-label={isStreaming ? "Queue message" : "Send message"}
+              aria-label={isStreaming || isQueuing ? "Queue message" : "Send message"}
             >
-              {isStreaming ? "Queue" : "Send"}
+              {isStreaming || isQueuing ? "Queue" : "Send"}
               <Send className="h-3.5 w-3.5" />
             </Button>
           </div>

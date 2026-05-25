@@ -14,6 +14,7 @@ import { chatMessageQueue, type SendFn } from "./messageQueue";
  */
 export function useMessageQueue(send: SendFn) {
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
+  const [isBusy, setIsBusy] = useState(chatMessageQueue.isBusy);
 
   // Keep the singleton pointed at the latest send closure. In an effect (not in
   // the render phase) so a render that React starts but discards in concurrent
@@ -27,6 +28,12 @@ export function useMessageQueue(send: SendFn) {
 
   useEffect(() => chatMessageQueue.subscribe(setQueuedMessages), []);
 
+  // Track the busy flag reactively so the UI can label the action button to
+  // match the dispatch decision. `busy` stays true across a whole turn — unlike
+  // `isStreaming`, which flickers false between tool rounds — so a click during
+  // that window correctly reads as "Queue" rather than "Send".
+  useEffect(() => chatMessageQueue.subscribeBusy(setIsBusy), []);
+
   const sendOrQueue = useCallback(
     (content: string, files: ChatFile[]) => chatMessageQueue.sendOrQueue(content, files),
     []
@@ -36,5 +43,5 @@ export function useMessageQueue(send: SendFn) {
 
   const clearQueue = useCallback(() => chatMessageQueue.clear(), []);
 
-  return { queuedMessages, sendOrQueue, removeQueuedMessage, clearQueue };
+  return { queuedMessages, isBusy, sendOrQueue, removeQueuedMessage, clearQueue };
 }
