@@ -106,13 +106,22 @@ The chat UI is optimized for high-performance multi-model streaming:
 
 ### Streaming Features
 
-| Feature             | Description                                     |
-| ------------------- | ----------------------------------------------- |
-| Live markdown       | Content renders as markdown while streaming     |
-| Syntax highlighting | Code blocks highlighted in real-time            |
-| Auto-scroll         | Follows streaming content, pauses on scroll-up  |
-| Cancel              | Stop any or all streams mid-generation          |
-| Usage stats         | Time-to-first-token and tokens/second displayed |
+| Feature             | Description                                               |
+| ------------------- | --------------------------------------------------------- |
+| Live markdown       | Content renders as markdown while streaming               |
+| Syntax highlighting | Code blocks highlighted in real-time                      |
+| Auto-scroll         | Follows streaming content, pauses on scroll-up            |
+| Cancel              | Stop any or all streams mid-generation                    |
+| Message queue       | Keep typing and queue follow-ups while a response streams |
+| Usage stats         | Time-to-first-token and tokens/second displayed           |
+
+### Message Queue
+
+You don't have to wait for a response to finish before composing the next message. While a
+response is streaming, the input stays editable and the send button changes to **Queue** —
+queued messages appear as removable chips above the input and are sent one at a time as each
+turn (including any tool-execution rounds) completes. A separate **Stop** button remains
+available to cancel the in-flight response without affecting queued messages.
 
 ### Usage Statistics
 

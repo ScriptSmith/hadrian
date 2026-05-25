@@ -78,6 +78,42 @@ Key selectors:
 3. **New callbacks?** → Wrap in `useCallback` with tight dependencies
 4. **New selectors?** → Create surgical selector hooks in the store file
 
+## Message Queue (sending while streaming)
+
+The input stays editable while a response streams. An **idle** send goes out immediately; a send
+issued **while a turn is in flight** is queued and dispatched when the current turn completes.
+
+- The queue is a plain, framework-agnostic class: `pages/chat/messageQueue.ts` (`MessageQueue`),
+  used as an **app-wide singleton** (`chatMessageQueue`) and wrapped by the `useMessageQueue` hook.
+  `ChatPage` calls `sendOrQueue(content, files)`; the hook exposes `queuedMessages` +
+  `removeQueuedMessage` + `clearQueue`, threaded through `ChatView` to `ChatInput`, which renders
+  removable chips above the input. The class is unit-tested in
+  `pages/chat/__tests__/messageQueue.test.ts`.
+- **Why a singleton, not component state:** the first message of a conversation navigates `/chat` →
+  `/chat/:id` (two separate `<Route>` elements), which **remounts `ChatPage`**. The first turn's
+  stream is *not* aborted on unmount (useChat has no unmount cleanup), so it keeps running on the
+  global stores. Component-scoped queue state would reset the in-flight lock on the remounted
+  instance, and a queued message would start a **second turn concurrently** — two `initStreaming`
+  calls for one model render two side-by-side responses ("the whole thing restarts"). The singleton
+  keeps the lock alive across the remount. The hook pushes the latest `sendMessage` in via
+  `setSend` every render and subscribes for queue updates; `ChatPage` calls `clearQueue()` on a real
+  conversation switch (skipping the create transition) so queued messages don't leak across
+  conversations.
+- `useChat`'s `sendMessage` is **async and resolves only when the whole turn completes** (including
+  multi-round tool execution). Serialization keys off that promise. Do **not** drive the queue off
+  `isStreaming` transitions — `isStreaming` briefly flips false *between* tool rounds (see the
+  comment near `useChat.ts` "more rounds coming"), which would dispatch the next message mid-turn
+  and clobber the in-flight stream (`initStreaming` resets the streaming store).
+- Only queue when busy. Routing the **first/idle** send through a long-lived drain loop is fragile:
+  that send also creates the conversation and navigates (`/chat` → `/chat/:id`), and coupling the
+  queue lock to that lifecycle caused ordering/stuck-queue bugs. Idle sends now bypass the queue
+  entirely (no chip), matching pre-queue behavior.
+- `MessageQueue` reads `send` through a getter so each dispatch uses the latest `sendMessage`
+  closure (picks up model/tool/config changes made while draining). A failed turn is caught so it
+  never strands the rest of the queue or leaves the queue stuck busy.
+- **Stop** is a separate button (shown only while streaming) that aborts the in-flight response; it
+  does not clear the queue. Remove queued messages via their chip's ✕.
+
 ## Model Instances
 
 The chat supports **model instances** — multiple copies of the same model with different settings (e.g., compare GPT-4 with temperature 0.3 vs 0.9):

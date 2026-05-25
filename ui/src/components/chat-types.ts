@@ -872,6 +872,17 @@ export interface ChatFile {
   preview?: string;
 }
 
+/**
+ * A message the user composed while a response was still streaming. Queued
+ * messages are sent one at a time as each in-flight turn completes (see the
+ * queue drain in `ChatPage`).
+ */
+export interface QueuedMessage {
+  id: string;
+  content: string;
+  files: ChatFile[];
+}
+
 export interface Conversation {
   id: string;
   /** Server-assigned ID after sync (may differ from local id) */

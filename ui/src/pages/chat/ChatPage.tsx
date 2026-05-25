@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { apiV1ModelsOptions } from "@/api/generated/@tanstack/react-query.gen";
 import { ChatView, type ChatFile } from "@/components/ChatView/ChatView";
+import { useMessageQueue } from "./useMessageQueue";
 import { ErrorBoundary } from "@/components/ErrorBoundary/ErrorBoundary";
 import { useConversationsContext } from "@/components/ConversationsProvider/ConversationsProvider";
 import {
@@ -256,6 +257,30 @@ export default function ChatPage() {
   const [forkModalOpen, setForkModalOpen] = useState(false);
   const [forkMessageId, setForkMessageId] = useState<string | undefined>(undefined);
 
+  // Message queue: lets the user keep composing (and hit "send") while a
+  // response is still streaming. An idle send goes out immediately; a send
+  // issued mid-turn is queued and dispatched when the turn completes. See
+  // `MessageQueue` for why serialization keys off the `sendMessage` promise
+  // rather than `isStreaming` (which flickers between tool rounds).
+  const { queuedMessages, isBusy, sendOrQueue, removeQueuedMessage, clearQueue } =
+    useMessageQueue(sendMessage);
+
+  // Drop pending queued messages when leaving the conversation they were queued
+  // for, so the singleton doesn't drain them through a different conversation's
+  // send context. The cleanup fires on a same-route switch (/chat/:idA →
+  // /chat/:idB, where the id dep changes) and on a remount that unmounts this
+  // instance (/chat/:id → /chat via "New Chat"), using the id captured at setup.
+  // The create transition (/chat → /chat/:id) unmounts the conversation-less
+  // /chat instance, whose captured id is undefined, so a queued follow-up is
+  // preserved. The local→remote URL flip keeps currentConversation.id stable, so
+  // the dep doesn't change and the queue survives it.
+  useEffect(() => {
+    const id = currentConversation?.id;
+    return () => {
+      if (id !== undefined) clearQueue();
+    };
+  }, [currentConversation?.id, clearQueue]);
+
   const handleSendMessage = useCallback(
     (content: string, files?: ChatFile[]) => {
       if (!currentConversation) {
@@ -267,9 +292,9 @@ export default function ChatPage() {
         navigate(`/chat/${newConv.id}`, { replace: true });
         setPendingProject({ id: null });
       }
-      sendMessage(content, files ?? []);
+      sendOrQueue(content, files ?? []);
     },
-    [currentConversation, createConversation, navigate, selectedModels, sendMessage, pendingProject]
+    [currentConversation, createConversation, navigate, selectedModels, pendingProject, sendOrQueue]
   );
 
   // Handle regeneration of a single model response
@@ -353,6 +378,9 @@ export default function ChatPage() {
           pendingProjectId={pendingProject.id}
           onEditAndRerun={editAndRerun}
           onRespondMcpApproval={respondToMcpApproval}
+          queuedMessages={queuedMessages}
+          onRemoveQueuedMessage={removeQueuedMessage}
+          isQueuing={isBusy}
         />
       </ErrorBoundary>
       {currentConversation && (

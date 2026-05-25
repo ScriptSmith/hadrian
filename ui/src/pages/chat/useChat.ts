@@ -225,7 +225,8 @@ interface UseChatReturn {
   messages: ChatMessage[];
   modelResponses: ModelResponse[];
   isStreaming: boolean;
-  sendMessage: (content: string, files: ChatFile[]) => void;
+  /** Resolves when the turn fully completes (including multi-round tool execution). */
+  sendMessage: (content: string, files: ChatFile[]) => Promise<void>;
   stopStreaming: () => void;
   clearMessages: () => void;
   /** Set messages directly. For functional updates, use the conversation store's actions. */
