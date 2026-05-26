@@ -315,18 +315,24 @@ fn serialize_payload_for_storage(
     value
 }
 
-/// Rewrite the top-level `id` of a non-streaming Responses-API JSON body to the
-/// persisted `resp_…` id. The upstream provider returns its own message id
-/// (`msg_…`, `gen-…`), but the gateway is the system of record: the id the
-/// client gets back must be the one `GET /v1/responses/{id}` and
-/// `previous_response_id` chaining resolve against. Output *item* ids are left
-/// untouched. On parse failure the original bytes are returned unchanged.
+/// Restore the gateway-owned echo fields on a non-streaming Responses-API JSON
+/// body: the top-level `id` (→ persisted `resp_…` id that `GET` and
+/// `previous_response_id` chaining resolve against), `store`, and
+/// `previous_response_id`. The upstream provider can't echo these correctly —
+/// it returns its own message id (`msg_…`, `gen-…`), `store` is forced false
+/// upstream, and `previous_response_id` is stripped before dispatch. Output
+/// *item* ids are left untouched. Shares `apply_echo_fields` with the streaming
+/// path. On parse failure the original bytes are returned unchanged.
 #[cfg(feature = "server")]
-fn rewrite_response_top_level_id(body: Vec<u8>, resp_id: &str) -> Vec<u8> {
+fn apply_response_echo_fields(
+    body: Vec<u8>,
+    resp_id: &str,
+    echo: &crate::services::response_persister::ResponseEchoFields,
+) -> Vec<u8> {
     match serde_json::from_slice::<serde_json::Value>(&body) {
-        Ok(mut value) if value.get("id").is_some() => {
-            value["id"] = serde_json::Value::String(resp_id.to_string());
-            serde_json::to_vec(&value).unwrap_or(body)
+        Ok(serde_json::Value::Object(mut obj)) => {
+            crate::services::response_persister::apply_echo_fields(&mut obj, resp_id, echo);
+            serde_json::to_vec(&serde_json::Value::Object(obj)).unwrap_or(body)
         }
         _ => body,
     }
@@ -2341,6 +2347,11 @@ pub async fn api_v1_responses(
                         org_id: row_org,
                         initial_sequence_number: record.last_sequence_number,
                         cancel_rx,
+                        // Echo the caller's intent, not the values we forced
+                        // upstream. Persistence only runs when store != false,
+                        // so the echoed store is always true here.
+                        store_echo: payload.store.unwrap_or(true),
+                        previous_response_id_echo: original_previous_response_id.clone(),
                     })
                 }
                 Err(e) => {
@@ -2555,15 +2566,19 @@ pub async fn api_v1_responses(
                     });
                 }
 
-                // Hand the client back the persisted `resp_…` id (what GET and
-                // `previous_response_id` chaining resolve against) instead of
-                // the upstream provider's message id. Done after cache-store so
-                // the cache keeps the verbatim upstream body, and before
-                // persist (which reads `output`/`usage` only, not the id).
+                // Restore the gateway-owned echo fields (persisted `resp_…` id,
+                // the caller's `store` and `previous_response_id`) the upstream
+                // provider can't echo correctly. Done after cache-store so the
+                // cache keeps the verbatim upstream body, and before persist
+                // (which reads `output`/`usage` only, not these fields).
                 #[cfg(feature = "server")]
                 let body_vec = match persistence_id_and_org.as_ref() {
                     Some((resp_id, _)) if parts.status.is_success() => {
-                        rewrite_response_top_level_id(body_vec, resp_id)
+                        let echo = crate::services::response_persister::ResponseEchoFields {
+                            store: payload.store.unwrap_or(true),
+                            previous_response_id: original_previous_response_id.clone(),
+                        };
+                        apply_response_echo_fields(body_vec, resp_id, &echo)
                     }
                     _ => body_vec,
                 };

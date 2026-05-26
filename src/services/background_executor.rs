@@ -489,6 +489,19 @@ pub async fn execute_persisted_response(
             org_id: record.org_id,
             initial_sequence_number: record.last_sequence_number,
             cancel_rx,
+            // Echo the caller's intent from the persisted snapshot (which keeps
+            // the original `store` / `previous_response_id`, not the values we
+            // strip before dispatch). Persisted rows always had store != false.
+            store_echo: record
+                .request_payload
+                .get("store")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            previous_response_id_echo: record
+                .request_payload
+                .get("previous_response_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned),
         }),
     );
 
