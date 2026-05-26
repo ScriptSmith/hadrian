@@ -1532,7 +1532,12 @@ model_name = "secondary-model"
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["object"], "response");
-        assert!(body["id"].as_str().unwrap().starts_with("test-"));
+        // The request is stored (store defaults to true), so Hadrian — the
+        // system of record — returns its own persisted `resp_…` id (what GET and
+        // `previous_response_id` chaining resolve against), not the upstream
+        // test provider's `test-…` id.
+        let id = body["id"].as_str().unwrap();
+        assert!(id.starts_with("resp_"), "unexpected response id: {id}");
         assert_eq!(body["status"], "completed");
 
         // Validate output structure
