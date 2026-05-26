@@ -127,6 +127,13 @@ pub fn wrap_streaming_with_persistence(
                         } else {
                             event
                         };
+                        // Hand the client the persisted `resp_…` id on every
+                        // lifecycle event, not the upstream provider's message
+                        // id — same reason as the non-streaming path: it's the
+                        // id GET and `previous_response_id` chaining resolve
+                        // against. Output *item* ids are left untouched.
+                        let event = rewrite_response_id_in_event(&event, &response_id)
+                            .unwrap_or(event);
                         if final_response_object.is_none()
                             && let Some((resp_obj, status)) = inspect_terminal_event(&event)
                         {
@@ -366,6 +373,53 @@ fn inject_container_id_into_event(event: &[u8], container_id: &str) -> Option<By
     }
 }
 
+/// Rewrite a streamed lifecycle event's top-level `response.id` to the
+/// persisted `resp_…` id. Only events carrying a nested `response` object with
+/// an `id` (`response.created` / `.in_progress` / `.completed` / `.failed` /
+/// `.incomplete`) are touched; delta and item events pass through untouched, as
+/// do output *item* ids nested inside `response.output`. Returns `None` when
+/// nothing changed so the caller can forward the original frame.
+fn rewrite_response_id_in_event(event: &[u8], resp_id: &str) -> Option<Bytes> {
+    // Cheap pre-filter: skip the JSON parse unless a `"response"` key is
+    // present. The type value (e.g. `"response.output_text.delta"`) never
+    // matches the quoted-both-sides key form, so deltas short-circuit here.
+    const KEY: &[u8] = b"\"response\"";
+    if !event.windows(KEY.len()).any(|w| w == KEY) {
+        return None;
+    }
+    let s = std::str::from_utf8(event).ok()?;
+    let mut out = String::with_capacity(event.len() + resp_id.len());
+    let mut mutated = false;
+    for line in s.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if let Some(data) = trimmed.strip_prefix("data:") {
+            let data = data.trim_start();
+            if !data.is_empty()
+                && data != "[DONE]"
+                && let Ok(mut json) = serde_json::from_str::<Value>(data)
+                && let Some(resp) = json.get_mut("response").and_then(|r| r.as_object_mut())
+                && resp
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|id| id != resp_id)
+            {
+                resp.insert("id".to_string(), Value::String(resp_id.to_string()));
+                out.push_str("data: ");
+                out.push_str(&serde_json::to_string(&json).ok()?);
+                if line.ends_with("\r\n") {
+                    out.push_str("\r\n");
+                } else if line.ends_with('\n') {
+                    out.push('\n');
+                }
+                mutated = true;
+                continue;
+            }
+        }
+        out.push_str(line);
+    }
+    mutated.then(|| Bytes::from(out))
+}
+
 /// Recognise an SSE event that terminates the response and carries the
 /// full final object. The Responses API emits one of:
 ///   data: {"type":"response.completed","response":{...}}
@@ -517,6 +571,24 @@ mod tests {
     fn ignores_non_terminal_events() {
         let raw = b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n";
         assert!(inspect_terminal_event(raw).is_none());
+    }
+
+    #[test]
+    fn rewrites_lifecycle_event_response_id() {
+        let raw = b"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"msg_upstream\",\"output\":[{\"id\":\"msg_upstream\",\"type\":\"message\"}]}}\n\n";
+        let out = rewrite_response_id_in_event(raw, "resp_hadrian").expect("should rewrite");
+        let s = std::str::from_utf8(&out).unwrap();
+        let json: Value = serde_json::from_str(s.trim().strip_prefix("data: ").unwrap()).unwrap();
+        // Top-level response id is rewritten...
+        assert_eq!(json["response"]["id"], "resp_hadrian");
+        // ...but the nested output *item* id is left untouched.
+        assert_eq!(json["response"]["output"][0]["id"], "msg_upstream");
+    }
+
+    #[test]
+    fn leaves_delta_events_untouched() {
+        let raw = b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n";
+        assert!(rewrite_response_id_in_event(raw, "resp_hadrian").is_none());
     }
 
     #[test]

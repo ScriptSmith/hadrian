@@ -48,6 +48,8 @@ pub mod response_event_buffer;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod response_persister;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod responses_chain;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod responses_pipeline;
 #[cfg(not(target_arch = "wasm32"))]
 mod responses_store;

@@ -315,6 +315,23 @@ fn serialize_payload_for_storage(
     value
 }
 
+/// Rewrite the top-level `id` of a non-streaming Responses-API JSON body to the
+/// persisted `resp_…` id. The upstream provider returns its own message id
+/// (`msg_…`, `gen-…`), but the gateway is the system of record: the id the
+/// client gets back must be the one `GET /v1/responses/{id}` and
+/// `previous_response_id` chaining resolve against. Output *item* ids are left
+/// untouched. On parse failure the original bytes are returned unchanged.
+#[cfg(feature = "server")]
+fn rewrite_response_top_level_id(body: Vec<u8>, resp_id: &str) -> Vec<u8> {
+    match serde_json::from_slice::<serde_json::Value>(&body) {
+        Ok(mut value) if value.get("id").is_some() => {
+            value["id"] = serde_json::Value::String(resp_id.to_string());
+            serde_json::to_vec(&value).unwrap_or(body)
+        }
+        _ => body,
+    }
+}
+
 /// Walk a serialized payload, replacing every `input_file.file_data`
 /// (a base64 data URL) with a small `{ "_omitted": "..."}` marker.
 fn strip_input_file_data(value: &mut serde_json::Value) {
@@ -1899,6 +1916,62 @@ pub async fn api_v1_responses(
     // content to anyone with GET access in the same org.
     #[cfg(feature = "server")]
     let original_instructions = payload.instructions.clone();
+
+    // Server-side conversation reconstruction for `previous_response_id`.
+    // Hadrian is the system of record, so it rebuilds the prior transcript from
+    // its store and prepends it to this turn's input, then strips
+    // `previous_response_id` so nothing is forwarded upstream (providers can't
+    // resolve a Hadrian id, and stateless passthroughs have no chaining at
+    // all). The originals are stashed and restored on the persisted snapshot so
+    // each row stores only its own turn — the next turn walks the chain. When
+    // there's no store/org we can't reconstruct, so the field is left intact
+    // for a natively-stateful upstream to handle.
+    #[cfg(feature = "server")]
+    let original_input = payload.input.clone();
+    #[cfg(feature = "server")]
+    let original_previous_response_id = payload.previous_response_id.clone();
+    #[cfg(feature = "server")]
+    if let (Some(prev_id), Some(store), Some(org_id)) = (
+        payload.previous_response_id.clone(),
+        state.responses_store.as_ref(),
+        principal.org_id,
+    ) {
+        let reconstructed = crate::services::responses_chain::reconstruct_input(
+            store,
+            org_id,
+            &prev_id,
+            payload.input.take(),
+        )
+        .await
+        .map_err(|e| {
+            use crate::services::responses_chain::ChainError;
+            match e {
+                ChainError::NotFound(_) => ApiError::new(
+                    StatusCode::NOT_FOUND,
+                    "previous_response_not_found",
+                    "The `previous_response_id` does not reference a stored response",
+                ),
+                ChainError::TooDeep => ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "conversation_too_long",
+                    "The conversation chain is too long to reconstruct",
+                ),
+                ChainError::Store(ref err) => {
+                    tracing::error!(error = %err, prev_id = %prev_id, "previous_response lookup failed");
+                    ApiError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "previous_response_lookup_failed",
+                        "Failed to load the previous response",
+                    )
+                }
+            }
+        })?;
+        payload.input = Some(crate::api_types::responses::ResponsesInput::Items(
+            reconstructed,
+        ));
+        payload.previous_response_id = None;
+    }
+
     #[cfg(feature = "server")]
     let mounted_skills = crate::services::responses_pipeline::resolve_and_inject_skills(
         &state,
@@ -2251,6 +2324,12 @@ pub async fn api_v1_responses(
                 request_payload: {
                     let mut snapshot = payload.clone();
                     snapshot.instructions = original_instructions.clone();
+                    // Persist only this turn's own input + the chain link, not
+                    // the reconstructed transcript, so chain-walking on the
+                    // next turn doesn't double-count and GET reflects what the
+                    // caller actually sent.
+                    snapshot.input = original_input.clone();
+                    snapshot.previous_response_id = original_previous_response_id.clone();
                     serialize_payload_for_storage(&snapshot)
                 },
                 retention_expires_at: store.retention_expires_at(now),
@@ -2475,6 +2554,19 @@ pub async fn api_v1_responses(
                             .await;
                     });
                 }
+
+                // Hand the client back the persisted `resp_…` id (what GET and
+                // `previous_response_id` chaining resolve against) instead of
+                // the upstream provider's message id. Done after cache-store so
+                // the cache keeps the verbatim upstream body, and before
+                // persist (which reads `output`/`usage` only, not the id).
+                #[cfg(feature = "server")]
+                let body_vec = match persistence_id_and_org.as_ref() {
+                    Some((resp_id, _)) if parts.status.is_success() => {
+                        rewrite_response_top_level_id(body_vec, resp_id)
+                    }
+                    _ => body_vec,
+                };
 
                 // Persist the non-streaming response now that the body
                 // is materialized. Streaming responses are persisted by

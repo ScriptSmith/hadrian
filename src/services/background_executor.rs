@@ -147,6 +147,26 @@ pub async fn execute_persisted_response(
     // `background` flag stays — the executor inspects it nowhere in
     // the inner pipeline, but downstream tooling can read it.
 
+    // Reconstruct conversation history from `previous_response_id` the same way
+    // the foreground handler does (the background early-return happens before
+    // that step, so the queued row still carries the original chain link).
+    // Hadrian owns chaining for every provider, so this must run here too or
+    // background turns would lose all prior context.
+    if let Some(prev_id) = payload.previous_response_id.clone() {
+        let reconstructed = crate::services::responses_chain::reconstruct_input(
+            &store,
+            record.org_id,
+            &prev_id,
+            payload.input.take(),
+        )
+        .await
+        .map_err(|e| BackgroundExecuteError::BadPayload(format!("previous_response_id: {e}")))?;
+        payload.input = Some(crate::api_types::responses::ResponsesInput::Items(
+            reconstructed,
+        ));
+        payload.previous_response_id = None;
+    }
+
     // Route the model.
     let routed = route_models_extended(
         payload.model.as_deref(),
