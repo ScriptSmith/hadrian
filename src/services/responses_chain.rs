@@ -48,6 +48,15 @@ pub enum ChainError {
     /// Store/DB failure while walking the chain.
     #[error("failed to load previous response: {0}")]
     Store(ResponsesStoreError),
+    /// A stored row in the chain has a present `input`/`output` field that no
+    /// longer deserializes (data corruption or schema drift — e.g. an old
+    /// binary reading a row with a newer output-item type). We refuse to
+    /// silently drop the turn: dropping it would feed the model a transcript
+    /// with unanswered messages, which it tends to repeat or hallucinate
+    /// around. Surfaced loudly so operators can catch the integrity/schema
+    /// issue instead of shipping invisible model-visible corruption.
+    #[error("stored response '{id}' has an unreadable `{field}` field")]
+    CorruptRecord { id: String, field: &'static str },
 }
 
 /// Convert a stored response's `input` snapshot into input items. Bare-string
@@ -97,17 +106,43 @@ fn parent_of(record: &ResponseRecord) -> Option<String> {
 
 /// Expand one stored turn into its input items: the caller's input for that
 /// turn followed by the assistant's output items.
-fn record_to_items(record: &ResponseRecord, out: &mut Vec<ResponsesInputItem>) {
-    if let Some(input) = record.request_payload.get("input").cloned()
-        && let Ok(parsed) = serde_json::from_value::<ResponsesInput>(input)
-    {
+///
+/// An absent `input`/`output` (`None`) is legitimate (e.g. a failed turn has no
+/// output) and skipped. A field that is *present* but fails to deserialize is a
+/// hard error — see [`ChainError::CorruptRecord`] — rather than a silent drop.
+fn record_to_items(
+    record: &ResponseRecord,
+    out: &mut Vec<ResponsesInputItem>,
+) -> Result<(), ChainError> {
+    if let Some(input) = record.request_payload.get("input").cloned() {
+        let parsed = serde_json::from_value::<ResponsesInput>(input).map_err(|e| {
+            tracing::error!(
+                response_id = %record.id,
+                error = %e,
+                "stored response has an unreadable `input` field; refusing to reconstruct a corrupt transcript"
+            );
+            ChainError::CorruptRecord {
+                id: record.id.clone(),
+                field: "input",
+            }
+        })?;
         out.extend(input_to_items(parsed));
     }
-    if let Some(output) = record.output.clone()
-        && let Ok(items) = serde_json::from_value::<Vec<ResponsesOutputItem>>(output)
-    {
+    if let Some(output) = record.output.clone() {
+        let items = serde_json::from_value::<Vec<ResponsesOutputItem>>(output).map_err(|e| {
+            tracing::error!(
+                response_id = %record.id,
+                error = %e,
+                "stored response has an unreadable `output` field; refusing to reconstruct a corrupt transcript"
+            );
+            ChainError::CorruptRecord {
+                id: record.id.clone(),
+                field: "output",
+            }
+        })?;
         out.extend(items.into_iter().map(output_item_to_input));
     }
+    Ok(())
 }
 
 /// Rebuild the full input for a new turn that chains off `previous_response_id`.
@@ -142,7 +177,7 @@ pub async fn reconstruct_input(
     // Replay oldest → newest.
     let mut items = Vec::new();
     for record in chain.iter().rev() {
-        record_to_items(record, &mut items);
+        record_to_items(record, &mut items)?;
     }
     if let Some(current) = current_input {
         items.extend(input_to_items(current));
@@ -216,7 +251,7 @@ mod tests {
     fn record_expands_to_input_then_output() {
         let r = record("resp_1", None, json!("Hi?"), assistant_output("Hello!"));
         let mut items = Vec::new();
-        record_to_items(&r, &mut items);
+        record_to_items(&r, &mut items).expect("valid record");
         // user "Hi?" then assistant "Hello!"
         assert_eq!(items.len(), 2);
         let user = serde_json::to_value(&items[0]).unwrap();
@@ -224,6 +259,22 @@ mod tests {
         let asst = serde_json::to_value(&items[1]).unwrap();
         assert_eq!(asst["role"], "assistant");
         assert_eq!(asst["content"][0]["text"], "Hello!");
+    }
+
+    #[test]
+    fn unreadable_output_is_a_hard_error_not_a_silent_drop() {
+        // A present-but-unparseable `output` (here: not even an array) must
+        // error rather than silently dropping the assistant turn.
+        let r = record("resp_bad", None, json!("Hi?"), json!("not-an-array"));
+        let mut items = Vec::new();
+        let err = record_to_items(&r, &mut items).expect_err("should reject corrupt output");
+        assert!(matches!(
+            err,
+            ChainError::CorruptRecord {
+                field: "output",
+                ..
+            }
+        ));
     }
 
     #[test]

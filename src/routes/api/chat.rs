@@ -1970,6 +1970,14 @@ pub async fn api_v1_responses(
                         "Failed to load the previous response",
                     )
                 }
+                // Already logged with the offending response id in
+                // `record_to_items`; surface as a 500 so the corruption is
+                // visible rather than silently dropped from the transcript.
+                ChainError::CorruptRecord { .. } => ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "previous_response_corrupt",
+                    "A response in the conversation history could not be read",
+                ),
             }
         })?;
         payload.input = Some(crate::api_types::responses::ResponsesInput::Items(

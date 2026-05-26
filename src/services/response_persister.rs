@@ -31,6 +31,16 @@ use crate::{
     streaming::SseBuffer,
 };
 
+/// Request-derived fields the gateway restores on the streamed/persisted
+/// response. The upstream provider can't echo these correctly — `store` is
+/// forced to false upstream and `previous_response_id` is stripped before
+/// dispatch — so we re-inject the caller's intent on every lifecycle event.
+#[derive(Debug, Clone)]
+pub struct ResponseEchoFields {
+    pub store: bool,
+    pub previous_response_id: Option<String>,
+}
+
 /// Wrap a streaming Responses-API HTTP response so the final state
 /// gets persisted to the `responses` table when the stream terminates.
 ///
@@ -42,16 +52,9 @@ use crate::{
 /// (background retries, hypothetical resume) continue the sequence
 /// instead of restarting at 0 and colliding on the (response_id,
 /// sequence_number) primary key.
-/// Request-derived fields the gateway restores on the streamed/persisted
-/// response. The upstream provider can't echo these correctly — `store` is
-/// forced to false upstream and `previous_response_id` is stripped before
-/// dispatch — so we re-inject the caller's intent on every lifecycle event.
-#[derive(Debug, Clone)]
-pub struct ResponseEchoFields {
-    pub store: bool,
-    pub previous_response_id: Option<String>,
-}
-
+// Each argument is a distinct piece of per-response wiring; bundling them
+// behind a struct would just move the noise around.
+#[allow(clippy::too_many_arguments)]
 pub fn wrap_streaming_with_persistence(
     response: Response<Body>,
     store: Arc<ResponsesStore>,
