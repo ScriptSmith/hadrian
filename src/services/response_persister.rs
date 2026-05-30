@@ -31,6 +31,16 @@ use crate::{
     streaming::SseBuffer,
 };
 
+/// Request-derived fields the gateway restores on the streamed/persisted
+/// response. The upstream provider can't echo these correctly — `store` is
+/// forced to false upstream and `previous_response_id` is stripped before
+/// dispatch — so we re-inject the caller's intent on every lifecycle event.
+#[derive(Debug, Clone)]
+pub struct ResponseEchoFields {
+    pub store: bool,
+    pub previous_response_id: Option<String>,
+}
+
 /// Wrap a streaming Responses-API HTTP response so the final state
 /// gets persisted to the `responses` table when the stream terminates.
 ///
@@ -42,6 +52,9 @@ use crate::{
 /// (background retries, hypothetical resume) continue the sequence
 /// instead of restarting at 0 and colliding on the (response_id,
 /// sequence_number) primary key.
+// Each argument is a distinct piece of per-response wiring; bundling them
+// behind a struct would just move the noise around.
+#[allow(clippy::too_many_arguments)]
 pub fn wrap_streaming_with_persistence(
     response: Response<Body>,
     store: Arc<ResponsesStore>,
@@ -50,6 +63,7 @@ pub fn wrap_streaming_with_persistence(
     initial_sequence_number: i64,
     mut cancel_rx: CancelSignal,
     event_buffer: Option<Arc<ResponseEventBuffer>>,
+    echo: ResponseEchoFields,
 ) -> Response<Body> {
     let (parts, body) = response.into_parts();
     let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
@@ -127,6 +141,14 @@ pub fn wrap_streaming_with_persistence(
                         } else {
                             event
                         };
+                        // Restore the gateway-owned echo fields on every
+                        // lifecycle event: the persisted `resp_…` id (not the
+                        // upstream message id) that GET and `previous_response_id`
+                        // chaining resolve against, plus the caller's `store` and
+                        // `previous_response_id` values that were forced/stripped
+                        // before dispatch. Output *item* ids are left untouched.
+                        let event = rewrite_lifecycle_echo_fields(&event, &response_id, &echo)
+                            .unwrap_or(event);
                         if final_response_object.is_none()
                             && let Some((resp_obj, status)) = inspect_terminal_event(&event)
                         {
@@ -366,6 +388,88 @@ fn inject_container_id_into_event(event: &[u8], container_id: &str) -> Option<By
     }
 }
 
+/// Restore gateway-owned echo fields on a streamed lifecycle event's nested
+/// `response` object: the top-level `id` (→ persisted `resp_…` id), `store`,
+/// and `previous_response_id`. Only events carrying a `response` object
+/// (`response.created` / `.in_progress` / `.completed` / `.failed` /
+/// `.incomplete`) are touched; delta and item events pass through untouched, as
+/// do output *item* ids nested inside `response.output`. Returns `None` when
+/// nothing changed so the caller can forward the original frame.
+fn rewrite_lifecycle_echo_fields(
+    event: &[u8],
+    resp_id: &str,
+    echo: &ResponseEchoFields,
+) -> Option<Bytes> {
+    // Cheap pre-filter: skip the JSON parse unless a `"response"` key is
+    // present. The type value (e.g. `"response.output_text.delta"`) never
+    // matches the quoted-both-sides key form, so deltas short-circuit here.
+    const KEY: &[u8] = b"\"response\"";
+    if !event.windows(KEY.len()).any(|w| w == KEY) {
+        return None;
+    }
+    let s = std::str::from_utf8(event).ok()?;
+    let mut out = String::with_capacity(event.len() + resp_id.len());
+    let mut mutated = false;
+    for line in s.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if let Some(data) = trimmed.strip_prefix("data:") {
+            let data = data.trim_start();
+            if !data.is_empty()
+                && data != "[DONE]"
+                && let Ok(mut json) = serde_json::from_str::<Value>(data)
+                && let Some(resp) = json.get_mut("response").and_then(|r| r.as_object_mut())
+                && apply_echo_fields(resp, resp_id, echo)
+            {
+                out.push_str("data: ");
+                out.push_str(&serde_json::to_string(&json).ok()?);
+                if line.ends_with("\r\n") {
+                    out.push_str("\r\n");
+                } else if line.ends_with('\n') {
+                    out.push('\n');
+                }
+                mutated = true;
+                continue;
+            }
+        }
+        out.push_str(line);
+    }
+    mutated.then(|| Bytes::from(out))
+}
+
+/// Overwrite the gateway-owned echo fields on a `response` object in place,
+/// returning whether anything changed. Shared by the streaming + non-streaming
+/// paths so both restore exactly the same fields. `id` is only rewritten when
+/// the object already carries one (some early events may omit it).
+pub(crate) fn apply_echo_fields(
+    resp: &mut serde_json::Map<String, Value>,
+    resp_id: &str,
+    echo: &ResponseEchoFields,
+) -> bool {
+    let mut changed = false;
+    if resp
+        .get("id")
+        .and_then(|v| v.as_str())
+        .is_some_and(|id| id != resp_id)
+    {
+        resp.insert("id".to_string(), Value::String(resp_id.to_string()));
+        changed = true;
+    }
+    let store = Value::Bool(echo.store);
+    if resp.get("store") != Some(&store) {
+        resp.insert("store".to_string(), store);
+        changed = true;
+    }
+    let prev = echo
+        .previous_response_id
+        .as_ref()
+        .map_or(Value::Null, |p| Value::String(p.clone()));
+    if resp.get("previous_response_id") != Some(&prev) {
+        resp.insert("previous_response_id".to_string(), prev);
+        changed = true;
+    }
+    changed
+}
+
 /// Recognise an SSE event that terminates the response and carries the
 /// full final object. The Responses API emits one of:
 ///   data: {"type":"response.completed","response":{...}}
@@ -517,6 +621,35 @@ mod tests {
     fn ignores_non_terminal_events() {
         let raw = b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n";
         assert!(inspect_terminal_event(raw).is_none());
+    }
+
+    #[test]
+    fn rewrites_lifecycle_event_echo_fields() {
+        let echo = ResponseEchoFields {
+            store: true,
+            previous_response_id: Some("resp_parent".to_string()),
+        };
+        let raw = b"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"msg_upstream\",\"store\":false,\"previous_response_id\":null,\"output\":[{\"id\":\"msg_upstream\",\"type\":\"message\"}]}}\n\n";
+        let out =
+            rewrite_lifecycle_echo_fields(raw, "resp_hadrian", &echo).expect("should rewrite");
+        let s = std::str::from_utf8(&out).unwrap();
+        let json: Value = serde_json::from_str(s.trim().strip_prefix("data: ").unwrap()).unwrap();
+        // Top-level echo fields are restored to the caller's intent...
+        assert_eq!(json["response"]["id"], "resp_hadrian");
+        assert_eq!(json["response"]["store"], true);
+        assert_eq!(json["response"]["previous_response_id"], "resp_parent");
+        // ...but the nested output *item* id is left untouched.
+        assert_eq!(json["response"]["output"][0]["id"], "msg_upstream");
+    }
+
+    #[test]
+    fn leaves_delta_events_untouched() {
+        let echo = ResponseEchoFields {
+            store: true,
+            previous_response_id: None,
+        };
+        let raw = b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n";
+        assert!(rewrite_lifecycle_echo_fields(raw, "resp_hadrian", &echo).is_none());
     }
 
     #[test]

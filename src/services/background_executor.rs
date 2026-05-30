@@ -147,6 +147,31 @@ pub async fn execute_persisted_response(
     // `background` flag stays — the executor inspects it nowhere in
     // the inner pipeline, but downstream tooling can read it.
 
+    // Reconstruct conversation history from `previous_response_id` the same way
+    // the foreground handler does (the background early-return happens before
+    // that step, so the queued row still carries the original chain link).
+    // Hadrian owns chaining for every provider, so this must run here too or
+    // background turns would lose all prior context.
+    //
+    // Stash the original chain link before reconstruction clears it: the
+    // skills-union and container_id_hint lookups below still need it to resolve
+    // which container this turn chains off of.
+    let original_previous_response_id = payload.previous_response_id.clone();
+    if let Some(prev_id) = payload.previous_response_id.clone() {
+        let reconstructed = crate::services::responses_chain::reconstruct_input(
+            &store,
+            record.org_id,
+            &prev_id,
+            payload.input.take(),
+        )
+        .await
+        .map_err(|e| BackgroundExecuteError::BadPayload(format!("previous_response_id: {e}")))?;
+        payload.input = Some(crate::api_types::responses::ResponsesInput::Items(
+            reconstructed,
+        ));
+        payload.previous_response_id = None;
+    }
+
     // Route the model.
     let routed = route_models_extended(
         payload.model.as_deref(),
@@ -198,7 +223,7 @@ pub async fn execute_persisted_response(
     if let Some(svc) = state.containers_service.as_ref() {
         let candidate_container_id: Option<String> = match (
             resolved_shell_env_pre.referenced_container_id.as_deref(),
-            payload.previous_response_id.as_deref(),
+            original_previous_response_id.as_deref(),
         ) {
             (Some(referenced), _) => Some(referenced.to_string()),
             (None, Some(prev)) => store
@@ -375,9 +400,10 @@ pub async fn execute_persisted_response(
     } else {
         // Implicit chaining via `previous_response_id`. Any
         // non-active prior container silently falls back to a fresh
-        // one rather than erroring.
+        // one rather than erroring. Reconstruction cleared
+        // `payload.previous_response_id`, so use the stashed original.
         match (
-            payload.previous_response_id.as_deref(),
+            original_previous_response_id.as_deref(),
             state.containers_service.as_ref(),
         ) {
             (Some(prev_id), Some(containers_svc)) => {
@@ -469,6 +495,19 @@ pub async fn execute_persisted_response(
             org_id: record.org_id,
             initial_sequence_number: record.last_sequence_number,
             cancel_rx,
+            // Echo the caller's intent from the persisted snapshot (which keeps
+            // the original `store` / `previous_response_id`, not the values we
+            // strip before dispatch). Persisted rows always had store != false.
+            store_echo: record
+                .request_payload
+                .get("store")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            previous_response_id_echo: record
+                .request_payload
+                .get("previous_response_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned),
         }),
     );
 

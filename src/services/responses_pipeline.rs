@@ -635,6 +635,10 @@ pub fn apply_streaming_pipeline(
             handle.initial_sequence_number,
             handle.cancel_rx,
             state.response_event_buffer.clone(),
+            crate::services::response_persister::ResponseEchoFields {
+                store: handle.store_echo,
+                previous_response_id: handle.previous_response_id_echo,
+            },
         )
     } else {
         after_tools
@@ -681,6 +685,14 @@ pub struct PersistenceHandle {
     /// primary key.
     pub initial_sequence_number: i64,
     pub cancel_rx: crate::services::CancelSignal,
+    /// `store` value to echo back to the client. The gateway forces
+    /// `store=false` upstream (it owns persistence), so the provider's
+    /// echoed value is meaningless — we restore what the caller asked for.
+    pub store_echo: bool,
+    /// `previous_response_id` to echo back. Stripped before dispatch (the
+    /// gateway reconstructs history itself), so without this the streamed +
+    /// retrieved response would always show `null` regardless of the request.
+    pub previous_response_id_echo: Option<String>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

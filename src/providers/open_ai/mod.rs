@@ -256,6 +256,12 @@ impl Provider for OpenAICompatibleProvider {
         let url = format!("{}/responses", self.base_url);
         let stream = payload.stream;
 
+        // Drop gateway-managed fields (store, background, models, provider,
+        // plugins, sovereignty_requirements, skills) that Hadrian consumes
+        // itself and the upstream must never see. See the method docs for why.
+        let mut payload = payload;
+        payload.strip_gateway_fields();
+
         // Pre-serialize before retry loop to avoid repeated serialization
         let body = serde_json::to_vec(&payload).unwrap_or_default();
 

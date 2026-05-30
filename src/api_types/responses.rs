@@ -3014,6 +3014,40 @@ pub fn build_streaming_response_json(
 }
 
 impl CreateResponsesPayload {
+    /// Strip gateway-managed fields before the payload is serialized and
+    /// forwarded to an OpenAI-compatible upstream provider (OpenAI, Azure,
+    /// OpenRouter, …).
+    ///
+    /// These fields are orchestration concerns that Hadrian consumes itself
+    /// and the upstream must never see:
+    ///
+    /// - `store` — Hadrian persists responses to its own DB under its own IDs.
+    ///   Forced to `false` (not omitted): OpenAI defaults `store` to `true`, so
+    ///   omitting it would make the upstream double-store, and strict backends
+    ///   like OpenRouter reject `store: true` outright.
+    /// - `background` — Hadrian runs background generation via its own job
+    ///   queue (`jobs/background_responses`), never delegated upstream.
+    /// - `models` — multi-model routing list, already resolved by the router.
+    /// - `provider` — Hadrian provider-routing config.
+    /// - `plugins` — Hadrian plugins.
+    /// - `sovereignty_requirements` — enforced by gateway middleware.
+    /// - `skills` — resolved into `instructions` + sandbox mounts before
+    ///   dispatch; the raw refs (incl. inline bundles) must not leak upstream.
+    ///
+    /// All of these are fully consumed in the route handler before dispatch, so
+    /// dropping them here is safe. Provider adapters that build their own
+    /// request structs (Anthropic, Bedrock, Vertex) never serialize the raw
+    /// payload, so this only matters for the OpenAI-compatible passthrough.
+    pub fn strip_gateway_fields(&mut self) {
+        self.store = Some(false);
+        self.background = None;
+        self.models = None;
+        self.provider = None;
+        self.plugins = None;
+        self.sovereignty_requirements = None;
+        self.skills = None;
+    }
+
     /// Produce a JSON map of echo fields for streaming response.completed events.
     pub fn echo_fields_json(&self) -> serde_json::Map<String, serde_json::Value> {
         let mut m = serde_json::Map::new();
@@ -3236,6 +3270,53 @@ mod context_management_tests {
         let parsed: Vec<ContextManagementItem> =
             serde_json::from_value(raw).expect("unknown variants should deserialize to Other");
         assert!(matches!(parsed[0], ContextManagementItem::Other));
+    }
+
+    #[test]
+    fn strip_gateway_fields_drops_orchestration_fields() {
+        let mut payload: CreateResponsesPayload = serde_json::from_value(serde_json::json!({
+            "model": "openrouter/some-model",
+            "store": true,
+            "background": true,
+            "models": ["a", "b"],
+            "provider": {"order": ["x"]},
+            "plugins": [],
+            "sovereignty_requirements": {},
+            "skills": [{"type": "skill_reference", "skill_id": "00000000-0000-0000-0000-000000000000"}],
+            "temperature": 0.5
+        }))
+        .expect("payload parses");
+
+        payload.strip_gateway_fields();
+
+        // store is forced to false (not omitted) so OpenAI's default of true
+        // can't cause a double-store and OpenRouter doesn't reject it.
+        assert_eq!(payload.store, Some(false));
+        assert_eq!(payload.background, None);
+        assert!(payload.models.is_none());
+        assert!(payload.provider.is_none());
+        assert!(payload.plugins.is_none());
+        assert!(payload.sovereignty_requirements.is_none());
+        assert!(payload.skills.is_none());
+
+        // Non-gateway fields are untouched.
+        assert_eq!(payload.model.as_deref(), Some("openrouter/some-model"));
+        assert_eq!(payload.temperature, Some(0.5));
+
+        // The serialized upstream body carries store:false and none of the
+        // gateway-only keys.
+        let body = serde_json::to_value(&payload).unwrap();
+        assert_eq!(body["store"], serde_json::json!(false));
+        for key in [
+            "background",
+            "models",
+            "provider",
+            "plugins",
+            "sovereignty_requirements",
+            "skills",
+        ] {
+            assert!(body.get(key).is_none(), "{key} should not be serialized");
+        }
     }
 }
 
