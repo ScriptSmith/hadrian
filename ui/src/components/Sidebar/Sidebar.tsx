@@ -266,7 +266,7 @@ function SortablePinnedItem({
       <ConversationPreview conv={conv}>
         <div
           className={cn(
-            "group flex w-full items-center gap-1 rounded-lg px-1 py-1.5 text-sm",
+            "group relative flex w-full items-center gap-1 rounded-lg px-1 py-1.5 text-sm",
             "hover:bg-accent/50",
             isActive ? "bg-accent text-accent-foreground font-medium" : "text-foreground/80"
           )}
@@ -276,7 +276,7 @@ function SortablePinnedItem({
           {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- DnD kit provides keyboard handlers via {...attributes} and {...listeners} */}
           <div
             className={cn(
-              "flex h-6 w-5 shrink-0 cursor-grab items-center justify-center rounded text-muted-foreground",
+              "relative z-10 flex h-6 w-5 shrink-0 cursor-grab items-center justify-center rounded text-muted-foreground",
               "opacity-0 group-hover:opacity-100 hover:bg-muted active:cursor-grabbing",
               isDragging && "opacity-100"
             )}
@@ -288,10 +288,18 @@ function SortablePinnedItem({
             <GripVertical className="h-3.5 w-3.5" />
           </div>
 
+          {/* Full-row click target so the whole bubble (not just the text) selects */}
+          <button
+            type="button"
+            aria-label={conv.title}
+            className="absolute inset-0 cursor-pointer rounded-lg"
+            onClick={onSelect}
+          />
+
           {/* Title */}
-          <button type="button" className="min-w-0 flex-1 truncate text-left" onClick={onSelect}>
+          <span className="min-w-0 flex-1 truncate text-left" aria-hidden="true">
             {conv.title}
-          </button>
+          </span>
 
           {/* Actions dropdown */}
           <Dropdown>
@@ -300,7 +308,7 @@ function SortablePinnedItem({
                 type="button"
                 aria-label="Conversation actions"
                 className={cn(
-                  "inline-flex items-center justify-center h-6 w-6 shrink-0 rounded-md p-0 opacity-0 transition-opacity hover:bg-muted",
+                  "relative z-10 inline-flex items-center justify-center h-6 w-6 shrink-0 rounded-md p-0 opacity-0 transition-opacity hover:bg-muted",
                   "group-hover:opacity-100",
                   isActive && "opacity-100"
                 )}
@@ -909,7 +917,7 @@ export function Sidebar({
                                       <ConversationPreview conv={conv}>
                                         <div
                                           className={cn(
-                                            "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm",
+                                            "group relative flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm",
                                             "hover:bg-accent/50",
                                             isActive(conv) && isChatRoute
                                               ? "bg-accent text-accent-foreground font-medium"
@@ -917,20 +925,26 @@ export function Sidebar({
                                           )}
                                           onContextMenu={(e) => handleContextMenu(e, conv)}
                                         >
+                                          {/* Full-row click target so the whole bubble (not just the text) selects */}
                                           <button
                                             type="button"
-                                            className="min-w-0 flex-1 truncate text-left"
+                                            aria-label={conv.title}
+                                            className="absolute inset-0 cursor-pointer rounded-lg"
                                             onClick={() => handleSelectConversation(conv.id)}
+                                          />
+                                          <span
+                                            className="min-w-0 flex-1 truncate text-left"
+                                            aria-hidden="true"
                                           >
                                             {conv.title}
-                                          </button>
+                                          </span>
                                           <Dropdown>
                                             <DropdownTrigger asChild showChevron={false}>
                                               <button
                                                 type="button"
                                                 aria-label="Conversation actions"
                                                 className={cn(
-                                                  "inline-flex items-center justify-center h-6 w-6 shrink-0 rounded-md p-0 opacity-0 transition-opacity hover:bg-muted",
+                                                  "relative z-10 inline-flex items-center justify-center h-6 w-6 shrink-0 rounded-md p-0 opacity-0 transition-opacity hover:bg-muted",
                                                   "group-hover:opacity-100",
                                                   isActive(conv) && "opacity-100"
                                                 )}

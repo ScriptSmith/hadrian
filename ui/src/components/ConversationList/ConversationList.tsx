@@ -143,17 +143,20 @@ const ConversationItem = memo(
       <li>
         <div
           className={cn(
-            "group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
+            "group relative flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
             "hover:bg-accent hover:text-accent-foreground",
             isSelected && "bg-accent text-accent-foreground"
           )}
         >
+          {/* Full-row click target so the whole bubble (not just the text) selects */}
           <button
             type="button"
-            className="flex min-w-0 flex-1 items-center gap-2 text-left"
-            onClick={() => onSelect(conv.id)}
+            aria-label={conv.title}
             aria-current={isSelected ? "page" : undefined}
-          >
+            className="absolute inset-0 cursor-pointer rounded-md"
+            onClick={() => onSelect(conv.id)}
+          />
+          <div className="flex min-w-0 flex-1 items-center gap-2" aria-hidden="true">
             <MessageSquare
               className={cn(
                 "h-4 w-4 shrink-0",
@@ -178,14 +181,14 @@ const ConversationItem = memo(
                 )}
               </div>
             </div>
-          </button>
+          </div>
           <Dropdown>
             <DropdownTrigger asChild showChevron={false}>
               <button
                 type="button"
                 aria-label="Conversation actions"
                 className={cn(
-                  "inline-flex items-center justify-center h-6 w-6 shrink-0 p-0 opacity-0 transition-opacity",
+                  "relative z-10 inline-flex items-center justify-center h-6 w-6 shrink-0 p-0 opacity-0 transition-opacity",
                   "group-hover:opacity-100",
                   isSelected && "opacity-100"
                 )}
