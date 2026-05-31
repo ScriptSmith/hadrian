@@ -109,19 +109,19 @@ manage project skills from **Project → Skills**.
 Skills live under the OpenAI-compatible `/v1/skills` surface. IDs are prefixed
 strings (`skill_…`, version ids `skillver_…`) and timestamps are unix seconds.
 
-| Method & path                               | Purpose                                                  |
-| ------------------------------------------- | -------------------------------------------------------- |
-| `POST /v1/skills`                           | Create a skill (publishes version `1`).                  |
-| `GET /v1/skills`                            | List skills for the current project / accessible owners. |
-| `GET /v1/skills/{id}`                       | Get a skill (with the default version's files).          |
-| `POST /v1/skills/{id}`                      | Set the default version (`{ "default_version": "2" }`).  |
-| `DELETE /v1/skills/{id}`                    | Delete a skill.                                           |
-| `GET /v1/skills/{id}/content`               | Download the default version as a zip bundle.            |
-| `POST /v1/skills/{id}/versions`             | Publish a new immutable version.                         |
-| `GET /v1/skills/{id}/versions`              | List versions.                                           |
-| `GET /v1/skills/{id}/versions/{version}`    | Get a specific version.                                  |
-| `DELETE /v1/skills/{id}/versions/{version}` | Delete a version.                                         |
-| `GET /v1/skills/{id}/versions/{version}/content` | Download a specific version as zip.                 |
+| Method & path                                    | Purpose                                                  |
+| ------------------------------------------------ | -------------------------------------------------------- |
+| `POST /v1/skills`                                | Create a skill (publishes version `1`).                  |
+| `GET /v1/skills`                                 | List skills for the current project / accessible owners. |
+| `GET /v1/skills/{id}`                            | Get a skill (with the default version's files).          |
+| `POST /v1/skills/{id}`                           | Set the default version (`{ "default_version": "2" }`).  |
+| `DELETE /v1/skills/{id}`                         | Delete a skill.                                          |
+| `GET /v1/skills/{id}/content`                    | Download the default version as a zip bundle.            |
+| `POST /v1/skills/{id}/versions`                  | Publish a new immutable version.                         |
+| `GET /v1/skills/{id}/versions`                   | List versions.                                           |
+| `GET /v1/skills/{id}/versions/{version}`         | Get a specific version.                                  |
+| `DELETE /v1/skills/{id}/versions/{version}`      | Delete a version.                                        |
+| `GET /v1/skills/{id}/versions/{version}/content` | Download a specific version as zip.                      |
 
 ### Versioning
 
