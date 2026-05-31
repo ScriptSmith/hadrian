@@ -681,6 +681,14 @@ providers without a native equivalent — your provider doesn't need to know abo
   `function_call` / `function_call_output` items in `payload.input` to the provider's
   tool-use format and back. The server-tool loop will not work otherwise. See
   `providers/{anthropic,bedrock,vertex}/convert.rs` for working examples.
+- **Shell history rewrite** — a `previous_response_id` continuation replays the prior turn's
+  *stored* output, which uses the client-facing hosted-shell shapes (`shell_call` /
+  `shell_call_output`, where `output` is an **array** of `{stdout, stderr, outcome}`). In
+  function mode `preprocess_shell_tools` rewrites those reconstructed items back to
+  `function_call` / `function_call_output` (string `output`) before your provider sees them,
+  so `convert.rs` only ever needs to handle the function-call shapes — never `ShellCall` /
+  `ShellCallOutput` in `payload.input`. Forwarding the array `output` verbatim makes
+  OpenAI-compatible upstreams 400 (`output`: expected string, received array).
 - **Container files** — when the server tool returns a `container_file_citation` annotation,
   it shows up on a `response.content_part.done` event. You don't need to handle this in your
   convert layer; the shell executor injects it on the way out via `transform_event`.

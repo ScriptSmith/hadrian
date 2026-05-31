@@ -76,6 +76,14 @@ fn input_to_items(input: ResponsesInput) -> Vec<ResponsesInputItem> {
 /// Map a prior turn's output item to the equivalent input item so it can be
 /// replayed as conversation history. The inner payloads are identical between
 /// the two enums, so this is a total, lossless 1:1 mapping.
+///
+/// Note the hosted-shell items (`ShellCall` / `ShellCallOutput`) are replayed
+/// verbatim here — the array-`output` shape they carry is only valid for
+/// native OpenAI passthrough. In function mode `preprocess_shell_tools`
+/// (`services/shell_tool.rs`, run per provider in `routes/execution.rs`)
+/// rewrites them to `function_call` / `function_call_output` before dispatch,
+/// since that's the mode-aware layer that knows whether the shell tool stayed
+/// native or was rewritten to a function.
 fn output_item_to_input(item: ResponsesOutputItem) -> ResponsesInputItem {
     match item {
         ResponsesOutputItem::Message(m) => ResponsesInputItem::OutputMessage(m),
