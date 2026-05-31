@@ -151,7 +151,12 @@ const ConversationItem = memo(
           {/* Full-row click target so the whole bubble (not just the text) selects */}
           <button
             type="button"
-            aria-label={conv.title}
+            aria-label={
+              `${conv.title}, ${conv.messages.length} messages` +
+              (conv.models.length > 0
+                ? `, ${conv.models.length} model${conv.models.length !== 1 ? "s" : ""}`
+                : "")
+            }
             aria-current={isSelected ? "page" : undefined}
             className="absolute inset-0 cursor-pointer rounded-md"
             onClick={() => onSelect(conv.id)}
