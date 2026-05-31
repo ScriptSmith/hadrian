@@ -31,9 +31,10 @@ use uuid::Uuid;
 use crate::{
     api_types::responses::{
         ContainerFileRef, CreateResponsesPayload, FunctionCallOutput, FunctionCallOutputType,
-        FunctionTool, KnownShellNetworkPolicyType, ResponsesAnnotation, ResponsesInput,
-        ResponsesInputItem, ResponsesToolDefinition, ShellDomainSecret, ShellEnvironment,
-        ShellNetworkPolicyType,
+        FunctionTool, KnownShellNetworkPolicyType, OutputItemFunctionCall,
+        OutputItemFunctionCallType, ResponsesAnnotation, ResponsesInput, ResponsesInputItem,
+        ResponsesToolDefinition, ShellCall, ShellCallOutcome, ShellCallOutputItem,
+        ShellDomainSecret, ShellEnvironment, ShellNetworkPolicyType,
     },
     config::{ContainersConfig, ShellLimitsConfig},
     models::UsageLogEntry,
@@ -737,6 +738,19 @@ impl ShellToolArguments {
 /// path. In OpenAI passthrough modes the native spec is left intact and
 /// this is skipped.
 pub fn preprocess_shell_tools(payload: &mut CreateResponsesPayload, hint: &ShellToolHint) {
+    // History items reconstructed from a `previous_response_id` chain carry
+    // the client-facing hosted-shell shapes (`shell_call` /
+    // `shell_call_output`, the latter with an *array* `output`). In function
+    // mode — the exact set of provider paths that call this — the model
+    // originally exchanged `function_call` / `function_call_output`, so
+    // replay those shapes instead. Forwarded verbatim the array `output`
+    // makes OpenAI-compatible upstreams reject the turn (`output`: expected
+    // string, received array) and Anthropic / Bedrock / Vertex silently drop
+    // the items, erasing the tool result from history. Runs before the tools
+    // early-return so a continuation that no longer re-declares the shell
+    // tool still gets its history normalized.
+    rewrite_shell_history_to_function_calls(payload);
+
     let Some(tools) = payload.tools.as_mut() else {
         return;
     };
@@ -754,6 +768,93 @@ pub fn preprocess_shell_tools(payload: &mut CreateResponsesPayload, hint: &Shell
             );
         }
     }
+}
+
+/// Rewrite reconstructed hosted-shell history items (`shell_call` /
+/// `shell_call_output`) in `payload.input` into the `function_call` /
+/// `function_call_output` pair the model exchanged in function mode. See
+/// [`preprocess_shell_tools`] for why. The two items stay paired by their
+/// shared `call_id`, so the upstream still matches the call to its result.
+fn rewrite_shell_history_to_function_calls(payload: &mut CreateResponsesPayload) {
+    let Some(ResponsesInput::Items(items)) = payload.input.as_mut() else {
+        return;
+    };
+    for item in items.iter_mut() {
+        let rewritten = match item {
+            ResponsesInputItem::ShellCall(call) => Some(ResponsesInputItem::OutputFunctionCall(
+                shell_call_to_function_call(call),
+            )),
+            ResponsesInputItem::ShellCallOutput(output) => Some(
+                ResponsesInputItem::FunctionCallOutput(shell_output_to_function_output(output)),
+            ),
+            _ => None,
+        };
+        if let Some(rewritten) = rewritten {
+            *item = rewritten;
+        }
+    }
+}
+
+/// Reconstruct the model-emitted `function_call` from a stored `shell_call`.
+/// The arguments mirror the `shell` function-tool schema
+/// (`{ "action": { … } }`). `id` is left unset: the stored `shell_call`
+/// reuses the model's `call_id` as its `id` (not a valid `fc_…` output id),
+/// and the API assigns item ids on output anyway — pairing is by `call_id`.
+fn shell_call_to_function_call(call: &ShellCall) -> OutputItemFunctionCall {
+    let arguments = serde_json::to_string(&serde_json::json!({ "action": call.action }))
+        .unwrap_or_else(|_| "{}".to_string());
+    OutputItemFunctionCall {
+        type_: OutputItemFunctionCallType::FunctionCall,
+        id: None,
+        name: ShellToolArguments::FUNCTION_NAME.to_string(),
+        arguments,
+        call_id: call.call_id.clone(),
+        status: None,
+    }
+}
+
+/// Reconstruct the `function_call_output` from a stored `shell_call_output`,
+/// flattening the array `output` into the plain-text `exit_code/stdout/stderr`
+/// blob the live tool loop feeds back to the model (see the continuation item
+/// built in `ShellExecutor::execute`).
+fn shell_output_to_function_output(output: &ShellCallOutputItem) -> FunctionCallOutput {
+    FunctionCallOutput {
+        type_: FunctionCallOutputType::FunctionCallOutput,
+        id: None,
+        call_id: output.call_id.clone(),
+        output: render_shell_output_text(output),
+        status: None,
+    }
+}
+
+/// Flatten a `shell_call_output`'s content chunks (and any captured
+/// `output_files` manifest) into the text result the model saw on the
+/// original turn.
+fn render_shell_output_text(item: &ShellCallOutputItem) -> String {
+    let mut combined = item
+        .output
+        .iter()
+        .map(|chunk| {
+            let exit_code = match &chunk.outcome {
+                ShellCallOutcome::Exit { exit_code } => *exit_code,
+                // Canonical `timeout(1)` exit code; matches how the live
+                // loop reports a killed call.
+                ShellCallOutcome::Timeout => 124,
+            };
+            format!(
+                "exit_code: {}\nstdout:\n{}\nstderr:\n{}",
+                exit_code, chunk.stdout, chunk.stderr
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !item.output_files.is_empty() {
+        combined.push_str("\noutput_files:\n");
+        for f in &item.output_files {
+            combined.push_str(&format!("- {} ({} bytes)\n", f.path, f.bytes));
+        }
+    }
+    combined
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2897,6 +2998,79 @@ mod tests {
             desc.contains("truncated"),
             "description should warn about truncation: {desc}"
         );
+    }
+
+    #[test]
+    fn preprocess_rewrites_shell_history_to_function_calls() {
+        // A continuation reconstructed from `previous_response_id` replays
+        // the prior turn's hosted-shell items (`shell_call` /
+        // `shell_call_output`, the latter with an *array* `output`). In
+        // function mode these must become `function_call` /
+        // `function_call_output` so upstreams that demand a string `output`
+        // don't reject the turn.
+        let payload_json = serde_json::json!({
+            "tools": [{"type": "shell"}],
+            "stream": false,
+            "input": [
+                {"role": "user", "content": "Run `echo hi`"},
+                {"type": "shell_call", "id": "call_abc", "call_id": "call_abc",
+                 "status": "completed",
+                 "action": {"commands": ["echo hi"]}},
+                {"type": "shell_call_output", "id": "call_abc", "call_id": "call_abc",
+                 "status": "completed",
+                 "output": [{"stdout": "hi\n", "stderr": "",
+                             "outcome": {"type": "exit", "exit_code": 0}}]},
+            ],
+        });
+        let mut payload: CreateResponsesPayload = serde_json::from_value(payload_json).unwrap();
+        preprocess_shell_tools(&mut payload, &ShellToolHint::default());
+
+        let Some(ResponsesInput::Items(items)) = payload.input.as_ref() else {
+            panic!("expected items input");
+        };
+        assert_eq!(items.len(), 3);
+        // The user message is preserved (not a tool item).
+        assert!(!matches!(
+            items[0],
+            ResponsesInputItem::ShellCall(_)
+                | ResponsesInputItem::ShellCallOutput(_)
+                | ResponsesInputItem::OutputFunctionCall(_)
+                | ResponsesInputItem::FunctionCallOutput(_)
+        ));
+        // shell_call → function_call with reconstructed `shell` arguments,
+        // pairing preserved via call_id.
+        let ResponsesInputItem::OutputFunctionCall(call) = &items[1] else {
+            panic!(
+                "expected shell_call rewritten to function_call: {:?}",
+                items[1]
+            );
+        };
+        assert_eq!(call.name, "shell");
+        assert_eq!(call.call_id, "call_abc");
+        assert!(call.id.is_none(), "must omit the non-fc_ shell id");
+        assert!(
+            call.arguments.contains("echo hi"),
+            "arguments should carry the action: {}",
+            call.arguments
+        );
+        // shell_call_output → function_call_output with a *string* output.
+        let ResponsesInputItem::FunctionCallOutput(out) = &items[2] else {
+            panic!(
+                "expected shell_call_output rewritten to function_call_output: {:?}",
+                items[2]
+            );
+        };
+        assert_eq!(out.call_id, "call_abc");
+        assert!(
+            out.output.contains("exit_code: 0") && out.output.contains("hi"),
+            "output should flatten to text: {}",
+            out.output
+        );
+        // No stray hosted-shell items survive to trip the upstream validator.
+        assert!(!items.iter().any(|i| matches!(
+            i,
+            ResponsesInputItem::ShellCall(_) | ResponsesInputItem::ShellCallOutput(_)
+        )));
     }
 
     #[test]
