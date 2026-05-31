@@ -160,7 +160,7 @@ export const skillExecutor: ToolExecutor = async (
   let skill = getFullSkill(summary.id);
   if (!skill) {
     try {
-      const response = await skillGet({ path: { id: summary.id } });
+      const response = await skillGet({ path: { skill_id: summary.id } });
       if (response.error || !response.data) {
         throw new Error(
           typeof response.error === "object" && response.error && "message" in response.error

@@ -38,7 +38,7 @@ import { SkillsButton } from "@/components/SkillsButton/SkillsButton";
 import { SlashCommandPopover } from "@/components/ChatInput/SlashCommandPopover";
 import { ToolsBar } from "@/components/ToolsBar";
 import { useUserSkills } from "@/hooks/useUserSkills";
-import type { Skill } from "@/api/generated/types.gen";
+import type { SkillResource } from "@/api/generated/types.gen";
 import { detectSlashQuery, matchSkills } from "@/pages/chat/utils/slashCommandMatcher";
 import type { ModelInfo } from "@/components/ModelPicker/ModelPicker";
 import { useConfig } from "@/config/ConfigProvider";
@@ -214,7 +214,7 @@ export function ChatInput({
   } | null>(null);
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
   const [slashMatchCount, setSlashMatchCount] = useState(0);
-  const [pendingSkill, setPendingSkill] = useState<Skill | null>(null);
+  const [pendingSkill, setPendingSkill] = useState<SkillResource | null>(null);
 
   // Quote selection: insert quoted text as markdown blockquote
   const quotedText = useQuotedText();
@@ -296,7 +296,7 @@ export function ChatInput({
   const enableSkill = useChatUIStore((s) => s.enableSkill);
 
   const commitSlashSkill = useCallback(
-    (skill: Skill) => {
+    (skill: SkillResource) => {
       setContent((prev) => {
         if (!slashQuery) return prev;
         // Strip the `/<query>` token; anything after the caret stays put.

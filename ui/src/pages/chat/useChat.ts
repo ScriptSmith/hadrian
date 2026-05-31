@@ -49,7 +49,7 @@ import {
   type ToolExecutorContext,
 } from "./utils/toolExecutors";
 import { buildSkillToolDescription } from "./utils/skillDirectory";
-import type { Skill } from "@/api/generated/types.gen";
+import type { SkillResource } from "@/api/generated/types.gen";
 import { getToolStatusLabel } from "@/components/ToolIcons";
 import { useMCPStore } from "@/stores/mcpStore";
 import {
@@ -136,7 +136,7 @@ interface UseChatOptions {
    * intent against them. Full SKILL.md bodies are loaded on demand via
    * the frontend `Skill` tool executor (see `skillExecutor.ts`).
    */
-  enabledSkills?: Skill[];
+  enabledSkills?: SkillResource[];
   /**
    * Data files registered with DuckDB for SQL queries.
    * Used to build dynamic tool description with schema information.
