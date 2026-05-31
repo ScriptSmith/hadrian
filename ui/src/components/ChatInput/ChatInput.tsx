@@ -203,9 +203,8 @@ export function ChatInput({
   const isTouchDevice = useIsTouchDevice();
 
   // Slash-command state. When the caret is inside a `/token` the popover
-  // shows skill suggestions; Enter invokes the picked skill by prefixing
-  // the submitted message with "Use the <name> skill for this request."
-  // and letting the `Skill` tool handle the actual load.
+  // shows skill suggestions; Enter picks the skill, which `sendMessage` then
+  // seeds (its SKILL.md) directly into the request — no model tool call.
   const { skills: userSkills } = useUserSkills();
   const [slashQuery, setSlashQuery] = useState<{
     query: string;
@@ -281,19 +280,17 @@ export function ChatInput({
     const trimmedContent = content.trim();
     if (!trimmedContent && files.length === 0) return;
 
-    // If the user committed a slash-command for a skill, prepend a request
-    // that tells the model to use it. The `Skill` tool handles the load.
-    const finalContent = pendingSkill
-      ? `Use the ${pendingSkill.name} skill for this request.\n\n${trimmedContent}`
-      : trimmedContent;
-
-    onSend(finalContent, files);
+    // A slash-invoked skill is seeded directly into the request by
+    // `sendMessage` (via `pendingSkillId` in the store), so the message we
+    // send is just the user's text — no "Use the X skill" nudge needed.
+    onSend(trimmedContent, files);
     setContent("");
     setFiles([]);
     setPendingSkill(null);
-  }, [content, files, onSend, pendingSkill, isStreaming, isQueuing]);
+  }, [content, files, onSend, isStreaming, isQueuing]);
 
   const markSkillUserInvoked = useChatUIStore((s) => s.markSkillUserInvoked);
+  const clearPendingSkill = useChatUIStore((s) => s.clearPendingSkill);
 
   const commitSlashSkill = useCallback(
     (skill: SkillResource) => {
@@ -587,7 +584,10 @@ export function ChatInput({
                 type="button"
                 className="ml-1 text-primary/70 hover:text-primary"
                 aria-label="Clear pending skill"
-                onClick={() => setPendingSkill(null)}
+                onClick={() => {
+                  setPendingSkill(null);
+                  clearPendingSkill();
+                }}
               >
                 ×
               </button>

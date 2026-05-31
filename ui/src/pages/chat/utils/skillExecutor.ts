@@ -1,5 +1,4 @@
 import { skillGet } from "@/api/generated/sdk.gen";
-import { useChatUIStore } from "@/stores/chatUIStore";
 
 import { getFullSkill, getSkillByName, setFullSkill } from "./skillCache";
 import type { ParsedToolCall } from "./toolCallParser";
@@ -65,6 +64,31 @@ function languageForPath(path: string): string {
     default:
       return "text";
   }
+}
+
+/**
+ * Load a skill's `SKILL.md` body by id, for seeding directly into a request
+ * when the user explicitly invokes it via the slash command (rather than
+ * relying on the model to call the `Skill` tool). Uses the by-id cache and
+ * falls back to a fetch. Returns `null` if the skill or its SKILL.md is gone.
+ */
+export async function loadSkillSeed(
+  skillId: string
+): Promise<{ name: string; text: string } | null> {
+  let skill = getFullSkill(skillId);
+  if (!skill) {
+    try {
+      const response = await skillGet({ path: { skill_id: skillId } });
+      if (response.error || !response.data) return null;
+      skill = response.data;
+      setFullSkill(skill);
+    } catch {
+      return null;
+    }
+  }
+  const main = skill.files?.find((f) => f.path === "SKILL.md");
+  if (!main) return null;
+  return { name: skill.name, text: main.content };
 }
 
 interface SkillToolArgs {
@@ -148,10 +172,9 @@ export const skillExecutor: ToolExecutor = async (
   // The tool description's enum is a soft hint to the model; enforce
   // `disable_model_invocation` here as the hard boundary so a model that
   // learns a skill name from prior context can't bypass an admin's flag.
-  // Exception: a skill the user explicitly slash-invoked is opted in for the
-  // session, so an explicit user invocation can still load it.
-  const userInvoked = useChatUIStore.getState().userInvokedSkillIds.includes(summary.id);
-  if (summary.disable_model_invocation === true && !userInvoked) {
+  // (Explicit user slash-invocations don't reach this path — they seed the
+  // SKILL.md into the request directly via `loadSkillSeed`.)
+  if (summary.disable_model_invocation === true) {
     const message = `Skill "${command}" cannot be invoked by the model.`;
     return {
       success: false,
