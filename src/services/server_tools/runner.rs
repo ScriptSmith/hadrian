@@ -662,8 +662,9 @@ fn event_type_of(event: &[u8]) -> Option<String> {
 struct StreamRewriter {
     seq: u64,
     next_output_index: u64,
-    /// item id → assigned `output_index`, so added/done/delta events for
-    /// one item share a slot.
+    /// slot key (the item id, or `(type, id)` for the hosted-shell pair) →
+    /// assigned `output_index`, so an item's added/done/delta events share
+    /// one slot. See [`Self::index_for`] for why the shell pair is qualified.
     item_index: HashMap<String, u64>,
     /// Output items captured in forward order, for terminal-output
     /// reconstruction.
@@ -989,7 +990,11 @@ impl StreamRewriter {
                 .or_else(|| obj.get("item_id").and_then(|v| v.as_str()))
                 .map(str::to_string);
             if let Some(id) = id {
-                let idx = self.index_for(&id);
+                let item_type = obj
+                    .get("item")
+                    .and_then(|i| i.get("type"))
+                    .and_then(|v| v.as_str());
+                let idx = self.index_for(item_type, &id);
                 obj.insert("output_index".into(), serde_json::Value::from(idx));
             }
         }
@@ -1064,13 +1069,34 @@ impl StreamRewriter {
         s
     }
 
-    fn index_for(&mut self, id: &str) -> u64 {
-        if let Some(i) = self.item_index.get(id) {
+    /// The `output_index` for an item, stable across its lifecycle events.
+    ///
+    /// Keyed on the item `id`, which is normally unique — and *must* stay the
+    /// key for delta events (`output_text.delta`, `function_call_arguments.delta`,
+    /// …) that reference their item by `item_id` alone (no `type`), so they
+    /// land on the slot their `output_item.added`/`done` already claimed.
+    ///
+    /// The sole exception is the hosted-shell pair: a `shell_call` and its
+    /// `shell_call_output` deliberately share one id (the model's `call_id`
+    /// doubles as the item id), so keying on id alone collapses them onto a
+    /// single `output_index` — a streaming client tracking items by slot then
+    /// renders only the last-arriving one. Those two types ride exclusively on
+    /// full `output_item.added`/`done` events (never deltas), so qualifying
+    /// just them by `(type, id)` splits the pair into two slots safely, and
+    /// (the call's added arrives first) in call-before-output order to match
+    /// the terminal reordering. Mirrors the `(type, id)` keying
+    /// [`Self::record_output_item`] uses for `output_pos`.
+    fn index_for(&mut self, item_type: Option<&str>, id: &str) -> u64 {
+        let key = match item_type {
+            Some(t @ ("shell_call" | "shell_call_output")) => format!("{t}\u{0}{id}"),
+            _ => id.to_string(),
+        };
+        if let Some(i) = self.item_index.get(&key) {
             return *i;
         }
         let i = self.next_output_index;
         self.next_output_index += 1;
-        self.item_index.insert(id.to_string(), i);
+        self.item_index.insert(key, i);
         i
     }
 
@@ -1308,6 +1334,50 @@ mod rewriter_tests {
         assert_eq!(data(&added1)["output_index"], 1);
         // The delta references msg_1 by item_id → same slot as added1.
         assert_eq!(data(&delta)["output_index"], 1);
+    }
+
+    #[test]
+    fn shell_call_and_output_get_distinct_live_output_index() {
+        let mut r = StreamRewriter::new(None, Vec::new());
+        // The shell_call and its shell_call_output share one id (the model's
+        // call_id), but the live stream must still give them two distinct
+        // output_index slots — keyed on (type, id) — with the call's the lower
+        // one so the live order matches the terminal reordering. A following
+        // message's delta must keep sharing its own (id-keyed) slot.
+        let added_call = r.rewrite(ev(serde_json::json!({
+            "type":"response.output_item.added","output_index":0,
+            "item":{"type":"shell_call","id":"toolu_1","call_id":"toolu_1"}
+        })));
+        let added_output = r.rewrite(ev(serde_json::json!({
+            "type":"response.output_item.added","output_index":0,
+            "item":{"type":"shell_call_output","id":"toolu_1","call_id":"toolu_1"}
+        })));
+        // Output `done` arrives before the call `done` (the shell tool's wire
+        // ordering); each must land back on the slot its `added` claimed.
+        let done_output = r.rewrite(ev(serde_json::json!({
+            "type":"response.output_item.done","output_index":0,
+            "item":{"type":"shell_call_output","id":"toolu_1","call_id":"toolu_1"}
+        })));
+        let done_call = r.rewrite(ev(serde_json::json!({
+            "type":"response.output_item.done","output_index":0,
+            "item":{"type":"shell_call","id":"toolu_1","call_id":"toolu_1"}
+        })));
+        let added_msg = r.rewrite(ev(serde_json::json!({
+            "type":"response.output_item.added","output_index":0,
+            "item":{"type":"message","id":"msg_1"}
+        })));
+        let msg_delta = r.rewrite(ev(serde_json::json!({
+            "type":"response.output_text.delta","output_index":0,"item_id":"msg_1","delta":"x"
+        })));
+        // Two distinct slots for the pair, call below its output.
+        assert_eq!(data(&added_call)["output_index"], 0);
+        assert_eq!(data(&added_output)["output_index"], 1);
+        assert_eq!(data(&done_output)["output_index"], 1);
+        assert_eq!(data(&done_call)["output_index"], 0);
+        // The message takes the next slot after the pair, and its delta — which
+        // carries only `item_id`, no `type` — still resolves to that same slot.
+        assert_eq!(data(&added_msg)["output_index"], 2);
+        assert_eq!(data(&msg_delta)["output_index"], 2);
     }
 
     #[test]
