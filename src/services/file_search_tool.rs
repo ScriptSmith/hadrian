@@ -1003,7 +1003,7 @@ fn build_file_search_call_output(
 ///
 /// The format matches OpenAI's Responses API streaming format where each
 /// output item is sent as an `response.output_item.done` event.
-fn format_file_search_call_sse_event(output: &FileSearchCallOutput) -> Option<Bytes> {
+fn format_file_search_call_sse_event(output: &FileSearchCallOutput) -> Bytes {
     // Create the SSE event data
     // OpenAI sends output items as part of the response stream with type "response.output_item.done"
     let event_data = serde_json::json!({
@@ -1012,9 +1012,12 @@ fn format_file_search_call_sse_event(output: &FileSearchCallOutput) -> Option<By
         "item": output,
     });
 
-    let json_str = serde_json::to_string(&event_data).ok()?;
-    let sse_event = format!("data: {}\n\n", json_str);
-    Some(Bytes::from(sse_event))
+    // `FileSearchCallOutput` is a plain serde struct with no float/non-string
+    // map keys, so serialization cannot fail; mirror the other formatters'
+    // `unwrap_or_default()` so this always yields a terminal frame and never
+    // strands the client stream.
+    let json_str = serde_json::to_string(&event_data).unwrap_or_default();
+    Bytes::from(format!("data: {}\n\n", json_str))
 }
 
 /// Build a self-contained handle for a `file_search` call whose arguments
@@ -1034,11 +1037,10 @@ fn synthesize_file_search_invalid_handle(
         status: WebSearchStatus::Failed,
         results: None,
     };
-    let mut events = Vec::new();
-    events.push(format_file_search_in_progress_event(&id, 0));
-    if let Some(item_event) = format_file_search_call_sse_event(&failed_item) {
-        events.push(item_event);
-    }
+    let events = vec![
+        format_file_search_in_progress_event(&id, 0),
+        format_file_search_call_sse_event(&failed_item),
+    ];
 
     let continuation_item = ResponsesInputItem::FunctionCallOutput(FunctionCallOutput {
         type_: FunctionCallOutputType::FunctionCallOutput,
@@ -1626,9 +1628,9 @@ impl crate::services::server_tools::ServerExecutedTool for FileSearchExecutor {
                 raw,
                 include_results,
             );
-            if let Some(evt) = format_file_search_call_sse_event(&call_output) {
-                let _ = event_tx.send(evt).await;
-            }
+            let _ = event_tx
+                .send(format_file_search_call_sse_event(&call_output))
+                .await;
         }
 
         // Emit the completed event.
@@ -2292,7 +2294,7 @@ mod tests {
             results: None,
         };
 
-        let sse_event = format_file_search_call_sse_event(&output).unwrap();
+        let sse_event = format_file_search_call_sse_event(&output);
         let event_str = std::str::from_utf8(&sse_event).unwrap();
 
         // Check SSE format

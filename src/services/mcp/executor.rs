@@ -343,7 +343,13 @@ impl McpExecutor {
                 error = %err,
                 "MCP approval gate failing closed"
             );
-            return self.synthesize_failed_call(binding, call_id, tool_name, arguments, err);
+            return self.synthesize_failed_call(
+                &binding.server_label,
+                call_id,
+                tool_name,
+                arguments,
+                err,
+            );
         };
 
         let approval_id = format!("mcpr_{}", uuid::Uuid::new_v4().simple());
@@ -468,7 +474,7 @@ impl McpExecutor {
     /// error JSON so the model sees a clean refusal.
     fn synthesize_failed_call(
         &self,
-        binding: &ServerBinding,
+        server_label: &str,
         call_id: &str,
         tool_name: &str,
         raw_args: &Value,
@@ -482,7 +488,7 @@ impl McpExecutor {
 
         let failed_item = mcp_call_item(
             &item_id,
-            &binding.server_label,
+            server_label,
             tool_name,
             raw_args,
             "failed",
@@ -997,18 +1003,17 @@ impl ServerExecutedTool for McpExecutor {
         // Recognized MCP call whose arguments couldn't be parsed: render a
         // spec-shaped `mcp_call` failure and feed the error back so the loop
         // continues — never drop it or dispatch null args to the server.
-        // The binding is guaranteed present (detection verified it).
+        // Detection verifies the binding before marking a call invalid, so
+        // `resolve_binding` succeeds in practice; fall back to the sanitized
+        // label rather than `?` so the contract (always `Ok`, never `Err`)
+        // holds even for calls built via the public `invalid()` constructor.
         if let Some(error) = &call.invalid {
-            let binding = self
+            let server_label = self
                 .resolve_binding(&sanitized_label)
-                .cloned()
-                .ok_or_else(|| {
-                    ToolError::InvalidCall(format!(
-                        "no MCP server binding for sanitized label '{sanitized_label}'"
-                    ))
-                })?;
+                .map(|b| b.server_label.clone())
+                .unwrap_or_else(|| sanitized_label.clone());
             return self.synthesize_failed_call(
-                &binding,
+                &server_label,
                 &call.call_id,
                 &tool_name,
                 &raw_args,
@@ -2039,6 +2044,37 @@ mod tests {
             panic!("expected FunctionCallOutput continuation");
         };
         assert_eq!(fco.call_id, "c1");
+        assert!(fco.output.contains("error"));
+    }
+
+    #[tokio::test]
+    async fn invalid_call_without_resolvable_binding_still_returns_ok() {
+        // Honour the `execute()` contract unconditionally: a call marked
+        // invalid via the public `DetectedToolCall::invalid()` constructor
+        // carries `Value::Null` args (so no `__mcp_label` and no resolvable
+        // binding). It must still feed back a failed `mcp_call` rather than
+        // returning `Err` and aborting the turn.
+        let payload: CreateResponsesPayload = serde_json::from_value(serde_json::json!({
+            "tools": [{"type":"mcp","server_label":"atlassian","server_url":"https://x"}]
+        }))
+        .unwrap();
+        let executor = McpExecutor::new(McpService::new(), &payload);
+
+        let call = DetectedToolCall::invalid("mcp", "c2", "unparseable arguments");
+        let ctx = ToolContext {
+            original_payload: payload,
+        };
+
+        let handle = executor
+            .execute(call, &ctx)
+            .await
+            .expect("execute must return Ok even without a resolvable binding");
+        let result = handle.result.await.expect("result resolves");
+        assert_eq!(result.call_id, "c2");
+        let ResponsesInputItem::FunctionCallOutput(fco) = &result.continuation_items[0] else {
+            panic!("expected FunctionCallOutput continuation");
+        };
+        assert_eq!(fco.call_id, "c2");
         assert!(fco.output.contains("error"));
     }
 
