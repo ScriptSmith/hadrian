@@ -796,6 +796,70 @@ fn rewrite_shell_history_to_function_calls(payload: &mut CreateResponsesPayload)
     }
 }
 
+/// Reorder a rebuilt `response.output` array so every `shell_call_output`
+/// immediately follows its paired `shell_call` (matched by `call_id`).
+///
+/// The shell tool emits the output item's terminal `done` *before* the call's
+/// (see `emit_success_done`'s wire-ordering invariant), so any consumer that
+/// rebuilds `response.output` from the forwarded `output_item.done` events
+/// captures the result *ahead* of its call. Persisting that order breaks
+/// `previous_response_id` replay: `responses_chain` →
+/// [`rewrite_shell_history_to_function_calls`] maps the array 1:1 to
+/// `function_call` / `function_call_output`, and a tool result preceding its
+/// call is an invalid upstream transcript — for Anthropic-family models the
+/// per-step assistant messages collapse, which relocates the signed `thinking`
+/// blocks and trips "`thinking` … blocks cannot be modified". Reordering only
+/// the rebuilt array keeps the live wire order intact while persisting a
+/// replayable transcript. Items already in call-then-output order (e.g. a
+/// passthrough upstream) are left untouched, as are non-shell items.
+pub(crate) fn order_shell_outputs_after_calls(
+    items: Vec<serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    fn type_of(item: &serde_json::Value) -> Option<&str> {
+        item.get("type").and_then(|v| v.as_str())
+    }
+    fn call_id_of(item: &serde_json::Value) -> Option<&str> {
+        item.get("call_id").and_then(|v| v.as_str())
+    }
+
+    let mut result: Vec<serde_json::Value> = Vec::with_capacity(items.len());
+    // shell_call_output items whose paired shell_call hasn't been placed yet
+    // (the normal case: the wire emits the output first).
+    let mut pending: Vec<serde_json::Value> = Vec::new();
+    for item in items {
+        if type_of(&item) == Some("shell_call_output") {
+            // Slot it straight after its call if already placed; otherwise hold
+            // it until the call arrives.
+            let placed_at = call_id_of(&item).and_then(|cid| {
+                result.iter().rposition(|it| {
+                    type_of(it) == Some("shell_call") && call_id_of(it) == Some(cid)
+                })
+            });
+            match placed_at {
+                Some(pos) => result.insert(pos + 1, item),
+                None => pending.push(item),
+            }
+            continue;
+        }
+        let is_call = type_of(&item) == Some("shell_call");
+        let cid = call_id_of(&item).map(str::to_string);
+        result.push(item);
+        // A call whose output was emitted first: attach it now, right after.
+        if is_call
+            && let Some(cid) = cid
+            && let Some(p) = pending
+                .iter()
+                .position(|o| call_id_of(o) == Some(cid.as_str()))
+        {
+            let out = pending.remove(p);
+            result.push(out);
+        }
+    }
+    // Any outputs whose call never appeared — keep, don't drop.
+    result.append(&mut pending);
+    result
+}
+
 /// Reconstruct the model-emitted `function_call` from a stored `shell_call`.
 /// The arguments mirror the `shell` function-tool schema
 /// (`{ "action": { … } }`). `id` is left unset: the stored `shell_call`
@@ -3128,6 +3192,54 @@ mod tests {
             i,
             ResponsesInputItem::ShellCall(_) | ResponsesInputItem::ShellCallOutput(_)
         )));
+    }
+
+    #[test]
+    fn order_shell_outputs_handles_output_before_call_and_interleaving() {
+        let reasoning = serde_json::json!({"type":"reasoning","id":"rs_1"});
+        let call = |c: &str| serde_json::json!({"type":"shell_call","id":c,"call_id":c});
+        let out = |c: &str| serde_json::json!({"type":"shell_call_output","id":c,"call_id":c});
+        let msg = serde_json::json!({"type":"message","id":"msg_1"});
+
+        // Wire order from the shell tool: each output's `done` precedes its
+        // call's `done` (output-before-call).
+        let input = vec![
+            reasoning.clone(),
+            out("a"),
+            call("a"),
+            out("b"),
+            call("b"),
+            msg.clone(),
+        ];
+        let ordered = super::order_shell_outputs_after_calls(input);
+        let types: Vec<&str> = ordered
+            .iter()
+            .map(|i| i["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            types,
+            vec![
+                "reasoning",
+                "shell_call",
+                "shell_call_output",
+                "shell_call",
+                "shell_call_output",
+                "message",
+            ]
+        );
+        // Each output still sits next to the call it pairs with.
+        assert_eq!(ordered[1]["call_id"], "a");
+        assert_eq!(ordered[2]["call_id"], "a");
+        assert_eq!(ordered[3]["call_id"], "b");
+        assert_eq!(ordered[4]["call_id"], "b");
+
+        // Already call-then-output (e.g. a passthrough upstream) is preserved.
+        let already_ordered = vec![call("a"), out("a"), msg.clone()];
+        let types: Vec<String> = super::order_shell_outputs_after_calls(already_ordered)
+            .iter()
+            .map(|i| i["type"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(types, vec!["shell_call", "shell_call_output", "message"]);
     }
 
     #[test]

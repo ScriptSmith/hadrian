@@ -852,6 +852,11 @@ pub async fn collect_streaming_response_to_json(response: Response<Body>) -> Res
             return Response::from_parts(parts, Body::from(bytes));
         }
     };
+    // Persist `shell_call_output` after its paired `shell_call`. The shell tool
+    // emits the output's `done` before the call's, so `output_items` holds them
+    // result-before-call; replaying that order is an invalid upstream transcript
+    // (see `order_shell_outputs_after_calls`).
+    let output_items = crate::services::shell_tool::order_shell_outputs_after_calls(output_items);
     response_obj["output"] = serde_json::Value::Array(output_items);
     if let Some(usage) = usage_sum
         && let Ok(usage_val) = serde_json::to_value(&usage)

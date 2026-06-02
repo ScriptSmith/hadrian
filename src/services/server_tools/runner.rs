@@ -668,8 +668,14 @@ struct StreamRewriter {
     /// Output items captured in forward order, for terminal-output
     /// reconstruction.
     output_items: Vec<serde_json::Value>,
-    /// item id → position in `output_items`, to dedupe a re-emitted item.
-    output_pos: HashMap<String, usize>,
+    /// `(item type, item id)` → position in `output_items`, to dedupe a
+    /// re-emitted item. Keyed on type *and* id because a `shell_call` and
+    /// its `shell_call_output` deliberately share one id (the model's
+    /// `call_id` doubles as the item id); keying on id alone let the
+    /// second-emitted item overwrite the first, silently dropping the tool
+    /// result from the persisted `response.output` and corrupting
+    /// `previous_response_id` replay.
+    output_pos: HashMap<(String, String), usize>,
     /// Stable Hadrian `resp_…` id stamped onto every lifecycle event's
     /// `response.id`, replacing the provider's per-turn id (e.g.
     /// OpenRouter's `gen-…`). Matches the persisted/retrievable id so a
@@ -1002,7 +1008,7 @@ impl StreamRewriter {
         {
             resp.insert(
                 "output".into(),
-                serde_json::Value::Array(self.output_items.clone()),
+                serde_json::Value::Array(self.ordered_output_items()),
             );
         }
 
@@ -1070,13 +1076,27 @@ impl StreamRewriter {
 
     fn record_output_item(&mut self, item: serde_json::Value) {
         if let Some(id) = item.get("id").and_then(|v| v.as_str()).map(str::to_string) {
-            if let Some(&pos) = self.output_pos.get(&id) {
+            let kind = item
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let key = (kind, id);
+            if let Some(&pos) = self.output_pos.get(&key) {
                 self.output_items[pos] = item;
                 return;
             }
-            self.output_pos.insert(id, self.output_items.len());
+            self.output_pos.insert(key, self.output_items.len());
         }
         self.output_items.push(item);
+    }
+
+    /// The captured output items for the persisted `response.output`, with
+    /// every `shell_call_output` reordered to follow its paired `shell_call`.
+    /// See [`crate::services::shell_tool::order_shell_outputs_after_calls`] for
+    /// why this matters for `previous_response_id` replay.
+    fn ordered_output_items(&self) -> Vec<serde_json::Value> {
+        crate::services::shell_tool::order_shell_outputs_after_calls(self.output_items.clone())
     }
 }
 
@@ -1319,6 +1339,77 @@ mod rewriter_tests {
         assert_eq!(items[0]["type"], "mcp_list_tools");
         assert_eq!(items[1]["type"], "mcp_call");
         assert_eq!(items[2]["type"], "message");
+    }
+
+    #[test]
+    fn shell_call_and_output_both_persist_in_call_then_output_order() {
+        let mut r = StreamRewriter::new(None, Vec::new());
+        // A signed reasoning block, then a shell call whose OUTPUT `done` is
+        // emitted before the CALL `done` (the shell tool's wire-ordering
+        // invariant), then the final message. The shell_call and its
+        // shell_call_output share one id (the model's call_id doubles as the
+        // item id) — the regression dropped one of the pair via that shared id.
+        r.rewrite(ev(serde_json::json!({
+            "type":"response.output_item.done","output_index":0,
+            "item":{"type":"reasoning","id":"rs_1","summary":[],
+                    "content":[{"type":"reasoning_text","text":"think"}],
+                    "signature":"sig","format":"anthropic-claude-v1","status":"completed"}
+        })));
+        // output BEFORE call, both id == call_id == "toolu_1".
+        r.rewrite(ev(serde_json::json!({
+            "type":"response.output_item.done","output_index":1,
+            "item":{"type":"shell_call_output","id":"toolu_1","call_id":"toolu_1",
+                    "status":"completed",
+                    "output":[{"stdout":"hi\n","stderr":"",
+                               "outcome":{"type":"exit","exit_code":0}}],
+                    "output_files":[]}
+        })));
+        r.rewrite(ev(serde_json::json!({
+            "type":"response.output_item.done","output_index":1,
+            "item":{"type":"shell_call","id":"toolu_1","call_id":"toolu_1",
+                    "status":"completed","action":{"commands":["echo hi"]}}
+        })));
+        r.rewrite(ev(serde_json::json!({
+            "type":"response.output_item.done","output_index":2,
+            "item":{"type":"message","id":"msg_1","role":"assistant"}
+        })));
+        let terminal = r.rewrite(ev(serde_json::json!({
+            "type":"response.completed",
+            "response":{"id":"resp_1","output":[{"type":"message","id":"msg_1"}]}
+        })));
+        let out = data(&terminal);
+        let items = out["response"]["output"].as_array().unwrap();
+        // Both the call and its output survive the shared id ...
+        assert_eq!(items.len(), 4, "got {items:#?}");
+        assert_eq!(items[0]["type"], "reasoning");
+        // ... and the call is persisted BEFORE its output for valid replay.
+        assert_eq!(items[1]["type"], "shell_call");
+        assert_eq!(items[2]["type"], "shell_call_output");
+        assert_eq!(items[1]["call_id"], "toolu_1");
+        assert_eq!(items[2]["call_id"], "toolu_1");
+        assert_eq!(items[3]["type"], "message");
+    }
+
+    #[test]
+    fn persisted_shell_call_output_deserializes_as_output_item() {
+        // `previous_response_id` replay (services/responses_chain.rs) parses
+        // the stored `output` array as `Vec<ResponsesOutputItem>`; a shape that
+        // fails would turn the (previously silently dropped) tool result into a
+        // hard `CorruptRecord` error. Lock the round-trip for the exact JSON
+        // `format_shell_call_output_item` emits.
+        use crate::api_types::responses::ResponsesOutputItem;
+        let item = serde_json::json!({
+            "type":"shell_call_output","id":"toolu_1","call_id":"toolu_1",
+            "status":"completed",
+            "output":[{"stdout":"hi\n","stderr":"",
+                       "outcome":{"type":"exit","exit_code":0},"created_by":"gateway"}],
+            "output_files":[],
+            "max_output_length":1000,
+            "created_by":"gateway"
+        });
+        let parsed: ResponsesOutputItem =
+            serde_json::from_value(item).expect("shell_call_output must parse as an output item");
+        assert!(matches!(parsed, ResponsesOutputItem::ShellCallOutput(_)));
     }
 
     #[test]
