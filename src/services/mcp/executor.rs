@@ -994,6 +994,28 @@ impl ServerExecutedTool for McpExecutor {
             .cloned()
             .unwrap_or(Value::Null);
 
+        // Recognized MCP call whose arguments couldn't be parsed: render a
+        // spec-shaped `mcp_call` failure and feed the error back so the loop
+        // continues — never drop it or dispatch null args to the server.
+        // The binding is guaranteed present (detection verified it).
+        if let Some(error) = &call.invalid {
+            let binding = self
+                .resolve_binding(&sanitized_label)
+                .cloned()
+                .ok_or_else(|| {
+                    ToolError::InvalidCall(format!(
+                        "no MCP server binding for sanitized label '{sanitized_label}'"
+                    ))
+                })?;
+            return self.synthesize_failed_call(
+                &binding,
+                &call.call_id,
+                &tool_name,
+                &raw_args,
+                crate::services::server_tools::invalid_arguments_text("mcp", error),
+            );
+        }
+
         let binding = self
             .resolve_binding(&sanitized_label)
             .cloned()
@@ -1186,23 +1208,39 @@ fn detect_in_chunk(chunk: &[u8], bindings: &[ServerBinding]) -> Vec<DetectedTool
         return Vec::new();
     };
     let call_id = call_id.to_string();
-    // Model emits `arguments` as a JSON-encoded string. Parse it
-    // so the executor can serve structured args to the MCP server.
+    // Model emits `arguments` as a JSON-encoded string. Parse it so the
+    // executor can serve structured args to the MCP server. When it isn't
+    // valid JSON, mark the call invalid (still carrying the label/tool so
+    // `execute()` can render a spec-shaped `mcp_call` failure) rather than
+    // dispatching null args to the server.
     let raw_args_str = item
         .get("arguments")
         .and_then(|v| v.as_str())
         .unwrap_or("{}");
-    let parsed_args: Value = serde_json::from_str(raw_args_str).unwrap_or(Value::Null);
-
-    vec![DetectedToolCall {
-        tool_name: "mcp",
-        call_id,
-        arguments: serde_json::json!({
-            "__mcp_label": sanitized_label,
-            "__mcp_tool": tool_name,
-            "__mcp_args": parsed_args,
-        }),
-    }]
+    match serde_json::from_str::<Value>(raw_args_str) {
+        Ok(parsed_args) => vec![DetectedToolCall::new(
+            "mcp",
+            call_id,
+            serde_json::json!({
+                "__mcp_label": sanitized_label,
+                "__mcp_tool": tool_name,
+                "__mcp_args": parsed_args,
+            }),
+        )],
+        Err(e) => {
+            let mut detected = DetectedToolCall::new(
+                "mcp",
+                call_id,
+                serde_json::json!({
+                    "__mcp_label": sanitized_label,
+                    "__mcp_tool": tool_name,
+                    "__mcp_args": Value::Null,
+                }),
+            );
+            detected.invalid = Some(format!("could not parse MCP tool `arguments` as JSON: {e}"));
+            vec![detected]
+        }
+    }
 }
 
 /// Concatenate every `data:` field on an SSE event into a single
@@ -1862,15 +1900,15 @@ mod tests {
         let executor =
             McpExecutor::with_persistence(service, &payload, None, None, DEFAULT_CALL_TIMEOUT_SECS);
 
-        let call = DetectedToolCall {
-            tool_name: "mcp",
-            call_id: "c1".into(),
-            arguments: serde_json::json!({
+        let call = DetectedToolCall::new(
+            "mcp",
+            "c1",
+            serde_json::json!({
                 "__mcp_label": "atlassian",
                 "__mcp_tool": "jira_create",
                 "__mcp_args": {"summary": "bug"},
             }),
-        };
+        );
         let ctx = ToolContext {
             original_payload: payload,
         };
@@ -1931,6 +1969,77 @@ mod tests {
         } else {
             panic!("expected FunctionCallOutput continuation");
         }
+    }
+
+    #[tokio::test]
+    async fn invalid_arguments_synthesize_failed_call_without_dispatch() {
+        use futures_util::StreamExt;
+
+        // A call detection marked invalid (unparseable arguments) must
+        // render a `mcp_call` with status `failed` and feed the error back —
+        // without dispatching to the server.
+        let payload: CreateResponsesPayload = serde_json::from_value(serde_json::json!({
+            "tools": [{"type":"mcp","server_label":"atlassian","server_url":"https://x"}]
+        }))
+        .unwrap();
+        let executor = McpExecutor::new(McpService::new(), &payload);
+
+        let mut call = DetectedToolCall::new(
+            "mcp",
+            "c1",
+            serde_json::json!({
+                "__mcp_label": "atlassian",
+                "__mcp_tool": "jira_create",
+                "__mcp_args": serde_json::Value::Null,
+            }),
+        );
+        call.invalid = Some("could not parse MCP tool `arguments` as JSON".to_string());
+        let ctx = ToolContext {
+            original_payload: payload,
+        };
+        let handle = executor.execute(call, &ctx).await.expect("handle returned");
+
+        let mut events = handle.events;
+        let mut terminal: Option<serde_json::Value> = None;
+        let mut lifecycle_types: Vec<String> = Vec::new();
+        while let Some(bytes) = events.next().await {
+            let text = std::str::from_utf8(&bytes).unwrap();
+            for line in text.lines() {
+                if let Some(rest) = line.strip_prefix("data:") {
+                    let v: serde_json::Value = serde_json::from_str(rest.trim()).unwrap();
+                    match v.get("type").and_then(|t| t.as_str()) {
+                        Some(t) if t.starts_with("response.mcp_call.") => {
+                            lifecycle_types.push(t.to_string());
+                        }
+                        Some("response.output_item.done") => terminal = Some(v["item"].clone()),
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        assert!(
+            lifecycle_types
+                .iter()
+                .any(|t| t == "response.mcp_call.failed"),
+            "expected a failed lifecycle, got {lifecycle_types:?}"
+        );
+        let terminal = terminal.expect("a terminal mcp_call item");
+        assert_eq!(terminal["status"], "failed");
+        assert!(
+            terminal["error"]
+                .as_str()
+                .unwrap()
+                .contains("Invalid arguments")
+        );
+
+        let result = handle.result.await.expect("result resolves");
+        assert_eq!(result.call_id, "c1");
+        let ResponsesInputItem::FunctionCallOutput(fco) = &result.continuation_items[0] else {
+            panic!("expected FunctionCallOutput continuation");
+        };
+        assert_eq!(fco.call_id, "c1");
+        assert!(fco.output.contains("error"));
     }
 
     fn executor() -> McpExecutor {

@@ -35,8 +35,8 @@ pub struct WebSearchToolArguments {
 impl WebSearchToolArguments {
     pub const FUNCTION_NAME: &'static str = "web_search";
 
-    pub fn parse(arguments_json: &str) -> Option<Self> {
-        serde_json::from_str(arguments_json).ok()
+    pub fn parse(arguments_json: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(arguments_json)
     }
 
     pub fn function_description() -> &'static str {
@@ -145,12 +145,24 @@ struct WebSearchToolCall {
     query: String,
 }
 
+/// Outcome of inspecting a `function_call` item named `web_search`.
+///
+/// `Invalid` carries the call id and reason so the executor can synthesize
+/// a `web_search_call` with status `failed` rather than dropping the call.
+/// `None` from [`parse_web_search_tool_call`] means the item is not a
+/// web_search call and should pass through untouched.
+#[derive(Debug, Clone)]
+enum WebSearchCallDetection {
+    Valid(WebSearchToolCall),
+    Invalid { id: String, error: String },
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Detection
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Parse a web_search tool call from a JSON value.
-fn parse_web_search_tool_call(value: &Value) -> Option<WebSearchToolCall> {
+fn parse_web_search_tool_call(value: &Value) -> Option<WebSearchCallDetection> {
     let obj = value.as_object()?;
 
     let type_val = obj.get("type")?.as_str()?;
@@ -171,16 +183,20 @@ fn parse_web_search_tool_call(value: &Value) -> Option<WebSearchToolCall> {
         .to_string();
 
     let arguments_str = obj.get("arguments")?.as_str()?;
-    let args = WebSearchToolArguments::parse(arguments_str)?;
-
-    Some(WebSearchToolCall {
-        id,
-        query: args.query,
-    })
+    match WebSearchToolArguments::parse(arguments_str) {
+        Ok(args) => Some(WebSearchCallDetection::Valid(WebSearchToolCall {
+            id,
+            query: args.query,
+        })),
+        Err(e) => Some(WebSearchCallDetection::Invalid {
+            id,
+            error: format!("could not parse `arguments` (expected {{\"query\": \"...\"}}): {e}"),
+        }),
+    }
 }
 
 /// Detect web_search tool calls in an SSE chunk.
-fn detect_web_search_in_chunk(chunk: &[u8]) -> Vec<WebSearchToolCall> {
+fn detect_web_search_in_chunk(chunk: &[u8]) -> Vec<WebSearchCallDetection> {
     let Some(chunk_str) = std::str::from_utf8(chunk).ok() else {
         return Vec::new();
     };
@@ -315,6 +331,55 @@ fn format_web_search_call_output_event(item_id: &str) -> Option<Bytes> {
     Some(Bytes::from(format!("data: {}\n\n", json_str)))
 }
 
+/// Build a self-contained handle for a `web_search` call whose arguments
+/// couldn't be parsed. Emits a `web_search_call` item with status `failed`
+/// (the spec's failure status) and feeds the error back as a
+/// `function_call_output` so the loop continues and the model can retry.
+#[cfg(feature = "server")]
+fn synthesize_web_search_invalid_handle(
+    call_id: &str,
+    error: &str,
+) -> crate::services::server_tools::ToolExecutionHandle {
+    let id = call_id.to_string();
+    let failed_item = WebSearchCallOutput {
+        type_: WebSearchCallOutputType::WebSearchCall,
+        id: id.clone(),
+        status: WebSearchStatus::Failed,
+    };
+    let done_event = serde_json::json!({
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": failed_item,
+    });
+    let events = vec![
+        format_web_search_in_progress_event(&id, 0),
+        Bytes::from(format!(
+            "data: {}\n\n",
+            serde_json::to_string(&done_event).unwrap_or_default()
+        )),
+    ];
+
+    let continuation_item = ResponsesInputItem::FunctionCallOutput(FunctionCallOutput {
+        type_: FunctionCallOutputType::FunctionCallOutput,
+        id: Some(id.clone()),
+        call_id: id.clone(),
+        output: crate::services::server_tools::invalid_arguments_text(
+            WebSearchToolArguments::FUNCTION_NAME,
+            error,
+        ),
+        status: None,
+    });
+    let result = crate::services::server_tools::ToolCallResult {
+        call_id: id,
+        continuation_items: vec![continuation_item],
+    };
+
+    crate::services::server_tools::ToolExecutionHandle {
+        events: Box::pin(futures_util::stream::iter(events)),
+        result: Box::pin(async move { Ok(result) }),
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Streaming wrapper
 // ─────────────────────────────────────────────────────────────────────────────
@@ -382,13 +447,24 @@ impl crate::services::server_tools::ServerExecutedTool for WebSearchExecutor {
     ) -> Vec<crate::services::server_tools::DetectedToolCall> {
         detect_web_search_in_chunk(event)
             .into_iter()
-            .map(|tc| crate::services::server_tools::DetectedToolCall {
-                tool_name: WebSearchToolArguments::FUNCTION_NAME,
-                call_id: tc.id.clone(),
-                arguments: serde_json::json!({
-                    "id": tc.id,
-                    "query": tc.query,
-                }),
+            .map(|detection| match detection {
+                WebSearchCallDetection::Valid(tc) => {
+                    crate::services::server_tools::DetectedToolCall::new(
+                        WebSearchToolArguments::FUNCTION_NAME,
+                        tc.id.clone(),
+                        serde_json::json!({
+                            "id": tc.id,
+                            "query": tc.query,
+                        }),
+                    )
+                }
+                WebSearchCallDetection::Invalid { id, error } => {
+                    crate::services::server_tools::DetectedToolCall::invalid(
+                        WebSearchToolArguments::FUNCTION_NAME,
+                        id,
+                        error,
+                    )
+                }
             })
             .collect()
     }
@@ -401,6 +477,12 @@ impl crate::services::server_tools::ServerExecutedTool for WebSearchExecutor {
         crate::services::server_tools::ToolExecutionHandle,
         crate::services::server_tools::ToolError,
     > {
+        // The model emitted a `web_search` call we recognized but couldn't
+        // parse. Surface a `web_search_call` with status `failed` and feed
+        // the error back so the loop continues — never drop it.
+        if let Some(error) = &call.invalid {
+            return Ok(synthesize_web_search_invalid_handle(&call.call_id, error));
+        }
         let query = call
             .arguments
             .get("query")
@@ -545,9 +627,29 @@ mod tests {
             "call_id": "call_123",
             "arguments": "{\"query\": \"rust async programming\"}"
         });
-        let tc = parse_web_search_tool_call(&value).unwrap();
+        let WebSearchCallDetection::Valid(tc) = parse_web_search_tool_call(&value).unwrap() else {
+            panic!("expected a valid web_search call");
+        };
         assert_eq!(tc.id, "call_123");
         assert_eq!(tc.query, "rust async programming");
+    }
+
+    #[test]
+    fn test_parse_web_search_tool_call_invalid_arguments() {
+        // `query` is a number, not a string → fails to deserialize.
+        let value = serde_json::json!({
+            "type": "function_call",
+            "name": "web_search",
+            "call_id": "call_bad",
+            "arguments": "{\"query\": 123}"
+        });
+        let WebSearchCallDetection::Invalid { id, error } =
+            parse_web_search_tool_call(&value).unwrap()
+        else {
+            panic!("expected an invalid web_search call");
+        };
+        assert_eq!(id, "call_bad");
+        assert!(!error.is_empty());
     }
 
     #[test]
@@ -577,7 +679,10 @@ mod tests {
 "#;
         let calls = detect_web_search_in_chunk(chunk);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].query, "latest news");
+        let WebSearchCallDetection::Valid(tc) = &calls[0] else {
+            panic!("expected a valid web_search call");
+        };
+        assert_eq!(tc.query, "latest news");
     }
 
     #[test]
@@ -598,8 +703,11 @@ mod tests {
         let chunk = b"data: {\"type\": \"response.function_call_arguments.done\", \"name\": \"web_search\", \"item_id\": \"item_789\", \"arguments\": \"{\\\"query\\\": \\\"weather today\\\"}\"}\n\ndata: {\"type\": \"response.output_item.done\", \"item\": {\"type\": \"function_call\", \"name\": \"web_search\", \"call_id\": \"call_789\", \"arguments\": \"{\\\"query\\\": \\\"weather today\\\"}\"}}\n\n";
         let calls = detect_web_search_in_chunk(chunk);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].id, "call_789");
-        assert_eq!(calls[0].query, "weather today");
+        let WebSearchCallDetection::Valid(tc) = &calls[0] else {
+            panic!("expected a valid web_search call");
+        };
+        assert_eq!(tc.id, "call_789");
+        assert_eq!(tc.query, "weather today");
     }
 
     #[test]
