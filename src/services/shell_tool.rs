@@ -643,8 +643,8 @@ impl ResolvedShellArgs {
 impl ShellToolArguments {
     pub const FUNCTION_NAME: &'static str = "shell";
 
-    pub fn parse(arguments_json: &str) -> Option<Self> {
-        serde_json::from_str(arguments_json).ok()
+    pub fn parse(arguments_json: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(arguments_json)
     }
 
     /// Resolve the parsed arguments into a flat call shape. Returns
@@ -937,7 +937,34 @@ struct ShellToolCall {
     args: ResolvedShellArgs,
 }
 
-fn parse_shell_tool_call(value: &Value) -> Option<ShellToolCall> {
+/// Outcome of inspecting a `function_call` item named `shell`.
+///
+/// `Invalid` carries the call id and a human-readable reason so the
+/// executor can synthesize a spec-shaped error `shell_call_output` rather
+/// than dropping the call (which would strand the agentic loop reporting a
+/// false `completed`). A `None` from [`parse_shell_tool_call`] means the
+/// item is genuinely not a shell call and should pass through untouched.
+#[derive(Debug, Clone)]
+enum ShellCallDetection {
+    Valid(ShellToolCall),
+    Invalid { id: String, error: String },
+}
+
+/// Truncate a raw arguments blob for inclusion in an error message so a
+/// pathological payload can't bloat the fed-back error text.
+fn truncate_for_error(s: &str) -> String {
+    const MAX: usize = 256;
+    if s.len() <= MAX {
+        return s.to_string();
+    }
+    let mut end = MAX;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
+}
+
+fn parse_shell_tool_call(value: &Value) -> Option<ShellCallDetection> {
     let obj = value.as_object()?;
     if obj.get("type").and_then(|t| t.as_str())? != "function_call" {
         return None;
@@ -952,11 +979,30 @@ fn parse_shell_tool_call(value: &Value) -> Option<ShellToolCall> {
         .unwrap_or("unknown")
         .to_string();
     let arguments_str = obj.get("arguments")?.as_str()?;
-    let args = ShellToolArguments::parse(arguments_str)?.resolve()?;
-    Some(ShellToolCall { id, args })
+    let parsed = match ShellToolArguments::parse(arguments_str) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            return Some(ShellCallDetection::Invalid {
+                id,
+                error: format!(
+                    "could not parse `arguments` into the expected \
+                     {{\"action\": {{\"commands\": [...]}}}} shape: {e}. Received: {}",
+                    truncate_for_error(arguments_str)
+                ),
+            });
+        }
+    };
+    match parsed.resolve() {
+        Some(args) => Some(ShellCallDetection::Valid(ShellToolCall { id, args })),
+        None => Some(ShellCallDetection::Invalid {
+            id,
+            error: "`action.commands` was empty; provide at least one non-empty command line"
+                .to_string(),
+        }),
+    }
 }
 
-fn detect_shell_in_chunk(chunk: &[u8]) -> Vec<ShellToolCall> {
+fn detect_shell_in_chunk(chunk: &[u8]) -> Vec<ShellCallDetection> {
     let Ok(chunk_str) = std::str::from_utf8(chunk) else {
         return Vec::new();
     };
@@ -1174,6 +1220,99 @@ fn format_shell_call_output_item(
         "output_index": output_index,
         "item": item,
     }))
+}
+
+/// Build a self-contained [`ToolExecutionHandle`] for a `shell` call whose
+/// arguments couldn't be parsed (or had no commands). No container is
+/// touched: it synthesizes the spec-shaped `shell_call` + `shell_call_output`
+/// pair — modeled as a failed command (`outcome: exit{exit_code: 2}`, the
+/// conventional shell "invalid usage" code) with the reason in `stderr`,
+/// per OpenAI's "preserve non-zero exit outputs so the model can reason
+/// about recovery steps" guidance — and a matching `function_call_output`
+/// continuation item so the model sees the error and can retry.
+fn synthesize_invalid_args_handle(call_id: &str, error: &str) -> ToolExecutionHandle {
+    // exit_code 2 == conventional shell "incorrect usage".
+    const INVALID_ARGS_EXIT_CODE: i32 = 2;
+    let id = call_id.to_string();
+
+    // `added` then `done`, output-before-call (same ordering invariant as the
+    // success path: the call resolving must mean its output is already on the
+    // wire). `killed: false` + a non-zero exit yields status `completed` with
+    // an `exit` outcome.
+    let events = vec![
+        format_shell_call_item(
+            ItemLifecycle::Added,
+            &id,
+            &id,
+            0,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            "in_progress",
+            None,
+            Some("model"),
+        ),
+        format_shell_call_output_item(
+            ItemLifecycle::Added,
+            &id,
+            &id,
+            0,
+            0,
+            "",
+            "",
+            &[],
+            false,
+            None,
+            Some("gateway"),
+        ),
+        format_shell_call_output_item(
+            ItemLifecycle::Done,
+            &id,
+            &id,
+            0,
+            INVALID_ARGS_EXIT_CODE,
+            "",
+            error,
+            &[],
+            false,
+            None,
+            Some("gateway"),
+        ),
+        format_shell_call_item(
+            ItemLifecycle::Done,
+            &id,
+            &id,
+            0,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            "completed",
+            None,
+            Some("model"),
+        ),
+    ];
+
+    let combined = format!("exit_code: {INVALID_ARGS_EXIT_CODE}\nstdout:\n\nstderr:\n{error}");
+    let cont_item = ResponsesInputItem::FunctionCallOutput(FunctionCallOutput {
+        type_: FunctionCallOutputType::FunctionCallOutput,
+        id: Some(id.clone()),
+        call_id: id.clone(),
+        output: combined,
+        status: None,
+    });
+    let result = ToolCallResult {
+        call_id: id,
+        continuation_items: vec![cont_item],
+    };
+
+    ToolExecutionHandle {
+        events: Box::pin(futures_util::stream::iter(events)),
+        result: Box::pin(async move { Ok(result) }),
+    }
 }
 
 /// Emit the spec-canonical `output_item.done` events for both the
@@ -1699,18 +1838,23 @@ impl ServerExecutedTool for ShellExecutor {
     fn detect(&self, event: &[u8], _ctx: &ToolContext) -> Vec<DetectedToolCall> {
         detect_shell_in_chunk(event)
             .into_iter()
-            .map(|tc| DetectedToolCall {
-                tool_name: ShellToolArguments::FUNCTION_NAME,
-                call_id: tc.id.clone(),
-                arguments: serde_json::json!({
-                    "id": tc.id,
-                    "commands": tc.args.commands,
-                    "stdin": tc.args.stdin,
-                    "timeout_ms": tc.args.timeout_ms,
-                    "max_output_length": tc.args.max_output_length,
-                    "env": tc.args.env,
-                    "working_directory": tc.args.working_directory,
-                }),
+            .map(|detection| match detection {
+                ShellCallDetection::Valid(tc) => DetectedToolCall::new(
+                    ShellToolArguments::FUNCTION_NAME,
+                    tc.id.clone(),
+                    serde_json::json!({
+                        "id": tc.id,
+                        "commands": tc.args.commands,
+                        "stdin": tc.args.stdin,
+                        "timeout_ms": tc.args.timeout_ms,
+                        "max_output_length": tc.args.max_output_length,
+                        "env": tc.args.env,
+                        "working_directory": tc.args.working_directory,
+                    }),
+                ),
+                ShellCallDetection::Invalid { id, error } => {
+                    DetectedToolCall::invalid(ShellToolArguments::FUNCTION_NAME, id, error)
+                }
             })
             .collect()
     }
@@ -1720,6 +1864,12 @@ impl ServerExecutedTool for ShellExecutor {
         call: DetectedToolCall,
         _ctx: &ToolContext,
     ) -> Result<ToolExecutionHandle, ToolError> {
+        // The model emitted a `shell` call we recognized but couldn't parse.
+        // Surface a spec-shaped error `shell_call_output` and feed the error
+        // back so the loop continues and the model can retry — never drop it.
+        if let Some(error) = &call.invalid {
+            return Ok(synthesize_invalid_args_handle(&call.call_id, error));
+        }
         let commands: Vec<String> = call
             .arguments
             .get("commands")
@@ -3002,7 +3152,9 @@ mod tests {
             "call_id": "call_abc",
             "arguments": "{\"action\": {\"commands\": [\"echo hi\"]}}"
         });
-        let tc = parse_shell_tool_call(&v).unwrap();
+        let ShellCallDetection::Valid(tc) = parse_shell_tool_call(&v).unwrap() else {
+            panic!("expected a valid shell call");
+        };
         assert_eq!(tc.id, "call_abc");
         assert_eq!(tc.args.commands, vec!["echo hi".to_string()]);
         assert!(tc.args.stdin.is_none());
@@ -3017,7 +3169,9 @@ mod tests {
             "call_id": "call_xyz",
             "arguments": "{\"action\": {\"commands\": [\"cd /tmp\", \"ls /\"], \"timeout_ms\": 1500, \"max_output_length\": 2000, \"env\": {\"FOO\": \"bar\"}, \"working_directory\": \"/tmp\"}}"
         });
-        let tc = parse_shell_tool_call(&v).unwrap();
+        let ShellCallDetection::Valid(tc) = parse_shell_tool_call(&v).unwrap() else {
+            panic!("expected a valid shell call");
+        };
         assert_eq!(
             tc.args.commands,
             vec!["cd /tmp".to_string(), "ls /".to_string()]
@@ -3095,6 +3249,97 @@ mod tests {
             "arguments": "{\"query\": \"hi\"}"
         });
         assert!(parse_shell_tool_call(&v).is_none());
+    }
+
+    #[test]
+    fn double_encoded_action_detected_as_invalid() {
+        // `action` is a JSON *string* instead of an object (double-encoded).
+        let v = serde_json::json!({
+            "type": "function_call",
+            "name": "shell",
+            "call_id": "call_bad",
+            "arguments": "{\"action\": \"{\\\"action\\\": {\\\"commands\\\": [\\\"echo hi\\\"]}}\"}"
+        });
+        let ShellCallDetection::Invalid { id, error } = parse_shell_tool_call(&v).unwrap() else {
+            panic!("expected an invalid shell call");
+        };
+        assert_eq!(id, "call_bad");
+        assert!(!error.is_empty());
+    }
+
+    #[test]
+    fn empty_commands_detected_as_invalid() {
+        let v = serde_json::json!({
+            "type": "function_call",
+            "name": "shell",
+            "call_id": "call_empty",
+            "arguments": "{\"action\": {\"commands\": []}}"
+        });
+        let ShellCallDetection::Invalid { id, error } = parse_shell_tool_call(&v).unwrap() else {
+            panic!("expected an invalid shell call");
+        };
+        assert_eq!(id, "call_empty");
+        assert!(error.contains("commands"));
+    }
+
+    #[test]
+    fn detect_shell_in_chunk_marks_malformed_invalid() {
+        let chunk = br#"data: {"type": "response.output_item.done", "item": {"type": "function_call", "name": "shell", "call_id": "call_z", "arguments": "{\"action\": \"oops\"}"}}
+
+"#;
+        let found = detect_shell_in_chunk(chunk);
+        assert_eq!(found.len(), 1);
+        assert!(matches!(found[0], ShellCallDetection::Invalid { .. }));
+    }
+
+    #[tokio::test]
+    async fn synthesize_invalid_args_handle_emits_failed_command() {
+        let handle = synthesize_invalid_args_handle("call_99", "bad args here");
+
+        // Drain the client-facing event stream.
+        let events: Vec<Bytes> = handle.events.collect().await;
+        let parsed: Vec<Value> = events
+            .iter()
+            .map(|b| {
+                let text = std::str::from_utf8(b).unwrap();
+                let data = text
+                    .lines()
+                    .find_map(|l| l.strip_prefix("data:").map(str::trim))
+                    .unwrap();
+                serde_json::from_str(data).unwrap()
+            })
+            .collect();
+
+        // The `shell_call_output` `done` reports a failed command: status
+        // completed, an `exit` outcome with the conventional non-zero code,
+        // and the reason in stderr.
+        let output_done = parsed
+            .iter()
+            .find(|e| {
+                e["type"] == "response.output_item.done" && e["item"]["type"] == "shell_call_output"
+            })
+            .expect("a shell_call_output done event");
+        assert_eq!(output_done["item"]["status"], "completed");
+        let content = &output_done["item"]["output"][0];
+        assert_eq!(content["outcome"]["type"], "exit");
+        assert_eq!(content["outcome"]["exit_code"], 2);
+        assert!(
+            content["stderr"]
+                .as_str()
+                .unwrap()
+                .contains("bad args here"),
+            "stderr should carry the error: {content:?}"
+        );
+
+        // The continuation feeds the error back, paired to the same call_id.
+        let result = handle.result.await.unwrap();
+        assert_eq!(result.call_id, "call_99");
+        let ResponsesInputItem::FunctionCallOutput(out) = &result.continuation_items[0] else {
+            panic!("expected a FunctionCallOutput continuation item");
+        };
+        assert_eq!(out.call_id, "call_99");
+        assert!(out.output.contains("exit_code: 2"));
+        assert!(out.output.contains("bad args here"));
     }
 
     #[test]

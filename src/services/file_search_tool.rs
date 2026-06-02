@@ -175,9 +175,11 @@ impl FileSearchToolArguments {
 
     /// Parse arguments from a JSON string (as received from model output).
     ///
-    /// Returns `None` if parsing fails or if required fields are missing.
-    pub fn parse(arguments_json: &str) -> Option<Self> {
-        serde_json::from_str(arguments_json).ok()
+    /// Returns `Err` if parsing fails or if required fields are missing; the
+    /// caller turns that into a spec-shaped failure rather than dropping the
+    /// call.
+    pub fn parse(arguments_json: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(arguments_json)
     }
 
     /// Generate a complete OpenAI-compatible function tool definition.
@@ -1001,7 +1003,7 @@ fn build_file_search_call_output(
 ///
 /// The format matches OpenAI's Responses API streaming format where each
 /// output item is sent as an `response.output_item.done` event.
-fn format_file_search_call_sse_event(output: &FileSearchCallOutput) -> Option<Bytes> {
+fn format_file_search_call_sse_event(output: &FileSearchCallOutput) -> Bytes {
     // Create the SSE event data
     // OpenAI sends output items as part of the response stream with type "response.output_item.done"
     let event_data = serde_json::json!({
@@ -1010,9 +1012,52 @@ fn format_file_search_call_sse_event(output: &FileSearchCallOutput) -> Option<By
         "item": output,
     });
 
-    let json_str = serde_json::to_string(&event_data).ok()?;
-    let sse_event = format!("data: {}\n\n", json_str);
-    Some(Bytes::from(sse_event))
+    // `FileSearchCallOutput` is a plain serde struct with no float/non-string
+    // map keys, so serialization cannot fail; mirror the other formatters'
+    // `unwrap_or_default()` so this always yields a terminal frame and never
+    // strands the client stream.
+    let json_str = serde_json::to_string(&event_data).unwrap_or_default();
+    Bytes::from(format!("data: {}\n\n", json_str))
+}
+
+/// Build a self-contained handle for a `file_search` call whose arguments
+/// couldn't be parsed. Emits a `file_search_call` item with status `failed`
+/// (the spec's failure status) and feeds the error back as a
+/// `function_call_output` so the loop continues and the model can retry.
+#[cfg(not(target_arch = "wasm32"))]
+fn synthesize_file_search_invalid_handle(
+    call_id: &str,
+    error: &str,
+) -> crate::services::server_tools::ToolExecutionHandle {
+    let id = call_id.to_string();
+    let failed_item = FileSearchCallOutput {
+        type_: FileSearchCallOutputType::FileSearchCall,
+        id: id.clone(),
+        queries: Vec::new(),
+        status: WebSearchStatus::Failed,
+        results: None,
+    };
+    let events = vec![
+        format_file_search_in_progress_event(&id, 0),
+        format_file_search_call_sse_event(&failed_item),
+    ];
+
+    let continuation_item = ResponsesInputItem::FunctionCallOutput(FunctionCallOutput {
+        type_: FunctionCallOutputType::FunctionCallOutput,
+        id: Some(id.clone()),
+        call_id: id.clone(),
+        output: crate::services::server_tools::invalid_arguments_text("file_search", error),
+        status: None,
+    });
+    let result = crate::services::server_tools::ToolCallResult {
+        call_id: id,
+        continuation_items: vec![continuation_item],
+    };
+
+    crate::services::server_tools::ToolExecutionHandle {
+        events: Box::pin(futures_util::stream::iter(events)),
+        result: Box::pin(async move { Ok(result) }),
+    }
 }
 
 /// Format a `response.file_search_call.in_progress` SSE event.
@@ -1143,10 +1188,22 @@ fn inject_citation_annotations(chunk: &[u8], tracker: &CitationTracker) -> Bytes
 ///
 /// All fields except `query` are optional. This function uses [`FileSearchToolArguments::parse()`]
 /// to deserialize the arguments, ensuring consistency with the schema sent to the model.
+/// Outcome of inspecting a `function_call` item named `file_search`.
+///
+/// `Invalid` carries the call id and reason so the executor can synthesize
+/// a `file_search_call` with status `failed` rather than dropping the call
+/// (which would strand the loop) or aborting the whole turn. `None` means
+/// the item is not a file_search call and should pass through untouched.
+#[derive(Debug, Clone)]
+pub enum FileSearchCallDetection {
+    Valid(Box<FileSearchToolCall>),
+    Invalid { id: String, error: String },
+}
+
 pub fn parse_file_search_tool_call(
     value: &Value,
     vector_store_ids: &[String],
-) -> Option<FileSearchToolCall> {
+) -> Option<FileSearchCallDetection> {
     // Check if this is a function call
     let obj = value.as_object()?;
 
@@ -1172,17 +1229,23 @@ pub fn parse_file_search_tool_call(
 
     // Parse arguments using the schema-defined struct
     let arguments_str = obj.get("arguments")?.as_str()?;
-    let args = FileSearchToolArguments::parse(arguments_str)?;
-
-    Some(FileSearchToolCall {
-        id,
-        query: args.query,
-        vector_store_ids: vector_store_ids.to_vec(),
-        max_num_results: args.max_num_results.map(|v| v as usize),
-        score_threshold: args.score_threshold,
-        filters: args.filters,
-        ranking_options: args.ranking_options,
-    })
+    match FileSearchToolArguments::parse(arguments_str) {
+        Ok(args) => Some(FileSearchCallDetection::Valid(Box::new(
+            FileSearchToolCall {
+                id,
+                query: args.query,
+                vector_store_ids: vector_store_ids.to_vec(),
+                max_num_results: args.max_num_results.map(|v| v as usize),
+                score_threshold: args.score_threshold,
+                filters: args.filters,
+                ranking_options: args.ranking_options,
+            },
+        ))),
+        Err(e) => Some(FileSearchCallDetection::Invalid {
+            id,
+            error: format!("could not parse `arguments` (expected {{\"query\": \"...\"}}): {e}"),
+        }),
+    }
 }
 
 /// Check if a streaming chunk contains file_search tool calls.
@@ -1192,7 +1255,7 @@ pub fn parse_file_search_tool_call(
 pub fn detect_file_search_in_chunk(
     chunk: &[u8],
     vector_store_ids: &[String],
-) -> Vec<FileSearchToolCall> {
+) -> Vec<FileSearchCallDetection> {
     let Some(chunk_str) = std::str::from_utf8(chunk).ok() else {
         return Vec::new();
     };
@@ -1238,18 +1301,26 @@ pub fn detect_file_search_in_chunk(
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown")
                         .to_string();
-                    if let Some(arguments_str) = json.get("arguments").and_then(|a| a.as_str())
-                        && let Some(args) = FileSearchToolArguments::parse(arguments_str)
-                    {
-                        found_calls.push(FileSearchToolCall {
-                            id,
-                            query: args.query,
-                            vector_store_ids: vector_store_ids.to_vec(),
-                            max_num_results: args.max_num_results.map(|v| v as usize),
-                            score_threshold: args.score_threshold,
-                            filters: args.filters,
-                            ranking_options: args.ranking_options,
-                        });
+                    if let Some(arguments_str) = json.get("arguments").and_then(|a| a.as_str()) {
+                        match FileSearchToolArguments::parse(arguments_str) {
+                            Ok(args) => found_calls.push(FileSearchCallDetection::Valid(Box::new(
+                                FileSearchToolCall {
+                                    id,
+                                    query: args.query,
+                                    vector_store_ids: vector_store_ids.to_vec(),
+                                    max_num_results: args.max_num_results.map(|v| v as usize),
+                                    score_threshold: args.score_threshold,
+                                    filters: args.filters,
+                                    ranking_options: args.ranking_options,
+                                },
+                            ))),
+                            Err(e) => found_calls.push(FileSearchCallDetection::Invalid {
+                                id,
+                                error: format!(
+                                    "could not parse `arguments` (expected {{\"query\": \"...\"}}): {e}"
+                                ),
+                            }),
+                        }
                     }
                 }
 
@@ -1315,8 +1386,10 @@ pub fn check_response_for_file_search(
     // Check output array (Responses API format)
     if let Some(output) = json.get("output").and_then(|o| o.as_array()) {
         for item in output {
-            if let Some(tool_call) = parse_file_search_tool_call(item, vector_store_ids) {
-                tool_calls.push(tool_call);
+            if let Some(FileSearchCallDetection::Valid(tool_call)) =
+                parse_file_search_tool_call(item, vector_store_ids)
+            {
+                tool_calls.push(*tool_call);
             }
         }
     }
@@ -1328,8 +1401,10 @@ pub fn check_response_for_file_search(
                 && let Some(tc_array) = message.get("tool_calls").and_then(|t| t.as_array())
             {
                 for tc in tc_array {
-                    if let Some(tool_call) = parse_file_search_tool_call(tc, vector_store_ids) {
-                        tool_calls.push(tool_call);
+                    if let Some(FileSearchCallDetection::Valid(tool_call)) =
+                        parse_file_search_tool_call(tc, vector_store_ids)
+                    {
+                        tool_calls.push(*tool_call);
                     }
                 }
             }
@@ -1404,10 +1479,21 @@ impl crate::services::server_tools::ServerExecutedTool for FileSearchExecutor {
         let vector_store_ids = self.context.get_vector_store_ids();
         detect_file_search_in_chunk(event, &vector_store_ids)
             .into_iter()
-            .map(|tc| crate::services::server_tools::DetectedToolCall {
-                tool_name: "file_search",
-                call_id: tc.id.clone(),
-                arguments: serde_json::to_value(&tc).unwrap_or(Value::Null),
+            .map(|detection| match detection {
+                FileSearchCallDetection::Valid(tc) => {
+                    crate::services::server_tools::DetectedToolCall::new(
+                        "file_search",
+                        tc.id.clone(),
+                        serde_json::to_value(&*tc).unwrap_or(Value::Null),
+                    )
+                }
+                FileSearchCallDetection::Invalid { id, error } => {
+                    crate::services::server_tools::DetectedToolCall::invalid(
+                        "file_search",
+                        id,
+                        error,
+                    )
+                }
             })
             .collect()
     }
@@ -1420,6 +1506,12 @@ impl crate::services::server_tools::ServerExecutedTool for FileSearchExecutor {
         crate::services::server_tools::ToolExecutionHandle,
         crate::services::server_tools::ToolError,
     > {
+        // The model emitted a `file_search` call we recognized but couldn't
+        // parse. Surface a `file_search_call` with status `failed` and feed
+        // the error back so the loop continues — never drop it or abort.
+        if let Some(error) = &call.invalid {
+            return Ok(synthesize_file_search_invalid_handle(&call.call_id, error));
+        }
         let tool_call: FileSearchToolCall =
             serde_json::from_value(call.arguments).map_err(|e| {
                 crate::services::server_tools::ToolError::InvalidCall(format!(
@@ -1536,9 +1628,9 @@ impl crate::services::server_tools::ServerExecutedTool for FileSearchExecutor {
                 raw,
                 include_results,
             );
-            if let Some(evt) = format_file_search_call_sse_event(&call_output) {
-                let _ = event_tx.send(evt).await;
-            }
+            let _ = event_tx
+                .send(format_file_search_call_sse_event(&call_output))
+                .await;
         }
 
         // Emit the completed event.
@@ -1666,6 +1758,26 @@ mod tests {
     use super::*;
     use crate::streaming::SseBuffer;
 
+    /// Unwrap a detection to its valid call, panicking if it's invalid —
+    /// keeps the detection-shape tests terse.
+    fn expect_valid(detection: FileSearchCallDetection) -> FileSearchToolCall {
+        match detection {
+            FileSearchCallDetection::Valid(tc) => *tc,
+            FileSearchCallDetection::Invalid { error, .. } => {
+                panic!("expected a valid file_search call, got invalid: {error}")
+            }
+        }
+    }
+
+    /// Like [`detect_file_search_in_chunk`] but unwraps every detection to a
+    /// valid call for the happy-path detection tests.
+    fn detect_valid(chunk: &[u8], vector_store_ids: &[String]) -> Vec<FileSearchToolCall> {
+        detect_file_search_in_chunk(chunk, vector_store_ids)
+            .into_iter()
+            .map(expect_valid)
+            .collect()
+    }
+
     #[test]
     fn test_parse_file_search_tool_call() {
         let json = serde_json::json!({
@@ -1679,7 +1791,7 @@ mod tests {
         let result = parse_file_search_tool_call(&json, &vector_store_ids);
 
         assert!(result.is_some());
-        let tool_call = result.unwrap();
+        let tool_call = expect_valid(result.unwrap());
         assert_eq!(tool_call.id, "call_123");
         assert_eq!(tool_call.query, "revenue growth in Q3");
         assert_eq!(tool_call.vector_store_ids, vector_store_ids);
@@ -1699,6 +1811,24 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_file_search_tool_call_invalid_arguments() {
+        // `query` is a number, not a string → fails to deserialize.
+        let json = serde_json::json!({
+            "type": "function_call",
+            "name": "file_search",
+            "call_id": "call_bad",
+            "arguments": "{\"query\": 123}"
+        });
+        let FileSearchCallDetection::Invalid { id, error } =
+            parse_file_search_tool_call(&json, &["vs_abc".to_string()]).unwrap()
+        else {
+            panic!("expected an invalid file_search call");
+        };
+        assert_eq!(id, "call_bad");
+        assert!(!error.is_empty());
+    }
+
+    #[test]
     fn test_parse_file_search_tool_call_with_max_results() {
         let json = serde_json::json!({
             "type": "function_call",
@@ -1708,7 +1838,7 @@ mod tests {
         });
 
         let vector_store_ids = vec!["vs_abc".to_string()];
-        let result = parse_file_search_tool_call(&json, &vector_store_ids).unwrap();
+        let result = expect_valid(parse_file_search_tool_call(&json, &vector_store_ids).unwrap());
 
         assert_eq!(result.max_num_results, Some(5));
     }
@@ -1723,7 +1853,7 @@ mod tests {
         });
 
         let vector_store_ids = vec!["vs_abc".to_string()];
-        let result = parse_file_search_tool_call(&json, &vector_store_ids).unwrap();
+        let result = expect_valid(parse_file_search_tool_call(&json, &vector_store_ids).unwrap());
 
         assert_eq!(result.query, "policy document");
         assert_eq!(result.score_threshold, Some(0.85));
@@ -1740,7 +1870,7 @@ mod tests {
         });
 
         let vector_store_ids = vec!["vs_abc".to_string()];
-        let result = parse_file_search_tool_call(&json, &vector_store_ids).unwrap();
+        let result = expect_valid(parse_file_search_tool_call(&json, &vector_store_ids).unwrap());
 
         assert_eq!(result.query, "budget report");
         assert!(result.filters.is_some());
@@ -1765,7 +1895,7 @@ mod tests {
         });
 
         let vector_store_ids = vec!["vs_abc".to_string()];
-        let result = parse_file_search_tool_call(&json, &vector_store_ids).unwrap();
+        let result = expect_valid(parse_file_search_tool_call(&json, &vector_store_ids).unwrap());
 
         assert_eq!(result.query, "meeting notes");
         assert!(result.filters.is_some());
@@ -1789,7 +1919,7 @@ mod tests {
         });
 
         let vector_store_ids = vec!["vs_abc".to_string(), "vs_def".to_string()];
-        let result = parse_file_search_tool_call(&json, &vector_store_ids).unwrap();
+        let result = expect_valid(parse_file_search_tool_call(&json, &vector_store_ids).unwrap());
 
         assert_eq!(result.id, "call_full");
         assert_eq!(result.query, "quarterly earnings");
@@ -1810,7 +1940,7 @@ mod tests {
         });
 
         let vector_store_ids = vec!["vs_abc".to_string()];
-        let result = parse_file_search_tool_call(&json, &vector_store_ids).unwrap();
+        let result = expect_valid(parse_file_search_tool_call(&json, &vector_store_ids).unwrap());
 
         assert_eq!(result.query, "simple search");
         assert!(result.max_num_results.is_none());
@@ -1823,7 +1953,7 @@ mod tests {
         let chunk = b"data: {\"output\": [{\"type\": \"function_call\", \"name\": \"file_search\", \"call_id\": \"call_abc\", \"arguments\": \"{\\\"query\\\": \\\"test query\\\"}\"}]}\n\n";
 
         let vector_store_ids = vec!["vs_test".to_string()];
-        let results = detect_file_search_in_chunk(chunk, &vector_store_ids);
+        let results = detect_valid(chunk, &vector_store_ids);
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "call_abc");
@@ -1855,7 +1985,7 @@ mod tests {
 "#;
 
         let vector_store_ids = vec!["vs_test".to_string()];
-        let results = detect_file_search_in_chunk(chunk, &vector_store_ids);
+        let results = detect_valid(chunk, &vector_store_ids);
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "fc_abc123");
@@ -1871,7 +2001,7 @@ mod tests {
 
 "#;
 
-        let results = detect_file_search_in_chunk(chunk, &["vs_123".to_string()]);
+        let results = detect_valid(chunk, &["vs_123".to_string()]);
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].query, "quarterly sales");
@@ -1897,7 +2027,7 @@ mod tests {
 "#;
 
         let vector_store_ids = vec!["vs_prod".to_string()];
-        let results = detect_file_search_in_chunk(chunk, &vector_store_ids);
+        let results = detect_valid(chunk, &vector_store_ids);
 
         assert_eq!(results.len(), 1);
         // parse_file_search_tool_call prefers call_id over id
@@ -1936,7 +2066,7 @@ mod tests {
 "#;
 
         let vector_store_ids = vec!["vs_finance".to_string()];
-        let results = detect_file_search_in_chunk(chunk, &vector_store_ids);
+        let results = detect_valid(chunk, &vector_store_ids);
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].id, "call_1");
@@ -1953,7 +2083,7 @@ mod tests {
 "#;
 
         let vector_store_ids = vec!["vs_data".to_string()];
-        let results = detect_file_search_in_chunk(chunk, &vector_store_ids);
+        let results = detect_valid(chunk, &vector_store_ids);
 
         // Should only detect the 2 file_search calls, not get_weather or message
         assert_eq!(results.len(), 2);
@@ -2164,7 +2294,7 @@ mod tests {
             results: None,
         };
 
-        let sse_event = format_file_search_call_sse_event(&output).unwrap();
+        let sse_event = format_file_search_call_sse_event(&output);
         let event_str = std::str::from_utf8(&sse_event).unwrap();
 
         // Check SSE format

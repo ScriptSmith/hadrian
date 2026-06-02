@@ -257,19 +257,31 @@ impl ServerExecutedTool for ToolSearchExecutor {
             .get("arguments")
             .and_then(|v| v.as_str())
             .unwrap_or("{}");
-        let arguments: Value = serde_json::from_str(args_str).unwrap_or_else(|e| {
-            tracing::warn!(
-                error = %e,
-                arguments = %args_str,
-                "tool_search call arguments are not valid JSON; treating as empty"
-            );
-            Value::Null
-        });
-        vec![DetectedToolCall {
-            tool_name: TOOL_SEARCH_FUNCTION_NAME,
-            call_id,
-            arguments,
-        }]
+        // Distinguish a malformed call (unparseable JSON) from a well-formed
+        // one that simply matches nothing: the former is surfaced as an
+        // explicit `failed` the model can recover from; the latter runs
+        // normally and returns an empty tool list.
+        match serde_json::from_str::<Value>(args_str) {
+            Ok(arguments) => {
+                vec![DetectedToolCall::new(
+                    TOOL_SEARCH_FUNCTION_NAME,
+                    call_id,
+                    arguments,
+                )]
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    arguments = %args_str,
+                    "tool_search call arguments are not valid JSON; surfacing as a failed call"
+                );
+                vec![DetectedToolCall::invalid(
+                    TOOL_SEARCH_FUNCTION_NAME,
+                    call_id,
+                    format!("could not parse `arguments` as JSON: {e}"),
+                )]
+            }
+        }
     }
 
     async fn execute(
@@ -277,6 +289,57 @@ impl ServerExecutedTool for ToolSearchExecutor {
         call: DetectedToolCall,
         _ctx: &ToolContext,
     ) -> Result<ToolExecutionHandle, ToolError> {
+        // A malformed tool_search call (unparseable arguments) is surfaced as
+        // an explicit `failed` tool_search_call — distinct from a well-formed
+        // search that matches nothing — plus a function_call_output the model
+        // can read and correct on its next turn.
+        if let Some(error) = &call.invalid {
+            let call_index = self.output_index.fetch_add(1, Ordering::Relaxed);
+            let call_item_id = next_item_id("ts");
+            let failed_item = |status: &str| {
+                serde_json::json!({
+                    "type": "tool_search_call",
+                    "id": call_item_id,
+                    "call_id": Value::Null,
+                    "execution": "server",
+                    "arguments": call.arguments,
+                    "status": status,
+                    "error": error,
+                })
+            };
+            let events = vec![
+                sse_output_item(
+                    "response.output_item.added",
+                    call_index,
+                    self.next_seq(),
+                    failed_item("in_progress"),
+                ),
+                sse_output_item(
+                    "response.output_item.done",
+                    call_index,
+                    self.next_seq(),
+                    failed_item("failed"),
+                ),
+            ];
+            let continuation = ResponsesInputItem::FunctionCallOutput(FunctionCallOutput {
+                type_: FunctionCallOutputType::FunctionCallOutput,
+                id: None,
+                call_id: call.call_id.clone(),
+                output: crate::services::server_tools::invalid_arguments_text(
+                    TOOL_SEARCH_FUNCTION_NAME,
+                    error,
+                ),
+                status: None,
+            });
+            let result = ToolCallResult {
+                call_id: call.call_id.clone(),
+                continuation_items: vec![continuation],
+            };
+            return Ok(ToolExecutionHandle {
+                events: Box::pin(futures_util::stream::iter(events)),
+                result: Box::pin(async move { Ok(result) }),
+            });
+        }
         let query = call
             .arguments
             .get("query")
@@ -653,14 +716,76 @@ mod tests {
         assert!(calls.is_empty());
     }
 
+    #[test]
+    fn detect_marks_malformed_arguments_invalid() {
+        let exec = executor_with_catalog();
+        // Unparseable JSON in `arguments` — distinct from an empty query.
+        let ev = serde_json::json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_bad",
+                "name": TOOL_SEARCH_FUNCTION_NAME,
+                "arguments": "{not valid json",
+            }
+        });
+        let calls = exec.detect(format!("data: {ev}\n\n").as_bytes(), &ctx());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].call_id, "call_bad");
+        assert!(
+            calls[0].invalid.is_some(),
+            "malformed tool_search args should be marked invalid"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_invalid_emits_failed_call() {
+        let exec = executor_with_catalog();
+        let call = DetectedToolCall::invalid(
+            TOOL_SEARCH_FUNCTION_NAME,
+            "call_bad",
+            "could not parse `arguments` as JSON",
+        );
+        let handle = exec.execute(call, &ctx()).await.expect("execute");
+        let events: Vec<Bytes> = handle.events.collect().await;
+        let parsed: Vec<serde_json::Value> = events
+            .iter()
+            .flat_map(|b| {
+                String::from_utf8_lossy(b)
+                    .lines()
+                    .filter_map(|l| l.strip_prefix("data:").map(str::trim))
+                    .map(|d| serde_json::from_str(d).unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        // The terminal tool_search_call reports status `failed` with an error.
+        let done = parsed
+            .iter()
+            .find(|e| {
+                e["type"] == "response.output_item.done" && e["item"]["type"] == "tool_search_call"
+            })
+            .expect("a tool_search_call done event");
+        assert_eq!(done["item"]["status"], "failed");
+        assert!(done["item"]["error"].as_str().unwrap().contains("parse"));
+
+        // The continuation feeds the error back for self-correction.
+        let result = handle.result.await.expect("result");
+        assert_eq!(result.call_id, "call_bad");
+        let ResponsesInputItem::FunctionCallOutput(out) = &result.continuation_items[0] else {
+            panic!("expected a FunctionCallOutput continuation item");
+        };
+        assert!(out.output.contains("Invalid arguments"));
+    }
+
     #[tokio::test]
     async fn execute_emits_call_and_output_items_and_stashes_defs() {
         let exec = executor_with_catalog();
-        let call = DetectedToolCall {
-            tool_name: TOOL_SEARCH_FUNCTION_NAME,
-            call_id: "call_1".to_string(),
-            arguments: serde_json::json!({"query": "search jira issues"}),
-        };
+        let call = DetectedToolCall::new(
+            TOOL_SEARCH_FUNCTION_NAME,
+            "call_1",
+            serde_json::json!({"query": "search jira issues"}),
+        );
         let handle = exec.execute(call, &ctx()).await.expect("execute");
         let events: Vec<Bytes> = handle.events.collect().await;
         let joined: String = events
@@ -684,11 +809,11 @@ mod tests {
     #[tokio::test]
     async fn apply_to_continuation_injects_discovered_tools_and_output() {
         let exec = executor_with_catalog();
-        let call = DetectedToolCall {
-            tool_name: TOOL_SEARCH_FUNCTION_NAME,
-            call_id: "call_1".to_string(),
-            arguments: serde_json::json!({"query": "search jira"}),
-        };
+        let call = DetectedToolCall::new(
+            TOOL_SEARCH_FUNCTION_NAME,
+            "call_1",
+            serde_json::json!({"query": "search jira"}),
+        );
         let handle = exec.execute(call, &ctx()).await.unwrap();
         let _ = handle.events.collect::<Vec<_>>().await;
         let result = handle.result.await.unwrap();

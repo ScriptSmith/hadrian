@@ -195,6 +195,50 @@ pub struct DetectedToolCall {
     /// Tool-specific arguments payload — JSON value or any other structure
     /// the tool needs to execute. Each tool's `execute()` interprets this.
     pub arguments: Value,
+    /// `Some(error)` when the tool recognized this call by name but could
+    /// not parse its arguments. A `detect()` MUST mark such a call here
+    /// rather than dropping it (a dropped call leaves the loop reporting a
+    /// false `completed` with no feedback to the model). The tool's
+    /// `execute()` MUST, when this is set, render its spec-shaped failure
+    /// item (e.g. `shell_call_output` with a non-zero exit, `web_search_call`
+    /// / `file_search_call` with status `failed`, `mcp_call` with `error`)
+    /// plus a `function_call_output` carrying the error, and return `Ok`
+    /// (never `Err`) so the loop continues and the model can self-correct.
+    pub invalid: Option<String>,
+}
+
+impl DetectedToolCall {
+    /// A well-formed detected call routed to the tool for execution.
+    pub fn new(tool_name: &'static str, call_id: impl Into<String>, arguments: Value) -> Self {
+        Self {
+            tool_name,
+            call_id: call_id.into(),
+            arguments,
+            invalid: None,
+        }
+    }
+
+    /// A call recognized by name but whose arguments could not be parsed.
+    /// See [`DetectedToolCall::invalid`] for the contract each tool's
+    /// `execute()` must honor.
+    pub fn invalid(
+        tool_name: &'static str,
+        call_id: impl Into<String>,
+        error: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_name,
+            call_id: call_id.into(),
+            arguments: Value::Null,
+            invalid: Some(error.into()),
+        }
+    }
+}
+
+/// Standard human-readable message for an unparseable tool call, fed back
+/// to the model in the `function_call_output` so it can correct the call.
+pub fn invalid_arguments_text(tool_name: &str, error: &str) -> String {
+    format!("Invalid arguments for tool `{tool_name}`: {error}")
 }
 
 /// Result of executing one tool call.
@@ -256,6 +300,12 @@ pub trait ServerExecutedTool: Send + Sync {
     /// tool's type that it contains.
     ///
     /// Called for every event of every iteration. Must be cheap.
+    ///
+    /// Contract: when an event carries a call this tool recognizes by name
+    /// but whose arguments cannot be parsed, return it via
+    /// [`DetectedToolCall::invalid`] — never silently drop it. Dropping a
+    /// recognized call makes the loop end as a false `completed` with no
+    /// feedback, stranding the model.
     fn detect(&self, event: &[u8], ctx: &ToolContext) -> Vec<DetectedToolCall>;
 
     /// Execute one detected tool call.
@@ -263,6 +313,11 @@ pub trait ServerExecutedTool: Send + Sync {
     /// Returns a handle exposing progress events plus the final result.
     /// The orchestrator forwards the events to the client and awaits the
     /// result to build the continuation payload.
+    ///
+    /// Contract: when `call.invalid` is `Some`, emit this tool's spec-shaped
+    /// failure item and return `Ok` with a `function_call_output` carrying
+    /// the error in `continuation_items` — do not return `Err` (that aborts
+    /// the whole turn) and do not run the underlying tool.
     async fn execute(
         &self,
         call: DetectedToolCall,
