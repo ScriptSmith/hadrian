@@ -233,6 +233,8 @@ pub enum ResponsesIncludable {
     ReasoningEncryptedContent,
     #[serde(rename = "code_interpreter_call.outputs")]
     CodeInterpreterCallOutputs,
+    #[serde(rename = "web_search_call.action.sources")]
+    WebSearchCallActionSources,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -668,12 +670,61 @@ pub enum WebSearchCallOutputType {
     WebSearchCall,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WebSearchActionType {
+    Search,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WebSearchSourceType {
+    Url,
+}
+
+/// A single source the model consulted during a web search — an entry in
+/// `web_search_call.action.sources`. Per OpenAI's spec the only source kind is
+/// a URL.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebSearchSource {
+    #[serde(rename = "type")]
+    pub type_: WebSearchSourceType,
+    pub url: String,
+}
+
+/// The action a `web_search_call` performed. Mirrors OpenAI's Responses API
+/// `search` action: it carries the issued `query` and, only when the request
+/// opts in via `include: ["web_search_call.action.sources"]`, the list of
+/// consulted source URLs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebSearchAction {
+    #[serde(rename = "type")]
+    pub type_: WebSearchActionType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sources: Option<Vec<WebSearchSource>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebSearchCallOutput {
     #[serde(rename = "type")]
     pub type_: WebSearchCallOutputType,
     pub id: String,
     pub status: WebSearchStatus,
+    /// The action taken (query, and optional source URLs). Matches OpenAI's
+    /// `web_search_call.action`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<WebSearchAction>,
+    /// **Hadrian Extension:** the full formatted search-result text that was
+    /// fed to the model when this search ran. Hadrian executes web search
+    /// itself (Tavily/Exa) against upstreams that keep no server-side search
+    /// state, so it retains the result text here to replay the search as a
+    /// `function_call` + `function_call_output` pair on a later turn (see
+    /// `services/web_search_tool.rs::rewrite_web_search_history`). OpenAI's
+    /// native item has no equivalent field — it relies on OpenAI-side state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_content: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

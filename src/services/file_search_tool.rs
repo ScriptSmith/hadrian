@@ -238,6 +238,12 @@ impl FileSearchToolArguments {
 /// // payload.tools now contains function tools instead of file_search tools
 /// ```
 pub fn preprocess_file_search_tools(payload: &mut CreateResponsesPayload) {
+    // Normalize any hosted `file_search_call` items echoed back in the input
+    // before the tools early-return, so a continuation that no longer
+    // re-declares file_search still gets its history cleaned. See
+    // [`strip_file_search_history`].
+    strip_file_search_history(payload);
+
     let Some(tools) = payload.tools.as_mut() else {
         return;
     };
@@ -256,6 +262,30 @@ pub fn preprocess_file_search_tools(payload: &mut CreateResponsesPayload) {
             );
         }
     }
+}
+
+/// Drop hosted `file_search_call` items from `payload.input`.
+///
+/// Like `web_search`, file search is server-executed: [`preprocess_file_search_tools`]
+/// rewrites the `file_search` tool to a function tool, so the provider never produces
+/// a native `file_search_call`. The spec-shaped `file_search_call` items Hadrian
+/// synthesizes for the client are persisted, so on a follow-up turn they come back as
+/// input — rebuilt from a `previous_response_id` chain (`services/responses_chain.rs`)
+/// or resent by a client doing manual multi-turn. No upstream accepts them:
+/// OpenAI-compatible providers (e.g. OpenRouter) reject the turn with `invalid_prompt`,
+/// and the others silently drop them.
+///
+/// We currently *drop* these items, which fixes the upstream rejection but loses the
+/// retrieved chunks from later-turn context. `web_search` instead does full-content
+/// replay (`web_search_tool::rewrite_web_search_history`), retaining the result text
+/// and rebuilding the `function_call` + `function_call_output` pair. File search could
+/// adopt the same approach, but RAG chunks are far larger than web snippets, so
+/// re-injecting them every turn is a deliberate cost tradeoff left for a follow-up.
+fn strip_file_search_history(payload: &mut CreateResponsesPayload) {
+    let Some(ResponsesInput::Items(items)) = payload.input.as_mut() else {
+        return;
+    };
+    items.retain(|item| !matches!(item, ResponsesInputItem::FileSearchCall(_)));
 }
 
 /// Check if a payload contains any file_search tools.
@@ -2278,6 +2308,45 @@ mod tests {
         assert_eq!(results[0].score, 0.85);
         assert!(results[0].attributes.is_some());
         assert_eq!(results[0].content.len(), 1);
+    }
+
+    #[test]
+    fn test_strip_file_search_history_removes_calls_keeps_other_items() {
+        let mut payload: CreateResponsesPayload = serde_json::from_value(serde_json::json!({
+            "input": [
+                {"role": "user", "content": "find the policy"},
+                {"role": "user", "content": "and the appendix?"},
+            ],
+            "stream": false,
+        }))
+        .unwrap();
+        let file_search_call = ResponsesInputItem::FileSearchCall(FileSearchCallOutput {
+            type_: FileSearchCallOutputType::FileSearchCall,
+            id: "fs_1".to_string(),
+            queries: vec!["policy".to_string()],
+            status: WebSearchStatus::Completed,
+            results: None,
+        });
+        let Some(ResponsesInput::Items(items)) = payload.input.as_mut() else {
+            panic!("expected items input");
+        };
+        items.insert(1, file_search_call);
+        assert_eq!(items.len(), 3);
+
+        // Strips even with no tools re-declared (continuation turn).
+        assert!(payload.tools.is_none());
+        preprocess_file_search_tools(&mut payload);
+
+        let Some(ResponsesInput::Items(items)) = payload.input else {
+            panic!("expected items input");
+        };
+        assert_eq!(items.len(), 2, "the file_search_call should be removed");
+        assert!(
+            !items
+                .iter()
+                .any(|i| matches!(i, ResponsesInputItem::FileSearchCall(_))),
+            "no file_search_call items should remain"
+        );
     }
 
     #[test]

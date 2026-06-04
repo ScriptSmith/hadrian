@@ -77,13 +77,14 @@ fn input_to_items(input: ResponsesInput) -> Vec<ResponsesInputItem> {
 /// replayed as conversation history. The inner payloads are identical between
 /// the two enums, so this is a total, lossless 1:1 mapping.
 ///
-/// Note the hosted-shell items (`ShellCall` / `ShellCallOutput`) are replayed
-/// verbatim here — the array-`output` shape they carry is only valid for
-/// native OpenAI passthrough. In function mode `preprocess_shell_tools`
-/// (`services/shell_tool.rs`, run per provider in `routes/execution.rs`)
-/// rewrites them to `function_call` / `function_call_output` before dispatch,
-/// since that's the mode-aware layer that knows whether the shell tool stayed
-/// native or was rewritten to a function.
+/// Note the hosted server-tool items (`ShellCall` / `ShellCallOutput`,
+/// `WebSearchCall`, `McpCall`, …) are replayed verbatim here — the per-provider
+/// preprocess layer in `routes/execution.rs` is what normalizes them before
+/// dispatch, since that's the mode-aware layer that knows whether each tool
+/// stayed native or was rewritten to a function. `preprocess_shell_tools`
+/// (`services/shell_tool.rs`) and `rewrite_web_search_history`
+/// (`services/web_search_tool.rs`) rewrite their hosted items to
+/// `function_call` / `function_call_output` pairs there.
 fn output_item_to_input(item: ResponsesOutputItem) -> ResponsesInputItem {
     match item {
         ResponsesOutputItem::Message(m) => ResponsesInputItem::OutputMessage(m),
@@ -283,6 +284,40 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn web_search_call_output_replays_with_action_and_content() {
+        // A stored `web_search_call` output item must round-trip through
+        // reconstruction as a `WebSearchCall` *input* item carrying its
+        // `action` (query + sources) and the Hadrian `replay_content`, so the
+        // per-provider preprocess can rebuild the function-call pair. Guards the
+        // untagged-enum deserialization against the added optional fields.
+        let output = json!([{
+            "type": "web_search_call",
+            "id": "ws_1",
+            "status": "completed",
+            "action": {
+                "type": "search",
+                "query": "rust 2024",
+                "sources": [{"type": "url", "url": "https://example.com"}]
+            },
+            "replay_content": "Web search results for \"rust 2024\""
+        }]);
+        let r = record("resp_1", None, json!("hi"), output);
+        let mut items = Vec::new();
+        record_to_items(&r, &mut items).expect("valid record");
+        // user "hi" then the web_search_call
+        assert_eq!(items.len(), 2);
+        assert!(
+            matches!(items[1], ResponsesInputItem::WebSearchCall(_)),
+            "must deserialize as the WebSearchCall variant"
+        );
+        let ws = serde_json::to_value(&items[1]).unwrap();
+        assert_eq!(ws["type"], "web_search_call");
+        assert_eq!(ws["action"]["query"], "rust 2024");
+        assert_eq!(ws["action"]["sources"][0]["url"], "https://example.com");
+        assert_eq!(ws["replay_content"], "Web search results for \"rust 2024\"");
     }
 
     #[test]
