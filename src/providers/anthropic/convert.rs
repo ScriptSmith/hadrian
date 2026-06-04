@@ -411,11 +411,18 @@ pub fn convert_responses_input_to_messages(
     input: Option<ResponsesInput>,
     instructions: Option<String>,
 ) -> (Option<String>, Vec<AnthropicMessage>) {
-    let system = instructions;
+    // Seed the system prompt with the top-level `instructions`, then fold in any
+    // system/developer messages found in the input. Anthropic has no native
+    // system role, so input system/developer messages must be merged here or
+    // they would be silently dropped.
+    let mut system_parts: Vec<String> = Vec::new();
+    if let Some(instructions) = instructions {
+        system_parts.push(instructions);
+    }
     let mut messages: Vec<AnthropicMessage> = Vec::new();
 
     let Some(input) = input else {
-        return (system, messages);
+        return (join_system_parts(system_parts), messages);
     };
 
     match input {
@@ -447,8 +454,12 @@ pub fn convert_responses_input_to_messages(
                             EasyInputMessageRole::User => "user",
                             EasyInputMessageRole::Assistant => "assistant",
                             EasyInputMessageRole::System | EasyInputMessageRole::Developer => {
-                                // System/developer messages are typically handled via instructions
-                                // but if they appear in input, we skip them (already in system)
+                                // Anthropic has no system role: fold system/developer
+                                // input messages into the system prompt.
+                                let text = easy_content_text(&msg.content);
+                                if !text.is_empty() {
+                                    system_parts.push(text);
+                                }
                                 continue;
                             }
                         };
@@ -480,6 +491,11 @@ pub fn convert_responses_input_to_messages(
                         let role = match msg.role {
                             InputMessageItemRole::User => "user",
                             InputMessageItemRole::System | InputMessageItemRole::Developer => {
+                                // Fold system/developer input messages into the system prompt.
+                                let text = input_content_text(&msg.content);
+                                if !text.is_empty() {
+                                    system_parts.push(text);
+                                }
                                 continue;
                             }
                         };
@@ -619,7 +635,36 @@ pub fn convert_responses_input_to_messages(
         }
     }
 
-    (system, messages)
+    (join_system_parts(system_parts), messages)
+}
+
+/// Join collected system/developer prompt parts with blank lines, or `None`.
+fn join_system_parts(parts: Vec<String>) -> Option<String> {
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
+    }
+}
+
+/// Extract the concatenated text from an easy-input message content value.
+fn easy_content_text(content: &EasyInputMessageContent) -> String {
+    match content {
+        EasyInputMessageContent::Text(text) => text.clone(),
+        EasyInputMessageContent::Parts(parts) => input_content_text(parts),
+    }
+}
+
+/// Extract the concatenated `input_text` from a list of input content items.
+fn input_content_text(parts: &[ResponseInputContentItem]) -> String {
+    parts
+        .iter()
+        .filter_map(|part| match part {
+            ResponseInputContentItem::InputText { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// Convert Responses API content items to Anthropic content blocks.
@@ -1770,6 +1815,42 @@ mod tests {
 
         assert_eq!(system, Some("You are a helpful assistant.".to_string()));
         assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn test_convert_responses_input_folds_system_messages() {
+        // System/developer messages in the input must be folded into the system
+        // prompt (Anthropic has no system role), not silently dropped.
+        let items = vec![
+            ResponsesInputItem::EasyMessage(EasyInputMessage {
+                type_: None,
+                role: EasyInputMessageRole::System,
+                content: EasyInputMessageContent::Text("Be concise.".to_string()),
+            }),
+            ResponsesInputItem::EasyMessage(EasyInputMessage {
+                type_: None,
+                role: EasyInputMessageRole::Developer,
+                content: EasyInputMessageContent::Text("Use markdown.".to_string()),
+            }),
+            ResponsesInputItem::EasyMessage(EasyInputMessage {
+                type_: None,
+                role: EasyInputMessageRole::User,
+                content: EasyInputMessageContent::Text("Hi".to_string()),
+            }),
+        ];
+
+        let (system, messages) = convert_responses_input_to_messages(
+            Some(ResponsesInput::Items(items)),
+            Some("You are a helpful assistant.".to_string()),
+        );
+
+        assert_eq!(
+            system,
+            Some("You are a helpful assistant.\n\nBe concise.\n\nUse markdown.".to_string())
+        );
+        // Only the user message survives as a turn.
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, "user");
     }
 
     #[test]

@@ -228,6 +228,12 @@ impl Provider for AzureOpenAIProvider {
         let timeout = self.timeout;
         let stream = payload.stream;
 
+        // Drop gateway-managed fields (store, background, models, provider,
+        // plugins, sovereignty_requirements, skills) that Hadrian consumes
+        // itself and the upstream must never see, mirroring the OpenAI adapter.
+        let mut payload = payload;
+        payload.strip_gateway_fields();
+
         // Pre-serialize request body before retry loop to avoid repeated serialization
         let body = serde_json::to_vec(&payload).unwrap_or_default();
 

@@ -500,15 +500,20 @@ pub(super) fn convert_responses_input_to_vertex(
     input: Option<ResponsesInput>,
     instructions: Option<String>,
 ) -> (Option<VertexContent>, Vec<VertexContent>) {
-    let system_instruction = instructions.map(|text| VertexContent {
-        role: "user".to_string(),
-        parts: vec![VertexPart::text(text)],
-    });
+    // Seed the system instruction with the top-level `instructions`, then fold
+    // in any system/developer messages found in the input. Gemini carries the
+    // system prompt in a dedicated `systemInstruction` field, so input
+    // system/developer messages must be merged here or they would be silently
+    // dropped.
+    let mut system_parts: Vec<String> = Vec::new();
+    if let Some(instructions) = instructions {
+        system_parts.push(instructions);
+    }
 
     let mut contents: Vec<VertexContent> = Vec::new();
 
     let Some(input) = input else {
-        return (system_instruction, contents);
+        return (join_system_parts_vertex(system_parts), contents);
     };
 
     // Track function call IDs to function names for tool results
@@ -541,7 +546,11 @@ pub(super) fn convert_responses_input_to_vertex(
                             EasyInputMessageRole::User => "user",
                             EasyInputMessageRole::Assistant => "model",
                             EasyInputMessageRole::System | EasyInputMessageRole::Developer => {
-                                // System/developer messages handled via instructions
+                                // Fold system/developer input messages into the system instruction.
+                                let text = easy_content_text_vertex(&msg.content);
+                                if !text.is_empty() {
+                                    system_parts.push(text);
+                                }
                                 continue;
                             }
                         };
@@ -577,6 +586,11 @@ pub(super) fn convert_responses_input_to_vertex(
                         let role = match msg.role {
                             InputMessageItemRole::User => "user",
                             InputMessageItemRole::System | InputMessageItemRole::Developer => {
+                                // Fold system/developer input messages into the system instruction.
+                                let text = input_content_text_vertex(&msg.content);
+                                if !text.is_empty() {
+                                    system_parts.push(text);
+                                }
                                 continue;
                             }
                         };
@@ -706,7 +720,39 @@ pub(super) fn convert_responses_input_to_vertex(
         }
     }
 
-    (system_instruction, contents)
+    (join_system_parts_vertex(system_parts), contents)
+}
+
+/// Join collected system/developer prompt parts into a Vertex system instruction, or `None`.
+fn join_system_parts_vertex(parts: Vec<String>) -> Option<VertexContent> {
+    if parts.is_empty() {
+        None
+    } else {
+        Some(VertexContent {
+            role: "user".to_string(),
+            parts: vec![VertexPart::text(parts.join("\n\n"))],
+        })
+    }
+}
+
+/// Extract the concatenated text from an easy-input message content value.
+fn easy_content_text_vertex(content: &EasyInputMessageContent) -> String {
+    match content {
+        EasyInputMessageContent::Text(text) => text.clone(),
+        EasyInputMessageContent::Parts(parts) => input_content_text_vertex(parts),
+    }
+}
+
+/// Extract the concatenated `input_text` from a list of input content items.
+fn input_content_text_vertex(parts: &[ResponseInputContentItem]) -> String {
+    parts
+        .iter()
+        .filter_map(|part| match part {
+            ResponseInputContentItem::InputText { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// Convert Responses API content items to Vertex parts.
@@ -1208,6 +1254,37 @@ mod responses_api_tests {
         );
 
         // Contents should have user message
+        assert_eq!(contents.len(), 1);
+        assert_eq!(contents[0].role, "user");
+    }
+
+    #[test]
+    fn test_convert_responses_input_folds_system_messages() {
+        // System/developer messages in the input must be folded into the system
+        // instruction, not silently dropped.
+        let input = Some(ResponsesInput::Items(vec![
+            ResponsesInputItem::EasyMessage(EasyInputMessage {
+                type_: Some(MessageType::Message),
+                role: EasyInputMessageRole::System,
+                content: EasyInputMessageContent::Text("Be concise.".to_string()),
+            }),
+            ResponsesInputItem::EasyMessage(EasyInputMessage {
+                type_: Some(MessageType::Message),
+                role: EasyInputMessageRole::User,
+                content: EasyInputMessageContent::Text("Hi".to_string()),
+            }),
+        ]));
+
+        let (system, contents) =
+            convert_responses_input_to_vertex(input, Some("You are helpful.".to_string()));
+
+        let system = system.expect("system instruction present");
+        assert_eq!(system.role, "user");
+        assert_eq!(system.parts.len(), 1);
+        assert_eq!(
+            system.parts[0].text,
+            Some("You are helpful.\n\nBe concise.".to_string())
+        );
         assert_eq!(contents.len(), 1);
         assert_eq!(contents[0].role, "user");
     }
