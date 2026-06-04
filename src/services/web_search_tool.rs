@@ -430,18 +430,12 @@ fn synthesize_web_search_invalid_handle(
         action: WebSearchAction::default(),
         replay_content: Some(error_text.clone()),
     };
-    let done_event = serde_json::json!({
-        "type": "response.output_item.done",
-        "output_index": 0,
-        "item": failed_item,
-    });
-    let events = vec![
-        format_web_search_in_progress_event(&id, 0),
-        Bytes::from(format!(
-            "data: {}\n\n",
-            serde_json::to_string(&done_event).unwrap_or_default()
-        )),
-    ];
+    // Reuse the canonical `output_item.done` formatter so the failed item's
+    // envelope stays in lockstep with the success/failure paths.
+    let mut events = vec![format_web_search_in_progress_event(&id, 0)];
+    if let Some(done_event) = format_web_search_call_output_event(&failed_item) {
+        events.push(done_event);
+    }
 
     let continuation_item = ResponsesInputItem::FunctionCallOutput(FunctionCallOutput {
         type_: FunctionCallOutputType::FunctionCallOutput,

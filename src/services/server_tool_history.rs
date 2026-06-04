@@ -45,9 +45,15 @@ pub fn rewrite_hosted_calls_to_function_pairs(
     let Some(ResponsesInput::Items(items)) = payload.input.as_mut() else {
         return;
     };
-    // Each owned call expands to two items; over-reserve by a small amount
-    // rather than reallocate mid-rewrite.
-    let mut rewritten = Vec::with_capacity(items.len() + 1);
+    // The common case — a turn with no prior hosted-tool calls — must touch
+    // nothing: count the items that expand first, bail before allocating when
+    // there are none, and size the output exactly (each expansion adds one item)
+    // so a run of K expansions never reallocates mid-rewrite.
+    let expansions = items.iter().filter(|item| expand(item).is_some()).count();
+    if expansions == 0 {
+        return;
+    }
+    let mut rewritten = Vec::with_capacity(items.len() + expansions);
     for item in std::mem::take(items) {
         match expand(&item) {
             Some((call, output)) => {
@@ -58,4 +64,86 @@ pub fn rewrite_hosted_calls_to_function_pairs(
         }
     }
     *items = rewritten;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api_types::responses::{FunctionCallOutputType, FunctionToolCallType};
+
+    /// Treat every `FunctionCallOutput` input item as a hosted call to expand,
+    /// pairing it with a fresh `function_call` keyed by the same `call_id`. This
+    /// lets the test drive the generic driver without a real hosted-tool type.
+    fn expand_outputs(item: &ResponsesInputItem) -> Option<(FunctionToolCall, FunctionCallOutput)> {
+        let ResponsesInputItem::FunctionCallOutput(out) = item else {
+            return None;
+        };
+        let call = FunctionToolCall {
+            type_: FunctionToolCallType::FunctionCall,
+            id: out.call_id.clone(),
+            call_id: out.call_id.clone(),
+            name: "t".to_string(),
+            arguments: "{}".to_string(),
+            status: None,
+        };
+        Some((call, out.clone()))
+    }
+
+    fn output_item(call_id: &str) -> ResponsesInputItem {
+        ResponsesInputItem::FunctionCallOutput(FunctionCallOutput {
+            type_: FunctionCallOutputType::FunctionCallOutput,
+            id: None,
+            call_id: call_id.to_string(),
+            output: String::new(),
+            status: None,
+        })
+    }
+
+    fn user_msg(text: &str) -> ResponsesInputItem {
+        serde_json::from_value(serde_json::json!({"role": "user", "content": text})).unwrap()
+    }
+
+    fn payload_with(items: Vec<ResponsesInputItem>) -> CreateResponsesPayload {
+        let mut payload: CreateResponsesPayload =
+            serde_json::from_value(serde_json::json!({"stream": false})).unwrap();
+        payload.input = Some(ResponsesInput::Items(items));
+        payload
+    }
+
+    #[test]
+    fn no_matching_items_leaves_input_untouched() {
+        let mut payload = payload_with(vec![user_msg("a"), user_msg("b")]);
+        rewrite_hosted_calls_to_function_pairs(&mut payload, expand_outputs);
+        let Some(ResponsesInput::Items(items)) = payload.input else {
+            panic!("expected items");
+        };
+        assert_eq!(items.len(), 2, "no expansions should leave the list as-is");
+        assert!(
+            !items
+                .iter()
+                .any(|i| matches!(i, ResponsesInputItem::FunctionCall(_))),
+            "nothing should have been rewritten"
+        );
+    }
+
+    #[test]
+    fn multiple_matches_expand_each_to_a_pair() {
+        let mut payload = payload_with(vec![
+            user_msg("a"),
+            output_item("c1"),
+            user_msg("b"),
+            output_item("c2"),
+        ]);
+        rewrite_hosted_calls_to_function_pairs(&mut payload, expand_outputs);
+        let Some(ResponsesInput::Items(items)) = payload.input else {
+            panic!("expected items");
+        };
+        // 2 user messages + 2 expansions × (call + output) = 6.
+        assert_eq!(items.len(), 6);
+        let fc_count = items
+            .iter()
+            .filter(|i| matches!(i, ResponsesInputItem::FunctionCall(_)))
+            .count();
+        assert_eq!(fc_count, 2, "each match yields one function_call");
+    }
 }
