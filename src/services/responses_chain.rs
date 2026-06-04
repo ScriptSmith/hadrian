@@ -78,13 +78,14 @@ fn input_to_items(input: ResponsesInput) -> Vec<ResponsesInputItem> {
 /// the two enums, so this is a total, lossless 1:1 mapping.
 ///
 /// Note the hosted server-tool items (`ShellCall` / `ShellCallOutput`,
-/// `WebSearchCall`, `McpCall`, …) are replayed verbatim here — the per-provider
-/// preprocess layer in `routes/execution.rs` is what normalizes them before
-/// dispatch, since that's the mode-aware layer that knows whether each tool
-/// stayed native or was rewritten to a function. `preprocess_shell_tools`
-/// (`services/shell_tool.rs`) and `rewrite_web_search_history`
-/// (`services/web_search_tool.rs`) rewrite their hosted items to
-/// `function_call` / `function_call_output` pairs there.
+/// `WebSearchCall`, `FileSearchCall`, `McpCall`, …) are replayed verbatim here —
+/// the per-provider preprocess layer in `routes/execution.rs` is what normalizes
+/// them before dispatch, since that's the mode-aware layer that knows whether
+/// each tool stayed native or was rewritten to a function. `preprocess_shell_tools`
+/// (`services/shell_tool.rs`) rewrites the two-item shell history in place, while
+/// `web_search`, `file_search`, and MCP share
+/// `server_tool_history::rewrite_hosted_calls_to_function_pairs` to expand their
+/// single hosted item into a `function_call` / `function_call_output` pair there.
 fn output_item_to_input(item: ResponsesOutputItem) -> ResponsesInputItem {
     match item {
         ResponsesOutputItem::Message(m) => ResponsesInputItem::OutputMessage(m),
