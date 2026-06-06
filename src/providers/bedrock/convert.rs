@@ -27,7 +27,10 @@ use crate::{
             ResponsesUsage, ResponsesUsageInputTokensDetails, ResponsesUsageOutputTokensDetails,
         },
     },
-    providers::image::parse_data_url,
+    providers::{
+        convert_utils::{easy_content_text, input_content_text},
+        image::parse_data_url,
+    },
     services::FileSearchToolArguments,
 };
 
@@ -474,7 +477,7 @@ pub(super) fn convert_responses_input_to_bedrock_messages(
                             EasyInputMessageRole::Assistant => "assistant",
                             EasyInputMessageRole::System | EasyInputMessageRole::Developer => {
                                 // Fold system/developer input messages into the system blocks.
-                                let text = easy_content_text_bedrock(&msg.content);
+                                let text = easy_content_text(&msg.content);
                                 if !text.is_empty() {
                                     system_parts.push(text);
                                 }
@@ -509,7 +512,7 @@ pub(super) fn convert_responses_input_to_bedrock_messages(
                             InputMessageItemRole::User => "user",
                             InputMessageItemRole::System | InputMessageItemRole::Developer => {
                                 // Fold system/developer input messages into the system blocks.
-                                let text = input_content_text_bedrock(&msg.content);
+                                let text = input_content_text(&msg.content);
                                 if !text.is_empty() {
                                     system_parts.push(text);
                                 }
@@ -656,26 +659,6 @@ fn join_system_parts_bedrock(parts: Vec<String>) -> Option<Vec<BedrockSystemCont
     } else {
         Some(vec![BedrockSystemContent::text(parts.join("\n\n"))])
     }
-}
-
-/// Extract the concatenated text from an easy-input message content value.
-fn easy_content_text_bedrock(content: &EasyInputMessageContent) -> String {
-    match content {
-        EasyInputMessageContent::Text(text) => text.clone(),
-        EasyInputMessageContent::Parts(parts) => input_content_text_bedrock(parts),
-    }
-}
-
-/// Extract the concatenated `input_text` from a list of input content items.
-fn input_content_text_bedrock(parts: &[ResponseInputContentItem]) -> String {
-    parts
-        .iter()
-        .filter_map(|part| match part {
-            ResponseInputContentItem::InputText { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
 }
 
 /// Convert Responses API content items to Bedrock content blocks.
@@ -1789,6 +1772,11 @@ mod tool_result_status_tests {
             }),
             ResponsesInputItem::EasyMessage(EasyInputMessage {
                 type_: None,
+                role: EasyInputMessageRole::Developer,
+                content: EasyInputMessageContent::Text("Use markdown.".to_string()),
+            }),
+            ResponsesInputItem::EasyMessage(EasyInputMessage {
+                type_: None,
                 role: EasyInputMessageRole::User,
                 content: EasyInputMessageContent::Text("Hi".to_string()),
             }),
@@ -1803,7 +1791,7 @@ mod tool_result_status_tests {
         assert_eq!(system.len(), 1);
         assert_eq!(
             system[0].text.as_deref(),
-            Some("You are a helpful assistant.\n\nBe concise.")
+            Some("You are a helpful assistant.\n\nBe concise.\n\nUse markdown.")
         );
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "user");

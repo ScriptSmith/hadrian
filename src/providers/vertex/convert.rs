@@ -28,7 +28,10 @@ use crate::{
             ResponsesUsageOutputTokensDetails,
         },
     },
-    providers::image::parse_data_url,
+    providers::{
+        convert_utils::{easy_content_text, input_content_text},
+        image::parse_data_url,
+    },
     services::FileSearchToolArguments,
 };
 
@@ -547,7 +550,7 @@ pub(super) fn convert_responses_input_to_vertex(
                             EasyInputMessageRole::Assistant => "model",
                             EasyInputMessageRole::System | EasyInputMessageRole::Developer => {
                                 // Fold system/developer input messages into the system instruction.
-                                let text = easy_content_text_vertex(&msg.content);
+                                let text = easy_content_text(&msg.content);
                                 if !text.is_empty() {
                                     system_parts.push(text);
                                 }
@@ -587,7 +590,7 @@ pub(super) fn convert_responses_input_to_vertex(
                             InputMessageItemRole::User => "user",
                             InputMessageItemRole::System | InputMessageItemRole::Developer => {
                                 // Fold system/developer input messages into the system instruction.
-                                let text = input_content_text_vertex(&msg.content);
+                                let text = input_content_text(&msg.content);
                                 if !text.is_empty() {
                                     system_parts.push(text);
                                 }
@@ -733,26 +736,6 @@ fn join_system_parts_vertex(parts: Vec<String>) -> Option<VertexContent> {
             parts: vec![VertexPart::text(parts.join("\n\n"))],
         })
     }
-}
-
-/// Extract the concatenated text from an easy-input message content value.
-fn easy_content_text_vertex(content: &EasyInputMessageContent) -> String {
-    match content {
-        EasyInputMessageContent::Text(text) => text.clone(),
-        EasyInputMessageContent::Parts(parts) => input_content_text_vertex(parts),
-    }
-}
-
-/// Extract the concatenated `input_text` from a list of input content items.
-fn input_content_text_vertex(parts: &[ResponseInputContentItem]) -> String {
-    parts
-        .iter()
-        .filter_map(|part| match part {
-            ResponseInputContentItem::InputText { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
 }
 
 /// Convert Responses API content items to Vertex parts.

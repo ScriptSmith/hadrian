@@ -26,7 +26,10 @@ use crate::{
             ResponsesUsageInputTokensDetails, ResponsesUsageOutputTokensDetails,
         },
     },
-    providers::image::parse_data_url,
+    providers::{
+        convert_utils::{easy_content_text, input_content_text},
+        image::parse_data_url,
+    },
     services::FileSearchToolArguments,
 };
 
@@ -645,26 +648,6 @@ fn join_system_parts(parts: Vec<String>) -> Option<String> {
     } else {
         Some(parts.join("\n\n"))
     }
-}
-
-/// Extract the concatenated text from an easy-input message content value.
-fn easy_content_text(content: &EasyInputMessageContent) -> String {
-    match content {
-        EasyInputMessageContent::Text(text) => text.clone(),
-        EasyInputMessageContent::Parts(parts) => input_content_text(parts),
-    }
-}
-
-/// Extract the concatenated `input_text` from a list of input content items.
-fn input_content_text(parts: &[ResponseInputContentItem]) -> String {
-    parts
-        .iter()
-        .filter_map(|part| match part {
-            ResponseInputContentItem::InputText { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
 }
 
 /// Convert Responses API content items to Anthropic content blocks.
