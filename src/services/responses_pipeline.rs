@@ -64,14 +64,65 @@ impl PipelinePrincipal {
         Self {
             api_key_id: api_key.map(|k| k.key.id),
             user_id: auth.and_then(|a| a.user_id()).or(state.default_user_id),
-            org_id: api_key
-                .and_then(|k| k.org_id)
-                .or_else(|| auth.and_then(|a| a.principal().org_id()))
-                .or(state.default_org_id),
+            org_id: resolve_request_org(auth, state.default_org_id),
             project_id: api_key.and_then(|k| k.project_id),
             team_id: api_key.and_then(|k| k.team_id),
             service_account_id: api_key.and_then(|k| k.service_account_id),
         }
+    }
+}
+
+/// Resolve the org a request operates in: the API key's bound org, else
+/// the authenticated principal's org, else the deployment `default_org_id`
+/// (no-auth / anonymous dev mode).
+///
+/// This is the single source of truth for request → org scoping, and
+/// every code path that *writes* an org-scoped row and a later path that
+/// *reads* it back must agree on it. In particular the MCP approval gate:
+/// park (`PipelinePrincipal::from_auth` → `McpExecutor` `org_id`) and
+/// resume (`routes::api::chat`) both call this, so a parked approval and
+/// its `mcp_approval_response` land in the same partition. Dropping the
+/// `default_org_id` fallback on either side made anonymous deployments
+/// park under the default org but resume under `None`, so the claim never
+/// hit and every approval re-prompted forever.
+pub fn resolve_request_org(
+    auth: Option<&AuthenticatedRequest>,
+    default_org_id: Option<Uuid>,
+) -> Option<Uuid> {
+    auth.and_then(|a| {
+        a.api_key()
+            .and_then(|k| k.org_id)
+            .or_else(|| a.principal().org_id())
+    })
+    .or(default_org_id)
+}
+
+#[cfg(test)]
+mod org_resolution_tests {
+    use super::*;
+
+    #[test]
+    fn anonymous_request_falls_back_to_default_org() {
+        // The MCP approval loop bug: park resolved org via this helper
+        // (with the `default_org_id` fallback) while resume omitted the
+        // fallback, so an anonymous resume looked under `None` and never
+        // claimed the parked row. Both paths now share this resolver, so an
+        // anonymous request must land on the deployment default on BOTH.
+        let default_org = Uuid::new_v4();
+        assert_eq!(
+            resolve_request_org(None, Some(default_org)),
+            Some(default_org),
+            "anonymous request must fall back to default_org_id"
+        );
+    }
+
+    #[test]
+    fn anonymous_request_without_default_resolves_none() {
+        // No auth and no configured default → no org. Park then fails
+        // closed (it can't persist a parked approval without an org) rather
+        // than parking, so there is nothing for resume to claim — the two
+        // paths stay symmetric in this case too.
+        assert_eq!(resolve_request_org(None, None), None);
     }
 }
 

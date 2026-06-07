@@ -242,7 +242,7 @@ pub fn invalid_arguments_text(tool_name: &str, error: &str) -> String {
 }
 
 /// Result of executing one tool call.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ToolCallResult {
     /// The call this result corresponds to.
     pub call_id: String,
@@ -251,6 +251,17 @@ pub struct ToolCallResult {
     /// Typically one `FunctionCallOutput` containing the tool result text
     /// the model can read on its next turn.
     pub continuation_items: Vec<ResponsesInputItem>,
+    /// When `true`, the runner ends the turn after this iteration instead
+    /// of sending a continuation request to the provider. The MCP approval
+    /// gate sets this when it parks a call: per the OpenAI Responses spec
+    /// the turn must stop at the `mcp_approval_request` so the model can't
+    /// emit a trailing assistant message after it. Letting the loop
+    /// continue would persist that stray assistant turn, which then
+    /// terminates the reconstructed transcript on the approval-resume
+    /// request and trips providers that reject an assistant-terminated
+    /// message array (e.g. Anthropic via OpenRouter: "This model does not
+    /// support assistant message prefill"). See `services::mcp::executor`.
+    pub stop_loop: bool,
 }
 
 /// Handle returned by `ServerExecutedTool::execute()`.

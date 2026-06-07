@@ -401,9 +401,25 @@ fn collect_inlined_catalogs(
 /// `mcp_list_tools` items are intentionally left for the provider
 /// conversion to drop: they're output-only catalog snapshots the model
 /// doesn't reason over, and dropping them loses no conversational
-/// content. `mcp_approval_request` / `mcp_approval_response` items are
-/// also left alone — pending approvals are resolved by [`super::resume`].
+/// content.
+///
+/// `mcp_approval_request` items are dropped here. Under `hadrian_hosted`
+/// the approval gate is Hadrian's, not the upstream's — the upstream is a
+/// plain function-calling model that never issued the request and has no
+/// way to consume it. Once [`super::resume`] resolves the matching
+/// `mcp_approval_response` into a `function_call` + `function_call_output`
+/// pair, the replayed approval-request item is redundant; left in, it is
+/// at best dropped by the per-provider conversion and at worst forwarded
+/// to an upstream (e.g. OpenRouter `/responses`) that mishandles a gating
+/// artifact with no `mcp` tool or `mcp_approval_response` alongside it,
+/// stranding the transcript on the wrong terminating role. (Pending,
+/// unresolved approvals are tracked in `mcp_pending_approvals`, not via
+/// this replayed item.) `mcp_approval_response` items never reach here —
+/// `resume` consumes them before reconstruction.
 fn rewrite_mcp_history(payload: &mut CreateResponsesPayload) {
+    if let Some(ResponsesInput::Items(items)) = payload.input.as_mut() {
+        items.retain(|item| !matches!(item, ResponsesInputItem::McpApprovalRequest(_)));
+    }
     rewrite_hosted_calls_to_function_pairs(payload, |item| match item {
         ResponsesInputItem::McpCall(call) => Some(mcp_call_to_function_pair(call)),
         _ => None,
@@ -1425,6 +1441,53 @@ mod tests {
             }
             other => panic!("expected function_call_output, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn rewrite_drops_replayed_mcp_approval_request() {
+        // A resume turn replays the prior `mcp_approval_request` from history
+        // (it was the spec-correct stopping point of the gated turn). Under
+        // hadrian_hosted the upstream is a plain function-calling model that
+        // can't consume that gating artifact, and `resume` has already folded
+        // the approved call into a `function_call`/`function_call_output`
+        // pair — so the rewrite must drop the approval-request item while
+        // leaving real conversation and prior `mcp_call` items intact.
+        use crate::api_types::responses::{ResponsesInput, ResponsesInputItem};
+
+        let service = McpService::new();
+        let mut payload: CreateResponsesPayload = serde_json::from_value(serde_json::json!({
+            "input": [
+                {"role": "user", "content": "What's in /tmp?"},
+                {"type": "mcp_approval_request", "id": "mcpr_1", "server_label": "s",
+                 "name": "bash", "arguments": "{}"},
+                {"type": "mcp_call", "id": "mcp_1", "server_label": "s", "name": "bash",
+                 "arguments": "{}", "status": "completed", "output": "files", "error": null,
+                 "approval_request_id": "mcpr_1"}
+            ]
+        }))
+        .unwrap();
+
+        rewrite_mcp_tools(&mut payload, &service, McpProviderKind::Anthropic)
+            .await
+            .unwrap();
+
+        let Some(ResponsesInput::Items(items)) = payload.input.as_ref() else {
+            panic!("expected items input");
+        };
+        assert!(
+            !items
+                .iter()
+                .any(|i| matches!(i, ResponsesInputItem::McpApprovalRequest(_))),
+            "mcp_approval_request must be dropped, got {items:?}"
+        );
+        // user message + (mcp_call → function_call + function_call_output) = 3.
+        assert_eq!(items.len(), 3, "got {items:?}");
+        assert!(matches!(items[0], ResponsesInputItem::EasyMessage(_)));
+        assert!(matches!(items[1], ResponsesInputItem::FunctionCall(_)));
+        assert!(matches!(
+            items[2],
+            ResponsesInputItem::FunctionCallOutput(_)
+        ));
     }
 
     #[tokio::test]

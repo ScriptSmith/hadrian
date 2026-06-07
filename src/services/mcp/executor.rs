@@ -421,11 +421,20 @@ impl McpExecutor {
         // Spawn so the channel survives until the runner pulls the
         // event; the actual continuation is synthesized immediately.
         tokio::spawn(async move {
-            // Tell the model to stop and wait. Without an output the
-            // function_call has no result; with one, the model sees a
-            // clear "do not continue" signal and the response ends in
-            // an assistant turn rather than burning the iteration
-            // budget on retries.
+            // Park = stop the turn here. `stop_loop` tells the runner to end
+            // the response at the `mcp_approval_request` instead of sending a
+            // continuation, matching the OpenAI Responses spec (the turn stops
+            // at the approval request; the caller resumes with an
+            // `mcp_approval_response`). Without this the loop would send the
+            // continuation below back to the model, which then emits a trailing
+            // assistant message — and that stray turn poisons the reconstructed
+            // transcript on resume (see `ToolCallResult::stop_loop`).
+            //
+            // The continuation `function_call_output` is retained as a
+            // defensive no-op: when `stop_loop` is honored the runner never
+            // forwards it, but pairing the suppressed `function_call` with an
+            // output keeps the item self-consistent for any path that inspects
+            // results without acting on `stop_loop`.
             let waiting_msg = serde_json::json!({
                 "status": "pending_approval",
                 "approval_request_id": approval_id,
@@ -446,6 +455,7 @@ impl McpExecutor {
             let _ = result_tx.send(Ok(ToolCallResult {
                 call_id: call_id_owned,
                 continuation_items: vec![continuation],
+                stop_loop: true,
             }));
             drop(event_tx);
         });
@@ -519,6 +529,9 @@ impl McpExecutor {
             let _ = result_tx.send(Ok(ToolCallResult {
                 call_id: call_id_owned,
                 continuation_items: vec![continuation],
+                // Fail-closed: the model sees the error and should replan, so
+                // keep the loop running (unlike a successful park).
+                stop_loop: false,
             }));
             drop(event_tx);
         });
@@ -743,6 +756,8 @@ impl McpExecutor {
             let _ = result_tx.send(Ok(ToolCallResult {
                 call_id,
                 continuation_items: vec![continuation],
+                // A real call result: the model continues to consume it.
+                stop_loop: false,
             }));
         });
 
@@ -1974,6 +1989,103 @@ mod tests {
         } else {
             panic!("expected FunctionCallOutput continuation");
         }
+    }
+
+    /// Minimal approvals repo whose `insert` succeeds, so the gate can
+    /// park (rather than fail closed) and we can assert the parked result
+    /// signals the runner to stop the turn.
+    struct InsertOkRepo;
+
+    #[async_trait]
+    impl crate::db::repos::McpPendingApprovalsRepo for InsertOkRepo {
+        async fn insert(
+            &self,
+            _row: crate::db::repos::NewMcpPendingApproval,
+        ) -> crate::db::DbResult<()> {
+            Ok(())
+        }
+        async fn take_by_id_and_org(
+            &self,
+            _id: &str,
+            _org_id: uuid::Uuid,
+            _now: chrono::DateTime<chrono::Utc>,
+        ) -> crate::db::DbResult<Option<crate::db::repos::McpPendingApproval>> {
+            Ok(None)
+        }
+        async fn delete_expired(
+            &self,
+            _cutoff: chrono::DateTime<chrono::Utc>,
+        ) -> crate::db::DbResult<u64> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn park_for_approval_stops_the_turn() {
+        use futures_util::StreamExt;
+
+        use crate::api_types::responses::{McpApprovalMode, McpRequireApproval};
+
+        // With persistence wired up, a gated call is parked (not failed
+        // closed). The parked result must carry `stop_loop = true` so the
+        // runner ends the turn at the `mcp_approval_request` instead of
+        // looping the model into a trailing assistant message — the spec
+        // behavior, and the fix for the broken approval-resume turn.
+        let mut tool = mcp_with("atlassian", "https://x");
+        tool.require_approval = Some(McpRequireApproval::Mode(McpApprovalMode::Always));
+        let payload: CreateResponsesPayload = serde_json::from_value(serde_json::json!({
+            "tools": [serde_json::to_value(tool).unwrap()],
+        }))
+        .unwrap();
+
+        let repo: std::sync::Arc<dyn crate::db::repos::McpPendingApprovalsRepo> =
+            std::sync::Arc::new(InsertOkRepo);
+        let service = McpService::with_approvals_repo(Some(repo), Default::default());
+        let executor = McpExecutor::with_persistence(
+            service,
+            &payload,
+            Some("resp_1".to_string()),
+            Some(uuid::Uuid::new_v4()),
+            DEFAULT_CALL_TIMEOUT_SECS,
+        );
+
+        let call = DetectedToolCall::new(
+            "mcp",
+            "c1",
+            serde_json::json!({
+                "__mcp_label": "atlassian",
+                "__mcp_tool": "jira_create",
+                "__mcp_args": {"summary": "bug"},
+            }),
+        );
+        let ctx = ToolContext {
+            original_payload: payload,
+        };
+        let handle = executor.execute(call, &ctx).await.expect("handle returned");
+
+        // The gate emits an `mcp_approval_request` item (not a failed call).
+        let mut events = handle.events;
+        let mut saw_approval_request = false;
+        while let Some(bytes) = events.next().await {
+            let text = std::str::from_utf8(&bytes).unwrap();
+            for line in text.lines() {
+                if let Some(rest) = line.strip_prefix("data:") {
+                    let v: serde_json::Value = serde_json::from_str(rest.trim()).unwrap();
+                    if v["item"]["type"] == "mcp_approval_request" {
+                        saw_approval_request = true;
+                    }
+                }
+            }
+        }
+        assert!(
+            saw_approval_request,
+            "expected an mcp_approval_request item"
+        );
+
+        // The result tells the runner to stop the turn here.
+        let result = handle.result.await.expect("result resolves");
+        assert!(result.stop_loop, "a parked approval must stop the turn");
+        assert_eq!(result.call_id, "c1");
     }
 
     #[tokio::test]

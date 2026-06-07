@@ -1122,6 +1122,7 @@ fn synthesize_file_search_invalid_handle(
     let result = crate::services::server_tools::ToolCallResult {
         call_id: id,
         continuation_items: vec![continuation_item],
+        stop_loop: false,
     };
 
     crate::services::server_tools::ToolExecutionHandle {
@@ -1722,6 +1723,7 @@ impl crate::services::server_tools::ServerExecutedTool for FileSearchExecutor {
         let _ = result_tx.send(Ok(crate::services::server_tools::ToolCallResult {
             call_id,
             continuation_items: vec![cont_item],
+            stop_loop: false,
         }));
 
         drop(event_tx);

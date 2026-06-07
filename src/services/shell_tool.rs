@@ -1307,6 +1307,7 @@ fn synthesize_invalid_args_handle(call_id: &str, error: &str) -> ToolExecutionHa
     let result = ToolCallResult {
         call_id: id,
         continuation_items: vec![cont_item],
+        stop_loop: false,
     };
 
     ToolExecutionHandle {
@@ -2609,6 +2610,7 @@ impl ServerExecutedTool for ShellExecutor {
             let _ = result_tx.send(Ok(ToolCallResult {
                 call_id: id_for_task,
                 continuation_items: vec![cont_item],
+                stop_loop: false,
             }));
             drop(event_tx);
         });

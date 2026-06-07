@@ -463,7 +463,7 @@ impl ToolLoopRunner {
                         // instead of the provider's raw, un-normalized bytes.
                         // With the rewriter off (file_search/web_search/shell)
                         // we forward the raw accumulated tail as before.
-                        match emit_failure_terminal(
+                        match emit_final_terminal(
                             &mut rewriter,
                             &tx,
                             suppressed_terminal.take(),
@@ -475,6 +475,37 @@ impl ToolLoopRunner {
                             Err(()) => return,
                         }
                         record_server_tool_iteration(iteration as u32, true, "error", &tool_names);
+                        break;
+                    }
+
+                    // A tool asked to end the turn here (the MCP approval gate
+                    // sets `stop_loop` when it parks a call). Don't send a
+                    // continuation — that would prompt the model for another
+                    // turn after the `mcp_approval_request`, and the OpenAI
+                    // Responses spec stops the turn at the approval request.
+                    // Re-emit the suppressed terminal through the rewriter so
+                    // `response.output` ends at the synthesized items the client
+                    // saw (e.g. `mcp_approval_request`), exactly as the
+                    // failure/abort paths do. See `ToolCallResult::stop_loop`.
+                    let stop_requested = results_by_tool.values().flatten().any(|r| r.stop_loop);
+                    if stop_requested {
+                        match emit_final_terminal(
+                            &mut rewriter,
+                            &tx,
+                            suppressed_terminal.take(),
+                            accumulated,
+                        )
+                        .await
+                        {
+                            Ok(forwarded) => raw_tail_forwarded = forwarded,
+                            Err(()) => return,
+                        }
+                        record_server_tool_iteration(
+                            iteration as u32,
+                            true,
+                            "stop_requested",
+                            &tool_names,
+                        );
                         break;
                     }
 
@@ -554,7 +585,7 @@ impl ToolLoopRunner {
                             // turn's terminal through the rewriter (so the
                             // already-streamed synthesized items survive in the
                             // reconstructed output) rather than dumping raw bytes.
-                            match emit_failure_terminal(
+                            match emit_final_terminal(
                                 &mut rewriter,
                                 &tx,
                                 suppressed_terminal.take(),
@@ -1155,7 +1186,11 @@ fn is_terminal_lifecycle(event: &[u8]) -> bool {
     )
 }
 
-/// Emit the final terminal on a failure/abort path.
+/// Emit the final terminal when the loop ends without a fresh provider
+/// turn — a failure/abort path, or a tool-requested clean stop (the MCP
+/// approval gate's `stop_loop`). In the stop case the suppressed terminal
+/// is the provider's `response.completed`, so this emits a completed
+/// terminal; on failure paths it carries whatever terminal was suppressed.
 ///
 /// With the rewriter on we re-emit the turn's suppressed terminal
 /// through it: this normalizes ids/sequence numbers, reconstructs
@@ -1170,7 +1205,7 @@ fn is_terminal_lifecycle(event: &[u8]) -> bool {
 /// Returns `Ok(raw_tail_forwarded)` — `true` only on the raw fallback,
 /// whose tail already carries a `[DONE]` so the epilogue must not emit a
 /// second one — or `Err(())` if the client disconnected.
-async fn emit_failure_terminal(
+async fn emit_final_terminal(
     rewriter: &mut Option<StreamRewriter>,
     tx: &mpsc::Sender<Result<Bytes, std::io::Error>>,
     suppressed_terminal: Option<Bytes>,
@@ -1738,5 +1773,196 @@ mod rewriter_tests {
         let text = std::str::from_utf8(&out).unwrap();
         assert!(text.starts_with("event: response.created\n"));
         assert!(text.contains("data: "));
+    }
+}
+
+/// End-to-end loop tests for `ToolCallResult::stop_loop` — the signal the
+/// MCP approval gate uses to end the turn at the `mcp_approval_request`
+/// instead of looping the model into a trailing assistant message.
+#[cfg(test)]
+mod stop_loop_tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use async_trait::async_trait;
+    use axum::{body::Body, response::Response};
+    use bytes::Bytes;
+
+    use super::*;
+    use crate::services::server_tools::{
+        DetectedToolCall, ProviderCallback, ServerExecutedTool, ToolCallResult, ToolContext,
+        ToolError, ToolExecutionHandle,
+    };
+
+    /// Detects a `function_call` named `faketool` and, on execute, emits one
+    /// synthesized output item (standing in for the gate's
+    /// `mcp_approval_request`) and resolves with a result whose `stop_loop`
+    /// flag is configurable.
+    struct FakeTool {
+        stop: bool,
+    }
+
+    #[async_trait]
+    impl ServerExecutedTool for FakeTool {
+        fn name(&self) -> &'static str {
+            "faketool"
+        }
+        fn is_enabled_for(&self, _payload: &CreateResponsesPayload) -> bool {
+            true
+        }
+        fn detect(&self, event: &[u8], _ctx: &ToolContext) -> Vec<DetectedToolCall> {
+            let Ok(text) = std::str::from_utf8(event) else {
+                return Vec::new();
+            };
+            let Some(data) = text
+                .lines()
+                .find_map(|l| l.strip_prefix("data:").map(str::trim))
+            else {
+                return Vec::new();
+            };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else {
+                return Vec::new();
+            };
+            if v["type"] == "response.output_item.done"
+                && v["item"]["type"] == "function_call"
+                && v["item"]["name"] == "faketool"
+            {
+                let call_id = v["item"]["call_id"].as_str().unwrap_or("c1").to_string();
+                return vec![DetectedToolCall::new(
+                    "faketool",
+                    call_id,
+                    serde_json::json!({}),
+                )];
+            }
+            Vec::new()
+        }
+        async fn execute(
+            &self,
+            call: DetectedToolCall,
+            _ctx: &ToolContext,
+        ) -> Result<ToolExecutionHandle, ToolError> {
+            let stop = self.stop;
+            let call_id = call.call_id;
+            let item = Bytes::from_static(
+                b"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\
+                  \"item\":{\"type\":\"mcp_approval_request\",\"id\":\"mcpr_x\",\
+                  \"server_label\":\"s\",\"name\":\"bash\",\"arguments\":\"{}\"}}\n\n",
+            );
+            let events = futures_util::stream::iter(vec![item]);
+            let result = ToolCallResult {
+                call_id,
+                continuation_items: Vec::new(),
+                stop_loop: stop,
+            };
+            Ok(ToolExecutionHandle {
+                events: Box::pin(events),
+                result: Box::pin(async move { Ok(result) }),
+            })
+        }
+        fn apply_to_continuation(
+            &self,
+            _payload: &mut CreateResponsesPayload,
+            _results: &[ToolCallResult],
+            _is_final_iteration: bool,
+        ) {
+        }
+    }
+
+    /// A provider turn that emits one `faketool` call then completes.
+    fn first_turn_body() -> Response<Body> {
+        let sse = concat!(
+            "data: {\"type\":\"response.created\",\"sequence_number\":0,\"response\":{}}\n\n",
+            "data: {\"type\":\"response.in_progress\",\"sequence_number\":1,\"response\":{}}\n\n",
+            "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"name\":\"faketool\",\"call_id\":\"c1\",\"id\":\"fc_1\",\"arguments\":\"{}\"}}\n\n",
+            "data: {\"type\":\"response.completed\",\"sequence_number\":2,\"response\":{}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        Response::new(Body::from(sse))
+    }
+
+    /// Continuation callback that counts invocations and returns a trivial
+    /// final turn (a message, no tool call) so a non-stop loop terminates.
+    fn counting_callback(counter: Arc<AtomicUsize>) -> ProviderCallback {
+        Arc::new(move |_payload| {
+            let counter = counter.clone();
+            Box::pin(async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                let sse = concat!(
+                    "data: {\"type\":\"response.created\",\"sequence_number\":0,\"response\":{}}\n\n",
+                    "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_1\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\",\"annotations\":[]}]}}\n\n",
+                    "data: {\"type\":\"response.completed\",\"sequence_number\":1,\"response\":{}}\n\n",
+                    "data: [DONE]\n\n",
+                );
+                Ok(Response::new(Body::from(sse)))
+            })
+        })
+    }
+
+    async fn collect(resp: Response<Body>) -> String {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    fn payload() -> CreateResponsesPayload {
+        serde_json::from_value(serde_json::json!({"model":"m","stream":true})).unwrap()
+    }
+
+    #[tokio::test]
+    async fn stop_loop_ends_turn_without_continuation() {
+        // The fix: a tool result with `stop_loop` ends the turn here. The
+        // runner must NOT send a continuation (which is what previously made
+        // the model emit a trailing assistant message after the approval
+        // request and broke the resume turn).
+        let counter = Arc::new(AtomicUsize::new(0));
+        let runner = ToolLoopRunner::new(payload(), 8)
+            .with_provider_callback(counting_callback(counter.clone()))
+            .rewrite_output(true)
+            .register(Arc::new(FakeTool { stop: true }));
+        let out = collect(runner.wrap_streaming(first_turn_body())).await;
+
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            0,
+            "stop_loop must not trigger a continuation request"
+        );
+        // The turn still terminates cleanly, and the synthesized approval
+        // item survives in the streamed output (the spec-correct stopping
+        // point), with no trailing assistant message after it.
+        assert!(
+            out.contains("response.completed"),
+            "expected a completed terminal:\n{out}"
+        );
+        assert!(
+            out.contains("mcp_approval_request"),
+            "the synthesized approval item should be forwarded:\n{out}"
+        );
+        assert!(
+            !out.contains("output_text"),
+            "no trailing assistant message should follow the approval request:\n{out}"
+        );
+        assert!(out.contains("[DONE]"), "expected a terminal [DONE]:\n{out}");
+    }
+
+    #[tokio::test]
+    async fn without_stop_loop_the_runner_continues_once() {
+        // Control: the identical harness with `stop_loop = false` drives
+        // exactly one continuation — proving the stop above is the flag's
+        // doing, not a dead callback or a tool that never engaged.
+        let counter = Arc::new(AtomicUsize::new(0));
+        let runner = ToolLoopRunner::new(payload(), 8)
+            .with_provider_callback(counting_callback(counter.clone()))
+            .rewrite_output(true)
+            .register(Arc::new(FakeTool { stop: false }));
+        let _ = collect(runner.wrap_streaming(first_turn_body())).await;
+
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "a normal tool result must drive exactly one continuation"
+        );
     }
 }
