@@ -27,7 +27,10 @@ use crate::{
             ResponsesUsage, ResponsesUsageInputTokensDetails, ResponsesUsageOutputTokensDetails,
         },
     },
-    providers::image::parse_data_url,
+    providers::{
+        convert_utils::{easy_content_text, input_content_text},
+        image::parse_data_url,
+    },
     services::FileSearchToolArguments,
 };
 
@@ -432,11 +435,18 @@ pub(super) fn convert_responses_input_to_bedrock_messages(
     input: Option<ResponsesInput>,
     instructions: Option<String>,
 ) -> (Option<Vec<BedrockSystemContent>>, Vec<BedrockMessage>) {
-    let system = instructions.map(|text| vec![BedrockSystemContent::text(text)]);
+    // Seed the system blocks with the top-level `instructions`, then fold in any
+    // system/developer messages found in the input. Bedrock Converse has no
+    // system role inside the message list, so input system/developer messages
+    // must be merged here or they would be silently dropped.
+    let mut system_parts: Vec<String> = Vec::new();
+    if let Some(instructions) = instructions {
+        system_parts.push(instructions);
+    }
     let mut messages: Vec<BedrockMessage> = Vec::new();
 
     let Some(input) = input else {
-        return (system, messages);
+        return (join_system_parts_bedrock(system_parts), messages);
     };
 
     match input {
@@ -466,7 +476,11 @@ pub(super) fn convert_responses_input_to_bedrock_messages(
                             EasyInputMessageRole::User => "user",
                             EasyInputMessageRole::Assistant => "assistant",
                             EasyInputMessageRole::System | EasyInputMessageRole::Developer => {
-                                // System/developer messages are handled via instructions
+                                // Fold system/developer input messages into the system blocks.
+                                let text = easy_content_text(&msg.content);
+                                if !text.is_empty() {
+                                    system_parts.push(text);
+                                }
                                 continue;
                             }
                         };
@@ -497,6 +511,11 @@ pub(super) fn convert_responses_input_to_bedrock_messages(
                         let role = match msg.role {
                             InputMessageItemRole::User => "user",
                             InputMessageItemRole::System | InputMessageItemRole::Developer => {
+                                // Fold system/developer input messages into the system blocks.
+                                let text = input_content_text(&msg.content);
+                                if !text.is_empty() {
+                                    system_parts.push(text);
+                                }
                                 continue;
                             }
                         };
@@ -630,7 +649,16 @@ pub(super) fn convert_responses_input_to_bedrock_messages(
         }
     }
 
-    (system, messages)
+    (join_system_parts_bedrock(system_parts), messages)
+}
+
+/// Join collected system/developer prompt parts into Bedrock system blocks, or `None`.
+fn join_system_parts_bedrock(parts: Vec<String>) -> Option<Vec<BedrockSystemContent>> {
+    if parts.is_empty() {
+        None
+    } else {
+        Some(vec![BedrockSystemContent::text(parts.join("\n\n"))])
+    }
 }
 
 /// Convert Responses API content items to Bedrock content blocks.
@@ -1728,6 +1756,45 @@ mod tool_result_status_tests {
         let json = serde_json::to_value(&messages[0].content[0]).unwrap();
         let tool_result = json.get("toolResult").unwrap();
         assert_eq!(tool_result.get("status").unwrap(), "success");
+    }
+
+    #[test]
+    fn test_responses_input_folds_system_messages() {
+        use crate::api_types::responses::EasyInputMessage;
+
+        // System/developer messages in the input must be folded into the system
+        // blocks (Bedrock Converse has no system role inside the message list).
+        let items = vec![
+            ResponsesInputItem::EasyMessage(EasyInputMessage {
+                type_: None,
+                role: EasyInputMessageRole::System,
+                content: EasyInputMessageContent::Text("Be concise.".to_string()),
+            }),
+            ResponsesInputItem::EasyMessage(EasyInputMessage {
+                type_: None,
+                role: EasyInputMessageRole::Developer,
+                content: EasyInputMessageContent::Text("Use markdown.".to_string()),
+            }),
+            ResponsesInputItem::EasyMessage(EasyInputMessage {
+                type_: None,
+                role: EasyInputMessageRole::User,
+                content: EasyInputMessageContent::Text("Hi".to_string()),
+            }),
+        ];
+
+        let (system, messages) = convert_responses_input_to_bedrock_messages(
+            Some(ResponsesInput::Items(items)),
+            Some("You are a helpful assistant.".to_string()),
+        );
+
+        let system = system.expect("system blocks present");
+        assert_eq!(system.len(), 1);
+        assert_eq!(
+            system[0].text.as_deref(),
+            Some("You are a helpful assistant.\n\nBe concise.\n\nUse markdown.")
+        );
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, "user");
     }
 }
 

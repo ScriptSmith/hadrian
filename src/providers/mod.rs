@@ -44,6 +44,7 @@ pub mod azure_openai;
 #[cfg(feature = "provider-bedrock")]
 pub mod bedrock;
 pub mod circuit_breaker;
+pub(crate) mod convert_utils;
 pub mod error;
 pub mod fallback;
 pub mod health_check;
