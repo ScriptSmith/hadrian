@@ -334,6 +334,7 @@ impl ServerExecutedTool for ToolSearchExecutor {
             let result = ToolCallResult {
                 call_id: call.call_id.clone(),
                 continuation_items: vec![continuation],
+                stop_loop: false,
             };
             return Ok(ToolExecutionHandle {
                 events: Box::pin(futures_util::stream::iter(events)),
@@ -488,6 +489,7 @@ impl ServerExecutedTool for ToolSearchExecutor {
         let result = ToolCallResult {
             call_id: call.call_id,
             continuation_items: vec![continuation],
+            stop_loop: false,
         };
 
         Ok(ToolExecutionHandle {

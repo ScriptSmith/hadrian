@@ -1507,11 +1507,24 @@ pub async fn api_v1_responses(
     // parked call, running it (on approve) or refusing it (on deny),
     // and folding the result back. Only runs under `hadrian_hosted`
     // mode with a resolved org scope.
+    //
+    // `org_id` MUST be resolved through the same `resolve_request_org`
+    // the park path uses (`PipelinePrincipal::from_auth` →
+    // `McpExecutor` `org_id`). Parked approvals are keyed by org and
+    // resume claims them by `(approval_request_id, org_id)`; a different
+    // resolution here sends resume looking in the wrong partition, the
+    // claim misses, and every approval silently re-prompts forever. The
+    // shared resolver's `default_org_id` fallback is what makes no-auth /
+    // anonymous deployments (where `principal().org_id()` is `None`)
+    // resume in the same partition park wrote to.
     #[cfg(feature = "mcp")]
     if let (Some(mcp_cfg), Some(mcp_service), Some(org_id)) = (
         state.config.features.mcp.as_ref(),
         state.mcp_service.as_ref(),
-        auth.as_ref().and_then(|a| a.0.principal().org_id()),
+        crate::services::responses_pipeline::resolve_request_org(
+            auth.as_ref().map(|e| &e.0),
+            state.default_org_id,
+        ),
     ) && mcp_cfg.is_hadrian_hosted()
         && let Err(e) = crate::services::mcp::resume_mcp_approvals(
             &mut payload,

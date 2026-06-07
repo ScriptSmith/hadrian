@@ -447,6 +447,7 @@ fn synthesize_web_search_invalid_handle(
     let result = crate::services::server_tools::ToolCallResult {
         call_id: id,
         continuation_items: vec![continuation_item],
+        stop_loop: false,
     };
 
     crate::services::server_tools::ToolExecutionHandle {
@@ -663,6 +664,7 @@ impl crate::services::server_tools::ServerExecutedTool for WebSearchExecutor {
         let result = crate::services::server_tools::ToolCallResult {
             call_id: id,
             continuation_items: vec![continuation_item],
+            stop_loop: false,
         };
 
         Ok(crate::services::server_tools::ToolExecutionHandle {
