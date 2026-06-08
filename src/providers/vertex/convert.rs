@@ -229,7 +229,10 @@ fn resolve_refs(
     };
 
     // Keywords sitting beside `$ref` (draft 2020-12 applies both); preserve them
-    // so an inlined field keeps its own `description`/`default`/etc.
+    // so an inlined field keeps its own `description`/`default`/etc. A sibling can
+    // itself be a subschema carrying a nested `$ref` (e.g. `anyOf` next to a
+    // `$ref`), so each is resolved below before being merged — otherwise the
+    // allowlist pass would later strip the orphaned `$ref` to an empty object.
     let siblings: Vec<(String, serde_json::Value)> = map
         .iter()
         .filter(|(k, _)| k.as_str() != "$ref")
@@ -270,7 +273,8 @@ fn resolve_refs(
     };
 
     if let serde_json::Value::Object(resolved) = &mut replacement {
-        for (k, v) in siblings {
+        for (k, mut v) in siblings {
+            resolve_refs(&mut v, defs, active);
             resolved.entry(k).or_insert(v);
         }
     }
@@ -2600,5 +2604,121 @@ mod responses_api_tests {
         }
 
         assert_eq!(response.output_text, Some("Final answer.".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod tool_conversion_tests {
+    use super::*;
+    use crate::api_types::chat_completion::{ToolDefinitionFunction, ToolType};
+
+    fn function_tool(parameters: serde_json::Value) -> ToolDefinition {
+        ToolDefinition {
+            type_: ToolType::Function,
+            function: ToolDefinitionFunction {
+                name: "platter_query".to_string(),
+                description: Some("Run a query".to_string()),
+                parameters: Some(parameters),
+                strict: None,
+            },
+            cache_control: None,
+        }
+    }
+
+    #[test]
+    fn test_convert_tools_sanitizes_chat_completion_parameters() {
+        // Parallel to `test_convert_responses_tools_strips_gemini_unsupported_schema_keys`,
+        // but for the chat-completions path: confirms `convert_tools` actually
+        // forwards `function.parameters` through `sanitized_parameters` — unsupported
+        // keys are stripped and `$ref`/`$defs` are inlined before reaching Vertex.
+        let tools = Some(vec![function_tool(serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "filter": {"$ref": "#/$defs/Filter"},
+                "tags": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["filter"],
+            "$defs": {
+                "Filter": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {"name": {"type": "string"}}
+                }
+            }
+        }))]);
+
+        let vertex_tools = convert_tools(tools).unwrap();
+        let params = vertex_tools[0].function_declarations[0]
+            .parameters
+            .as_ref()
+            .unwrap();
+
+        let serialized = serde_json::to_string(params).unwrap();
+        assert!(
+            !serialized.contains("$schema"),
+            "$schema should be stripped: {serialized}"
+        );
+        assert!(
+            !serialized.contains("additionalProperties"),
+            "additionalProperties should be stripped: {serialized}"
+        );
+        assert!(
+            !serialized.contains("$ref") && !serialized.contains("$defs"),
+            "references should be inlined: {serialized}"
+        );
+        assert_eq!(params["type"], "object");
+        assert_eq!(params["required"][0], "filter");
+        assert_eq!(
+            params["properties"]["filter"]["properties"]["name"]["type"],
+            "string"
+        );
+    }
+
+    #[test]
+    fn test_convert_tools_resolves_ref_in_sibling_keyword() {
+        // A `$ref` co-located with a schema-valued sibling (`anyOf`) that itself
+        // holds a nested `$ref`. The sibling must be resolved too — otherwise the
+        // allowlist pass strips the bare `$ref` and the variant collapses to `{}`.
+        let tools = Some(vec![function_tool(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "node": {
+                    "$ref": "#/$defs/A",
+                    "anyOf": [
+                        {"$ref": "#/$defs/B"},
+                        {"type": "null"}
+                    ]
+                }
+            },
+            "$defs": {
+                "A": {"type": "object", "properties": {"a": {"type": "string"}}},
+                "B": {"type": "object", "properties": {"b": {"type": "string"}}}
+            }
+        }))]);
+
+        let vertex_tools = convert_tools(tools).unwrap();
+        let params = vertex_tools[0].function_declarations[0]
+            .parameters
+            .as_ref()
+            .unwrap();
+
+        let serialized = serde_json::to_string(params).unwrap();
+        assert!(
+            !serialized.contains("$ref"),
+            "no $ref should survive, including inside siblings: {serialized}"
+        );
+        // The primary `$ref` resolved to A...
+        assert_eq!(
+            params["properties"]["node"]["properties"]["a"]["type"],
+            "string"
+        );
+        // ...and the nested `$ref` inside the `anyOf` sibling resolved to B rather
+        // than collapsing to an empty variant.
+        assert_eq!(
+            params["properties"]["node"]["anyOf"][0]["properties"]["b"]["type"],
+            "string"
+        );
     }
 }
