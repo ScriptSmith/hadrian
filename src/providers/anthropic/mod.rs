@@ -43,6 +43,49 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// Default max tokens if not specified.
 const DEFAULT_MAX_TOKENS: u32 = 4096;
 
+/// Tokens reserved for the visible answer on top of the thinking budget when
+/// extended thinking is enabled, so the reply still has room. Matches the
+/// buffer qwen-code adopted for the same Anthropic constraint.
+const THINKING_OUTPUT_MARGIN: u32 = 8000;
+
+/// Anthropic requires `max_tokens > thinking.budget_tokens`, and the budget is
+/// thinking-only — the visible answer needs headroom on top. `max_tokens` and
+/// the thinking budget are derived independently (the budget from
+/// `reasoning.effort`, `max_tokens` from the request/config/default), so a
+/// common case like effort `medium` (budget 16000) against the 4096 default
+/// produces `budget_tokens > max_tokens` and a 400. Raise `max_tokens` so it
+/// always clears the budget plus [`THINKING_OUTPUT_MARGIN`].
+///
+/// Only ever RAISES `max_tokens`, so a generous client-supplied value, the
+/// adaptive path, and interleaved thinking (where the budget may legitimately
+/// exceed output) are all left untouched.
+///
+/// NOTE: the result is intentionally not clamped to the model's catalog
+/// `limit.output` — the provider has no catalog handle, the computed ceiling
+/// (≤ 32000 + margin) stays under every current Anthropic output cap, and
+/// Anthropic validates client-specified extremes itself. Revisit if budgets grow.
+fn max_tokens_with_thinking_headroom(
+    max_tokens: u32,
+    thinking: &Option<types::AnthropicThinkingConfig>,
+) -> u32 {
+    match thinking {
+        Some(types::AnthropicThinkingConfig::Enabled { budget_tokens }) => {
+            let raised = max_tokens.max(budget_tokens.saturating_add(THINKING_OUTPUT_MARGIN));
+            if raised != max_tokens {
+                tracing::debug!(
+                    original_max_tokens = max_tokens,
+                    adjusted_max_tokens = raised,
+                    budget_tokens = *budget_tokens,
+                    "Raised max_tokens to clear Anthropic thinking budget plus reply headroom"
+                );
+            }
+            raised
+        }
+        // Disabled / Adaptive / None: no fixed budget to reconcile against.
+        _ => max_tokens,
+    }
+}
+
 /// Compute the `anthropic-beta` header value based on model and thinking config.
 ///
 /// When thinking is enabled on models that match an entry in
@@ -187,6 +230,9 @@ impl Provider for AnthropicProvider {
         let (thinking, output_config) =
             convert_chat_completion_reasoning_config(payload.reasoning.as_ref(), &model);
 
+        // Ensure max_tokens clears the thinking budget (+ reply headroom).
+        let max_tokens = max_tokens_with_thinking_headroom(max_tokens, &thinking);
+
         // Note: When thinking is enabled, temperature must be 1.0 per Anthropic API requirements
         let temperature = if thinking.is_some() {
             None // Anthropic requires temperature=1 when thinking is enabled, so we don't send it
@@ -325,6 +371,9 @@ impl Provider for AnthropicProvider {
         // Convert reasoning config to thinking config (model-aware for adaptive thinking)
         let (thinking, output_config) =
             convert_reasoning_config(payload.reasoning.as_ref(), &model);
+
+        // Ensure max_tokens clears the thinking budget (+ reply headroom).
+        let max_tokens = max_tokens_with_thinking_headroom(max_tokens, &thinking);
 
         // Note: When thinking is enabled, temperature must be 1.0 per Anthropic API requirements
         let temperature = if thinking.is_some() {
@@ -522,6 +571,65 @@ mod tests {
 
     fn enabled() -> Option<types::AnthropicThinkingConfig> {
         Some(types::AnthropicThinkingConfig::Adaptive)
+    }
+
+    fn enabled_budget(budget_tokens: u32) -> Option<types::AnthropicThinkingConfig> {
+        Some(types::AnthropicThinkingConfig::Enabled { budget_tokens })
+    }
+
+    #[test]
+    fn max_tokens_raised_above_thinking_budget() {
+        // The logged failure: effort `medium` (budget 16000) with the 4096
+        // default would 400. Now it clears the budget plus the reply margin.
+        assert_eq!(
+            max_tokens_with_thinking_headroom(DEFAULT_MAX_TOKENS, &enabled_budget(16000)),
+            16000 + THINKING_OUTPUT_MARGIN,
+        );
+        // High effort (32000) likewise.
+        assert_eq!(
+            max_tokens_with_thinking_headroom(DEFAULT_MAX_TOKENS, &enabled_budget(32000)),
+            32000 + THINKING_OUTPUT_MARGIN,
+        );
+    }
+
+    #[test]
+    fn max_tokens_only_ever_raised() {
+        // A client-supplied ceiling already above budget + margin is preserved.
+        assert_eq!(
+            max_tokens_with_thinking_headroom(50000, &enabled_budget(16000)),
+            50000,
+        );
+    }
+
+    #[test]
+    fn max_tokens_above_budget_still_gets_margin() {
+        // Boundary case: max_tokens already exceeds budget_tokens (so it would
+        // satisfy Anthropic's raw `max_tokens > budget_tokens` check) but sits
+        // below budget + margin — it must still be raised to clear the margin.
+        assert_eq!(
+            max_tokens_with_thinking_headroom(20000, &enabled_budget(16000)),
+            16000 + THINKING_OUTPUT_MARGIN,
+        );
+    }
+
+    #[test]
+    fn max_tokens_untouched_without_fixed_budget() {
+        // Adaptive, disabled, and absent thinking have no budget to reconcile.
+        assert_eq!(
+            max_tokens_with_thinking_headroom(
+                4096,
+                &Some(types::AnthropicThinkingConfig::Adaptive)
+            ),
+            4096,
+        );
+        assert_eq!(
+            max_tokens_with_thinking_headroom(
+                4096,
+                &Some(types::AnthropicThinkingConfig::Disabled)
+            ),
+            4096,
+        );
+        assert_eq!(max_tokens_with_thinking_headroom(4096, &None), 4096);
     }
 
     #[test]
