@@ -329,7 +329,13 @@ impl Provider for AnthropicProvider {
         } else {
             payload.temperature
         };
-        let top_p = if strict { None } else { payload.top_p };
+        // Anthropic rejects `top_p` whenever thinking is active (not only for
+        // strict models), so it follows the same condition as `temperature`.
+        let top_p = if strict || thinking.is_some() {
+            None
+        } else {
+            payload.top_p
+        };
 
         // Build metadata if user is provided
         let metadata = payload.user.map(|user_id| AnthropicMetadata {
@@ -492,7 +498,13 @@ impl Provider for AnthropicProvider {
         } else {
             payload.temperature
         };
-        let top_p = if strict { None } else { payload.top_p };
+        // Anthropic rejects `top_p` whenever thinking is active (not only for
+        // strict models), so it follows the same condition as `temperature`.
+        let top_p = if strict || thinking.is_some() {
+            None
+        } else {
+            payload.top_p
+        };
 
         let stream = payload.stream;
 
