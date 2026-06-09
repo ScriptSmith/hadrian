@@ -245,6 +245,26 @@ fn collect_tool_bindings(
     out
 }
 
+/// Derive the `fc_…`-namespaced item `id` OpenAI's Responses API requires
+/// for a `function_call`, from a parked `call_id`.
+///
+/// OpenAI call_ids carry a `call_` prefix we swap for `fc_`. A call_id
+/// already in the `fc_` namespace — an MCP-shaped call that arrived with
+/// only an `id` and no `call_id`, where the executor falls back to that
+/// `fc_…` id as the call_id — is returned unchanged so we don't emit a
+/// `fc_fc_…` double prefix. Anything else is prefixed once. The result
+/// always begins with `fc_` (all OpenAI validates); non-OpenAI providers
+/// ignore the item `id` entirely.
+fn function_call_item_id(call_id: &str) -> String {
+    if call_id.starts_with("fc_") {
+        call_id.to_string()
+    } else if let Some(rest) = call_id.strip_prefix("call_") {
+        format!("fc_{rest}")
+    } else {
+        format!("fc_{call_id}")
+    }
+}
+
 /// Look up + resolve one approval. Returns the reconstructed
 /// `(function_call, function_call_output)` pair to fold back into input,
 /// or `None` when the approval doesn't match any parked row.
@@ -442,11 +462,19 @@ async fn resolve_approval(
     // matching call to anchor to (`synthesize_function_name` yields the same
     // `mcp_<label>__<tool>` name the rewrite exposed). The original was
     // suppressed from the client at park time, so it isn't in the resumed
-    // input. `id` and `call_id` share the parked `call_id` — unique per
-    // response and never colliding with a live function-call id.
+    // input.
+    //
+    // `call_id` reuses the parked id (the `call_…` value the model emitted);
+    // the item `id` must live in the *separate* `fc_…` namespace. This pair
+    // is folded into `input` and — because `previous_response_id` chaining is
+    // Hadrian-owned — replayed verbatim to the provider on the next turn.
+    // OpenAI's Responses API 400s a `function_call` whose `id` starts with
+    // `call_` ("Expected an ID that begins with 'fc'"), so derive an `fc_…`
+    // id from the call_id. Other providers ignore the item `id` and key on
+    // `call_id`, so this is safe for all of them.
     let function_call = FunctionToolCall {
         type_: FunctionToolCallType::FunctionCall,
-        id: row.call_id.clone(),
+        id: function_call_item_id(&row.call_id),
         call_id: row.call_id.clone(),
         name: synthesize_function_name(&row.server_label, &row.tool_name),
         arguments: row.arguments_json.clone(),
@@ -556,6 +584,21 @@ mod tests {
         assert_eq!(e.code(), "mcp_resume_call_failed");
     }
 
+    #[test]
+    fn function_call_item_id_derives_fc_namespace() {
+        // OpenAI call_ids: swap `call_` → `fc_`.
+        assert_eq!(function_call_item_id("call_abc123"), "fc_abc123");
+        // Already `fc_`-namespaced (executor fell back to `id` when a
+        // call arrived with no `call_id`): leave it, no `fc_fc_` prefix.
+        assert_eq!(function_call_item_id("fc_xyz"), "fc_xyz");
+        // Anything else: prefix exactly once.
+        assert_eq!(function_call_item_id("toolu_42"), "fc_toolu_42");
+        // Every result satisfies OpenAI's `fc_` requirement.
+        for id in ["call_abc123", "fc_xyz", "toolu_42"] {
+            assert!(function_call_item_id(id).starts_with("fc_"));
+        }
+    }
+
     /// Repo holding a single parked approval; `take_by_id_and_org`
     /// returns it once (and `None` thereafter, mirroring the real
     /// claim-and-delete semantics).
@@ -609,7 +652,7 @@ mod tests {
                 id: "mcpr_x".into(),
                 response_id: "resp_1".into(),
                 org_id,
-                call_id: "fc_1".into(),
+                call_id: "call_abc123".into(),
                 server_label: "atlassian".into(),
                 server_url: "https://mcp.atlassian.com".into(),
                 tool_name: "jira_search".into(),
@@ -645,14 +688,20 @@ mod tests {
         match &items[0] {
             ResponsesInputItem::FunctionCall(fc) => {
                 assert_eq!(fc.name, "mcp_atlassian__jira_search");
-                assert_eq!(fc.call_id, "fc_1");
+                // `call_id` keeps the parked `call_…` value; the item `id`
+                // must live in the `fc_…` namespace or OpenAI 400s the
+                // replayed call. The two must stay distinct.
+                assert_eq!(fc.call_id, "call_abc123");
+                assert_eq!(fc.id, "fc_abc123");
+                assert!(fc.id.starts_with("fc_"));
+                assert_ne!(fc.id, fc.call_id);
                 assert_eq!(fc.arguments, r#"{"q":"bug"}"#);
             }
             other => panic!("expected function_call, got {other:?}"),
         }
         match &items[1] {
             ResponsesInputItem::FunctionCallOutput(out) => {
-                assert_eq!(out.call_id, "fc_1");
+                assert_eq!(out.call_id, "call_abc123");
                 assert!(out.output.contains("refused"));
                 assert!(out.output.contains("not now"));
             }
