@@ -800,6 +800,16 @@ pub struct AnthropicProviderConfig {
     /// request supplies `reasoning.max_tokens`.
     #[serde(default = "default_strict_thinking_models")]
     pub strict_thinking_models: Vec<String>,
+
+    /// Models that support **mid-conversation system messages** — an inline
+    /// `role:"system"` message in the `messages` array (Claude Opus 4.8 only at
+    /// time of writing; no beta header is required). Substring match. For models
+    /// not listed here, system/developer messages that appear after the first
+    /// turn are folded into the top-level `system` prompt, since those models
+    /// reject a non-user/assistant role in `messages`. Extend this list as new
+    /// models gain support.
+    #[serde(default = "default_mid_conversation_system_models")]
+    pub mid_conversation_system_models: Vec<String>,
 }
 
 pub fn default_interleaved_thinking_models() -> Vec<String> {
@@ -826,6 +836,10 @@ pub fn default_strict_thinking_models() -> Vec<String> {
         "opus-4-8".to_string(),
         "opus-4.8".to_string(),
     ]
+}
+
+pub fn default_mid_conversation_system_models() -> Vec<String> {
+    vec!["opus-4-8".to_string(), "opus-4.8".to_string()]
 }
 
 impl AnthropicProviderConfig {
@@ -2949,6 +2963,7 @@ mod tests {
             interleaved_thinking_models: default_interleaved_thinking_models(),
             adaptive_thinking_models: default_adaptive_thinking_models(),
             strict_thinking_models: default_strict_thinking_models(),
+            mid_conversation_system_models: default_mid_conversation_system_models(),
         };
 
         let debug_output = format!("{:?}", config);

@@ -16,7 +16,7 @@ use convert::{
     convert_chat_completion_reasoning_config, convert_messages, convert_reasoning_config,
     convert_response, convert_responses_input_to_messages, convert_responses_tool_choice,
     convert_responses_tools, convert_stop, convert_tool_choice, convert_tools,
-    requires_strict_thinking,
+    requires_strict_thinking, supports_mid_conversation_system,
 };
 use serde::Deserialize;
 use stream::{AnthropicToOpenAIStream, AnthropicToResponsesStream};
@@ -116,13 +116,13 @@ fn max_tokens_with_thinking_headroom(
 ///   models reject it). Opus 4.7/4.8 are deliberately excluded; adaptive
 ///   thinking auto-enables interleaved there.
 /// - `task-budgets-2026-03-13` when an `output_config.task_budget` is set.
-/// - `mid-conversation-system-2026-04-07` when an inline `role:"system"`
-///   message was emitted mid-conversation.
+///
+/// Mid-conversation system messages need no beta header (Opus 4.8 supports them
+/// directly), so they don't appear here; gating happens at conversion time.
 fn compute_beta_header(
     model: &str,
     thinking: &Option<types::AnthropicThinkingConfig>,
     output_config: &Option<types::AnthropicOutputConfig>,
-    emitted_inline_system: bool,
     interleaved_thinking_models: &[String],
 ) -> Option<String> {
     let mut betas: Vec<&str> = Vec::new();
@@ -148,10 +148,6 @@ fn compute_beta_header(
         })
     ) {
         betas.push("task-budgets-2026-03-13");
-    }
-
-    if emitted_inline_system {
-        betas.push("mid-conversation-system-2026-04-07");
     }
 
     if betas.is_empty() {
@@ -229,6 +225,7 @@ pub struct AnthropicProvider {
     interleaved_thinking_models: Vec<String>,
     adaptive_thinking_models: Vec<String>,
     strict_thinking_models: Vec<String>,
+    mid_conversation_system_models: Vec<String>,
 }
 
 impl AnthropicProvider {
@@ -274,6 +271,7 @@ impl AnthropicProvider {
             interleaved_thinking_models: config.interleaved_thinking_models.clone(),
             adaptive_thinking_models: config.adaptive_thinking_models.clone(),
             strict_thinking_models: config.strict_thinking_models.clone(),
+            mid_conversation_system_models: config.mid_conversation_system_models.clone(),
         }
     }
 }
@@ -321,7 +319,11 @@ impl Provider for AnthropicProvider {
         )
         .await;
 
-        let (system, messages) = convert_messages(messages_to_convert);
+        // Mid-conversation system messages are inline only on models that
+        // support them (Opus 4.8); otherwise they fold into the system prompt.
+        let mid_conversation_system =
+            supports_mid_conversation_system(&model, &self.mid_conversation_system_models);
+        let (system, messages) = convert_messages(messages_to_convert, mid_conversation_system);
         let stream = payload.stream;
 
         // Convert tools and tool_choice
@@ -368,10 +370,6 @@ impl Provider for AnthropicProvider {
             user_id: Some(user_id),
         });
 
-        // A `role:"system"` message past the first turn means a mid-conversation
-        // system message was emitted; flag it for the beta header.
-        let emitted_inline_system = messages.iter().any(|m| m.role == "system");
-
         let anthropic_request = AnthropicRequest {
             model,
             messages,
@@ -394,7 +392,6 @@ impl Provider for AnthropicProvider {
             &anthropic_request.model,
             &anthropic_request.thinking,
             &anthropic_request.output_config,
-            emitted_inline_system,
             &self.interleaved_thinking_models,
         );
         let body = serde_json::to_vec(&anthropic_request).unwrap_or_default();
@@ -485,9 +482,16 @@ impl Provider for AnthropicProvider {
 
         let echo_fields = payload.echo_fields_json();
 
-        // Convert Responses API input to Anthropic messages format
-        let (system, messages) =
-            convert_responses_input_to_messages(payload.input, payload.instructions.clone());
+        // Convert Responses API input to Anthropic messages format. Mid-
+        // conversation system messages are inline only on models that support
+        // them (Opus 4.8); otherwise they fold into the system prompt.
+        let mid_conversation_system =
+            supports_mid_conversation_system(&model, &self.mid_conversation_system_models);
+        let (system, messages) = convert_responses_input_to_messages(
+            payload.input,
+            payload.instructions.clone(),
+            mid_conversation_system,
+        );
 
         // Convert tools and tool_choice
         let tools = convert_responses_tools(payload.tools);
@@ -545,10 +549,6 @@ impl Provider for AnthropicProvider {
             user_id: Some(user_id),
         });
 
-        // A `role:"system"` message past the first turn means a mid-conversation
-        // system message was emitted; flag it for the beta header.
-        let emitted_inline_system = messages.iter().any(|m| m.role == "system");
-
         let anthropic_request = AnthropicRequest {
             model,
             messages,
@@ -571,7 +571,6 @@ impl Provider for AnthropicProvider {
             &anthropic_request.model,
             &anthropic_request.thinking,
             &anthropic_request.output_config,
-            emitted_inline_system,
             &self.interleaved_thinking_models,
         );
         let body = serde_json::to_vec(&anthropic_request).unwrap_or_default();
@@ -812,7 +811,7 @@ mod tests {
     fn beta_header_set_for_allowed_model() {
         let allow = vec!["opus-4-6".to_string()];
         assert_eq!(
-            compute_beta_header("claude-opus-4-6-20260101", &enabled(), &None, false, &allow),
+            compute_beta_header("claude-opus-4-6-20260101", &enabled(), &None, &allow),
             Some("interleaved-thinking-2025-05-14".to_string())
         );
     }
@@ -821,13 +820,7 @@ mod tests {
     fn beta_header_skipped_for_unlisted_model() {
         let allow = vec!["opus-4-6".to_string()];
         assert_eq!(
-            compute_beta_header(
-                "claude-sonnet-4-5-20250929",
-                &enabled(),
-                &None,
-                false,
-                &allow
-            ),
+            compute_beta_header("claude-sonnet-4-5-20250929", &enabled(), &None, &allow),
             None
         );
     }
@@ -836,7 +829,7 @@ mod tests {
     fn beta_header_skipped_when_thinking_disabled() {
         let allow = vec!["opus-4-6".to_string()];
         assert_eq!(
-            compute_beta_header("claude-opus-4-6-20260101", &None, &None, false, &allow),
+            compute_beta_header("claude-opus-4-6-20260101", &None, &None, &allow),
             None
         );
     }
@@ -844,7 +837,7 @@ mod tests {
     #[test]
     fn beta_header_disabled_with_empty_allowlist() {
         assert_eq!(
-            compute_beta_header("claude-opus-4-6-20260101", &enabled(), &None, false, &[]),
+            compute_beta_header("claude-opus-4-6-20260101", &enabled(), &None, &[]),
             None
         );
     }
@@ -853,23 +846,22 @@ mod tests {
     fn beta_header_ignores_empty_pattern() {
         let allow = vec![String::new()];
         assert_eq!(
-            compute_beta_header("claude-opus-4-6", &enabled(), &None, false, &allow),
+            compute_beta_header("claude-opus-4-6", &enabled(), &None, &allow),
             None
         );
     }
 
     #[test]
-    fn beta_header_accumulates_task_budget_and_mid_conversation() {
-        // Opus 4.7/4.8 stay out of the interleaved list (adaptive covers it),
-        // but a task budget + an inline system message accumulate, comma-joined.
+    fn beta_header_accumulates_task_budget() {
+        // Opus 4.7/4.8 stay out of the interleaved list (adaptive covers it), and
+        // mid-conversation system needs no beta — only the task budget is added.
         let oc = Some(types::AnthropicOutputConfig {
             effort: Some(types::AnthropicEffort::XHigh),
             task_budget: Some(types::AnthropicTaskBudget::Tokens { total: 50_000 }),
         });
-        let header = compute_beta_header("claude-opus-4-8", &enabled(), &oc, true, &[])
+        let header = compute_beta_header("claude-opus-4-8", &enabled(), &oc, &[])
             .expect("expected a beta header");
-        assert!(header.contains("task-budgets-2026-03-13"));
-        assert!(header.contains("mid-conversation-system-2026-04-07"));
+        assert_eq!(header, "task-budgets-2026-03-13");
         assert!(!header.contains("interleaved-thinking-2025-05-14"));
     }
 

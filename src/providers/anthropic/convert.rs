@@ -189,7 +189,17 @@ pub fn convert_tool_choice(tool_choice: Option<ToolChoice>) -> Option<AnthropicT
 
 /// Convert OpenAI messages to Anthropic format.
 /// Returns (system_prompt, messages).
-pub fn convert_messages(openai_messages: Vec<Message>) -> (Option<String>, Vec<AnthropicMessage>) {
+/// Convert OpenAI chat-completion messages to Anthropic messages.
+///
+/// `mid_conversation_system` enables emitting system/developer messages that
+/// appear after the first turn as inline `role:"system"` messages (Opus 4.8
+/// only). When `false`, every system/developer message is folded into the
+/// top-level `system` prompt, since other models reject a non-user/assistant
+/// role in `messages`.
+pub fn convert_messages(
+    openai_messages: Vec<Message>,
+    mid_conversation_system: bool,
+) -> (Option<String>, Vec<AnthropicMessage>) {
     let mut system_parts: Vec<String> = Vec::new();
     let mut messages = Vec::new();
     let mut pending_tool_results: Vec<ContentBlock> = Vec::new();
@@ -199,15 +209,16 @@ pub fn convert_messages(openai_messages: Vec<Message>) -> (Option<String>, Vec<A
             Message::System { content, .. } | Message::Developer { content, .. } => {
                 let text = extract_text(&content);
                 if !text.is_empty() {
-                    if messages.is_empty() && pending_tool_results.is_empty() {
-                        // Leading system/developer messages fold into the
-                        // top-level `system` prompt.
+                    let leading = messages.is_empty() && pending_tool_results.is_empty();
+                    if leading || !mid_conversation_system {
+                        // Leading system/developer messages — and every such
+                        // message on models without mid-conversation support —
+                        // fold into the top-level `system` prompt.
                         system_parts.push(text);
                     } else {
-                        // Once a turn has started, emit the message inline as a
-                        // `role:"system"` message (mid-conversation system,
-                        // beta `mid-conversation-system-2026-04-07`) so it isn't
-                        // hoisted ahead of the cached conversation prefix.
+                        // Mid-conversation system message (Opus 4.8, no beta
+                        // header): emit it inline as a `role:"system"` message so
+                        // it isn't hoisted ahead of the cached conversation prefix.
                         if !pending_tool_results.is_empty() {
                             messages.push(AnthropicMessage {
                                 role: "user".to_string(),
@@ -432,9 +443,14 @@ pub fn convert_response(anthropic: AnthropicResponse) -> OpenAIResponse {
 
 /// Convert OpenAI Responses API input to Anthropic Messages format.
 /// Returns (system_prompt, messages).
+///
+/// `mid_conversation_system` enables emitting system/developer input items that
+/// appear after the first turn as inline `role:"system"` messages (Opus 4.8
+/// only). When `false`, they fold into the top-level `system` prompt.
 pub fn convert_responses_input_to_messages(
     input: Option<ResponsesInput>,
     instructions: Option<String>,
+    mid_conversation_system: bool,
 ) -> (Option<String>, Vec<AnthropicMessage>) {
     // Seed the system prompt with the top-level `instructions`, then fold in any
     // system/developer messages found in the input. Anthropic has no native
@@ -481,14 +497,16 @@ pub fn convert_responses_input_to_messages(
                             EasyInputMessageRole::System | EasyInputMessageRole::Developer => {
                                 let text = easy_content_text(&msg.content);
                                 if !text.is_empty() {
-                                    if messages.is_empty() {
-                                        // Leading system/developer input folds
-                                        // into the top-level system prompt.
+                                    if messages.is_empty() || !mid_conversation_system {
+                                        // Leading system/developer input — and
+                                        // every such item on models without
+                                        // mid-conversation support — folds into
+                                        // the top-level system prompt.
                                         system_parts.push(text);
                                     } else {
-                                        // Mid-conversation system message (beta
-                                        // `mid-conversation-system-2026-04-07`):
-                                        // keep it inline so it follows the turn.
+                                        // Mid-conversation system message (Opus
+                                        // 4.8, no beta header): keep it inline so
+                                        // it follows the turn.
                                         messages.push(AnthropicMessage {
                                             role: "system".to_string(),
                                             content: AnthropicContent::Text(text),
@@ -528,13 +546,15 @@ pub fn convert_responses_input_to_messages(
                             InputMessageItemRole::System | InputMessageItemRole::Developer => {
                                 let text = input_content_text(&msg.content);
                                 if !text.is_empty() {
-                                    if messages.is_empty() {
-                                        // Leading system/developer input folds
-                                        // into the top-level system prompt.
+                                    if messages.is_empty() || !mid_conversation_system {
+                                        // Leading system/developer input — and
+                                        // every such item on models without
+                                        // mid-conversation support — folds into
+                                        // the top-level system prompt.
                                         system_parts.push(text);
                                     } else {
-                                        // Mid-conversation system message (beta
-                                        // `mid-conversation-system-2026-04-07`).
+                                        // Mid-conversation system message (Opus
+                                        // 4.8, no beta header).
                                         messages.push(AnthropicMessage {
                                             role: "system".to_string(),
                                             content: AnthropicContent::Text(text),
@@ -899,6 +919,14 @@ pub(super) fn requires_strict_thinking(model: &str, strict_models: &[String]) ->
     model_matches_any(model, strict_models)
 }
 
+/// Whether `model` supports mid-conversation system messages — an inline
+/// `role:"system"` message in `messages` (Claude Opus 4.8 only at present).
+/// Other models reject a non-user/assistant role, so they fold such messages
+/// into the top-level `system` prompt instead.
+pub(super) fn supports_mid_conversation_system(model: &str, models: &[String]) -> bool {
+    model_matches_any(model, models)
+}
+
 fn model_matches_any(model: &str, patterns: &[String]) -> bool {
     patterns
         .iter()
@@ -914,20 +942,19 @@ pub(super) fn adaptive_thinking_config(strict: bool) -> AnthropicThinkingConfig 
 }
 
 /// Clamp an effort level the target model doesn't support. `XHigh` is Opus 4.7+
-/// only (the strict set); `Max` is Opus-tier only. Unsupported levels clamp down
-/// to `High` rather than erroring upstream.
+/// only (the strict set), so it clamps down to `High` elsewhere rather than
+/// erroring upstream.
+///
+/// `Max` is intentionally never clamped: `clamp_effort` only runs on the
+/// adaptive path, and every adaptive model (Opus 4.6+ and Sonnet 4.6) supports
+/// `max` per Anthropic's effort docs — Sonnet 4.6 included. There is no
+/// adaptive model that accepts the request but rejects `max`.
 fn clamp_effort(effort: AnthropicEffort, model: &str, strict_models: &[String]) -> AnthropicEffort {
     match effort {
         // `xhigh` is Opus 4.7+ only (the strict set).
         AnthropicEffort::XHigh if !requires_strict_thinking(model, strict_models) => {
             AnthropicEffort::High
         }
-        // `max` is Opus-tier only. `clamp_effort` only runs on the adaptive path,
-        // so the model is already Opus 4.6+/Sonnet 4.6; among those, `contains
-        // ("opus")` selects exactly the max-capable Opus models. A config list
-        // can't be reused here: `adaptive_models` also includes Sonnet 4.6, which
-        // rejects `max`, and `strict_models` excludes Opus 4.6, which accepts it.
-        AnthropicEffort::Max if !model.contains("opus") => AnthropicEffort::High,
         other => other,
     }
 }
@@ -1324,7 +1351,7 @@ mod tests {
             name: None,
         }];
 
-        let (system, anthropic_msgs) = convert_messages(messages);
+        let (system, anthropic_msgs) = convert_messages(messages, false);
         assert!(system.is_none());
         assert_eq!(anthropic_msgs.len(), 1);
         assert_eq!(anthropic_msgs[0].role, "user");
@@ -1354,7 +1381,7 @@ mod tests {
             },
         ];
 
-        let (system, anthropic_msgs) = convert_messages(messages);
+        let (system, anthropic_msgs) = convert_messages(messages, false);
         assert_eq!(system, Some("You are helpful".to_string()));
         assert_eq!(anthropic_msgs.len(), 1);
         assert_eq!(anthropic_msgs[0].role, "user");
@@ -1378,7 +1405,7 @@ mod tests {
             },
         ];
 
-        let (system, _) = convert_messages(messages);
+        let (system, _) = convert_messages(messages, false);
         assert_eq!(
             system,
             Some("First instruction\n\nSecond instruction".to_string())
@@ -1403,7 +1430,7 @@ mod tests {
             },
         ];
 
-        let (system, _) = convert_messages(messages);
+        let (system, _) = convert_messages(messages, false);
         assert_eq!(
             system,
             Some("System rules\n\nDeveloper context".to_string())
@@ -1427,7 +1454,7 @@ mod tests {
             reasoning: None,
         }];
 
-        let (_, anthropic_msgs) = convert_messages(messages);
+        let (_, anthropic_msgs) = convert_messages(messages, false);
         assert_eq!(anthropic_msgs.len(), 1);
         assert_eq!(anthropic_msgs[0].role, "assistant");
         match &anthropic_msgs[0].content {
@@ -1463,7 +1490,7 @@ mod tests {
             tool_call_id: "call_123".to_string(),
         }];
 
-        let (_, anthropic_msgs) = convert_messages(messages);
+        let (_, anthropic_msgs) = convert_messages(messages, false);
         assert_eq!(anthropic_msgs.len(), 1);
         assert_eq!(anthropic_msgs[0].role, "user");
         match &anthropic_msgs[0].content {
@@ -1504,7 +1531,7 @@ mod tests {
             name: None,
         }];
 
-        let (_, anthropic_msgs) = convert_messages(messages);
+        let (_, anthropic_msgs) = convert_messages(messages, false);
         assert_eq!(anthropic_msgs.len(), 1);
         // Images are now properly converted to ContentBlocks
         match &anthropic_msgs[0].content {
@@ -1912,6 +1939,7 @@ mod tests {
         let (system, messages) = convert_responses_input_to_messages(
             Some(ResponsesInput::Text("Hello, Claude!".to_string())),
             None,
+            false,
         );
 
         assert!(system.is_none());
@@ -1928,6 +1956,7 @@ mod tests {
         let (system, messages) = convert_responses_input_to_messages(
             Some(ResponsesInput::Text("Hello".to_string())),
             Some("You are a helpful assistant.".to_string()),
+            false,
         );
 
         assert_eq!(system, Some("You are a helpful assistant.".to_string()));
@@ -1959,6 +1988,7 @@ mod tests {
         let (system, messages) = convert_responses_input_to_messages(
             Some(ResponsesInput::Items(items)),
             Some("You are a helpful assistant.".to_string()),
+            false,
         );
 
         assert_eq!(
@@ -1968,6 +1998,37 @@ mod tests {
         // Only the user message survives as a turn.
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "user");
+    }
+
+    #[test]
+    fn test_convert_responses_input_mid_conversation_system_gated_by_model() {
+        // A system message after a user turn: inline on Opus 4.8, folded elsewhere.
+        let items = || {
+            vec![
+                ResponsesInputItem::EasyMessage(EasyInputMessage {
+                    type_: None,
+                    role: EasyInputMessageRole::User,
+                    content: EasyInputMessageContent::Text("Hi".to_string()),
+                }),
+                ResponsesInputItem::EasyMessage(EasyInputMessage {
+                    type_: None,
+                    role: EasyInputMessageRole::System,
+                    content: EasyInputMessageContent::Text("Be terse.".to_string()),
+                }),
+            ]
+        };
+
+        // Supported (Opus 4.8): emitted inline as role:"system".
+        let (system, messages) =
+            convert_responses_input_to_messages(Some(ResponsesInput::Items(items())), None, true);
+        assert!(system.is_none());
+        assert!(messages.iter().any(|m| m.role == "system"));
+
+        // Unsupported: folded into the top-level prompt, no inline role:"system".
+        let (system, messages) =
+            convert_responses_input_to_messages(Some(ResponsesInput::Items(items())), None, false);
+        assert_eq!(system.as_deref(), Some("Be terse."));
+        assert!(!messages.iter().any(|m| m.role == "system"));
     }
 
     #[test]
@@ -1986,7 +2047,7 @@ mod tests {
         ];
 
         let (system, messages) =
-            convert_responses_input_to_messages(Some(ResponsesInput::Items(items)), None);
+            convert_responses_input_to_messages(Some(ResponsesInput::Items(items)), None, false);
 
         assert!(system.is_none());
         assert_eq!(messages.len(), 2);
@@ -2015,7 +2076,7 @@ mod tests {
         ];
 
         let (_, messages) =
-            convert_responses_input_to_messages(Some(ResponsesInput::Items(items)), None);
+            convert_responses_input_to_messages(Some(ResponsesInput::Items(items)), None, false);
 
         assert_eq!(messages.len(), 2);
 
@@ -2977,20 +3038,20 @@ mod tests {
             Some(AnthropicEffort::High)
         ));
 
-        // max stays max on an opus model, clamps to high on sonnet (Opus-tier only).
+        // max is supported on every adaptive model (Opus 4.6+ and Sonnet 4.6),
+        // so it is never clamped — Sonnet 4.6 keeps `max`.
         assert!(matches!(
             effort_for(ResponsesReasoningEffort::Max, "claude-opus-4-6-20260525"),
             Some(AnthropicEffort::Max)
         ));
         assert!(matches!(
             effort_for(ResponsesReasoningEffort::Max, "claude-sonnet-4-6-20260101"),
-            Some(AnthropicEffort::High)
+            Some(AnthropicEffort::Max)
         ));
     }
 
-    #[test]
-    fn mid_conversation_system_message_emitted_inline() {
-        let messages = vec![
+    fn lead_user_mid_messages() -> Vec<Message> {
+        vec![
             Message::System {
                 content: MessageContent::Text("lead".to_string()),
                 name: None,
@@ -3003,14 +3064,32 @@ mod tests {
                 content: MessageContent::Text("mid".to_string()),
                 name: None,
             },
-        ];
-        let (system, msgs) = convert_messages(messages);
-        // Leading system folds into the top-level prompt.
+        ]
+    }
+
+    #[test]
+    fn mid_conversation_system_message_emitted_inline_when_supported() {
+        // mid_conversation_system = true (Opus 4.8): the post-turn system
+        // message is emitted inline as role:"system".
+        let (system, msgs) = convert_messages(lead_user_mid_messages(), true);
+        // Leading system still folds into the top-level prompt.
         assert_eq!(system.as_deref(), Some("lead"));
-        // The post-turn system message is emitted inline as role:"system".
         assert!(
             msgs.iter().any(|m| m.role == "system"),
             "expected an inline system message"
+        );
+    }
+
+    #[test]
+    fn mid_conversation_system_message_folds_when_unsupported() {
+        // mid_conversation_system = false (every model but Opus 4.8): the
+        // post-turn system message must NOT be emitted inline (those models
+        // reject role:"system"); it folds into the top-level prompt instead.
+        let (system, msgs) = convert_messages(lead_user_mid_messages(), false);
+        assert_eq!(system.as_deref(), Some("lead\n\nmid"));
+        assert!(
+            !msgs.iter().any(|m| m.role == "system"),
+            "no inline system message expected when unsupported"
         );
     }
 
