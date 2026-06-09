@@ -25,7 +25,7 @@
 - **Single binary, single config.** No complex deployments. Works on a Raspberry Pi or global cloud infrastructure.
 - **All features included.** Multi-tenancy, SSO, RBAC, guardrails, semantic caching, cost forecasting. Everything is free.
 - **Production ready.** Budget enforcement, rate limiting, circuit breakers, fallback chains, observability.
-- **Multi-model chat UI.** Compare responses from multiple models side-by-side with 14 interaction modes.
+- **Multi-model chat UI.** Compare responses from multiple models side-by-side with 15 interaction modes.
 - **Built-in RAG.** OpenAI-compatible Vector Stores API with document processing, chunking, and search.
 - **Studio.** Image generation, TTS, transcription, and translation with multi-model execution.
 
@@ -126,8 +126,8 @@ Supports OpenAI, Anthropic, AWS Bedrock, Google Vertex AI, Azure OpenAI, and any
 - **Knowledge Bases:** File upload, text extraction, OCR, chunking, vector search, re-ranking. OpenAI-compatible Vector Stores API.
 - **Cost tracking:** Microcent precision, time-series forecasting, budget enforcement with atomic reservation.
 - **Observability:** Prometheus metrics, OTLP tracing, structured logging, usage export.
-- **Web UI:** Multi-model chat with 14 modes, web search, frontend tools (Python, JS, SQL, charts), MCP support, admin panel.
-- **Agents:** Server-side shell tool in persistent containers and server-side MCP, via the Responses API.
+- **Web UI:** Multi-model chat with 15 modes, web search, frontend tools (Python, JS, SQL, charts), MCP support, admin panel.
+- **Agents:** Server-side shell tool in persistent containers, server-side MCP, and Skills, via the Responses API.
 - **Studio:** Image generation, text-to-speech, transcription, and translation across providers.
 - **Secrets:** External secrets managers (AWS Secrets Manager, GCP Secret Manager, Azure Key Vault, HashiCorp Vault) for credential storage.
 
