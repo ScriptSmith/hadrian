@@ -442,11 +442,23 @@ async fn resolve_approval(
     // matching call to anchor to (`synthesize_function_name` yields the same
     // `mcp_<label>__<tool>` name the rewrite exposed). The original was
     // suppressed from the client at park time, so it isn't in the resumed
-    // input. `id` and `call_id` share the parked `call_id` — unique per
-    // response and never colliding with a live function-call id.
+    // input.
+    //
+    // `call_id` reuses the parked id (the `call_…` value the model emitted);
+    // the item `id` must live in the *separate* `fc_…` namespace. This pair
+    // is folded into `input` and — because `previous_response_id` chaining is
+    // Hadrian-owned — replayed verbatim to the provider on the next turn.
+    // OpenAI's Responses API 400s a `function_call` whose `id` starts with
+    // `call_` ("Expected an ID that begins with 'fc'"), so derive an `fc_…`
+    // id from the call_id (matching the `fc_{tool_id}` convention the stream
+    // converters use). Other providers ignore the item `id` and key on
+    // `call_id`, so this is safe for all of them.
     let function_call = FunctionToolCall {
         type_: FunctionToolCallType::FunctionCall,
-        id: row.call_id.clone(),
+        id: format!(
+            "fc_{}",
+            row.call_id.strip_prefix("call_").unwrap_or(&row.call_id)
+        ),
         call_id: row.call_id.clone(),
         name: synthesize_function_name(&row.server_label, &row.tool_name),
         arguments: row.arguments_json.clone(),
@@ -609,7 +621,7 @@ mod tests {
                 id: "mcpr_x".into(),
                 response_id: "resp_1".into(),
                 org_id,
-                call_id: "fc_1".into(),
+                call_id: "call_abc123".into(),
                 server_label: "atlassian".into(),
                 server_url: "https://mcp.atlassian.com".into(),
                 tool_name: "jira_search".into(),
@@ -645,14 +657,20 @@ mod tests {
         match &items[0] {
             ResponsesInputItem::FunctionCall(fc) => {
                 assert_eq!(fc.name, "mcp_atlassian__jira_search");
-                assert_eq!(fc.call_id, "fc_1");
+                // `call_id` keeps the parked `call_…` value; the item `id`
+                // must live in the `fc_…` namespace or OpenAI 400s the
+                // replayed call. The two must stay distinct.
+                assert_eq!(fc.call_id, "call_abc123");
+                assert_eq!(fc.id, "fc_abc123");
+                assert!(fc.id.starts_with("fc_"));
+                assert_ne!(fc.id, fc.call_id);
                 assert_eq!(fc.arguments, r#"{"q":"bug"}"#);
             }
             other => panic!("expected function_call, got {other:?}"),
         }
         match &items[1] {
             ResponsesInputItem::FunctionCallOutput(out) => {
-                assert_eq!(out.call_id, "fc_1");
+                assert_eq!(out.call_id, "call_abc123");
                 assert!(out.output.contains("refused"));
                 assert!(out.output.contains("not now"));
             }
