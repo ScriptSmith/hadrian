@@ -918,9 +918,15 @@ fn adaptive_thinking_config(strict: bool) -> AnthropicThinkingConfig {
 /// to `High` rather than erroring upstream.
 fn clamp_effort(effort: AnthropicEffort, model: &str, strict_models: &[String]) -> AnthropicEffort {
     match effort {
+        // `xhigh` is Opus 4.7+ only (the strict set).
         AnthropicEffort::XHigh if !requires_strict_thinking(model, strict_models) => {
             AnthropicEffort::High
         }
+        // `max` is Opus-tier only. `clamp_effort` only runs on the adaptive path,
+        // so the model is already Opus 4.6+/Sonnet 4.6; among those, `contains
+        // ("opus")` selects exactly the max-capable Opus models. A config list
+        // can't be reused here: `adaptive_models` also includes Sonnet 4.6, which
+        // rejects `max`, and `strict_models` excludes Opus 4.6, which accepts it.
         AnthropicEffort::Max if !model.contains("opus") => AnthropicEffort::High,
         other => other,
     }
@@ -1005,9 +1011,12 @@ pub fn convert_reasoning_config(
 
 fn responses_effort_to_anthropic(effort: ResponsesReasoningEffort) -> AnthropicEffort {
     match effort {
-        ResponsesReasoningEffort::None
-        | ResponsesReasoningEffort::Minimal
-        | ResponsesReasoningEffort::Low => AnthropicEffort::Low,
+        // `None` means "disable thinking" and is mapped to `Disabled` by the
+        // caller before reaching this helper — never a low-effort request.
+        ResponsesReasoningEffort::None => {
+            unreachable!("`None` effort must be handled as Disabled by the caller")
+        }
+        ResponsesReasoningEffort::Minimal | ResponsesReasoningEffort::Low => AnthropicEffort::Low,
         ResponsesReasoningEffort::Medium => AnthropicEffort::Medium,
         ResponsesReasoningEffort::High => AnthropicEffort::High,
         ResponsesReasoningEffort::XHigh => AnthropicEffort::XHigh,
@@ -1074,9 +1083,12 @@ pub fn convert_chat_completion_reasoning_config(
 
 fn chat_effort_to_anthropic(effort: ReasoningEffort) -> AnthropicEffort {
     match effort {
-        ReasoningEffort::None | ReasoningEffort::Minimal | ReasoningEffort::Low => {
-            AnthropicEffort::Low
+        // `None` means "disable thinking" and is mapped to `Disabled` by the
+        // caller before reaching this helper — never a low-effort request.
+        ReasoningEffort::None => {
+            unreachable!("`None` effort must be handled as Disabled by the caller")
         }
+        ReasoningEffort::Minimal | ReasoningEffort::Low => AnthropicEffort::Low,
         ReasoningEffort::Medium => AnthropicEffort::Medium,
         ReasoningEffort::High => AnthropicEffort::High,
         ReasoningEffort::XHigh => AnthropicEffort::XHigh,
