@@ -907,7 +907,7 @@ fn model_matches_any(model: &str, patterns: &[String]) -> bool {
 
 /// Build the adaptive thinking config, opting strict models (Opus 4.7/4.8) into
 /// summarized reasoning so their thinking summaries aren't omitted by default.
-fn adaptive_thinking_config(strict: bool) -> AnthropicThinkingConfig {
+pub(super) fn adaptive_thinking_config(strict: bool) -> AnthropicThinkingConfig {
     AnthropicThinkingConfig::Adaptive {
         display: strict.then_some(AnthropicThinkingDisplay::Summarized),
     }

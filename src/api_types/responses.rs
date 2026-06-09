@@ -159,14 +159,16 @@ pub enum ResponseTextConfigVerbosity {
 /// **Hadrian Extension:** task budget for an agentic loop (Claude Opus 4.7/4.8).
 /// Mirrors Anthropic's `output_config.task_budget` shape
 /// (`{"type": "tokens", "total": N}`). The minimum is 20,000 tokens; smaller
-/// values are clamped up at the adapter layer.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// values are rejected at request validation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Validate)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct TaskBudgetConfig {
     /// Budget unit. Only `tokens` is supported.
     #[serde(rename = "type", default)]
     pub type_: TaskBudgetType,
-    /// Total token budget for the agentic loop.
+    /// Total token budget for the agentic loop. Minimum 20,000.
+    #[validate(range(min = 20000, message = "task_budget total must be at least 20000"))]
+    #[cfg_attr(feature = "utoipa", schema(minimum = 20000))]
     pub total: u32,
 }
 
@@ -2767,8 +2769,9 @@ pub struct CreateResponsesPayload {
     /// models (Opus 4.7/4.8). Maps to Anthropic's `output_config.task_budget`
     /// (beta `task-budgets-2026-03-13`). The model is told its budget and
     /// self-moderates — distinct from `max_output_tokens`, an enforced
-    /// per-response ceiling. Minimum 20,000 tokens (clamped up). Consumed by the
-    /// Anthropic provider; stripped before reaching OpenAI-compatible upstreams.
+    /// per-response ceiling. Minimum 20,000 tokens. Consumed by the Anthropic
+    /// provider; stripped before reaching OpenAI-compatible upstreams.
+    #[validate(nested)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_budget: Option<TaskBudgetConfig>,
 
@@ -3371,6 +3374,21 @@ mod context_management_tests {
         assert_eq!(msg.phase, None);
         let reser = serde_json::to_value(ResponsesInputItem::OutputMessage(msg.clone())).unwrap();
         assert!(reser.get("phase").is_none());
+    }
+
+    #[test]
+    fn task_budget_total_below_minimum_is_rejected() {
+        use validator::Validate;
+        let too_small = TaskBudgetConfig {
+            type_: TaskBudgetType::Tokens,
+            total: 5_000,
+        };
+        assert!(too_small.validate().is_err());
+        let ok = TaskBudgetConfig {
+            type_: TaskBudgetType::Tokens,
+            total: 20_000,
+        };
+        assert!(ok.validate().is_ok());
     }
 
     #[test]

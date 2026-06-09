@@ -12,10 +12,11 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use axum::response::Response;
 use convert::{
-    convert_anthropic_to_responses_response, convert_chat_completion_reasoning_config,
-    convert_messages, convert_reasoning_config, convert_response,
-    convert_responses_input_to_messages, convert_responses_tool_choice, convert_responses_tools,
-    convert_stop, convert_tool_choice, convert_tools, requires_strict_thinking,
+    adaptive_thinking_config, convert_anthropic_to_responses_response,
+    convert_chat_completion_reasoning_config, convert_messages, convert_reasoning_config,
+    convert_response, convert_responses_input_to_messages, convert_responses_tool_choice,
+    convert_responses_tools, convert_stop, convert_tool_choice, convert_tools,
+    requires_strict_thinking,
 };
 use serde::Deserialize;
 use stream::{AnthropicToOpenAIStream, AnthropicToResponsesStream};
@@ -160,24 +161,37 @@ fn compute_beta_header(
     }
 }
 
-/// Attach a task budget to the output config for strict (Opus 4.7/4.8) models.
+/// Attach a task budget to the output config for strict (Opus 4.7/4.8) models,
+/// and ensure thinking is active so the request is coherent.
+///
 /// Task budgets are unsupported elsewhere, so the field is ignored for other
-/// models. The total is clamped up to Anthropic's 20,000-token minimum.
+/// models. When a budget is attached but the caller supplied no thinking config,
+/// adaptive thinking is synthesized — a task budget describes an agentic loop, so
+/// sending `output_config.task_budget` with no `thinking` field (which the beta
+/// API may reject or silently ignore) would be incoherent. An explicit
+/// `disabled` from the caller is preserved.
+///
+/// `total` is validated to be >= 20,000 at the request layer; the `max(20_000)`
+/// here is a defensive backstop for paths that bypass that validation.
 fn apply_task_budget(
+    thinking: Option<types::AnthropicThinkingConfig>,
     output_config: Option<types::AnthropicOutputConfig>,
     task_budget: Option<&crate::api_types::responses::TaskBudgetConfig>,
     strict: bool,
-) -> Option<types::AnthropicOutputConfig> {
+) -> (
+    Option<types::AnthropicThinkingConfig>,
+    Option<types::AnthropicOutputConfig>,
+) {
     let Some(cfg) = task_budget else {
-        return output_config;
+        return (thinking, output_config);
     };
     if !strict {
-        return output_config;
+        return (thinking, output_config);
     }
     let budget = types::AnthropicTaskBudget::Tokens {
         total: cfg.total.max(20_000),
     };
-    Some(match output_config {
+    let output_config = Some(match output_config {
         Some(mut oc) => {
             oc.task_budget = Some(budget);
             oc
@@ -186,7 +200,11 @@ fn apply_task_budget(
             effort: None,
             task_budget: Some(budget),
         },
-    })
+    });
+    // Only fill the gap when the caller didn't specify thinking. This branch is
+    // strict-only, so summarized display is correct.
+    let thinking = thinking.or_else(|| Some(adaptive_thinking_config(true)));
+    (thinking, output_config)
 }
 
 pub struct AnthropicProvider {
@@ -481,8 +499,14 @@ impl Provider for AnthropicProvider {
 
         let strict = requires_strict_thinking(&model, &self.strict_thinking_models);
 
-        // Attach a task budget (Opus 4.7/4.8 only); clamp to the API minimum.
-        let output_config = apply_task_budget(output_config, payload.task_budget.as_ref(), strict);
+        // Attach a task budget (Opus 4.7/4.8 only); this also synthesizes adaptive
+        // thinking when a budget is set without a reasoning config.
+        let (thinking, output_config) = apply_task_budget(
+            thinking,
+            output_config,
+            payload.task_budget.as_ref(),
+            strict,
+        );
 
         // Ensure max_tokens clears the thinking budget (+ reply headroom), or
         // raises the adaptive default for Opus 4.7/4.8 when unspecified.
@@ -846,15 +870,52 @@ mod tests {
         use crate::api_types::responses::{TaskBudgetConfig, TaskBudgetType};
         let cfg = TaskBudgetConfig {
             type_: TaskBudgetType::Tokens,
-            total: 5_000,
+            total: 25_000,
         };
-        // Non-strict model: the budget is ignored.
-        assert!(apply_task_budget(None, Some(&cfg), false).is_none());
-        // Strict model: attached and clamped up to the 20K minimum.
-        let oc = apply_task_budget(None, Some(&cfg), true).expect("budget attached");
+        // Non-strict model: the budget and thinking are left untouched.
+        let (thinking, oc) = apply_task_budget(None, None, Some(&cfg), false);
+        assert!(thinking.is_none() && oc.is_none());
+
+        // Strict model: budget attached and thinking synthesized.
+        let (thinking, oc) = apply_task_budget(None, None, Some(&cfg), true);
         assert!(matches!(
-            oc.task_budget,
-            Some(types::AnthropicTaskBudget::Tokens { total }) if total == 20_000
+            oc.expect("budget attached").task_budget,
+            Some(types::AnthropicTaskBudget::Tokens { total }) if total == 25_000
+        ));
+        assert!(matches!(
+            thinking,
+            Some(types::AnthropicThinkingConfig::Adaptive {
+                display: Some(types::AnthropicThinkingDisplay::Summarized)
+            })
+        ));
+    }
+
+    #[test]
+    fn apply_task_budget_synthesizes_thinking_but_keeps_explicit() {
+        use crate::api_types::responses::{TaskBudgetConfig, TaskBudgetType};
+        let cfg = TaskBudgetConfig {
+            type_: TaskBudgetType::Tokens,
+            total: 30_000,
+        };
+
+        // No reasoning config (thinking None) -> adaptive thinking synthesized so
+        // the wire payload isn't `output_config.task_budget` with no `thinking`.
+        let (thinking, _) = apply_task_budget(None, None, Some(&cfg), true);
+        assert!(matches!(
+            thinking,
+            Some(types::AnthropicThinkingConfig::Adaptive { .. })
+        ));
+
+        // An explicit `disabled` from the caller is preserved, not overridden.
+        let (thinking, _) = apply_task_budget(
+            Some(types::AnthropicThinkingConfig::Disabled),
+            None,
+            Some(&cfg),
+            true,
+        );
+        assert!(matches!(
+            thinking,
+            Some(types::AnthropicThinkingConfig::Disabled)
         ));
     }
 }
