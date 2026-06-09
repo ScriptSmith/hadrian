@@ -168,8 +168,9 @@ fn compute_beta_header(
 /// models. When a budget is attached but the caller supplied no thinking config,
 /// adaptive thinking is synthesized — a task budget describes an agentic loop, so
 /// sending `output_config.task_budget` with no `thinking` field (which the beta
-/// API may reject or silently ignore) would be incoherent. An explicit
-/// `disabled` from the caller is preserved.
+/// API may reject or silently ignore) would be incoherent. If the caller
+/// explicitly disabled thinking, the budget can't apply, so it is skipped
+/// entirely rather than forwarding a contradictory `thinking: disabled` payload.
 ///
 /// `total` is validated to be >= 20,000 at the request layer; the `max(20_000)`
 /// here is a defensive backstop for paths that bypass that validation.
@@ -186,6 +187,13 @@ fn apply_task_budget(
         return (thinking, output_config);
     };
     if !strict {
+        return (thinking, output_config);
+    }
+    // A task budget governs a thinking/agentic loop. If the caller explicitly
+    // disabled thinking, the budget is inapplicable — skip it (and its beta
+    // header) rather than forwarding a contradictory `thinking: disabled` +
+    // `output_config.task_budget`, which Anthropic rejects.
+    if matches!(thinking, Some(types::AnthropicThinkingConfig::Disabled)) {
         return (thinking, output_config);
     }
     let budget = types::AnthropicTaskBudget::Tokens {
@@ -891,7 +899,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_task_budget_synthesizes_thinking_but_keeps_explicit() {
+    fn apply_task_budget_synthesizes_thinking_when_none() {
         use crate::api_types::responses::{TaskBudgetConfig, TaskBudgetType};
         let cfg = TaskBudgetConfig {
             type_: TaskBudgetType::Tokens,
@@ -900,14 +908,25 @@ mod tests {
 
         // No reasoning config (thinking None) -> adaptive thinking synthesized so
         // the wire payload isn't `output_config.task_budget` with no `thinking`.
-        let (thinking, _) = apply_task_budget(None, None, Some(&cfg), true);
+        let (thinking, oc) = apply_task_budget(None, None, Some(&cfg), true);
         assert!(matches!(
             thinking,
             Some(types::AnthropicThinkingConfig::Adaptive { .. })
         ));
+        assert!(oc.is_some_and(|oc| oc.task_budget.is_some()));
+    }
 
-        // An explicit `disabled` from the caller is preserved, not overridden.
-        let (thinking, _) = apply_task_budget(
+    #[test]
+    fn apply_task_budget_skipped_when_thinking_disabled() {
+        use crate::api_types::responses::{TaskBudgetConfig, TaskBudgetType};
+        let cfg = TaskBudgetConfig {
+            type_: TaskBudgetType::Tokens,
+            total: 30_000,
+        };
+
+        // An explicit `disabled` is preserved, and the budget is dropped — never a
+        // contradictory `thinking: disabled` + `output_config.task_budget`.
+        let (thinking, oc) = apply_task_budget(
             Some(types::AnthropicThinkingConfig::Disabled),
             None,
             Some(&cfg),
@@ -917,5 +936,6 @@ mod tests {
             thinking,
             Some(types::AnthropicThinkingConfig::Disabled)
         ));
+        assert!(oc.is_none());
     }
 }
