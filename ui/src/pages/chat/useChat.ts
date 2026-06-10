@@ -1072,7 +1072,10 @@ export function useChat({
           requestBody.tools = tools;
           // Hadrian extension: stream cumulative usage/cost updates at each
           // server-tool turn boundary so the display ticks during the loop.
-          requestBody.include = ["usage.incremental"];
+          requestBody.include = [
+            ...((requestBody.include as string[] | undefined) ?? []),
+            "usage.incremental",
+          ];
         }
 
         const response = await fetch("/api/v1/responses", {
