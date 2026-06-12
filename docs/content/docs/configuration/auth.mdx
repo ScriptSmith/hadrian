@@ -139,13 +139,13 @@ groups_header = "X-Forwarded-Groups"
 require_identity = true
 ```
 
-| Setting            | Type    | Default | Description                                                                     |
-| ------------------ | ------- | ------- | ------------------------------------------------------------------------------- |
-| `identity_header`  | string  | ---     | Header containing the authenticated user's ID (required).                       |
-| `email_header`     | string  | None    | Header containing the user's email.                                             |
-| `name_header`      | string  | None    | Header containing the user's display name.                                      |
-| `groups_header`    | string  | None    | Header containing groups/roles (comma-separated or JSON array).                 |
-| `require_identity` | boolean | `true`  | Require identity headers on all requests. If `false`, anonymous access allowed. |
+| Setting            | Type    | Default | Description                                                                                                                                      |
+| ------------------ | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `identity_header`  | string  | ---     | Header containing the authenticated user's ID (required).                                                                                        |
+| `email_header`     | string  | None    | Header containing the user's email.                                                                                                              |
+| `name_header`      | string  | None    | Header containing the user's display name.                                                                                                       |
+| `groups_header`    | string  | None    | Header containing groups/roles (comma-separated or JSON array).                                                                                  |
+| `require_identity` | boolean | `true`  | Require proxy identity headers. If `false`, credential-less `/v1/*` requests are served anonymously (see [Anonymous Access](#anonymous-access)). |
 
 <Callout type="error">
   **Critical Security:** Configure `[server.trusted_proxies]` to prevent header spoofing. Without
@@ -215,6 +215,31 @@ read-only gateway — set `allow_anonymous = true`. Invalid credentials are stil
 regardless of this flag. With `type = "none"`, all access is anonymous and this flag has no
 effect.
 
+### IAP and `require_identity`
+
+In [IAP](#iap-identity-aware-proxy) mode, identity comes from proxy-set headers rather than a
+credential the client sends. IAP has its own switch, `require_identity` (default `true`), for
+whether those headers are mandatory:
+
+- **`require_identity = true`** (default) — a request that reaches the gateway without proxy
+  identity headers is treated as having no credential and is rejected `401`, the same
+  fail-closed behavior as every other mode. This is correct when the proxy sits in front of
+  **all** traffic.
+- **`require_identity = false`** — the proxy's documented opt-in for unauthenticated access to
+  public endpoints. Hadrian honors this on the data plane: a credential-less `/v1/*` request is
+  served anonymously. You do **not** also need `allow_anonymous = true`; either flag permits
+  anonymous access. (`allow_anonymous` remains the mode-independent global switch.)
+
+```toml
+[server.trusted_proxies]
+cidrs = ["10.0.0.0/8"]            # required for IAP
+
+[auth.mode]
+type = "iap"
+identity_header = "X-Auth-Request-User"
+require_identity = false          # allow anonymous access to public /v1/* endpoints
+```
+
 <Callout type="warn">
   Setting `allow_anonymous = true` while an auth mode is enabled opens **every** `/v1/*` endpoint to
   unauthenticated callers, including model inference, which can incur provider cost. Prefer leaving
@@ -224,7 +249,9 @@ effect.
 <Callout type="info">
   **Breaking change.** Earlier builds served credential-less `/v1/*` requests even when an auth mode
   was enabled (relying on `[auth.rbac.gateway].default_effect` as the only backstop). Deployments
-  that depended on that behavior must now set `allow_anonymous = true` explicitly.
+  that depended on that behavior must now set `allow_anonymous = true` explicitly — except IAP
+  deployments that already set `require_identity = false`, which continue to allow anonymous access
+  unchanged.
 </Callout>
 
 ## API Key Settings

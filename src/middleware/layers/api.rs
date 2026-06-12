@@ -841,20 +841,20 @@ pub async fn api_middleware(
             "Authentication failed: invalid credentials provided"
         );
         return auth_result.unwrap_err().into_response();
-    } else if state.config.auth.is_auth_enabled() && !state.config.auth.allow_anonymous {
+    } else if state.config.auth.allows_anonymous_access() {
+        // Anonymous access is permitted: `mode = none`, `allow_anonymous = true`,
+        // or IAP with `require_identity = false`.
+        (None, None)
+    } else {
         // No credentials, auth is enabled, and anonymous access has not been
-        // explicitly opted into. Fail closed — same as the admin plane — rather
-        // than falling through to anonymous and relying on RBAC as the backstop.
+        // opted into. Fail closed — same as the admin plane — rather than
+        // falling through to anonymous and relying on RBAC as the backstop.
         metrics::record_auth_attempt("none", false);
         tracing::warn!(
             request_id = ?request_id,
-            "Rejected anonymous request: auth is enabled and allow_anonymous is false"
+            "Rejected anonymous request: auth is enabled and anonymous access is not permitted"
         );
         return AuthError::MissingCredentials.into_response();
-    } else {
-        // Anonymous access is permitted: either `mode = none`, or
-        // `allow_anonymous = true` was set explicitly.
-        (None, None)
     };
 
     // 4. Execute the request

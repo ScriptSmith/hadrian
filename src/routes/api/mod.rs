@@ -2166,6 +2166,74 @@ type = "api_key"
         );
     }
 
+    #[tokio::test]
+    async fn test_iap_require_identity_false_permits_anonymous() {
+        // IAP's `require_identity = false` is its native opt-in for unauthenticated
+        // access to public endpoints; a credential-less request must be served.
+        let app = test_app_with_auth(
+            r#"
+[server.trusted_proxies]
+dangerously_trust_all = true
+
+[auth.mode]
+type = "iap"
+identity_header = "X-Auth-Request-User"
+require_identity = false
+"#,
+        )
+        .await;
+
+        let (status, body) = post_json(
+            &app,
+            "/api/v1/chat/completions",
+            json!({
+                "model": "test/test-model",
+                "messages": [{"role": "user", "content": "Hello"}]
+            }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "IAP require_identity = false must permit anonymous access"
+        );
+        assert_eq!(body["object"], "chat.completion");
+    }
+
+    #[tokio::test]
+    async fn test_iap_require_identity_true_rejects_anonymous() {
+        // The default (`require_identity = true`) requires a proxy-supplied
+        // identity, so a credential-less request fails closed with 401.
+        let app = test_app_with_auth(
+            r#"
+[server.trusted_proxies]
+dangerously_trust_all = true
+
+[auth.mode]
+type = "iap"
+identity_header = "X-Auth-Request-User"
+require_identity = true
+"#,
+        )
+        .await;
+
+        let (status, body) = post_json(
+            &app,
+            "/api/v1/chat/completions",
+            json!({
+                "model": "test/test-model",
+                "messages": [{"role": "user", "content": "Hello"}]
+            }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "IAP require_identity = true must reject anonymous access"
+        );
+        assert_eq!(body["error"]["code"], "missing_credentials");
+    }
+
     // ============================================================================
     // Error Handling Tests
     // ============================================================================

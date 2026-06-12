@@ -36,9 +36,14 @@ pub async fn api_v1_models(
 ) -> Result<Json<CombinedModelsResponse>, ApiError> {
     // Authorize catalog access. Unlike the inference handlers this is a
     // `model:list` check (not `model:use`); it brings `/v1/models` to parity
-    // with the rest of the data plane so the catalog respects gateway RBAC
-    // instead of leaking to any caller. Missing credentials are already
-    // rejected upstream in `api_middleware` when auth is enabled.
+    // with the rest of the data plane so the catalog respects gateway RBAC.
+    //
+    // `api_authz_middleware` always inserts an `AuthzContext`, so `authz` is
+    // present even for anonymous requests (those permitted by `mode = none` or
+    // `allow_anonymous`) — they carry an empty subject and are still evaluated
+    // against gateway RBAC, so a `deny` default effect gates the catalog. When
+    // gateway RBAC is disabled or fail-open, the catalog is served, matching
+    // every other `/v1/*` handler.
     if let Some(Extension(ref authz)) = authz {
         let org_id = auth.as_ref().and_then(|Extension(a)| {
             a.api_key()

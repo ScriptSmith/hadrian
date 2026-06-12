@@ -90,6 +90,27 @@ impl AuthConfig {
         !matches!(self.mode, AuthMode::None)
     }
 
+    /// Whether unauthenticated ("anonymous") access to the `/v1/*` data plane is
+    /// permitted for a request that carries no credential.
+    ///
+    /// Returns true when:
+    /// - authentication is disabled entirely (`mode = none`), or
+    /// - `allow_anonymous = true` is set explicitly, or
+    /// - the mode is `iap` and the proxy is configured with
+    ///   `require_identity = false` — IAP's native opt-in for unauthenticated
+    ///   access to public endpoints.
+    ///
+    /// Otherwise a missing credential is fatal and `api_middleware` returns 401.
+    pub fn allows_anonymous_access(&self) -> bool {
+        if !self.is_auth_enabled() || self.allow_anonymous {
+            return true;
+        }
+        if let AuthMode::Iap(iap) = &self.mode {
+            return !iap.require_identity;
+        }
+        false
+    }
+
     /// Whether admin routes should be protected by authentication middleware.
     ///
     /// Returns true for all modes except `None`. In `ApiKey` mode, admin routes
