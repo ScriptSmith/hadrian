@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { useConfig } from "@/config/ConfigProvider";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 
-import { hasCookieSessionMethod } from "./types";
+import { COOKIE_SESSION_METHODS, hasCookieSessionMethod } from "./types";
 import type { AuthContextValue, AuthMethod, AuthState, LoginCredentials, User } from "./types";
 
 export const AuthContext = createContext<AuthContextValue | null>(null);
@@ -249,7 +249,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const logout = useCallback(() => {
-    const hadCookieSession = state.method === "session";
+    const hadCookieSession = state.method !== null && COOKIE_SESSION_METHODS.includes(state.method);
     setStoredAuth(null);
     setState({
       isAuthenticated: false,

@@ -211,12 +211,23 @@ export const IdpMode: Story = {
   },
 };
 
-/** IdP mode before any org SSO config is enabled. Email discovery still renders so the page is never without a login affordance. */
+/**
+ * IdP mode before any org SSO config is enabled. No login flow can succeed
+ * yet (discovery has nothing to find), so the page shows setup guidance
+ * instead of an email form that would dead-end on every submission.
+ */
 export const IdpModeNoOrgSso: Story = {
   parameters: {
     msw: {
       handlers: createHandlers(mockIdpNoOrgSsoConfig),
     },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => {
+      expect(canvas.getByText(/no identity provider has been configured/i)).toBeInTheDocument();
+    });
+    expect(canvas.queryByLabelText(/work email/i)).not.toBeInTheDocument();
   },
 };
 
