@@ -8,9 +8,12 @@ use uuid::Uuid;
 use crate::{
     db::{
         error::DbError,
-        repos::{ListParams, OrganizationRepo, ProjectRepo, UserRepo},
+        repos::{ListParams, OrganizationRepo, ProjectRepo, TeamRepo, UserRepo},
     },
-    models::{CreateOrganization, CreateProject, CreateUser, MembershipSource, UpdateUser},
+    models::{
+        AddTeamMember, CreateOrganization, CreateProject, CreateTeam, CreateUser, MembershipSource,
+        UpdateUser,
+    },
 };
 
 // ============================================================================
@@ -45,6 +48,7 @@ pub struct UserTestContext<'a> {
     pub user_repo: &'a dyn UserRepo,
     pub org_repo: &'a dyn OrganizationRepo,
     pub project_repo: &'a dyn ProjectRepo,
+    pub team_repo: &'a dyn TeamRepo,
 }
 
 impl<'a> UserTestContext<'a> {
@@ -66,6 +70,21 @@ impl<'a> UserTestContext<'a> {
             )
             .await
             .expect("Failed to create test project")
+            .id
+    }
+
+    /// Create a test team and return its ID
+    pub async fn create_test_team(&self, org_id: Uuid, slug: &str) -> Uuid {
+        self.team_repo
+            .create(
+                org_id,
+                CreateTeam {
+                    slug: slug.to_string(),
+                    name: format!("Team {}", slug),
+                },
+            )
+            .await
+            .expect("Failed to create test team")
             .id
     }
 }
@@ -950,6 +969,73 @@ pub async fn test_user_can_be_in_multiple_projects(ctx: &UserTestContext<'_>) {
     assert_eq!(count2, 1);
 }
 
+/// Per-user membership lookups must decode the `source` column on both
+/// backends. Postgres stores it as a native `membership_source` enum, so the
+/// query must cast it to text before reading it as a string (regression test
+/// for a decode panic). Uses `Jit` so a decode that silently falls back to
+/// the default (`Manual`) also fails.
+pub async fn test_get_memberships_for_user(ctx: &UserTestContext<'_>) {
+    let org_id = ctx.create_test_org("membership-lookup-org").await;
+    let project_id = ctx
+        .create_test_project(org_id, "membership-lookup-project")
+        .await;
+    let team_id = ctx.create_test_team(org_id, "membership-lookup-team").await;
+
+    let input = create_user_input("membership-lookup-user", None, None);
+    let user = ctx
+        .user_repo
+        .create(input)
+        .await
+        .expect("Failed to create user");
+
+    ctx.user_repo
+        .add_to_org(user.id, org_id, "member", MembershipSource::Jit)
+        .await
+        .expect("Failed to add user to org");
+    ctx.user_repo
+        .add_to_project(user.id, project_id, "member", MembershipSource::Jit)
+        .await
+        .expect("Failed to add user to project");
+    ctx.team_repo
+        .add_member(
+            team_id,
+            AddTeamMember {
+                user_id: user.id,
+                role: "member".to_string(),
+                source: MembershipSource::Jit,
+            },
+        )
+        .await
+        .expect("Failed to add user to team");
+
+    let org_memberships = ctx
+        .user_repo
+        .get_org_memberships_for_user(user.id)
+        .await
+        .expect("Failed to get org memberships");
+    assert_eq!(org_memberships.len(), 1);
+    assert_eq!(org_memberships[0].org_id, org_id);
+    assert_eq!(org_memberships[0].source, MembershipSource::Jit);
+
+    let project_memberships = ctx
+        .user_repo
+        .get_project_memberships_for_user(user.id)
+        .await
+        .expect("Failed to get project memberships");
+    assert_eq!(project_memberships.len(), 1);
+    assert_eq!(project_memberships[0].project_id, project_id);
+    assert_eq!(project_memberships[0].source, MembershipSource::Jit);
+
+    let team_memberships = ctx
+        .user_repo
+        .get_team_memberships_for_user(user.id)
+        .await
+        .expect("Failed to get team memberships");
+    assert_eq!(team_memberships.len(), 1);
+    assert_eq!(team_memberships[0].team_id, team_id);
+    assert_eq!(team_memberships[0].source, MembershipSource::Jit);
+}
+
 // ============================================================================
 // SQLite Tests - Fast, in-memory
 // ============================================================================
@@ -958,17 +1044,23 @@ pub async fn test_user_can_be_in_multiple_projects(ctx: &UserTestContext<'_>) {
 mod sqlite_tests {
     use super::*;
     use crate::db::{
-        sqlite::{SqliteOrganizationRepo, SqliteProjectRepo, SqliteUserRepo},
+        sqlite::{SqliteOrganizationRepo, SqliteProjectRepo, SqliteTeamRepo, SqliteUserRepo},
         tests::harness::{create_sqlite_pool, run_sqlite_migrations},
     };
 
-    async fn create_repos() -> (SqliteUserRepo, SqliteOrganizationRepo, SqliteProjectRepo) {
+    async fn create_repos() -> (
+        SqliteUserRepo,
+        SqliteOrganizationRepo,
+        SqliteProjectRepo,
+        SqliteTeamRepo,
+    ) {
         let pool = create_sqlite_pool().await;
         run_sqlite_migrations(&pool).await;
         (
             SqliteUserRepo::new(pool.clone()),
             SqliteOrganizationRepo::new(pool.clone()),
-            SqliteProjectRepo::new(pool),
+            SqliteProjectRepo::new(pool.clone()),
+            SqliteTeamRepo::new(pool),
         )
     }
 
@@ -976,11 +1068,12 @@ mod sqlite_tests {
         ($name:ident) => {
             #[tokio::test]
             async fn $name() {
-                let (user_repo, org_repo, project_repo) = create_repos().await;
+                let (user_repo, org_repo, project_repo, team_repo) = create_repos().await;
                 let ctx = UserTestContext {
                     user_repo: &user_repo,
                     org_repo: &org_repo,
                     project_repo: &project_repo,
+                    team_repo: &team_repo,
                 };
                 super::$name(&ctx).await;
             }
@@ -1027,6 +1120,9 @@ mod sqlite_tests {
     sqlite_test!(test_concurrent_add_to_different_orgs);
     sqlite_test!(test_can_switch_orgs_after_removal);
     sqlite_test!(test_user_can_be_in_multiple_projects);
+
+    // Per-user membership lookups
+    sqlite_test!(test_get_memberships_for_user);
 }
 
 // ============================================================================
@@ -1037,7 +1133,9 @@ mod sqlite_tests {
 mod postgres_tests {
     use super::*;
     use crate::db::{
-        postgres::{PostgresOrganizationRepo, PostgresProjectRepo, PostgresUserRepo},
+        postgres::{
+            PostgresOrganizationRepo, PostgresProjectRepo, PostgresTeamRepo, PostgresUserRepo,
+        },
         tests::harness::postgres::{create_isolated_postgres_pool, run_postgres_migrations},
     };
 
@@ -1050,11 +1148,13 @@ mod postgres_tests {
                 run_postgres_migrations(&pool).await;
                 let user_repo = PostgresUserRepo::new(pool.clone(), None);
                 let org_repo = PostgresOrganizationRepo::new(pool.clone(), None);
-                let project_repo = PostgresProjectRepo::new(pool, None);
+                let project_repo = PostgresProjectRepo::new(pool.clone(), None);
+                let team_repo = PostgresTeamRepo::new(pool, None);
                 let ctx = UserTestContext {
                     user_repo: &user_repo,
                     org_repo: &org_repo,
                     project_repo: &project_repo,
+                    team_repo: &team_repo,
                 };
                 super::$name(&ctx).await;
             }
@@ -1101,4 +1201,7 @@ mod postgres_tests {
     postgres_test!(test_concurrent_add_to_different_orgs);
     postgres_test!(test_can_switch_orgs_after_removal);
     postgres_test!(test_user_can_be_in_multiple_projects);
+
+    // Per-user membership lookups
+    postgres_test!(test_get_memberships_for_user);
 }
