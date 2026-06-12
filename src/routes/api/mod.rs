@@ -2073,6 +2073,8 @@ type = "api_key"
         );
     }
 
+    // Config validation rejects `auth.rbac.enabled` without the `cel` feature.
+    #[cfg(feature = "cel")]
     #[tokio::test]
     async fn test_anonymous_rejected_with_gateway_rbac_fail_open() {
         // Reproduces the deployment configuration that best demonstrates the
