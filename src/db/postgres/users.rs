@@ -767,7 +767,7 @@ impl UserRepo for PostgresUserRepo {
                 o.slug as org_slug,
                 o.name as org_name,
                 om.role,
-                om.source,
+                om.source::TEXT,
                 om.created_at as joined_at
             FROM org_memberships om
             INNER JOIN organizations o ON om.org_id = o.id
@@ -779,20 +779,21 @@ impl UserRepo for PostgresUserRepo {
         .fetch_all(&self.read_pool)
         .await?;
 
-        Ok(rows
-            .into_iter()
+        rows.into_iter()
             .map(|row| {
                 let source_str: String = row.get("source");
-                UserOrgMembership {
+                Ok(UserOrgMembership {
                     org_id: row.get("org_id"),
                     org_slug: row.get("org_slug"),
                     org_name: row.get("org_name"),
                     role: row.get("role"),
-                    source: MembershipSource::parse(&source_str).unwrap_or_default(),
+                    source: MembershipSource::parse(&source_str).ok_or_else(|| {
+                        DbError::Internal(format!("invalid membership source: {source_str}"))
+                    })?,
                     joined_at: row.get("joined_at"),
-                }
+                })
             })
-            .collect())
+            .collect()
     }
 
     async fn get_project_memberships_for_user(
@@ -807,7 +808,7 @@ impl UserRepo for PostgresUserRepo {
                 p.name as project_name,
                 p.org_id,
                 pm.role,
-                pm.source,
+                pm.source::TEXT,
                 pm.created_at as joined_at
             FROM project_memberships pm
             INNER JOIN projects p ON pm.project_id = p.id
@@ -819,21 +820,22 @@ impl UserRepo for PostgresUserRepo {
         .fetch_all(&self.read_pool)
         .await?;
 
-        Ok(rows
-            .into_iter()
+        rows.into_iter()
             .map(|row| {
                 let source_str: String = row.get("source");
-                UserProjectMembership {
+                Ok(UserProjectMembership {
                     project_id: row.get("project_id"),
                     project_slug: row.get("project_slug"),
                     project_name: row.get("project_name"),
                     org_id: row.get("org_id"),
                     role: row.get("role"),
-                    source: MembershipSource::parse(&source_str).unwrap_or_default(),
+                    source: MembershipSource::parse(&source_str).ok_or_else(|| {
+                        DbError::Internal(format!("invalid membership source: {source_str}"))
+                    })?,
                     joined_at: row.get("joined_at"),
-                }
+                })
             })
-            .collect())
+            .collect()
     }
 
     async fn get_team_memberships_for_user(&self, user_id: Uuid) -> DbResult<Vec<TeamMembership>> {
@@ -845,7 +847,7 @@ impl UserRepo for PostgresUserRepo {
                 t.name as team_name,
                 t.org_id,
                 tm.role,
-                tm.source,
+                tm.source::TEXT,
                 tm.created_at as joined_at
             FROM team_memberships tm
             INNER JOIN teams t ON tm.team_id = t.id
@@ -857,21 +859,22 @@ impl UserRepo for PostgresUserRepo {
         .fetch_all(&self.read_pool)
         .await?;
 
-        Ok(rows
-            .into_iter()
+        rows.into_iter()
             .map(|row| {
                 let source_str: String = row.get("source");
-                TeamMembership {
+                Ok(TeamMembership {
                     team_id: row.get("team_id"),
                     team_slug: row.get("team_slug"),
                     team_name: row.get("team_name"),
                     org_id: row.get("org_id"),
                     role: row.get("role"),
-                    source: MembershipSource::parse(&source_str).unwrap_or_default(),
+                    source: MembershipSource::parse(&source_str).ok_or_else(|| {
+                        DbError::Internal(format!("invalid membership source: {source_str}"))
+                    })?,
                     joined_at: row.get("joined_at"),
-                }
+                })
             })
-            .collect())
+            .collect()
     }
 
     // ==================== GDPR Deletion Methods ====================

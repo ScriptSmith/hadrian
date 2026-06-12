@@ -798,7 +798,9 @@ impl UserRepo for SqliteUserRepo {
                     org_slug: row.col("org_slug"),
                     org_name: row.col("org_name"),
                     role: row.col("role"),
-                    source: MembershipSource::parse(&source_str).unwrap_or_default(),
+                    source: MembershipSource::parse(&source_str).ok_or_else(|| {
+                        DbError::Internal(format!("invalid membership source: {source_str}"))
+                    })?,
                     joined_at: row.col("joined_at"),
                 })
             })
@@ -838,7 +840,9 @@ impl UserRepo for SqliteUserRepo {
                     project_name: row.col("project_name"),
                     org_id: parse_uuid(&row.col::<String>("org_id"))?,
                     role: row.col("role"),
-                    source: MembershipSource::parse(&source_str).unwrap_or_default(),
+                    source: MembershipSource::parse(&source_str).ok_or_else(|| {
+                        DbError::Internal(format!("invalid membership source: {source_str}"))
+                    })?,
                     joined_at: row.col("joined_at"),
                 })
             })
@@ -875,7 +879,9 @@ impl UserRepo for SqliteUserRepo {
                     team_name: row.col("team_name"),
                     org_id: parse_uuid(&row.col::<String>("org_id"))?,
                     role: row.col("role"),
-                    source: MembershipSource::parse(&source_str).unwrap_or_default(),
+                    source: MembershipSource::parse(&source_str).ok_or_else(|| {
+                        DbError::Internal(format!("invalid membership source: {source_str}"))
+                    })?,
                     joined_at: row.col("joined_at"),
                 })
             })

@@ -950,6 +950,52 @@ pub async fn test_user_can_be_in_multiple_projects(ctx: &UserTestContext<'_>) {
     assert_eq!(count2, 1);
 }
 
+/// Per-user membership lookups must decode the `source` column on both
+/// backends. Postgres stores it as a native `membership_source` enum, so the
+/// query must cast it to text before reading it as a string (regression test
+/// for a decode panic). Uses `Jit` so a decode that silently falls back to
+/// the default (`Manual`) also fails.
+pub async fn test_get_memberships_for_user(ctx: &UserTestContext<'_>) {
+    let org_id = ctx.create_test_org("membership-lookup-org").await;
+    let project_id = ctx
+        .create_test_project(org_id, "membership-lookup-project")
+        .await;
+
+    let input = create_user_input("membership-lookup-user", None, None);
+    let user = ctx
+        .user_repo
+        .create(input)
+        .await
+        .expect("Failed to create user");
+
+    ctx.user_repo
+        .add_to_org(user.id, org_id, "member", MembershipSource::Jit)
+        .await
+        .expect("Failed to add user to org");
+    ctx.user_repo
+        .add_to_project(user.id, project_id, "member", MembershipSource::Jit)
+        .await
+        .expect("Failed to add user to project");
+
+    let org_memberships = ctx
+        .user_repo
+        .get_org_memberships_for_user(user.id)
+        .await
+        .expect("Failed to get org memberships");
+    assert_eq!(org_memberships.len(), 1);
+    assert_eq!(org_memberships[0].org_id, org_id);
+    assert_eq!(org_memberships[0].source, MembershipSource::Jit);
+
+    let project_memberships = ctx
+        .user_repo
+        .get_project_memberships_for_user(user.id)
+        .await
+        .expect("Failed to get project memberships");
+    assert_eq!(project_memberships.len(), 1);
+    assert_eq!(project_memberships[0].project_id, project_id);
+    assert_eq!(project_memberships[0].source, MembershipSource::Jit);
+}
+
 // ============================================================================
 // SQLite Tests - Fast, in-memory
 // ============================================================================
@@ -1027,6 +1073,9 @@ mod sqlite_tests {
     sqlite_test!(test_concurrent_add_to_different_orgs);
     sqlite_test!(test_can_switch_orgs_after_removal);
     sqlite_test!(test_user_can_be_in_multiple_projects);
+
+    // Per-user membership lookups
+    sqlite_test!(test_get_memberships_for_user);
 }
 
 // ============================================================================
@@ -1101,4 +1150,7 @@ mod postgres_tests {
     postgres_test!(test_concurrent_add_to_different_orgs);
     postgres_test!(test_can_switch_orgs_after_removal);
     postgres_test!(test_user_can_be_in_multiple_projects);
+
+    // Per-user membership lookups
+    postgres_test!(test_get_memberships_for_user);
 }

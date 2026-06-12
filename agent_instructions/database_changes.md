@@ -83,6 +83,23 @@ CREATE TABLE IF NOT EXISTS items (
 );
 ```
 
+### Reading native enum columns (PostgreSQL)
+
+A native enum column **cannot** be decoded as a Rust `String` — sqlx's type check rejects it
+(`mismatched types; Rust type String (as SQL type TEXT) is not compatible with SQL type item_status`),
+and `row.get()` panics at runtime. SQLite masks the bug because it stores the same column as TEXT,
+so it only surfaces when the query runs against Postgres. Cast the column in every SELECT/RETURNING
+column list:
+
+```sql
+SELECT id, status::TEXT FROM items
+```
+
+Binding the other direction is the mirror image: cast the parameter (`VALUES ($1, $2::item_status)`).
+Reference: `src/db/postgres/model_pricing.rs`, `src/db/postgres/containers.rs` (`CONTAINER_COLUMNS`).
+When parsing the string into the Rust enum, propagate a `DbError::Internal` on unknown values rather
+than silently falling back to a default.
+
 ## UUID Handling in Rust
 
 SQLite stores UUIDs as TEXT, so conversion is needed:
