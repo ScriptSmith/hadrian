@@ -83,10 +83,18 @@ log_allowed = false
 log_denied = true
 
 # API endpoint authorization (for /v1/* endpoints)
-# Enable policy-based control over model access, token limits, feature gating
+# Enable policy-based control over model access, token limits, feature gating.
+#
+# NOTE: default_effect here only governs policy evaluation for requests that are
+# ALREADY authenticated. It is NOT the barrier against unauthenticated access:
+# because auth.mode is "idp", a credential-less /v1/* request is rejected with
+# 401 at the authentication layer before any policy is evaluated (data plane
+# fails closed, same as the admin plane). Gateway RBAC is defense-in-depth on top
+# of that. To intentionally allow anonymous /v1/* access, set
+# auth.allow_anonymous = true (not recommended).
 [auth.rbac.gateway]
 enabled = true
-default_effect = "allow"  # Fail-open for backwards compatibility
+default_effect = "allow"  # Fail-open for authenticated subjects with no matching policy
 
 # ==============================================================================
 # CEL Authorization Policies

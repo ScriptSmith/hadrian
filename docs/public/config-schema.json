@@ -10,6 +10,7 @@
         "mode": {
           "type": "none"
         },
+        "allow_anonymous": false,
         "api_key": null,
         "session": null,
         "rbac": {
@@ -981,6 +982,11 @@
       "description": "Authentication and authorization configuration.\n\nUses a single `mode` to control authentication for all endpoints: - `none` — No authentication (local dev, all access is anonymous) - `api_key` — API key required everywhere (admin shows \"enter key\" login) - `idp` — Per-org SSO + session cookies + JWT + API keys - `iap` — Reverse proxy headers + API keys",
       "type": "object",
       "properties": {
+        "allow_anonymous": {
+          "description": "Allow unauthenticated (\"anonymous\") access to `/v1/*` data-plane endpoints even when an auth mode is enabled.\n\nDefaults to `false` (fail-closed): when `mode` is anything other than `none`, a request that carries no credential is rejected with `401`, matching the admin plane. This is an authentication concern and is independent of `rbac.gateway.default_effect`, which only governs policy evaluation for requests that are already authenticated.\n\n`mode = none` is always anonymous regardless of this flag. Set this to `true` only for deployments that intentionally expose `/v1/*` without credentials.",
+          "default": false,
+          "type": "boolean"
+        },
         "api_key": {
           "description": "Shared API key settings (used by api_key, idp, and iap modes).",
           "default": null,
