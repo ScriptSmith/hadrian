@@ -831,16 +831,29 @@ pub async fn api_middleware(
         }
 
         (Some(auth.clone()), api_key_id)
-    } else if headers.contains_key("X-API-Key") || headers.contains_key("Authorization") {
-        // Credentials were provided but invalid — reject with the original error
+    } else if has_credentials {
+        // Credentials were provided but invalid — reject with the original error.
+        // `has_credentials` respects the configured API key header name as well
+        // as the standard Authorization header.
         metrics::record_auth_attempt("api_key", false);
         tracing::warn!(
             request_id = ?request_id,
             "Authentication failed: invalid credentials provided"
         );
         return auth_result.unwrap_err().into_response();
+    } else if state.config.auth.is_auth_enabled() && !state.config.auth.allow_anonymous {
+        // No credentials, auth is enabled, and anonymous access has not been
+        // explicitly opted into. Fail closed — same as the admin plane — rather
+        // than falling through to anonymous and relying on RBAC as the backstop.
+        metrics::record_auth_attempt("none", false);
+        tracing::warn!(
+            request_id = ?request_id,
+            "Rejected anonymous request: auth is enabled and allow_anonymous is false"
+        );
+        return AuthError::MissingCredentials.into_response();
     } else {
-        // No credentials provided — allow anonymous access
+        // Anonymous access is permitted: either `mode = none`, or
+        // `allow_anonymous = true` was set explicitly.
         (None, None)
     };
 

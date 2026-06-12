@@ -19,6 +19,21 @@ pub struct AuthConfig {
     #[serde(default)]
     pub mode: AuthMode,
 
+    /// Allow unauthenticated ("anonymous") access to `/v1/*` data-plane
+    /// endpoints even when an auth mode is enabled.
+    ///
+    /// Defaults to `false` (fail-closed): when `mode` is anything other than
+    /// `none`, a request that carries no credential is rejected with `401`,
+    /// matching the admin plane. This is an authentication concern and is
+    /// independent of `rbac.gateway.default_effect`, which only governs policy
+    /// evaluation for requests that are already authenticated.
+    ///
+    /// `mode = none` is always anonymous regardless of this flag. Set this to
+    /// `true` only for deployments that intentionally expose `/v1/*` without
+    /// credentials.
+    #[serde(default)]
+    pub allow_anonymous: bool,
+
     /// Shared API key settings (used by api_key, idp, and iap modes).
     #[serde(default)]
     pub api_key: Option<ApiKeyAuthConfig>,
