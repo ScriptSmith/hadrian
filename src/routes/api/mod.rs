@@ -1110,6 +1110,48 @@ model_name = "secondary-model"
         crate::build_app(&config, state)
     }
 
+    /// Build a test app with a custom `[auth*]` configuration block appended.
+    ///
+    /// `auth_block` must start with a table header (e.g. `[auth.mode]`) and owns
+    /// all `auth` configuration; the base config deliberately omits the session
+    /// secret since these tests use `api_key` mode, which does not require it.
+    async fn test_app_with_auth(auth_block: &str) -> axum::Router {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+        static COUNTER: AtomicU64 = AtomicU64::new(9000);
+        let db_id = COUNTER.fetch_add(1, Ordering::SeqCst);
+
+        let config_str = format!(
+            r#"
+[database]
+type = "sqlite"
+path = "file:api_test_auth_db_{db_id}?mode=memory&cache=shared"
+create_if_missing = true
+run_migrations = true
+wal_mode = false
+busy_timeout_ms = 5000
+
+[providers]
+default_provider = "test"
+
+[providers.test]
+type = "test"
+model_name = "test-model"
+
+{auth_block}
+"#
+        );
+
+        let config =
+            crate::config::GatewayConfig::parse(&config_str).expect("Failed to parse test config");
+        let state = crate::AppState::new(config.clone())
+            .await
+            .expect("Failed to create AppState");
+        crate::build_app(&config, state)
+    }
+
     /// Helper to make a JSON POST request
     async fn post_json(app: &axum::Router, uri: &str, body: Value) -> (StatusCode, Value) {
         post_json_with_headers(app, uri, body, vec![]).await
@@ -1989,6 +2031,207 @@ model_name = "secondary-model"
         // Anonymous requests are allowed by default
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["object"], "chat.completion");
+    }
+
+    #[tokio::test]
+    async fn test_anonymous_rejected_when_auth_enabled() {
+        // With an auth mode enabled and no explicit anonymous opt-in, a request
+        // carrying no credential must fail closed with 401 — the same behavior
+        // as the admin plane — rather than falling through to anonymous access.
+        let app = test_app_with_auth(
+            r#"
+[auth.mode]
+type = "api_key"
+"#,
+        )
+        .await;
+
+        // Chat completions without credentials -> 401
+        let (status, body) = post_json(
+            &app,
+            "/api/v1/chat/completions",
+            json!({
+                "model": "test/test-model",
+                "messages": [{"role": "user", "content": "Hello"}]
+            }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "anonymous chat must be rejected when auth is enabled"
+        );
+        assert_eq!(body["error"]["type"], "authentication_error");
+        assert_eq!(body["error"]["code"], "missing_credentials");
+
+        // The model catalog must not leak to anonymous callers either -> 401
+        let (models_status, _) = get_json(&app, "/api/v1/models").await;
+        assert_eq!(
+            models_status,
+            StatusCode::UNAUTHORIZED,
+            "anonymous /v1/models must be rejected when auth is enabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_anonymous_rejected_with_gateway_rbac_fail_open() {
+        // Reproduces the deployment configuration that best demonstrates the
+        // original bug: gateway RBAC enabled with a fail-open default effect and
+        // no deny policy matching a basic model. Previously an anonymous request
+        // built an empty subject, matched no deny policy, and was served (200).
+        // The authn fix now rejects the request at the middleware before any
+        // policy evaluation, so this returns 401.
+        let app = test_app_with_auth(
+            r#"
+[auth.mode]
+type = "api_key"
+
+[auth.rbac]
+enabled = true
+default_effect = "deny"
+
+[auth.rbac.gateway]
+enabled = true
+default_effect = "allow"
+"#,
+        )
+        .await;
+
+        let (status, body) = post_json(
+            &app,
+            "/api/v1/chat/completions",
+            json!({
+                "model": "test/test-model",
+                "messages": [{"role": "user", "content": "Hello"}]
+            }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "anonymous request must not fail open via gateway default_effect = allow"
+        );
+        assert_eq!(body["error"]["code"], "missing_credentials");
+    }
+
+    #[tokio::test]
+    async fn test_allow_anonymous_opt_in() {
+        // The escape hatch: deployments that intentionally expose /v1/* without
+        // credentials set allow_anonymous = true and anonymous access is served.
+        let app = test_app_with_auth(
+            r#"
+[auth]
+allow_anonymous = true
+
+[auth.mode]
+type = "api_key"
+"#,
+        )
+        .await;
+
+        let (status, body) = post_json(
+            &app,
+            "/api/v1/chat/completions",
+            json!({
+                "model": "test/test-model",
+                "messages": [{"role": "user", "content": "Hello"}]
+            }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "allow_anonymous = true must permit anonymous access"
+        );
+        assert_eq!(body["object"], "chat.completion");
+
+        // Invalid credentials are still rejected even with allow_anonymous = true.
+        let (bad_status, _) = post_json_with_headers(
+            &app,
+            "/api/v1/chat/completions",
+            json!({
+                "model": "test/test-model",
+                "messages": [{"role": "user", "content": "Hello"}]
+            }),
+            vec![(
+                "Authorization",
+                "Bearer malformed-key-without-proper-prefix",
+            )],
+        )
+        .await;
+        assert_eq!(
+            bad_status,
+            StatusCode::UNAUTHORIZED,
+            "invalid credentials must be rejected regardless of allow_anonymous"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_iap_require_identity_false_permits_anonymous() {
+        // IAP's `require_identity = false` is its native opt-in for unauthenticated
+        // access to public endpoints; a credential-less request must be served.
+        let app = test_app_with_auth(
+            r#"
+[server.trusted_proxies]
+dangerously_trust_all = true
+
+[auth.mode]
+type = "iap"
+identity_header = "X-Auth-Request-User"
+require_identity = false
+"#,
+        )
+        .await;
+
+        let (status, body) = post_json(
+            &app,
+            "/api/v1/chat/completions",
+            json!({
+                "model": "test/test-model",
+                "messages": [{"role": "user", "content": "Hello"}]
+            }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "IAP require_identity = false must permit anonymous access"
+        );
+        assert_eq!(body["object"], "chat.completion");
+    }
+
+    #[tokio::test]
+    async fn test_iap_require_identity_true_rejects_anonymous() {
+        // The default (`require_identity = true`) requires a proxy-supplied
+        // identity, so a credential-less request fails closed with 401.
+        let app = test_app_with_auth(
+            r#"
+[server.trusted_proxies]
+dangerously_trust_all = true
+
+[auth.mode]
+type = "iap"
+identity_header = "X-Auth-Request-User"
+require_identity = true
+"#,
+        )
+        .await;
+
+        let (status, body) = post_json(
+            &app,
+            "/api/v1/chat/completions",
+            json!({
+                "model": "test/test-model",
+                "messages": [{"role": "user", "content": "Hello"}]
+            }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "IAP require_identity = true must reject anonymous access"
+        );
+        assert_eq!(body["error"]["code"], "missing_credentials");
     }
 
     // ============================================================================

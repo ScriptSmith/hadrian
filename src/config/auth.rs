@@ -19,6 +19,21 @@ pub struct AuthConfig {
     #[serde(default)]
     pub mode: AuthMode,
 
+    /// Allow unauthenticated ("anonymous") access to `/v1/*` data-plane
+    /// endpoints even when an auth mode is enabled.
+    ///
+    /// Defaults to `false` (fail-closed): when `mode` is anything other than
+    /// `none`, a request that carries no credential is rejected with `401`,
+    /// matching the admin plane. This is an authentication concern and is
+    /// independent of `rbac.gateway.default_effect`, which only governs policy
+    /// evaluation for requests that are already authenticated.
+    ///
+    /// `mode = none` is always anonymous regardless of this flag. Set this to
+    /// `true` only for deployments that intentionally expose `/v1/*` without
+    /// credentials.
+    #[serde(default)]
+    pub allow_anonymous: bool,
+
     /// Shared API key settings (used by api_key, idp, and iap modes).
     #[serde(default)]
     pub api_key: Option<ApiKeyAuthConfig>,
@@ -73,6 +88,27 @@ impl AuthConfig {
     /// Whether authentication is enabled (any mode other than None).
     pub fn is_auth_enabled(&self) -> bool {
         !matches!(self.mode, AuthMode::None)
+    }
+
+    /// Whether unauthenticated ("anonymous") access to the `/v1/*` data plane is
+    /// permitted for a request that carries no credential.
+    ///
+    /// Returns true when:
+    /// - authentication is disabled entirely (`mode = none`), or
+    /// - `allow_anonymous = true` is set explicitly, or
+    /// - the mode is `iap` and the proxy is configured with
+    ///   `require_identity = false` — IAP's native opt-in for unauthenticated
+    ///   access to public endpoints.
+    ///
+    /// Otherwise a missing credential is fatal and `api_middleware` returns 401.
+    pub fn allows_anonymous_access(&self) -> bool {
+        if !self.is_auth_enabled() || self.allow_anonymous {
+            return true;
+        }
+        if let AuthMode::Iap(iap) = &self.mode {
+            return !iap.require_identity;
+        }
+        false
     }
 
     /// Whether admin routes should be protected by authentication middleware.

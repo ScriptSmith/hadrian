@@ -1,8 +1,8 @@
-use axum::{Extension, Json, extract::State};
+use axum::{Extension, Json, extract::State, http::StatusCode};
 use serde::Serialize;
 
 use super::ApiError;
-use crate::AppState;
+use crate::{AppState, middleware::AuthzContext};
 
 /// Combined models response with provider-prefixed model IDs.
 #[derive(Serialize)]
@@ -23,14 +23,54 @@ pub struct CombinedModelsResponse {
     responses(
         (status = 200, description = "List of available models", body = CombinedModelsResponse),
         (status = 400, description = "Bad request", body = crate::openapi::ErrorResponse),
+        (status = 401, description = "Unauthorized - missing or invalid credentials", body = crate::openapi::ErrorResponse),
+        (status = 403, description = "Forbidden - not authorized to list models", body = crate::openapi::ErrorResponse),
     ),
     security(("api_key" = []))
 ))]
-#[tracing::instrument(name = "api.models", skip(state, auth))]
+#[tracing::instrument(name = "api.models", skip(state, auth, authz))]
 pub async fn api_v1_models(
     State(state): State<AppState>,
     auth: Option<Extension<crate::auth::AuthenticatedRequest>>,
+    authz: Option<Extension<AuthzContext>>,
 ) -> Result<Json<CombinedModelsResponse>, ApiError> {
+    // Authorize catalog access. Unlike the inference handlers this is a
+    // `model:list` check (not `model:use`); it brings `/v1/models` to parity
+    // with the rest of the data plane so the catalog respects gateway RBAC.
+    //
+    // `api_authz_middleware` always inserts an `AuthzContext`, so `authz` is
+    // present even for anonymous requests (those permitted by `mode = none` or
+    // `allow_anonymous`) — they carry an empty subject and are still evaluated
+    // against gateway RBAC, so a `deny` default effect gates the catalog. When
+    // gateway RBAC is disabled or fail-open, the catalog is served, matching
+    // every other `/v1/*` handler.
+    if let Some(Extension(ref authz)) = authz {
+        let org_id = auth.as_ref().and_then(|Extension(a)| {
+            a.api_key()
+                .and_then(|k| k.org_id.map(|id| id.to_string()))
+                .or_else(|| a.identity().and_then(|i| i.org_ids.first().cloned()))
+        });
+        let project_id = auth.as_ref().and_then(|Extension(a)| {
+            a.api_key()
+                .and_then(|k| k.project_id.map(|id| id.to_string()))
+                .or_else(|| a.identity().and_then(|i| i.project_ids.first().cloned()))
+        });
+
+        authz
+            .require_api(
+                "model",
+                "list",
+                None,
+                None,
+                org_id.as_deref(),
+                project_id.as_deref(),
+            )
+            .await
+            .map_err(|e| {
+                ApiError::new(StatusCode::FORBIDDEN, "authorization_denied", e.to_string())
+            })?;
+    }
+
     // Read static provider models from the in-memory cache (warmed on startup,
     // refreshed periodically). Providers missing from the cache (e.g. if warming
     // failed) are fetched live as a fallback.
