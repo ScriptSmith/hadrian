@@ -399,10 +399,7 @@ pub async fn get_ui_config(State(state): State<AppState>) -> Json<UiConfigRespon
     // containers, so the Containers page would only ever show an empty
     // list — hide it regardless of [ui.pages] settings.
     if !state.config.features.containers.enabled {
-        response.pages.containers = PageConfigResponse {
-            status: PageStatus::Disabled,
-            notice_message: None,
-        };
+        response.pages.containers.status = PageStatus::Disabled;
     }
 
     // Add sovereignty custom field definitions
