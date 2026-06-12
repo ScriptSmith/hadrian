@@ -199,7 +199,7 @@ When any mode other than `none` is enabled, the data plane fails closed: a reque
 `/v1/*` endpoint that carries **no** credential is rejected with `401 missing_credentials`,
 exactly like the admin plane. This is an authentication concern and is independent of
 [gateway RBAC](/docs/features/authorization) — `[auth.rbac.gateway].default_effect` only
-governs policy evaluation for requests that are *already authenticated*, so it is never the
+governs policy evaluation for requests that are _already authenticated_, so it is never the
 sole barrier against unauthenticated access.
 
 ```toml
@@ -216,16 +216,15 @@ regardless of this flag. With `type = "none"`, all access is anonymous and this 
 effect.
 
 <Callout type="warn">
-  Setting `allow_anonymous = true` while an auth mode is enabled opens **every** `/v1/*`
-  endpoint to unauthenticated callers, including model inference, which can incur provider
-  cost. Prefer leaving it `false` and issuing scoped API keys.
+  Setting `allow_anonymous = true` while an auth mode is enabled opens **every** `/v1/*` endpoint to
+  unauthenticated callers, including model inference, which can incur provider cost. Prefer leaving
+  it `false` and issuing scoped API keys.
 </Callout>
 
 <Callout type="info">
-  **Breaking change.** Earlier builds served credential-less `/v1/*` requests even when an
-  auth mode was enabled (relying on `[auth.rbac.gateway].default_effect` as the only
-  backstop). Deployments that depended on that behavior must now set `allow_anonymous = true`
-  explicitly.
+  **Breaking change.** Earlier builds served credential-less `/v1/*` requests even when an auth mode
+  was enabled (relying on `[auth.rbac.gateway].default_effect` as the only backstop). Deployments
+  that depended on that behavior must now set `allow_anonymous = true` explicitly.
 </Callout>
 
 ## API Key Settings
