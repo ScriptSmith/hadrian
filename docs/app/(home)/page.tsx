@@ -1,29 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { Brain, Code, Eye, Server, Shield, Users, Zap } from "lucide-react";
-import {
-  Anthropic,
-  AzureAI,
-  Bedrock,
-  Cerebras,
-  Cohere,
-  DeepSeek,
-  Fireworks,
-  Groq,
-  LmStudio,
-  Mistral,
-  Ollama,
-  OpenAI,
-  OpenRouter,
-  Perplexity,
-  Together,
-  VertexAI,
-  Vllm,
-} from "@lobehub/icons";
 import { QuickStartSelector } from "@/components/quick-start-selector";
+import { RoutingDiagram } from "@/components/routing-diagram";
 import { StoryEmbed } from "@/components/story-embed";
 
 function GitHubIcon({ className }: { className?: string }) {
@@ -180,119 +161,6 @@ function DemoGallery() {
   );
 }
 
-// --- Providers ---
-
-type ProviderIcon = React.ComponentType<{
-  size?: number | string;
-  title?: string;
-  className?: string;
-  style?: React.CSSProperties;
-}>;
-
-type Provider = { name: string; Icon: ProviderIcon; href: string };
-
-const providerCategories: {
-  name: string;
-  description: string;
-  cols: string;
-  providers: Provider[];
-}[] = [
-  {
-    name: "Native integrations",
-    description: "Purpose-built clients with cloud-native auth and prompt caching",
-    cols: "sm:grid-cols-3 lg:grid-cols-5",
-    providers: [
-      {
-        name: "OpenAI",
-        Icon: OpenAI.Text,
-        href: "/docs/configuration/providers#openai",
-      },
-      {
-        name: "Anthropic",
-        Icon: Anthropic.Text,
-        href: "/docs/configuration/providers#anthropic",
-      },
-      {
-        name: "AWS Bedrock",
-        Icon: Bedrock.Text,
-        href: "/docs/configuration/providers#aws-bedrock",
-      },
-      {
-        name: "Google Vertex AI",
-        Icon: VertexAI.Text,
-        href: "/docs/configuration/providers#google-vertex-ai",
-      },
-      {
-        name: "Azure OpenAI",
-        Icon: AzureAI.Text,
-        href: "/docs/configuration/providers#azure-openai",
-      },
-    ],
-  },
-  {
-    name: "OpenAI-compatible",
-    description: "Drop-in adapter for any compatible endpoint, hosted or self-hosted",
-    cols: "sm:grid-cols-3 lg:grid-cols-4",
-    providers: (
-      [
-        ["OpenRouter", OpenRouter.Text],
-        ["Ollama", Ollama.Text],
-        ["Together AI", Together.Text],
-        ["Groq", Groq.Text],
-        ["Fireworks", Fireworks.Text],
-        ["Cerebras", Cerebras.Text],
-        ["vLLM", Vllm.Text],
-        ["LM Studio", LmStudio.Text],
-        ["DeepSeek", DeepSeek.Text],
-        ["Mistral", Mistral.Text],
-        ["Cohere", Cohere.Text],
-        ["Perplexity", Perplexity.Text],
-      ] as const
-    ).map(([name, Icon]) => ({
-      name,
-      Icon,
-      href: "/docs/configuration/providers#openai-compatible-providers",
-    })),
-  },
-];
-
-function ProviderCategory({
-  name,
-  description,
-  cols,
-  providers,
-}: {
-  name: string;
-  description: string;
-  cols: string;
-  providers: Provider[];
-}) {
-  return (
-    <div>
-      <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-3">
-        <h3 className="text-sm font-semibold uppercase tracking-widest text-fd-foreground">
-          {name}
-        </h3>
-        <span className="text-xs text-fd-muted-foreground">{description}</span>
-      </div>
-      <div
-        className={`grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-fd-border bg-fd-border ${cols}`}
-      >
-        {providers.map(({ name: providerName, Icon, href }) => (
-          <Link
-            key={providerName}
-            href={href}
-            aria-label={`${providerName} configuration documentation`}
-            className="flex h-24 items-center justify-center bg-fd-card px-3 text-fd-foreground transition-colors hover:bg-fd-muted"
-          >
-            <Icon size={28} title={providerName} className="max-w-full" />
-          </Link>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 // --- Everything Included ---
 
 const featureCategories = [
@@ -373,16 +241,9 @@ export default function HomePage() {
   return (
     <div className="flex flex-col">
       {/* Hero */}
-      <section className="relative overflow-hidden border-b bg-gradient-to-b from-fd-background to-fd-muted/30 py-16 md:py-24">
+      <section className="relative overflow-hidden py-16 md:py-24">
         <div className="mx-auto max-w-6xl px-4">
           <div className="text-center">
-            <Image
-              src={`${process.env.DOCS_BASE_PATH || ""}/icon.svg`}
-              alt=""
-              width={96}
-              height={96}
-              className="mx-auto mb-6"
-            />
             <h1 className="mb-6 text-4xl font-bold tracking-tight md:text-6xl">Hadrian Gateway</h1>
             <p className="mx-auto mb-0 max-w-2xl text-lg text-fd-muted-foreground md:text-xl">
               Unified AI gateway with every enterprise feature included.
@@ -391,7 +252,7 @@ export default function HomePage() {
               Completely Open Source and Free.
             </p>
             <p className="mb-8 text-sm text-fd-muted-foreground">
-              MIT and Apache-2.0 licensed. No proprietary code, no upgrade tiers, no restrictions.
+              MIT and Apache-2.0 licensed. No proprietary code, upgrade tiers, or restrictions.
             </p>
             <div className="flex flex-wrap justify-center gap-4">
               <span className="group relative">
@@ -454,6 +315,11 @@ export default function HomePage() {
             </div>
           </div>
 
+          {/* Routing diagram */}
+          <div className="mt-16">
+            <RoutingDiagram />
+          </div>
+
           {/* Quick Start Selector */}
           <div className="mx-auto mt-12 max-w-6xl">
             <h2 className="mb-4 text-lg font-semibold">Get Started</h2>
@@ -463,35 +329,19 @@ export default function HomePage() {
       </section>
 
       {/* See it in Action */}
-      <section className="border-b bg-fd-muted/30 py-16 md:py-24">
+      <section className="py-16 md:py-24">
         <div className="mx-auto mb-8 max-w-6xl px-4 text-center">
           <h2 className="text-3xl font-bold">See it in Action</h2>
         </div>
         <DemoGallery />
       </section>
 
-      {/* Providers */}
-      <section className="border-b py-16 md:py-24">
-        <div className="mx-auto max-w-6xl px-4">
-          <h2 className="mb-4 text-center text-3xl font-bold">Providers</h2>
-          <p className="mx-auto mb-12 max-w-2xl text-center text-fd-muted-foreground">
-            Route to any provider through a unified API. Automatic failover, health checks, and
-            circuit breakers included.
-          </p>
-          <div className="space-y-12">
-            {providerCategories.map((cat) => (
-              <ProviderCategory key={cat.name} {...cat} />
-            ))}
-          </div>
-        </div>
-      </section>
-
       {/* Everything Included */}
-      <section className="border-b bg-fd-muted/30 py-16 md:py-24">
+      <section className="py-16 md:py-24">
         <div className="mx-auto max-w-6xl px-4">
           <h2 className="mb-4 text-center text-3xl font-bold">Everything Included</h2>
           <p className="mx-auto mb-12 max-w-2xl text-center text-fd-muted-foreground">
-            Every feature is included in the open-source release. No asterisks, no upgrade walls.
+            Every feature is included in the open-source release. No asterisks or upgrade walls.
           </p>
           <div className="grid gap-x-12 gap-y-10 md:grid-cols-2 lg:grid-cols-3">
             {featureCategories.map((cat) => (

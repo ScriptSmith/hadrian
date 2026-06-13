@@ -1,9 +1,21 @@
 import type { BaseLayoutProps } from "fumadocs-ui/layouts/shared";
+import Image from "next/image";
 
 export function baseOptions(): BaseLayoutProps {
   return {
     nav: {
-      title: "Hadrian",
+      title: (
+        <>
+          <Image
+            src={`${process.env.DOCS_BASE_PATH || ""}/icon.svg`}
+            alt=""
+            width={24}
+            height={24}
+            className="rounded-md"
+          />
+          Hadrian
+        </>
+      ),
     },
     links: [
       {
