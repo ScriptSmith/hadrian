@@ -1888,7 +1888,7 @@ export function GatewayDiagram() {
         `}</style>
 
         <div className="w-full overflow-x-auto">
-          <div className="relative mx-auto w-full min-w-[720px] max-w-3xl">
+          <div className="relative mx-auto w-full max-w-3xl sm:min-w-[720px]">
             <div
               id={`gw-panel-${scene.id}`}
               role="tabpanel"
