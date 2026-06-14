@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import Link from "next/link";
 import {
   Database,
@@ -57,17 +65,24 @@ const fullPath = (y: number) =>
 // Inbound only: user into the gateway.
 const userPath = `M${A_IN.x},${A_IN.y} L${GW_LEFT - 4},${GY}`;
 
+// User to the gateway *centre* — used by rejected requests so the bounce peaks at
+// the same point (and the same instant) a passed request changes colour.
+const gatePath = `M${A_IN.x},${A_IN.y} L${GX},${GY}`;
+
 // Gateway down to a node directly beneath it (logs, cache, meters).
 const SINK_TOP = 384;
 const sinkPath = `M${GX},${GW_BOTTOM} L${GX},${SINK_TOP}`;
 
 // =====================================================================
-// Constant-speed timing
+// One shared clock per scene
 //
-// Every request dot moves at the same pixel speed in every diagram. A dot's
-// travel time is therefore its path length / SPEED, computed analytically so we
-// never depend on the DOM. Lanes share a period so the launch cadence and the
-// number of requests in flight stay consistent across scenes.
+// Every scene is driven by a discrete schedule of request "slots". Slot k
+// launches from the user at k·C and crosses the gateway centre at k·C + T_GATE,
+// where T_GATE is the (constant) user→gateway travel time. Because that crossing
+// time is known analytically, every downstream action — a log row reaching its
+// slot, a meter ticking, a request bouncing back — can be pinned to it. Dots,
+// logs and meters therefore all live on the single SVG/SMIL timeline and stay in
+// lock-step; nothing runs on the independent CSS-animation clock any more.
 // =====================================================================
 
 const SPEED = 170; // viewBox units per second — the one speed used everywhere
@@ -124,23 +139,38 @@ const travelTime = (d: string) => pathLength(d) / SPEED;
 // Fraction of a full lane reached at the gateway centre (where colour changes).
 const gateFrac = (d: string) => (GX - A_IN.x) / pathLength(d);
 
-// Shared period for a set of lanes: keeps ~IN_FLIGHT dots visible and a steady
-// launch cadence regardless of how many lanes the scene has.
-function lanePeriod(times: number[]): number {
-  const n = times.length;
-  const maxT = Math.max(...times);
-  return Math.max((n / IN_FLIGHT) * maxT, 1.05 * maxT);
+// Constant user→gateway-centre travel time. Same for every lane (the inbound
+// segment is identical), so every slot crosses the gateway at k·C + T_GATE.
+const T_GATE = (GX - A_IN.x) / SPEED;
+
+// Per-scene cadence and cycle. C keeps ~IN_FLIGHT dots on the longest lane; the
+// cycle is n slots long so the whole scene repeats seamlessly every n·C.
+function sceneTiming(ys: number[], n: number, inFlight = IN_FLIGHT) {
+  const C = Math.max(...ys.map((y) => travelTime(fullPath(y)))) / inFlight;
+  return { C, cycle: n * C };
 }
-// Low-discrepancy stagger so launches never look like a top-to-bottom sweep.
-const laneBegin = (i: number, period: number) => Number((((i * 0.618033) % 1) * period).toFixed(3));
+
+// Low-discrepancy lane assignment so a regular launch cadence never reads as a
+// top-to-bottom sweep (consecutive slots land on well-separated rows).
+const LANE_STEP: Record<number, number> = { 3: 2, 4: 3, 9: 4 };
+const laneOf = (k: number, n: number) => (k * (LANE_STEP[n] ?? 1)) % n;
 
 // =====================================================================
-// Primitives
+// Reduced motion
+//
+// Dots, glows and bounces are SMIL and carry `motion-reduce:hidden`, so CSS
+// hides them with no JS. The logs and meters can't be disabled that way (SMIL
+// isn't CSS), so they read this context and render a static frame instead.
 // =====================================================================
 
-// A constant-speed request dot: travels `path` once per `dur`, then idles. The
-// caller passes `dur`; the travelling fraction is derived from the path length
-// so the on-screen speed is identical to every other dot.
+const ReducedMotionContext = createContext(false);
+const useReduced = () => useContext(ReducedMotionContext);
+
+// =====================================================================
+// Request-dot primitives (all on the SMIL clock)
+// =====================================================================
+
+// A constant-speed request dot: travels `path` once per `dur`, then idles.
 function Flow({
   path,
   dur,
@@ -237,8 +267,8 @@ function TwoColorFlow({
   );
 }
 
-// A request that reaches `peak` along `path`, then reverses — denied, blocked,
-// or rate-limited. Both legs move at SPEED (span derived from the path length).
+// A request that reaches the gateway centre along `path`, then reverses — denied,
+// blocked, or rate-limited. Both legs move at SPEED (span derived from length).
 function ReturnDot({
   path,
   peak,
@@ -342,6 +372,58 @@ function NodeGlow({
         repeatCount="indefinite"
       />
     </rect>
+  );
+}
+
+// Slot k as a forward request: launches at k·C, optionally turns `outClass` at
+// the gateway, and lights its destination as it arrives.
+function ForwardDot({
+  y,
+  begin,
+  cycle,
+  className = "fill-fd-primary",
+  outClass,
+  r,
+}: {
+  y: number;
+  begin: number;
+  cycle: number;
+  className?: string;
+  outClass?: string;
+  r?: number;
+}) {
+  const path = fullPath(y);
+  const at = Math.min(0.985, travelTime(path) / cycle);
+  return (
+    <g>
+      <NodeGlow x={PX} y={y} size={56} dur={cycle} begin={begin} at={at} />
+      {outClass ? (
+        <TwoColorFlow
+          path={path}
+          dur={cycle}
+          begin={begin}
+          inClass={className}
+          outClass={outClass}
+        />
+      ) : (
+        <Flow path={path} dur={cycle} begin={begin} className={className} r={r} />
+      )}
+    </g>
+  );
+}
+
+// Slot k as a rejected request: reaches the gateway centre at k·C + T_GATE, then
+// bounces back in `outClass`.
+function BounceDot({ begin, cycle, outClass }: { begin: number; cycle: number; outClass: string }) {
+  return (
+    <ReturnDot
+      path={gatePath}
+      peak={1}
+      dur={cycle}
+      begin={begin}
+      at={Math.min(0.985, T_GATE / cycle)}
+      outClass={outClass}
+    />
   );
 }
 
@@ -449,19 +531,18 @@ function Chip({
   );
 }
 
-function ProviderChips({ providers }: { providers: Provider[] }) {
-  const ys = providerYs(providers.length);
+function ProviderChips({ providers, ys }: { providers: Provider[]; ys?: number[] }) {
+  const rowYs = ys ?? providerYs(providers.length);
   return (
     <>
       {providers.map((p, i) => (
-        <Chip key={p.name} provider={p} y={ys[i]} />
+        <Chip key={p.name} provider={p} y={rowYs[i]} />
       ))}
     </>
   );
 }
 
-function Wires({ providers }: { providers: Provider[] }) {
-  const ys = providerYs(providers.length);
+function Wires({ ys }: { ys: number[] }) {
   return (
     <g fill="none" aria-hidden="true" className="stroke-fd-border" strokeWidth={1.5}>
       <path d={userPath} />
@@ -472,60 +553,13 @@ function Wires({ providers }: { providers: Provider[] }) {
   );
 }
 
-// One constant-speed dot per provider lane (+ arrival glow). Optionally turns a
-// second colour at the gateway (auth/authz "allowed" requests).
-function Lanes({
-  providers,
-  className = "fill-fd-primary",
-  outClass,
-  sizes,
-}: {
-  providers: Provider[];
-  className?: string;
-  outClass?: string;
-  sizes?: number[];
-}) {
-  const ys = providerYs(providers.length);
-  const paths = ys.map(fullPath);
-  const times = paths.map(travelTime);
-  const period = lanePeriod(times);
+function SinkWire() {
   return (
-    <>
-      {paths.map((d, i) => {
-        const begin = laneBegin(i, period);
-        const at = Math.min(0.985, times[i] / period);
-        return (
-          <g key={i}>
-            <NodeGlow x={PX} y={ys[i]} size={56} dur={period} begin={begin} at={at} />
-            {outClass ? (
-              <TwoColorFlow
-                path={d}
-                dur={period}
-                begin={begin}
-                inClass={className}
-                outClass={outClass}
-              />
-            ) : (
-              <Flow
-                path={d}
-                dur={period}
-                begin={begin}
-                className={className}
-                r={sizes ? sizes[i % sizes.length] : 4.5}
-              />
-            )}
-          </g>
-        );
-      })}
-    </>
+    <g fill="none" aria-hidden="true" className="stroke-fd-border" strokeWidth={1.5}>
+      <path d={sinkPath} strokeDasharray="4 4" />
+    </g>
   );
 }
-
-// The launch cadence (and log roll interval) for a set of providers.
-const cadenceFor = (providers: Provider[]) => {
-  const times = providerYs(providers.length).map((y) => travelTime(fullPath(y)));
-  return lanePeriod(times) / providers.length;
-};
 
 function SatelliteNode({
   x,
@@ -534,7 +568,6 @@ function SatelliteNode({
   h,
   icon,
   title,
-  subtitle,
 }: {
   x: number;
   y: number;
@@ -542,58 +575,101 @@ function SatelliteNode({
   h: number;
   icon: React.ReactNode;
   title: string;
-  subtitle?: string;
 }) {
   return (
     <foreignObject x={x - w / 2} y={y - h / 2} width={w} height={h} aria-hidden="true">
       <div className="flex h-full w-full items-center gap-2.5 rounded-xl border border-fd-border bg-fd-card px-3 shadow-sm">
         <span className="flex-none text-fd-muted-foreground">{icon}</span>
-        <span className="flex flex-col leading-tight">
-          <span className="text-[13px] font-semibold text-fd-foreground">{title}</span>
-          {subtitle && <span className="text-[11px] text-fd-muted-foreground">{subtitle}</span>}
-        </span>
+        <span className="text-[13px] font-semibold text-fd-foreground">{title}</span>
       </div>
     </foreignObject>
   );
 }
 
-// A live log pinned under the gateway. Rows step upward once per `step` seconds
-// (the request cadence) so entries roll in time with the request dots.
-function RollingLog({
+// =====================================================================
+// Action nodes — driven by the slot schedule, on the SMIL clock
+// =====================================================================
+
+const LOG_ROW_H = 16;
+const LOG_VISIBLE = 3;
+
+// A live log pinned under the gateway. The strip scrolls upward at a constant
+// LOG_ROW_H-per-cadence, phased so row k lands in the bottom slot at the exact
+// instant slot k's dot crosses the gateway. Row content therefore *is* the
+// request you just watched pass through.
+function EventLog({
+  id,
   w,
   title,
   icon,
   href,
   rows,
-  step,
+  C,
+  cycle,
 }: {
+  id: string;
   w: number;
   title: string;
   icon: React.ReactNode;
   href?: string;
   rows: React.ReactNode[];
-  step: number;
+  C: number;
+  cycle: number;
 }) {
-  const rowH = 16;
-  const visible = 3;
-  const dur = rows.length * step;
-  const h = 30 + visible * rowH + 8;
+  const reduced = useReduced();
+  const n = rows.length;
+  const headerH = 26;
+  const cardX = GX - w / 2;
+  const cardY = SINK_TOP;
+  const rowsX = cardX + 12;
+  const rowsW = w - 24;
+  const rowsTopY = cardY + headerH;
+  const cardH = headerH + LOG_VISIBLE * LOG_ROW_H + 12;
+
+  // Strip translate: at the gateway-crossing time of slot k the bottom slot must
+  // hold row k. A constant-velocity scroll satisfies that for every k at once;
+  // the −n·LOG_ROW_H offset centres the indices inside the triplicated strip.
+  const A = (LOG_VISIBLE - 1) * LOG_ROW_H + (LOG_ROW_H / C) * T_GATE - n * LOG_ROW_H;
+  const ty0 = rowsTopY + A;
+  const ty1 = ty0 - n * LOG_ROW_H;
+  const clipId = `hadrian-logclip-${id}`;
+
   const header = (
     <span className="flex items-center gap-1.5 text-[12px] font-semibold text-fd-foreground">
       <span className="text-fd-muted-foreground">{icon}</span>
       {title}
     </span>
   );
-  return (
-    <foreignObject
-      x={GX - w / 2}
-      y={SINK_TOP}
-      width={w}
-      height={h}
-      aria-hidden={href ? undefined : "true"}
+
+  const rowDiv = (key: string, content: React.ReactNode) => (
+    <div
+      key={key}
+      className="flex items-center gap-1.5 overflow-hidden whitespace-nowrap"
+      style={{ height: LOG_ROW_H }}
     >
-      <div className="h-full w-full rounded-xl border border-fd-border bg-fd-card px-3 py-2 shadow-sm">
-        <div className="mb-1">
+      {content}
+    </div>
+  );
+
+  return (
+    <>
+      <rect
+        x={cardX}
+        y={cardY}
+        width={w}
+        height={cardH}
+        rx={12}
+        className="fill-fd-card stroke-fd-border"
+        strokeWidth={1.5}
+      />
+      <foreignObject
+        x={cardX}
+        y={cardY + 6}
+        width={w}
+        height={headerH}
+        aria-hidden={href ? undefined : "true"}
+      >
+        <div className="px-3">
           {href ? (
             <Link
               href={href}
@@ -605,26 +681,172 @@ function RollingLog({
             header
           )}
         </div>
-        <div style={{ height: visible * rowH, overflow: "hidden" }}>
-          <div
-            className="hadrian-noanim font-mono text-[10.5px]"
-            style={{ animation: `hadrian-roll ${dur}s steps(${rows.length}) infinite` }}
-          >
-            {[...rows, ...rows].map((row, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-1.5 overflow-hidden whitespace-nowrap"
-                style={{ height: rowH }}
-              >
-                {row}
-              </div>
-            ))}
+      </foreignObject>
+
+      {reduced ? (
+        <foreignObject
+          x={rowsX}
+          y={rowsTopY}
+          width={rowsW}
+          height={LOG_VISIBLE * LOG_ROW_H}
+          aria-hidden="true"
+        >
+          <div className="font-mono text-[10.5px]">
+            {rows.slice(0, LOG_VISIBLE).map((row, i) => rowDiv(`s-${i}`, row))}
           </div>
-        </div>
-      </div>
-    </foreignObject>
+        </foreignObject>
+      ) : (
+        <>
+          <clipPath id={clipId}>
+            <rect x={rowsX} y={rowsTopY} width={rowsW} height={LOG_VISIBLE * LOG_ROW_H} />
+          </clipPath>
+          <g clipPath={`url(#${clipId})`} aria-hidden="true">
+            <g transform={`translate(0 ${ty0.toFixed(2)})`}>
+              <animateTransform
+                attributeName="transform"
+                type="translate"
+                calcMode="linear"
+                values={`0 ${ty0.toFixed(2)};0 ${ty1.toFixed(2)}`}
+                keyTimes="0;1"
+                dur={`${cycle}s`}
+                repeatCount="indefinite"
+              />
+              <foreignObject x={rowsX} y={0} width={rowsW} height={3 * n * LOG_ROW_H}>
+                <div className="font-mono text-[10.5px]">
+                  {[0, 1, 2].flatMap((c) => rows.map((row, j) => rowDiv(`${c}-${j}`, row)))}
+                </div>
+              </foreignObject>
+            </g>
+          </g>
+        </>
+      )}
+    </>
   );
 }
+
+// A meter under the gateway whose fill is the request schedule made cumulative:
+// each accepted slot nudges the bar at its crossing time, the gaps between slots
+// are the (linear) refill/leak, and `keyTimes`/`values` come straight from the
+// per-scene simulation that also decides which slots bounce.
+function EventMeter({
+  w,
+  icon,
+  title,
+  keyTimes,
+  values,
+  cycle,
+  balanceSteps,
+  staticFrac,
+  staticBalance,
+}: {
+  w: number;
+  icon: React.ReactNode;
+  title: string;
+  keyTimes: number[];
+  values: number[];
+  cycle: number;
+  balanceSteps?: { from: number; to: number; text: string }[];
+  staticFrac: number;
+  staticBalance?: string;
+}) {
+  const reduced = useReduced();
+  const h = 56;
+  const cardX = GX - w / 2;
+  const cardY = SINK_TOP;
+  const fillW = w - 24;
+  const barX = cardX + 12;
+  const barY = cardY + 38;
+  const barH = 6;
+
+  const widths = values.map((v) => (fillW * Math.max(0, Math.min(1, v))).toFixed(1));
+  const kt = keyTimes.map((t) => Math.max(0, Math.min(1, t)).toFixed(4)).join(";");
+
+  return (
+    <>
+      <rect
+        x={cardX}
+        y={cardY}
+        width={w}
+        height={h}
+        rx={12}
+        className="fill-fd-card stroke-fd-border"
+        strokeWidth={1.5}
+      />
+      <foreignObject x={cardX} y={cardY + 8} width={w} height={20} aria-hidden="true">
+        <div className="flex items-center gap-2 px-3 text-[13px] font-semibold text-fd-foreground">
+          <span className="text-fd-muted-foreground">{icon}</span>
+          {title}
+        </div>
+      </foreignObject>
+
+      {/* Balance counter (right) — one text node per step, opacity-gated on the
+          shared clock so it never drifts from the bar. */}
+      {reduced
+        ? staticBalance && (
+            <text
+              x={cardX + w - 12}
+              y={cardY + 22}
+              textAnchor="end"
+              className="fill-fd-muted-foreground font-mono"
+              fontSize={11}
+              aria-hidden="true"
+            >
+              {staticBalance}
+            </text>
+          )
+        : balanceSteps?.map((b, i) => {
+            const from = Math.max(0.0001, Math.min(0.999, b.from));
+            const to = Math.max(from + 0.0002, Math.min(1, b.to));
+            return (
+              <text
+                key={i}
+                x={cardX + w - 12}
+                y={cardY + 22}
+                textAnchor="end"
+                className="fill-fd-muted-foreground font-mono"
+                fontSize={11}
+                opacity={0}
+                aria-hidden="true"
+              >
+                {b.text}
+                <animate
+                  attributeName="opacity"
+                  values="0;0;1;1;0;0"
+                  keyTimes={`0;${from.toFixed(4)};${from.toFixed(4)};${to.toFixed(4)};${to.toFixed(4)};1`}
+                  dur={`${cycle}s`}
+                  repeatCount="indefinite"
+                />
+              </text>
+            );
+          })}
+
+      <rect x={barX} y={barY} width={fillW} height={barH} rx={barH / 2} className="fill-fd-muted" />
+      <rect
+        x={barX}
+        y={barY}
+        width={reduced ? fillW * staticFrac : widths[0]}
+        height={barH}
+        rx={barH / 2}
+        className="fill-fd-primary"
+      >
+        {!reduced && (
+          <animate
+            attributeName="width"
+            values={widths.join(";")}
+            keyTimes={kt}
+            calcMode="linear"
+            dur={`${cycle}s`}
+            repeatCount="indefinite"
+          />
+        )}
+      </rect>
+    </>
+  );
+}
+
+// =====================================================================
+// Log row renderers (HTML, inside the scrolling strip)
+// =====================================================================
 
 function Tag({ tone, children }: { tone: "allow" | "deny" | "redact"; children: React.ReactNode }) {
   const map = {
@@ -640,36 +862,53 @@ function Tag({ tone, children }: { tone: "allow" | "deny" | "redact"; children: 
   );
 }
 
-// A meter card under the gateway: header (with optional balance) and a bar.
-function MeterNode({
-  w,
-  icon,
-  title,
-  balance,
-  barClass,
+function PolicyRow({
+  tone,
+  action,
+  policy,
 }: {
-  w: number;
-  icon: React.ReactNode;
-  title: string;
-  balance?: React.ReactNode;
-  barClass: string;
+  tone: "allow" | "deny";
+  action: string;
+  policy: string;
 }) {
-  const h = 56;
   return (
-    <foreignObject x={GX - w / 2} y={SINK_TOP} width={w} height={h} aria-hidden="true">
-      <div className="flex h-full w-full flex-col justify-center gap-1.5 rounded-xl border border-fd-border bg-fd-card px-3 shadow-sm">
-        <div className="flex items-center justify-between text-[13px] font-semibold text-fd-foreground">
-          <span className="flex items-center gap-2">
-            <span className="text-fd-muted-foreground">{icon}</span>
-            {title}
-          </span>
-          {balance}
-        </div>
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-fd-muted">
-          <div className={`h-full rounded-full bg-fd-primary ${barClass}`} />
-        </div>
-      </div>
-    </foreignObject>
+    <>
+      <Tag tone={tone}>{tone}</Tag>
+      <span className="w-[116px] text-fd-foreground">{action}</span>
+      <span className="ml-auto text-fd-muted-foreground">{policy}</span>
+    </>
+  );
+}
+
+function ScreenRow({ tone, label }: { tone: "allow" | "deny" | "redact"; label: string }) {
+  return (
+    <>
+      <Tag tone={tone}>{tone}</Tag>
+      <span className={tone === "allow" ? "text-fd-muted-foreground" : "text-fd-foreground"}>
+        {label}
+      </span>
+    </>
+  );
+}
+
+function UsageRow({
+  provider,
+  tok,
+  cost,
+  lat,
+}: {
+  provider: string;
+  tok: string;
+  cost: string;
+  lat: string;
+}) {
+  return (
+    <>
+      <span className="w-[68px] text-fd-foreground">{provider}</span>
+      <span className="w-[78px] text-fd-muted-foreground">{tok}</span>
+      <span className="w-[54px] text-fd-foreground">{cost}</span>
+      <span className="ml-auto text-fd-muted-foreground">{lat}</span>
+    </>
   );
 }
 
@@ -736,8 +975,85 @@ const ROUTING_SET = [
   ALL.compatible,
   ALL.openrouter,
 ];
+// Lane order: anthropic, openai, gemini. Usage/scene rows reference these by name.
 const LEAN_SET = [ALL.anthropic, ALL.openai, ALL.gemini];
-const LEAN_CADENCE = cadenceFor(LEAN_SET);
+
+// =====================================================================
+// Meter schedules (deterministic, no Date/Math.random)
+//
+// Meter scenes run on a slightly longer cycle (`meterCycle`) than n·C: the extra
+// T_GATE tail is an arrival-free gap that (a) keeps every slot's crossing
+// fraction inside [0,1) — so no keyTime needs clamping — and (b) gives the meter
+// a moment to recover/leak so the loop is seamless.
+// =====================================================================
+
+const meterCycle = (C: number, n: number) => n * C + T_GATE;
+
+// Build a stepped bar trajectory: the bar holds, then jumps at each event's
+// crossing fraction, so it visibly moves the instant a request passes the
+// gateway. `holdToEnd` keeps the last value pinned until the cycle boundary
+// (a hard reset, e.g. a new budget period) instead of leaking back down.
+function stepMeter(
+  events: { f: number; level: number }[],
+  start: number,
+  end: number,
+  holdToEnd = false
+) {
+  const keyTimes = [0];
+  const values = [start];
+  let prev = start;
+  for (const e of events) {
+    keyTimes.push(Math.max(0.0001, e.f - 0.0015));
+    values.push(prev);
+    keyTimes.push(e.f);
+    values.push(e.level);
+    prev = e.level;
+  }
+  if (holdToEnd) {
+    keyTimes.push(0.999);
+    values.push(prev);
+  }
+  keyTimes.push(1);
+  values.push(end);
+  return { keyTimes, values };
+}
+
+// Rate limiting: load climbs as requests arrive, tops out, and the requests
+// that arrive while full are shed (bounced). It leaks back down over the tail.
+function rateSchedule(C: number, cycle: number) {
+  const acceptLevels = [0.28, 0.45, 0.6, 0.74, 0.87, 1.0];
+  const shed = [false, false, false, false, false, false, true, true];
+  let prev = 0.1;
+  let li = 0;
+  const events = shed.map((isShed, k) => {
+    const level = isShed ? prev : acceptLevels[li++];
+    prev = level;
+    return { f: (k * C + T_GATE) / cycle, level };
+  });
+  return { ...stepMeter(events, 0.1, 0.1), shed };
+}
+
+// Cumulative spend against a fixed budget; a slot whose cost would overflow the
+// budget is shed. The bar holds the running total, then resets at the boundary.
+function budgetSchedule(costs: number[], budget: number, C: number, cycle: number) {
+  let spent = 0;
+  let segFrom = 0;
+  const shed: boolean[] = [];
+  const events: { f: number; level: number }[] = [];
+  const balanceSteps: { from: number; to: number; text: string }[] = [];
+  const fmt = (v: number) => `$${v} / $${budget.toLocaleString("en-US")}`;
+  for (let k = 0; k < costs.length; k++) {
+    const f = (k * C + T_GATE) / cycle;
+    balanceSteps.push({ from: segFrom, to: f, text: fmt(spent) });
+    const accept = spent + costs[k] <= budget;
+    if (accept) spent += costs[k];
+    shed.push(!accept);
+    events.push({ f, level: spent / budget });
+    segFrom = f;
+  }
+  balanceSteps.push({ from: segFrom, to: 1, text: fmt(spent) });
+  return { ...stepMeter(events, 0, 0, true), shed, balanceSteps };
+}
 
 // =====================================================================
 // Scenes
@@ -751,14 +1067,6 @@ type Scene = {
   render: () => React.ReactNode;
 };
 
-function SinkWire() {
-  return (
-    <g fill="none" aria-hidden="true" className="stroke-fd-border" strokeWidth={1.5}>
-      <path d={sinkPath} strokeDasharray="4 4" />
-    </g>
-  );
-}
-
 const scenes: Scene[] = [
   {
     id: "routing",
@@ -766,15 +1074,23 @@ const scenes: Scene[] = [
     caption:
       "One OpenAI-compatible API routes to any provider, with automatic fallbacks and health checks.",
     href: PROVIDERS_DOCS,
-    render: () => (
-      <>
-        <Wires providers={ROUTING_SET} />
-        <Lanes providers={ROUTING_SET} />
-        <UserNode />
-        <GatewayNode />
-        <ProviderChips providers={ROUTING_SET} />
-      </>
-    ),
+    render: () => {
+      const ys = providerYs(ROUTING_SET.length);
+      const n = ROUTING_SET.length;
+      const { C, cycle } = sceneTiming(ys, n);
+      return (
+        <>
+          <Wires ys={ys} />
+          {ROUTING_SET.map((_, k) => {
+            const lane = laneOf(k, n);
+            return <ForwardDot key={k} y={ys[lane]} begin={k * C} cycle={cycle} />;
+          })}
+          <UserNode />
+          <GatewayNode />
+          <ProviderChips providers={ROUTING_SET} ys={ys} />
+        </>
+      );
+    },
   },
   {
     id: "auth",
@@ -783,25 +1099,36 @@ const scenes: Scene[] = [
       "Every request is authenticated against your identity provider before it reaches a model.",
     href: "/docs/authentication",
     render: () => {
+      const ys = providerYs(LEAN_SET.length);
+      const n = 6;
+      const { C, cycle } = sceneTiming(ys, n);
       const idpY = 116;
       const loginPath = `M${UX},${UY - 34} L${UX},${idpY + 22}`;
       const idpToGw = `M${UX + 80},${idpY} C ${UX + 190},${idpY} ${GW_LEFT - 70},${GY - 26} ${GW_LEFT - 4},${GY - 18}`;
       return (
         <>
-          <Wires providers={LEAN_SET} />
+          <Wires ys={ys} />
           {/* IdP wired to the user (neutral) and the gateway (green: trusted identity). */}
           <g fill="none" aria-hidden="true" strokeWidth={1.5}>
             <path d={loginPath} strokeDasharray="4 4" className="stroke-fd-border" />
             <path d={idpToGw} strokeDasharray="4 4" className="stroke-emerald-500/70" />
           </g>
           {/* Requests turn green as they pass the gateway (authenticated). */}
-          <Lanes providers={LEAN_SET} outClass="fill-emerald-500" />
+          {Array.from({ length: n }, (_, k) => (
+            <ForwardDot
+              key={k}
+              y={ys[laneOf(k, LEAN_SET.length)]}
+              begin={k * C}
+              cycle={cycle}
+              outClass="fill-emerald-500"
+            />
+          ))}
           {/* Occasional, irregular login traffic to the IdP. */}
           <Flow path={loginPath} dur={5.3} begin={0.6} />
           <Flow path={loginPath} dur={7.1} begin={3.4} />
           <UserNode />
           <GatewayNode />
-          <ProviderChips providers={LEAN_SET} />
+          <ProviderChips providers={LEAN_SET} ys={ys} />
           <SatelliteNode
             x={UX}
             y={idpY}
@@ -819,69 +1146,95 @@ const scenes: Scene[] = [
     pill: "Authorization",
     caption: "CEL-based RBAC evaluates system and org policies to allow or deny each request.",
     href: "/docs/features/authorization",
-    render: () => (
-      <>
-        <Wires providers={LEAN_SET} />
-        {/* Allowed requests continue green; denied ones turn red at the gateway. */}
-        <Lanes providers={LEAN_SET} outClass="fill-emerald-500" />
-        <ReturnDot
-          path={userPath}
-          peak={1}
-          dur={LEAN_CADENCE * 4}
-          begin={LEAN_CADENCE * 1.5}
-          at={0.42}
-          outClass="fill-red-500"
-        />
-        <UserNode />
-        <GatewayNode />
-        <ProviderChips providers={LEAN_SET} />
-        <SinkWire />
-        <RollingLog
-          w={300}
-          step={LEAN_CADENCE}
-          title="Policy decisions"
-          icon={<ShieldCheck className="h-4 w-4" />}
-          rows={[
-            <PolicyRow key="1" tone="allow" action="model:use" policy="org-member-read" />,
-            <PolicyRow key="2" tone="deny" action="model:use" policy="premium-models" />,
-            <PolicyRow key="3" tone="allow" action="vector_store:read" policy="org-member-read" />,
-            <PolicyRow key="4" tone="deny" action="user:delete" policy="deny-self-delete" />,
-            <PolicyRow key="5" tone="allow" action="responses:create" policy="org-admin" />,
-          ]}
-        />
-      </>
-    ),
+    render: () => {
+      const ys = providerYs(LEAN_SET.length);
+      const items: {
+        tone: "allow" | "deny";
+        action: string;
+        policy: string;
+        lane?: number;
+      }[] = [
+        { tone: "allow", action: "model:use", policy: "org-member-read", lane: 0 },
+        { tone: "deny", action: "model:use", policy: "premium-models" },
+        { tone: "allow", action: "vector_store:read", policy: "org-member-read", lane: 2 },
+        { tone: "allow", action: "responses:create", policy: "org-admin", lane: 1 },
+        { tone: "deny", action: "user:delete", policy: "deny-self-delete" },
+        { tone: "allow", action: "model:use", policy: "org-member-read", lane: 0 },
+      ];
+      const n = items.length;
+      const { C, cycle } = sceneTiming(ys, n);
+      return (
+        <>
+          <Wires ys={ys} />
+          {items.map((it, k) =>
+            it.tone === "allow" ? (
+              <ForwardDot
+                key={k}
+                y={ys[it.lane ?? 0]}
+                begin={k * C}
+                cycle={cycle}
+                outClass="fill-emerald-500"
+              />
+            ) : (
+              <BounceDot key={k} begin={k * C} cycle={cycle} outClass="fill-red-500" />
+            )
+          )}
+          <UserNode />
+          <GatewayNode />
+          <ProviderChips providers={LEAN_SET} ys={ys} />
+          <SinkWire />
+          <EventLog
+            id="authz"
+            w={300}
+            C={C}
+            cycle={cycle}
+            title="Policy decisions"
+            icon={<ShieldCheck className="h-4 w-4" />}
+            rows={items.map((it, k) => (
+              <PolicyRow key={k} tone={it.tone} action={it.action} policy={it.policy} />
+            ))}
+          />
+        </>
+      );
+    },
   },
   {
     id: "rate-limits",
     pill: "Rate limiting",
     caption: "Per-key and per-tenant limits shed excess load before it reaches a provider.",
     href: "/docs/configuration/auth#per-key-rate-limits",
-    render: () => (
-      <>
-        <Wires providers={LEAN_SET} />
-        <Lanes providers={LEAN_SET} />
-        {/* Once the bucket is full, requests reach the gateway then bounce back orange. */}
-        <ReturnDot
-          path={userPath}
-          peak={1}
-          dur={6.5}
-          begin={0}
-          at={0.73}
-          outClass="fill-orange-500"
-        />
-        <UserNode />
-        <GatewayNode />
-        <ProviderChips providers={LEAN_SET} />
-        <SinkWire />
-        <MeterNode
-          w={186}
-          icon={<Gauge className="h-4 w-4" />}
-          title="Rate limit"
-          barClass="w-[60%] [animation:hadrian-rate_6.5s_linear_infinite] motion-reduce:[animation:none]"
-        />
-      </>
-    ),
+    render: () => {
+      const ys = providerYs(LEAN_SET.length);
+      const n = 8;
+      const { C } = sceneTiming(ys, n);
+      const cycle = meterCycle(C, n);
+      const sim = rateSchedule(C, cycle);
+      return (
+        <>
+          <Wires ys={ys} />
+          {sim.shed.map((isShed, k) =>
+            isShed ? (
+              <BounceDot key={k} begin={k * C} cycle={cycle} outClass="fill-orange-500" />
+            ) : (
+              <ForwardDot key={k} y={ys[laneOf(k, LEAN_SET.length)]} begin={k * C} cycle={cycle} />
+            )
+          )}
+          <UserNode />
+          <GatewayNode />
+          <ProviderChips providers={LEAN_SET} ys={ys} />
+          <SinkWire />
+          <EventMeter
+            w={186}
+            cycle={cycle}
+            icon={<Gauge className="h-4 w-4" />}
+            title="Rate limit"
+            keyTimes={sim.keyTimes}
+            values={sim.values}
+            staticFrac={0.6}
+          />
+        </>
+      );
+    },
   },
   {
     id: "guardrails",
@@ -889,41 +1242,59 @@ const scenes: Scene[] = [
     caption:
       "Content moderation, PII detection, and virus scanning screen every request and response.",
     href: "/docs/features/guardrails",
-    render: () => (
-      <>
-        <Wires providers={LEAN_SET} />
-        {/* Successful requests pass through; blocked content turns away red. */}
-        <Lanes providers={LEAN_SET} />
-        <ReturnDot
-          path={userPath}
-          peak={1}
-          dur={LEAN_CADENCE * 5}
-          begin={LEAN_CADENCE * 2}
-          at={0.4}
-          outClass="fill-red-500"
-        />
-        <UserNode />
-        <GatewayNode />
-        <ProviderChips providers={LEAN_SET} />
-        <SinkWire />
-        {/* The guardrails provider and the screening log it produces, as one unit. */}
-        <RollingLog
-          w={224}
-          step={LEAN_CADENCE}
-          title="Guardrails"
-          icon={<ShieldAlert className="h-4 w-4" />}
-          href="/docs/features/guardrails"
-          rows={[
-            <ScreenRow key="1" tone="allow" label="passed" />,
-            <ScreenRow key="2" tone="deny" label="pii_credit_card" />,
-            <ScreenRow key="3" tone="allow" label="passed" />,
-            <ScreenRow key="4" tone="deny" label="prompt_attack" />,
-            <ScreenRow key="5" tone="redact" label="pii_email" />,
-            <ScreenRow key="6" tone="allow" label="passed" />,
-          ]}
-        />
-      </>
-    ),
+    render: () => {
+      const ys = providerYs(LEAN_SET.length);
+      const items: {
+        tone: "allow" | "deny" | "redact";
+        label: string;
+        lane?: number;
+      }[] = [
+        { tone: "allow", label: "passed", lane: 0 },
+        { tone: "deny", label: "pii_credit_card" },
+        { tone: "allow", label: "passed", lane: 2 },
+        { tone: "deny", label: "prompt_attack" },
+        { tone: "redact", label: "pii_email", lane: 1 },
+        { tone: "allow", label: "passed", lane: 0 },
+      ];
+      const n = items.length;
+      const { C, cycle } = sceneTiming(ys, n);
+      return (
+        <>
+          <Wires ys={ys} />
+          {items.map((it, k) => {
+            if (it.tone === "deny")
+              return <BounceDot key={k} begin={k * C} cycle={cycle} outClass="fill-red-500" />;
+            if (it.tone === "redact")
+              return (
+                <ForwardDot
+                  key={k}
+                  y={ys[it.lane ?? 0]}
+                  begin={k * C}
+                  cycle={cycle}
+                  outClass="fill-amber-500"
+                />
+              );
+            return <ForwardDot key={k} y={ys[it.lane ?? 0]} begin={k * C} cycle={cycle} />;
+          })}
+          <UserNode />
+          <GatewayNode />
+          <ProviderChips providers={LEAN_SET} ys={ys} />
+          <SinkWire />
+          <EventLog
+            id="guardrails"
+            w={224}
+            C={C}
+            cycle={cycle}
+            title="Guardrails"
+            icon={<ShieldAlert className="h-4 w-4" />}
+            href="/docs/features/guardrails"
+            rows={items.map((it, k) => (
+              <ScreenRow key={k} tone={it.tone} label={it.label} />
+            ))}
+          />
+        </>
+      );
+    },
   },
   {
     id: "budgets",
@@ -931,35 +1302,49 @@ const scenes: Scene[] = [
     caption:
       "Scoped budgets and microcent cost tracking meter spend across orgs, teams, and projects.",
     href: "/docs/features/budgets",
-    render: () => (
-      <>
-        <Wires providers={LEAN_SET} />
-        {/* Requests vary in size to represent cost. */}
-        <Lanes providers={LEAN_SET} sizes={[6.5, 3.5, 5]} />
-        <UserNode />
-        <GatewayNode />
-        <ProviderChips providers={LEAN_SET} />
-        <SinkWire />
-        {/* Once the budget is spent, requests bounce back. */}
-        <ReturnDot
-          path={userPath}
-          peak={1}
-          dur={10}
-          begin={0}
-          at={0.83}
-          outClass="fill-orange-500"
-        />
-        <MeterNode
-          w={210}
-          icon={<Wallet className="h-4 w-4" />}
-          title="Budget"
-          balance={
-            <span className="hadrian-balance font-mono text-[11px] text-fd-muted-foreground [animation:hadrian-spend_10s_linear_infinite] motion-reduce:[animation:none]" />
-          }
-          barClass="w-[60%] [animation:hadrian-budget_10s_linear_infinite] motion-reduce:[animation:none]"
-        />
-      </>
-    ),
+    render: () => {
+      const ys = providerYs(LEAN_SET.length);
+      const costs = [150, 90, 230, 120, 180, 260, 140];
+      const budget = 1000;
+      const n = costs.length;
+      const { C } = sceneTiming(ys, n);
+      const cycle = meterCycle(C, n);
+      const sim = budgetSchedule(costs, budget, C, cycle);
+      const radiusFor = (c: number) => 3.2 + (c / 260) * 3.6; // cost → dot size
+      return (
+        <>
+          <Wires ys={ys} />
+          {sim.shed.map((isShed, k) =>
+            isShed ? (
+              <BounceDot key={k} begin={k * C} cycle={cycle} outClass="fill-orange-500" />
+            ) : (
+              <ForwardDot
+                key={k}
+                y={ys[laneOf(k, LEAN_SET.length)]}
+                begin={k * C}
+                cycle={cycle}
+                r={radiusFor(costs[k])}
+              />
+            )
+          )}
+          <UserNode />
+          <GatewayNode />
+          <ProviderChips providers={LEAN_SET} ys={ys} />
+          <SinkWire />
+          <EventMeter
+            w={210}
+            cycle={cycle}
+            icon={<Wallet className="h-4 w-4" />}
+            title="Budget"
+            keyTimes={sim.keyTimes}
+            values={sim.values}
+            balanceSteps={sim.balanceSteps}
+            staticFrac={0.6}
+            staticBalance={`$600 / $${budget.toLocaleString("en-US")}`}
+          />
+        </>
+      );
+    },
   },
   {
     id: "caching",
@@ -970,16 +1355,23 @@ const scenes: Scene[] = [
       const ys = providerYs(4);
       const cacheY = ys[0];
       const llmYs = ys.slice(1);
+      const items: { hit: boolean; lane?: number }[] = [
+        { hit: true },
+        { hit: false, lane: 0 },
+        { hit: true },
+        { hit: false, lane: 1 },
+        { hit: false, lane: 2 },
+        { hit: true },
+      ];
+      const n = items.length;
+      const { C, cycle } = sceneTiming(ys, n);
       const cachePath = fullPath(cacheY);
-      // The gateway -> cache leg runs at 2x speed (an instant hit). Solve the
-      // travel fraction so the user -> gateway leg matches every other request.
+      // Gateway → cache leg runs at 2× speed (instant hit); the user → gateway
+      // leg matches every other request.
       const g = gateFrac(cachePath);
       const L = pathLength(cachePath);
-      const t1 = (g * L) / SPEED; // user -> gateway at SPEED
-      const t2 = ((1 - g) * L) / (2 * SPEED); // gateway -> cache at 2x SPEED
-      const cacheDur = LEAN_CADENCE * 3;
-      const f1 = (t1 / cacheDur).toFixed(3);
-      const f2 = ((t1 + t2) / cacheDur).toFixed(3);
+      const t1 = (g * L) / SPEED;
+      const t2 = ((1 - g) * L) / (2 * SPEED);
       return (
         <>
           <g fill="none" aria-hidden="true" className="stroke-fd-border" strokeWidth={1.5}>
@@ -988,49 +1380,49 @@ const scenes: Scene[] = [
               <path key={i} d={providerPath(y)} />
             ))}
           </g>
-          {/* Misses route through to a provider (lanes sit on the lower 3 rows). */}
-          {(() => {
-            const paths = llmYs.map(fullPath);
-            const period = lanePeriod(paths.map(travelTime));
-            return paths.map((d, i) => {
-              const begin = laneBegin(i, period);
-              const at = Math.min(0.985, travelTime(d) / period);
-              return (
-                <g key={i}>
-                  <NodeGlow x={PX} y={llmYs[i]} size={56} dur={period} begin={begin} at={at} />
-                  <Flow path={d} dur={period} begin={begin} />
-                </g>
-              );
-            });
-          })()}
-          {/* Cache lane: forward only, 2x speed on the gateway -> cache leg. */}
-          {[0, 1].map((k) => (
-            <circle
-              key={k}
-              r="4.5"
-              className="fill-teal-500 motion-reduce:hidden"
-              opacity={0}
-              style={DOT_FILTER}
-            >
-              <animateMotion
-                path={cachePath}
-                dur={`${cacheDur}s`}
-                begin={`${(k * cacheDur) / 2}s`}
-                repeatCount="indefinite"
-                calcMode="linear"
-                keyPoints={`0;${g.toFixed(3)};1;1`}
-                keyTimes={`0;${f1};${f2};1`}
-              />
-              <animate
-                attributeName="opacity"
-                values="0;1;1;0;0"
-                keyTimes={`0;0.03;${(Number(f2) - 0.02).toFixed(3)};${(Number(f2) + 0.01).toFixed(3)};1`}
-                dur={`${cacheDur}s`}
-                begin={`${(k * cacheDur) / 2}s`}
-                repeatCount="indefinite"
-              />
-            </circle>
-          ))}
+          {items.map((it, k) => {
+            const begin = k * C;
+            if (!it.hit)
+              return <ForwardDot key={k} y={llmYs[it.lane ?? 0]} begin={begin} cycle={cycle} />;
+            const f1 = (t1 / cycle).toFixed(3);
+            const f2 = ((t1 + t2) / cycle).toFixed(3);
+            return (
+              <g key={k}>
+                <NodeGlow
+                  x={PX}
+                  y={cacheY}
+                  size={56}
+                  dur={cycle}
+                  begin={begin}
+                  at={Math.min(0.985, (t1 + t2) / cycle)}
+                />
+                <circle
+                  r="4.5"
+                  className="fill-teal-500 motion-reduce:hidden"
+                  opacity={0}
+                  style={DOT_FILTER}
+                >
+                  <animateMotion
+                    path={cachePath}
+                    dur={`${cycle}s`}
+                    begin={`${begin}s`}
+                    repeatCount="indefinite"
+                    calcMode="linear"
+                    keyPoints={`0;${g.toFixed(3)};1;1`}
+                    keyTimes={`0;${f1};${f2};1`}
+                  />
+                  <animate
+                    attributeName="opacity"
+                    values="0;1;1;0;0"
+                    keyTimes={`0;0.03;${(Number(f2) - 0.02).toFixed(3)};${(Number(f2) + 0.01).toFixed(3)};1`}
+                    dur={`${cycle}s`}
+                    begin={`${begin}s`}
+                    repeatCount="indefinite"
+                  />
+                </circle>
+              </g>
+            );
+          })}
           <UserNode />
           <GatewayNode />
           <foreignObject
@@ -1068,29 +1460,44 @@ const scenes: Scene[] = [
     caption:
       "Every request is logged with tokens, cost, and latency to the database, Prometheus, and OTLP.",
     href: "/docs/configuration/observability",
-    render: () => (
-      <>
-        <Wires providers={LEAN_SET} />
-        <Lanes providers={LEAN_SET} />
-        <UserNode />
-        <GatewayNode />
-        <ProviderChips providers={LEAN_SET} />
-        <SinkWire />
-        <RollingLog
-          w={252}
-          step={LEAN_CADENCE}
-          title="Usage log"
-          icon={<ScrollText className="h-4 w-4" />}
-          rows={[
-            <UsageRow key="1" provider="openai" tok="1242 → 318" cost="$0.0023" lat="412ms" />,
-            <UsageRow key="2" provider="anthropic" tok="880 → 1203" cost="$0.0142" lat="1.2s" />,
-            <UsageRow key="3" provider="gemini" tok="512 → 240" cost="$0.0006" lat="380ms" />,
-            <UsageRow key="4" provider="bedrock" tok="2048 → 96" cost="$0.0031" lat="540ms" />,
-            <UsageRow key="5" provider="openai" tok="310 → 870" cost="$0.0089" lat="910ms" />,
-          ]}
-        />
-      </>
-    ),
+    render: () => {
+      const ys = providerYs(LEAN_SET.length);
+      // provider matches the lane the dot is sent to, so the row and the dot you
+      // watch arrive are the same request.
+      const items = [
+        { lane: 1, provider: "openai", tok: "1242 → 318", cost: "$0.0023", lat: "412ms" },
+        { lane: 0, provider: "anthropic", tok: "880 → 1203", cost: "$0.0142", lat: "1.2s" },
+        { lane: 2, provider: "gemini", tok: "512 → 240", cost: "$0.0006", lat: "380ms" },
+        { lane: 1, provider: "openai", tok: "310 → 870", cost: "$0.0089", lat: "910ms" },
+        { lane: 0, provider: "anthropic", tok: "2048 → 96", cost: "$0.0031", lat: "540ms" },
+        { lane: 2, provider: "gemini", tok: "1024 → 512", cost: "$0.0042", lat: "600ms" },
+      ];
+      const n = items.length;
+      const { C, cycle } = sceneTiming(ys, n);
+      return (
+        <>
+          <Wires ys={ys} />
+          {items.map((it, k) => (
+            <ForwardDot key={k} y={ys[it.lane]} begin={k * C} cycle={cycle} />
+          ))}
+          <UserNode />
+          <GatewayNode />
+          <ProviderChips providers={LEAN_SET} ys={ys} />
+          <SinkWire />
+          <EventLog
+            id="usage"
+            w={252}
+            C={C}
+            cycle={cycle}
+            title="Usage log"
+            icon={<ScrollText className="h-4 w-4" />}
+            rows={items.map((it, k) => (
+              <UsageRow key={k} provider={it.provider} tok={it.tok} cost={it.cost} lat={it.lat} />
+            ))}
+          />
+        </>
+      );
+    },
   },
   {
     id: "sovereignty",
@@ -1130,7 +1537,8 @@ const scenes: Scene[] = [
         },
       ];
       const ys = providerYs(rows.length);
-      const period = lanePeriod(ys.map((y) => travelTime(fullPath(y))));
+      const n = 8;
+      const { C, cycle } = sceneTiming(ys, n);
       return (
         <>
           <g fill="none" aria-hidden="true" strokeWidth={1.5}>
@@ -1140,15 +1548,16 @@ const scenes: Scene[] = [
             ))}
           </g>
           {/* Each request is one colour and travels to a single matching provider. */}
-          {rows.map((r, i) => {
-            const d = fullPath(ys[i]);
-            const begin = laneBegin(i, period);
-            const at = Math.min(0.985, travelTime(d) / period);
+          {Array.from({ length: n }, (_, k) => {
+            const lane = laneOf(k, rows.length);
             return (
-              <g key={r.p.name}>
-                <NodeGlow x={PX} y={ys[i]} size={56} dur={period} begin={begin} at={at} />
-                <Flow path={d} dur={period} begin={begin} className={r.fill} />
-              </g>
+              <ForwardDot
+                key={k}
+                y={ys[lane]}
+                begin={k * C}
+                cycle={cycle}
+                className={rows[lane].fill}
+              />
             );
           })}
           <UserNode />
@@ -1167,19 +1576,26 @@ const scenes: Scene[] = [
       "The gateway runs MCP, shell, file search, and web search in an agentic loop, then routes.",
     href: "/docs/features/agents",
     render: () => {
+      const ys = providerYs(LEAN_SET.length);
       const tools = [
-        { icon: <Plug className="h-4 w-4" />, label: "MCP", dur: 3.3, begin: 0.4 },
-        { icon: <Terminal className="h-4 w-4" />, label: "Shell", dur: 4.1, begin: 1.9 },
-        { icon: <FileSearch className="h-4 w-4" />, label: "Files", dur: 3.7, begin: 1.1 },
-        { icon: <Globe className="h-4 w-4" />, label: "Web", dur: 4.7, begin: 2.6 },
+        { icon: <Plug className="h-4 w-4" />, label: "MCP" },
+        { icon: <Terminal className="h-4 w-4" />, label: "Shell" },
+        { icon: <FileSearch className="h-4 w-4" />, label: "Files" },
+        { icon: <Globe className="h-4 w-4" />, label: "Web" },
       ];
+      const n = 6;
+      const { C, cycle } = sceneTiming(ys, n);
       const startX = GX - 165;
       const gap = 110;
       const ty = SINK_TOP + 16;
       return (
         <>
-          <Wires providers={LEAN_SET} />
-          <Lanes providers={LEAN_SET} />
+          <Wires ys={ys} />
+          {/* Each request reaches the gateway, which calls a tool (down and back)
+              before routing it onward — so every tool invocation has a cause. */}
+          {Array.from({ length: n }, (_, k) => (
+            <ForwardDot key={k} y={ys[laneOf(k, LEAN_SET.length)]} begin={k * C} cycle={cycle} />
+          ))}
           <g fill="none" aria-hidden="true" className="stroke-fd-border" strokeWidth={1.5}>
             {tools.map((_, i) => (
               <path key={i} d={`M${GX},${GW_BOTTOM} L${startX + i * gap},${ty - 18}`} />
@@ -1187,20 +1603,36 @@ const scenes: Scene[] = [
           </g>
           <UserNode />
           <GatewayNode />
-          {/* Incommensurate periods make the picked tool look random. */}
-          {tools.map((t, i) => {
-            const tx = startX + i * gap;
+          {Array.from({ length: n }, (_, k) => {
+            const ti = (k * 3) % tools.length; // a different tool per request
+            const tx = startX + ti * gap;
             const loop = `M${GX},${GW_BOTTOM} L${tx},${ty - 18} L${GX},${GW_BOTTOM}`;
             return (
-              <g key={t.label}>
-                <Flow path={loop} dur={t.dur} begin={t.begin} className="fill-violet-500" />
-                <foreignObject x={tx - 42} y={ty - 16} width={84} height={34} aria-hidden="true">
-                  <div className="flex h-full w-full items-center justify-center gap-1.5 rounded-lg border border-fd-border bg-fd-card text-[12px] font-medium text-fd-foreground shadow-sm">
-                    <span className="text-fd-muted-foreground">{t.icon}</span>
-                    {t.label}
-                  </div>
-                </foreignObject>
-              </g>
+              <Flow
+                key={k}
+                path={loop}
+                dur={cycle}
+                begin={k * C + T_GATE}
+                className="fill-violet-500"
+              />
+            );
+          })}
+          {tools.map((t, i) => {
+            const tx = startX + i * gap;
+            return (
+              <foreignObject
+                key={t.label}
+                x={tx - 42}
+                y={ty - 16}
+                width={84}
+                height={34}
+                aria-hidden="true"
+              >
+                <div className="flex h-full w-full items-center justify-center gap-1.5 rounded-lg border border-fd-border bg-fd-card text-[12px] font-medium text-fd-foreground shadow-sm">
+                  <span className="text-fd-muted-foreground">{t.icon}</span>
+                  {t.label}
+                </div>
+              </foreignObject>
             );
           })}
         </>
@@ -1208,56 +1640,6 @@ const scenes: Scene[] = [
     },
   },
 ];
-
-function PolicyRow({
-  tone,
-  action,
-  policy,
-}: {
-  tone: "allow" | "deny";
-  action: string;
-  policy: string;
-}) {
-  return (
-    <>
-      <Tag tone={tone}>{tone}</Tag>
-      <span className="w-[116px] text-fd-foreground">{action}</span>
-      <span className="ml-auto text-fd-muted-foreground">{policy}</span>
-    </>
-  );
-}
-
-function ScreenRow({ tone, label }: { tone: "allow" | "deny" | "redact"; label: string }) {
-  return (
-    <>
-      <Tag tone={tone}>{tone}</Tag>
-      <span className={tone === "allow" ? "text-fd-muted-foreground" : "text-fd-foreground"}>
-        {label}
-      </span>
-    </>
-  );
-}
-
-function UsageRow({
-  provider,
-  tok,
-  cost,
-  lat,
-}: {
-  provider: string;
-  tok: string;
-  cost: string;
-  lat: string;
-}) {
-  return (
-    <>
-      <span className="w-[68px] text-fd-foreground">{provider}</span>
-      <span className="w-[78px] text-fd-muted-foreground">{tok}</span>
-      <span className="w-[54px] text-fd-foreground">{cost}</span>
-      <span className="ml-auto text-fd-muted-foreground">{lat}</span>
-    </>
-  );
-}
 
 // =====================================================================
 // Tabbed, auto-cycling wrapper
@@ -1315,107 +1697,84 @@ export function GatewayDiagram() {
   const scene = scenes[active];
 
   return (
-    <div
-      className="flex flex-col items-center gap-5"
-      onMouseEnter={() => setPaused(true)}
-      onMouseLeave={() => setPaused(false)}
-      onFocusCapture={() => setPaused(true)}
-      onBlurCapture={() => setPaused(false)}
-    >
-      <style>{`
-        @keyframes hadrian-scene-fade { from { opacity: 0 } to { opacity: 1 } }
-        @keyframes hadrian-rate {
-          0% { width: 12% } 13% { width: 34% } 19% { width: 27% } 33% { width: 55% }
-          39% { width: 47% } 55% { width: 80% } 61% { width: 71% } 75% { width: 100% }
-          90% { width: 100% } 100% { width: 12% }
-        }
-        @keyframes hadrian-budget {
-          0% { width: 6% } 8% { width: 6% } 10% { width: 15% } 24% { width: 15% }
-          26% { width: 38% } 44% { width: 38% } 46% { width: 50% } 62% { width: 50% }
-          64% { width: 82% } 80% { width: 82% } 82% { width: 100% } 95% { width: 100% }
-          100% { width: 6% }
-        }
-        @property --hadrian-spent { syntax: "<integer>"; inherits: true; initial-value: 60; }
-        @keyframes hadrian-spend {
-          0% { --hadrian-spent: 60 } 8% { --hadrian-spent: 60 } 10% { --hadrian-spent: 150 }
-          24% { --hadrian-spent: 150 } 26% { --hadrian-spent: 380 } 44% { --hadrian-spent: 380 }
-          46% { --hadrian-spent: 500 } 62% { --hadrian-spent: 500 } 64% { --hadrian-spent: 820 }
-          80% { --hadrian-spent: 820 } 82% { --hadrian-spent: 1000 } 95% { --hadrian-spent: 1000 }
-          100% { --hadrian-spent: 60 }
-        }
-        .hadrian-balance::before {
-          counter-reset: hs var(--hadrian-spent);
-          content: "$" counter(hs) " / $1,000";
-        }
-        @keyframes hadrian-roll { from { transform: translateY(0) } to { transform: translateY(-50%) } }
-        @media (prefers-reduced-motion: reduce) { .hadrian-noanim { animation: none !important } }
-      `}</style>
+    <ReducedMotionContext.Provider value={reducedMotion}>
+      <div
+        className="flex flex-col items-center gap-5"
+        onMouseEnter={() => setPaused(true)}
+        onMouseLeave={() => setPaused(false)}
+        onFocusCapture={() => setPaused(true)}
+        onBlurCapture={() => setPaused(false)}
+      >
+        <style>{`
+          @keyframes hadrian-scene-fade { from { opacity: 0 } to { opacity: 1 } }
+        `}</style>
 
-      <div className="w-full overflow-x-auto">
-        <div
-          id={`gw-panel-${scene.id}`}
-          role="tabpanel"
-          aria-label={scene.pill}
-          key={reducedMotion ? undefined : scene.id}
-          style={reducedMotion ? undefined : { animation: "hadrian-scene-fade 420ms ease" }}
-        >
-          <svg
-            viewBox={`0 0 ${VB_W} ${VB_H}`}
-            aria-label={`Hadrian Gateway, ${scene.pill}. ${scene.caption}`}
-            className="mx-auto h-auto w-full min-w-[720px] max-w-3xl"
+        <div className="w-full overflow-x-auto">
+          <div
+            id={`gw-panel-${scene.id}`}
+            role="tabpanel"
+            aria-label={scene.pill}
+            key={reducedMotion ? undefined : scene.id}
+            style={reducedMotion ? undefined : { animation: "hadrian-scene-fade 420ms ease" }}
           >
-            <defs>
-              <filter id="hadrian-dot-glow" x="-200%" y="-200%" width="500%" height="500%">
-                <feGaussianBlur stdDeviation="2.5" result="blur" />
-                <feMerge>
-                  <feMergeNode in="blur" />
-                  <feMergeNode in="SourceGraphic" />
-                </feMerge>
-              </filter>
-              <filter id="hadrian-node-glow" x="-100%" y="-100%" width="300%" height="300%">
-                <feGaussianBlur stdDeviation="7" />
-              </filter>
-            </defs>
-            {scene.render()}
-          </svg>
+            <svg
+              viewBox={`0 0 ${VB_W} ${VB_H}`}
+              aria-label={`Hadrian Gateway, ${scene.pill}. ${scene.caption}`}
+              className="mx-auto h-auto w-full min-w-[720px] max-w-3xl"
+            >
+              <defs>
+                <filter id="hadrian-dot-glow" x="-200%" y="-200%" width="500%" height="500%">
+                  <feGaussianBlur stdDeviation="2.5" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+                <filter id="hadrian-node-glow" x="-100%" y="-100%" width="300%" height="300%">
+                  <feGaussianBlur stdDeviation="7" />
+                </filter>
+              </defs>
+              {scene.render()}
+            </svg>
+          </div>
+        </div>
+
+        <p className="flex min-h-[2.5rem] max-w-2xl flex-wrap items-center justify-center gap-x-1.5 text-center text-sm text-fd-muted-foreground">
+          {scene.caption}{" "}
+          <Link href={scene.href} className="whitespace-nowrap font-medium text-fd-primary">
+            Learn more →
+          </Link>
+        </p>
+
+        {/* Pill tabs switch the diagram (they do not navigate away). */}
+        <div
+          ref={tablistRef}
+          role="tablist"
+          aria-label="Gateway capabilities"
+          onKeyDown={onKeyDown}
+          className="flex max-w-3xl flex-wrap justify-center gap-2"
+        >
+          {scenes.map((s, i) => (
+            <button
+              key={s.id}
+              type="button"
+              role="tab"
+              aria-selected={i === active}
+              aria-controls={`gw-panel-${s.id}`}
+              tabIndex={i === active ? 0 : -1}
+              onClick={() => setActive(i)}
+              onFocus={() => setActive(i)}
+              className={`cursor-pointer rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors ${
+                i === active
+                  ? "border-fd-primary bg-fd-primary text-fd-primary-foreground"
+                  : "border-fd-border bg-fd-card text-fd-muted-foreground hover:border-fd-primary/50 hover:text-fd-foreground"
+              }`}
+            >
+              {s.pill}
+            </button>
+          ))}
         </div>
       </div>
-
-      <p className="flex min-h-[2.5rem] max-w-2xl flex-wrap items-center justify-center gap-x-1.5 text-center text-sm text-fd-muted-foreground">
-        {scene.caption}{" "}
-        <Link href={scene.href} className="whitespace-nowrap font-medium text-fd-primary">
-          Learn more →
-        </Link>
-      </p>
-
-      {/* Pill tabs switch the diagram (they do not navigate away). */}
-      <div
-        ref={tablistRef}
-        role="tablist"
-        aria-label="Gateway capabilities"
-        onKeyDown={onKeyDown}
-        className="flex max-w-3xl flex-wrap justify-center gap-2"
-      >
-        {scenes.map((s, i) => (
-          <button
-            key={s.id}
-            type="button"
-            role="tab"
-            aria-selected={i === active}
-            aria-controls={`gw-panel-${s.id}`}
-            tabIndex={i === active ? 0 : -1}
-            onClick={() => setActive(i)}
-            onFocus={() => setActive(i)}
-            className={`cursor-pointer rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors ${
-              i === active
-                ? "border-fd-primary bg-fd-primary text-fd-primary-foreground"
-                : "border-fd-border bg-fd-card text-fd-muted-foreground hover:border-fd-primary/50 hover:text-fd-foreground"
-            }`}
-          >
-            {s.pill}
-          </button>
-        ))}
-      </div>
-    </div>
+    </ReducedMotionContext.Provider>
   );
 }
