@@ -1910,6 +1910,9 @@ function usePrefersReducedMotion() {
 }
 
 const CYCLE_MS = 6500;
+// How long the "Stop animation" toggle lingers after the last interaction before
+// it fades out, so it doesn't sit on top of the running scene indefinitely.
+const CONTROLS_HIDE_MS = 600;
 
 export function GatewayDiagram() {
   const [active, setActive] = useState(0);
@@ -1917,12 +1920,46 @@ export function GatewayDiagram() {
   // When the OS prefers reduced motion the diagram renders a static frame; a
   // single click on the Play overlay opts back in to the full animation.
   const [forceMotion, setForceMotion] = useState(false);
+  // While the animation is playing the "Stop animation" toggle auto-hides after a
+  // beat of inactivity and reappears the moment the user interacts with the scene.
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const hideTimer = useRef<number | null>(null);
   const reducedMotion = usePrefersReducedMotion();
   const reduced = reducedMotion && !forceMotion;
   const tablistRef = useRef<HTMLDivElement>(null);
 
   const go = useCallback(
     (i: number) => setActive(((i % scenes.length) + scenes.length) % scenes.length),
+    []
+  );
+
+  // Reveal the toggle and (re)arm its auto-hide. The timer only runs while the
+  // animation is playing — the "Play animation" call-to-action never hides, or a
+  // reduced-motion user would have no way to start the scene.
+  const wakeControls = useCallback(() => {
+    if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
+    setControlsVisible(true);
+    if (forceMotion) {
+      hideTimer.current = window.setTimeout(() => setControlsVisible(false), CONTROLS_HIDE_MS);
+    }
+  }, [forceMotion]);
+
+  // Flip play/stop and seed the visibility timeline for the new state: starting
+  // the animation shows the toggle and arms its fade-out; stopping pins it back on.
+  const toggleMotion = useCallback(() => {
+    const next = !forceMotion;
+    setForceMotion(next);
+    if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
+    setControlsVisible(true);
+    if (next) {
+      hideTimer.current = window.setTimeout(() => setControlsVisible(false), CONTROLS_HIDE_MS);
+    }
+  }, [forceMotion]);
+
+  useEffect(
+    () => () => {
+      if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
+    },
     []
   );
 
@@ -1967,7 +2004,14 @@ export function GatewayDiagram() {
         `}</style>
 
         <div className="w-full overflow-x-auto">
-          <div className="relative mx-auto w-full max-w-3xl sm:min-w-[720px]">
+          {/* Interacting with the scene itself (not the caption or tab pills)
+              wakes the auto-hiding "Stop animation" toggle. */}
+          <div
+            className="relative mx-auto w-full max-w-3xl sm:min-w-[720px]"
+            onPointerMove={wakeControls}
+            onPointerDown={wakeControls}
+            onFocus={wakeControls}
+          >
             <div
               id={`gw-panel-${scene.id}`}
               role="tabpanel"
@@ -2000,9 +2044,11 @@ export function GatewayDiagram() {
             {reducedMotion && (
               <button
                 type="button"
-                onClick={() => setForceMotion((on) => !on)}
+                onClick={toggleMotion}
                 aria-label={forceMotion ? "Stop animation" : "Play animation"}
-                className="absolute left-2 top-2 z-10 flex items-center gap-1 rounded-full border border-fd-border bg-fd-card/90 px-2 py-1 text-[11px] font-medium text-fd-foreground shadow-sm backdrop-blur transition-colors hover:border-fd-primary/60 hover:text-fd-primary"
+                className={`absolute left-2 top-2 z-10 flex items-center gap-1 rounded-full border border-fd-border bg-fd-card/90 px-2 py-1 text-[11px] font-medium text-fd-foreground shadow-sm backdrop-blur transition duration-300 hover:border-fd-primary/60 hover:text-fd-primary ${
+                  forceMotion && !controlsVisible ? "pointer-events-none opacity-0" : "opacity-100"
+                }`}
               >
                 {forceMotion ? (
                   <Square className="h-3 w-3" aria-hidden="true" />
