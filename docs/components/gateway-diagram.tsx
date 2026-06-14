@@ -1242,6 +1242,76 @@ const scenes: Scene[] = [
     },
   },
   {
+    id: "sovereignty",
+    pill: "Sovereignty",
+    caption:
+      "Requests route only to providers in compliant regions, based on their sovereignty rules.",
+    href: "/docs/features/data-sovereignty",
+    render: () => {
+      const rows = [
+        {
+          p: ALL.openai,
+          region: "US",
+          flag: <UsFlag />,
+          fill: "fill-red-500",
+          stroke: "stroke-red-500/70",
+        },
+        {
+          p: ALL.anthropic,
+          region: "US",
+          flag: <UsFlag />,
+          fill: "fill-red-500",
+          stroke: "stroke-red-500/70",
+        },
+        {
+          p: ALL.azure,
+          region: "EU",
+          flag: <EuFlag />,
+          fill: "fill-blue-500",
+          stroke: "stroke-blue-500/70",
+        },
+        {
+          p: ALL.onprem,
+          region: "EU",
+          flag: <EuFlag />,
+          fill: "fill-blue-500",
+          stroke: "stroke-blue-500/70",
+        },
+      ];
+      const ys = providerYs(rows.length);
+      const n = 8;
+      const { C, cycle } = sceneTiming(ys, n);
+      return (
+        <>
+          <g fill="none" aria-hidden="true" strokeWidth={1.5}>
+            <path d={userPath} className="stroke-fd-border" />
+            {rows.map((r, i) => (
+              <path key={i} d={providerPath(ys[i])} className={r.stroke} />
+            ))}
+          </g>
+          {/* Each request is one colour and travels to a single matching provider. */}
+          {Array.from({ length: n }, (_, k) => {
+            const lane = laneOf(k, rows.length);
+            return (
+              <ForwardDot
+                key={k}
+                y={ys[lane]}
+                begin={k * C}
+                cycle={cycle}
+                className={rows[lane].fill}
+              />
+            );
+          })}
+          <UserNode />
+          <GatewayNode />
+          {rows.map((r, i) => (
+            <Chip key={r.p.name} provider={r.p} y={ys[i]} tag={r.region} flag={r.flag} />
+          ))}
+        </>
+      );
+    },
+  },
+  {
     id: "auth",
     pill: "Authentication",
     caption:
@@ -1746,76 +1816,6 @@ const scenes: Scene[] = [
               />
             ))}
           />
-        </>
-      );
-    },
-  },
-  {
-    id: "sovereignty",
-    pill: "Sovereignty",
-    caption:
-      "Requests route only to providers in compliant regions, based on their sovereignty rules.",
-    href: "/docs/features/data-sovereignty",
-    render: () => {
-      const rows = [
-        {
-          p: ALL.openai,
-          region: "US",
-          flag: <UsFlag />,
-          fill: "fill-red-500",
-          stroke: "stroke-red-500/70",
-        },
-        {
-          p: ALL.anthropic,
-          region: "US",
-          flag: <UsFlag />,
-          fill: "fill-red-500",
-          stroke: "stroke-red-500/70",
-        },
-        {
-          p: ALL.azure,
-          region: "EU",
-          flag: <EuFlag />,
-          fill: "fill-blue-500",
-          stroke: "stroke-blue-500/70",
-        },
-        {
-          p: ALL.onprem,
-          region: "EU",
-          flag: <EuFlag />,
-          fill: "fill-blue-500",
-          stroke: "stroke-blue-500/70",
-        },
-      ];
-      const ys = providerYs(rows.length);
-      const n = 8;
-      const { C, cycle } = sceneTiming(ys, n);
-      return (
-        <>
-          <g fill="none" aria-hidden="true" strokeWidth={1.5}>
-            <path d={userPath} className="stroke-fd-border" />
-            {rows.map((r, i) => (
-              <path key={i} d={providerPath(ys[i])} className={r.stroke} />
-            ))}
-          </g>
-          {/* Each request is one colour and travels to a single matching provider. */}
-          {Array.from({ length: n }, (_, k) => {
-            const lane = laneOf(k, rows.length);
-            return (
-              <ForwardDot
-                key={k}
-                y={ys[lane]}
-                begin={k * C}
-                cycle={cycle}
-                className={rows[lane].fill}
-              />
-            );
-          })}
-          <UserNode />
-          <GatewayNode />
-          {rows.map((r, i) => (
-            <Chip key={r.p.name} provider={r.p} y={ys[i]} tag={r.region} flag={r.flag} />
-          ))}
         </>
       );
     },
