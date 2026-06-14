@@ -1914,7 +1914,7 @@ function usePrefersReducedMotion() {
 const CYCLE_MS = 6500;
 // How long the "Stop animation" toggle lingers after the last interaction before
 // it fades out, so it doesn't sit on top of the running scene indefinitely.
-const CONTROLS_HIDE_MS = 600;
+const CONTROLS_HIDE_MS = 2500;
 
 // =====================================================================
 // Scene picker
@@ -2049,19 +2049,18 @@ export function GatewayDiagram() {
   }, [paused, reduced]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-      e.preventDefault();
-      go(active + 1);
-    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-      e.preventDefault();
-      go(active - 1);
-    } else if (e.key === "Home") {
-      e.preventDefault();
-      go(0);
-    } else if (e.key === "End") {
-      e.preventDefault();
-      go(scenes.length - 1);
-    }
+    let next: number | null = null;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = active + 1;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = active - 1;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = scenes.length - 1;
+    if (next === null) return;
+    e.preventDefault();
+    const idx = ((next % scenes.length) + scenes.length) % scenes.length;
+    go(idx);
+    // Roving tabindex: arrow keys must also move DOM focus to the activated tab,
+    // otherwise focus stays on a now-tabIndex=-1 button and Tab skips the tablist.
+    tablistRef.current?.querySelectorAll<HTMLElement>('[role="tab"]')[idx]?.focus();
   };
 
   const scene = scenes[active];
