@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Brain, Code, Eye, Server, Shield, Users, Zap } from "lucide-react";
 import { QuickStartSelector } from "@/components/quick-start-selector";
-import { RoutingDiagram } from "@/components/routing-diagram";
+import { GatewayDiagram } from "@/components/gateway-diagram";
 import { StoryEmbed } from "@/components/story-embed";
 
 function GitHubIcon({ className }: { className?: string }) {
@@ -315,9 +315,9 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* Routing diagram */}
+          {/* Gateway capabilities diagram */}
           <div className="mt-16">
-            <RoutingDiagram />
+            <GatewayDiagram />
           </div>
 
           {/* Quick Start Selector */}
