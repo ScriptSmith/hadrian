@@ -45,6 +45,7 @@ const ROW_GAP = 56; // vertical spacing between provider rows
 const GW_RIGHT = GX + GW_HALF;
 const GW_LEFT = GX - GW_HALF;
 const GW_BOTTOM = GY + GW_HALF;
+const P_EDGE = PX - PROVIDER_HALF - 2; // x where a provider lane meets its chip
 
 const DOT_FILTER = { filter: "url(#hadrian-dot-glow)" } as const;
 
@@ -54,13 +55,13 @@ const providerYs = (n: number) =>
 
 // Gateway out to a provider row.
 const providerPath = (y: number) =>
-  `M${GW_RIGHT},${GY} C ${GW_RIGHT + 112},${GY} ${GW_RIGHT + 132},${y} ${PX - PROVIDER_HALF - 2},${y}`;
+  `M${GW_RIGHT},${GY} C ${GW_RIGHT + 112},${GY} ${GW_RIGHT + 132},${y} ${P_EDGE},${y}`;
 
 // Full lane: user straight through the gateway, then on to one provider. A single
 // dot on this path is one request reaching exactly one provider (no split).
 const A_IN = { x: UX + 36, y: UY };
 const fullPath = (y: number) =>
-  `M${A_IN.x},${A_IN.y} L${GW_RIGHT},${GY} C ${GW_RIGHT + 112},${GY} ${GW_RIGHT + 132},${y} ${PX - PROVIDER_HALF - 2},${y}`;
+  `M${A_IN.x},${A_IN.y} L${GW_RIGHT},${GY} C ${GW_RIGHT + 112},${GY} ${GW_RIGHT + 132},${y} ${P_EDGE},${y}`;
 
 // Inbound only: user into the gateway.
 const userPath = `M${A_IN.x},${A_IN.y} L${GW_LEFT - 4},${GY}`;
@@ -486,13 +487,17 @@ type Provider = {
 function Chip({
   provider,
   y,
+  tag,
+  tagColor,
   region,
-  regionColor,
+  unhealthy,
 }: {
   provider: Provider;
   y: number;
+  tag?: string;
+  tagColor?: string;
   region?: string;
-  regionColor?: string;
+  unhealthy?: boolean;
 }) {
   return (
     <foreignObject
@@ -506,23 +511,36 @@ function Chip({
         aria-label={`${provider.name} provider documentation`}
         className="group flex h-full items-center gap-3 no-underline"
       >
-        <span className="flex aspect-square h-full flex-none items-center justify-center rounded-xl border border-fd-border bg-fd-card shadow-sm transition-colors group-hover:border-fd-primary/60">
+        <span
+          className={`flex aspect-square h-full flex-none items-center justify-center rounded-xl border bg-fd-card shadow-sm transition-colors ${
+            unhealthy
+              ? "border-red-500/50 opacity-60"
+              : "border-fd-border group-hover:border-fd-primary/60"
+          }`}
+        >
           {provider.node}
         </span>
         <span className="flex flex-col leading-tight">
           <span
-            className="font-medium text-fd-muted-foreground transition-colors group-hover:text-fd-foreground"
+            className={`font-medium transition-colors group-hover:text-fd-foreground ${
+              unhealthy ? "text-fd-muted-foreground/60" : "text-fd-muted-foreground"
+            }`}
             style={{ fontSize: 14 }}
           >
             {provider.name}
           </span>
-          {region && (
-            <span className="flex items-center gap-1 text-[11px] uppercase tracking-wide text-fd-muted-foreground/70">
-              <span
-                className="inline-block h-2 w-2 rounded-full"
-                style={{ background: regionColor }}
-              />
-              {region}
+          {(tag || region) && (
+            <span className="flex items-center gap-1.5 text-[11px]">
+              {tag && (
+                <span className="flex items-center gap-1 uppercase tracking-wide text-fd-muted-foreground/70">
+                  <span
+                    className="inline-block h-2 w-2 rounded-full"
+                    style={{ background: tagColor }}
+                  />
+                  {tag}
+                </span>
+              )}
+              {region && <span className="text-fd-muted-foreground/50">{region}</span>}
             </span>
           )}
         </span>
@@ -1093,6 +1111,72 @@ const scenes: Scene[] = [
     },
   },
   {
+    id: "failover",
+    pill: "Failover",
+    caption:
+      "Health checks flag unhealthy providers, so the gateway routes around them to healthy ones.",
+    href: `${PROVIDERS_DOCS}#health-checks`,
+    render: () => {
+      const ys = providerYs(3);
+      // The unhealthy provider sits in the middle; its lane stays dark while
+      // traffic flows to the healthy providers above and below it.
+      const providers = [
+        { p: ALL.bedrock, region: "US West", tag: "Healthy", tagColor: "#22c55e" },
+        {
+          p: ALL.openai,
+          region: "US East",
+          tag: "Unhealthy",
+          tagColor: "#ef4444",
+          unhealthy: true,
+        },
+        { p: ALL.azure, region: "EU West", tag: "Healthy", tagColor: "#22c55e" },
+      ];
+      const DEAD = 1;
+      const healthyRows = [0, 2];
+      const n = 8;
+      const { C, cycle } = sceneTiming(
+        healthyRows.map((i) => ys[i]),
+        n
+      );
+      return (
+        <>
+          <g fill="none" aria-hidden="true" strokeWidth={1.5}>
+            <path d={userPath} className="stroke-fd-border" />
+            {ys.map((y, i) => (
+              <path
+                key={i}
+                d={providerPath(y)}
+                className={i === DEAD ? "stroke-red-500/40" : "stroke-fd-border"}
+                strokeDasharray={i === DEAD ? "4 4" : undefined}
+              />
+            ))}
+          </g>
+          {Array.from({ length: n }, (_, k) => (
+            <ForwardDot
+              key={k}
+              y={ys[healthyRows[k % healthyRows.length]]}
+              begin={k * C}
+              cycle={cycle}
+            />
+          ))}
+          <UserNode />
+          <GatewayNode />
+          {providers.map((h, i) => (
+            <Chip
+              key={h.p.name}
+              provider={h.p}
+              y={ys[i]}
+              tag={h.tag}
+              tagColor={h.tagColor}
+              region={h.region}
+              unhealthy={h.unhealthy}
+            />
+          ))}
+        </>
+      );
+    },
+  },
+  {
     id: "auth",
     pill: "Authentication",
     caption:
@@ -1586,7 +1670,7 @@ const scenes: Scene[] = [
           <UserNode />
           <GatewayNode />
           {rows.map((r, i) => (
-            <Chip key={r.p.name} provider={r.p} y={ys[i]} region={r.region} regionColor={r.dot} />
+            <Chip key={r.p.name} provider={r.p} y={ys[i]} tag={r.region} tagColor={r.dot} />
           ))}
         </>
       );
