@@ -1404,13 +1404,17 @@ const scenes: Scene[] = [
     href: "/docs/features/budgets",
     render: () => {
       const ys = providerYs(LEAN_SET.length);
-      const costs = [1.5, 0.9, 2.3, 1.2, 1.8, 2.6, 1.4];
+      // Costs climb cumulative spend to exactly the budget by the fifth request,
+      // so the bar fills before anything bounces — then, with the budget spent,
+      // every remaining request bounces while the meter reads full. This matches
+      // the rate-limit scene, where shedding only begins once the bar tops out.
+      const costs = [1.4, 2.1, 1.8, 2.4, 2.3, 2.0, 1.5];
       const budget = 10;
       const n = costs.length;
       const { C } = sceneTiming(ys, n);
       const cycle = meterCycle(C, n);
       const sim = budgetSchedule(costs, budget, C, cycle);
-      const radiusFor = (c: number) => 3.2 + (c / 2.6) * 3.6; // cost → dot size
+      const radiusFor = (c: number) => 3.2 + (c / 2.4) * 3.6; // cost → dot size
       return (
         <>
           <Wires ys={ys} />
@@ -1439,8 +1443,8 @@ const scenes: Scene[] = [
             keyTimes={sim.keyTimes}
             values={sim.values}
             balanceSteps={sim.balanceSteps}
-            staticFrac={0.6}
-            staticBalance={`$6.00 / $${budget.toLocaleString("en-US")}`}
+            staticFrac={0.77}
+            staticBalance={`$7.70 / $${budget.toLocaleString("en-US")}`}
           />
         </>
       );
