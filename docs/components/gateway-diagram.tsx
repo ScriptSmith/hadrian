@@ -971,21 +971,27 @@ function ScreenRow({ tone, label }: { tone: "allow" | "deny" | "redact"; label: 
 }
 
 function UsageRow({
+  identity,
   provider,
   tok,
+  finish,
   cost,
   lat,
 }: {
+  identity: string;
   provider: string;
   tok: string;
+  finish: string;
   cost: string;
   lat: string;
 }) {
   return (
     <>
-      <span className="w-[68px] text-fd-foreground">{provider}</span>
-      <span className="w-[78px] text-fd-muted-foreground">{tok}</span>
-      <span className="w-[54px] text-fd-foreground">{cost}</span>
+      <span className="w-[112px] text-fd-foreground">{identity}</span>
+      <span className="w-[62px] text-fd-muted-foreground">{provider}</span>
+      <span className="w-[70px] text-fd-muted-foreground">{tok}</span>
+      <span className="w-[94px] text-fd-muted-foreground">{finish}</span>
+      <span className="w-[50px] text-fd-foreground">{cost}</span>
       <span className="ml-auto text-fd-muted-foreground">{lat}</span>
     </>
   );
@@ -1237,7 +1243,7 @@ const scenes: Scene[] = [
     id: "auth",
     pill: "Authentication",
     caption:
-      "Every request is authenticated against your identity provider before it reaches a model.",
+      "Every request is authenticated by API key or single sign-on with your identity provider before it reaches a model.",
     href: "/docs/authentication",
     render: () => {
       const ys = providerYs(LEAN_SET.length);
@@ -1298,7 +1304,7 @@ const scenes: Scene[] = [
         { tone: "allow", action: "model:use", policy: "org-member-read", lane: 0 },
         { tone: "deny", action: "model:use", policy: "premium-models" },
         { tone: "allow", action: "vector_store:read", policy: "org-member-read", lane: 2 },
-        { tone: "allow", action: "responses:create", policy: "org-admin", lane: 1 },
+        { tone: "allow", action: "response:delete", policy: "org-admin", lane: 1 },
         { tone: "deny", action: "user:delete", policy: "deny-self-delete" },
         { tone: "allow", action: "model:use", policy: "org-member-read", lane: 0 },
       ];
@@ -1381,7 +1387,7 @@ const scenes: Scene[] = [
     id: "guardrails",
     pill: "Guardrails",
     caption:
-      "Content moderation, PII detection, and virus scanning screen every request and response.",
+      "Content moderation, PII detection, and prompt-injection checks screen every request and response.",
     href: "/docs/features/guardrails",
     render: () => {
       const ys = providerYs(LEAN_SET.length);
@@ -1494,7 +1500,7 @@ const scenes: Scene[] = [
   {
     id: "caching",
     pill: "Caching",
-    caption: "Redis-backed caching returns hits instantly, skipping the call to a provider.",
+    caption: "In-memory or Redis caching returns hits instantly, skipping the call to a provider.",
     href: "/docs/features/caching",
     render: () => {
       const ys = providerYs(4);
@@ -1627,20 +1633,77 @@ const scenes: Scene[] = [
   {
     id: "usage",
     pill: "Usage logging",
-    caption:
-      "Every request is logged with tokens, cost, and latency to the database, Prometheus, and OTLP.",
+    caption: "Every request is logged with tokens, cost, latency, and finish reason.",
     href: "/docs/configuration/observability",
     render: () => {
       const ys = providerYs(LEAN_SET.length);
       // provider matches the lane the dot is sent to, so the row and the dot you
-      // watch arrive are the same request.
-      const items = [
-        { lane: 1, provider: "openai", tok: "1242 → 318", cost: "$0.0023", lat: "412ms" },
-        { lane: 0, provider: "anthropic", tok: "880 → 1203", cost: "$0.0142", lat: "1.2s" },
-        { lane: 2, provider: "gemini", tok: "512 → 240", cost: "$0.0006", lat: "380ms" },
-        { lane: 1, provider: "openai", tok: "310 → 870", cost: "$0.0089", lat: "910ms" },
-        { lane: 0, provider: "anthropic", tok: "2048 → 96", cost: "$0.0031", lat: "540ms" },
-        { lane: 2, provider: "gemini", tok: "1024 → 512", cost: "$0.0042", lat: "600ms" },
+      // watch arrive are the same request. `identity` is the user or service
+      // account the request was tied to, which Hadrian records alongside the
+      // prompt and completion counts, cost, latency, and finish reason.
+      const items: {
+        lane: number;
+        identity: string;
+        provider: string;
+        tok: string;
+        finish: string;
+        cost: string;
+        lat: string;
+      }[] = [
+        {
+          lane: 1,
+          identity: "alice@example.com",
+          provider: "openai",
+          tok: "1242 → 318",
+          finish: "stop",
+          cost: "$0.0023",
+          lat: "412ms",
+        },
+        {
+          lane: 0,
+          identity: "svc-batch",
+          provider: "anthropic",
+          tok: "880 → 1203",
+          finish: "tool_calls",
+          cost: "$0.0142",
+          lat: "1.2s",
+        },
+        {
+          lane: 2,
+          identity: "bob@example.com",
+          provider: "gemini",
+          tok: "512 → 240",
+          finish: "stop",
+          cost: "$0.0006",
+          lat: "380ms",
+        },
+        {
+          lane: 1,
+          identity: "carol@example.com",
+          provider: "openai",
+          tok: "310 → 870",
+          finish: "length",
+          cost: "$0.0089",
+          lat: "910ms",
+        },
+        {
+          lane: 0,
+          identity: "dana@example.com",
+          provider: "anthropic",
+          tok: "2048 → 96",
+          finish: "content_filter",
+          cost: "$0.0031",
+          lat: "540ms",
+        },
+        {
+          lane: 2,
+          identity: "svc-ingest",
+          provider: "gemini",
+          tok: "1024 → 512",
+          finish: "stop",
+          cost: "$0.0042",
+          lat: "600ms",
+        },
       ];
       const n = items.length;
       const { C, cycle } = sceneTiming(ys, n);
@@ -1656,13 +1719,21 @@ const scenes: Scene[] = [
           <SinkWire />
           <EventLog
             id="usage"
-            w={252}
+            w={480}
             C={C}
             cycle={cycle}
             title="Usage log"
             icon={<ScrollText className="h-4 w-4" />}
             rows={items.map((it, k) => (
-              <UsageRow key={k} provider={it.provider} tok={it.tok} cost={it.cost} lat={it.lat} />
+              <UsageRow
+                key={k}
+                identity={it.identity}
+                provider={it.provider}
+                tok={it.tok}
+                finish={it.finish}
+                cost={it.cost}
+                lat={it.lat}
+              />
             ))}
           />
         </>
@@ -1743,7 +1814,7 @@ const scenes: Scene[] = [
     id: "tools",
     pill: "Server-side tools",
     caption:
-      "The gateway runs MCP, shell, file search, and web search in an agentic loop, then routes.",
+      "The gateway runs MCP tools, shell commands, file search, and web search as server-side tools in an agentic loop with the model.",
     href: "/docs/features/agents",
     render: () => {
       const ys = providerYs(LEAN_SET.length);
@@ -1936,12 +2007,12 @@ export function GatewayDiagram() {
           </div>
         </div>
 
-        <p className="flex min-h-[2.5rem] max-w-2xl flex-wrap items-center justify-center gap-x-1.5 text-center text-sm text-fd-muted-foreground">
-          {scene.caption}{" "}
+        <div className="flex min-h-[4.25rem] max-w-2xl flex-col items-center justify-center gap-1.5 text-center text-sm text-fd-muted-foreground">
+          <p>{scene.caption}</p>
           <Link href={scene.href} className="whitespace-nowrap font-medium text-fd-primary">
             Learn more →
           </Link>
-        </p>
+        </div>
 
         {/* Pill tabs switch the diagram (they do not navigate away). */}
         <div
